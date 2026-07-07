@@ -1,0 +1,47 @@
+/* Soleria App Styles */
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d0ccc4;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #b0aba2;
+}
+
+/* Select dropdown arrow */
+select.soleria-input {
+  appearance: auto;
+  background-image: none;
+}
+
+/* Number input spinners */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  opacity: 1;
+}
+
+/* Canvas in login */
+canvas {
+  display: block;
+}
+
+/* Smooth transitions */
+button, .card-white {
+  transition: all 0.2s ease;
+}
+
+/* Focus visible */
+*:focus-visible {
+  outline: 2px solid var(--brand-gold);
+  outline-offset: 2px;
+}

@@ -186,6 +186,7 @@
 | gp_no | INT |
 | bilty_no | INT |
 | status | ENUM('Posted','Unposted') |
+| remarks | VARCHAR |
 
 ---
 
@@ -204,4 +205,19 @@
 
 ---
 
-> **Pending:** Receipts (Jamma) and Control Accounts tables — to be added after discussion.
+## Receipt Tables
+
+### receipts
+| Column | Type |
+|---|---|
+| receipt_id | INT PK AUTO |
+| date | DATE |
+| customer_id | INT FK → customers |
+| amount | DECIMAL |
+| payment_mode | ENUM('Cash', 'Cheque', 'Online') |
+| details | VARCHAR |
+| remarks | VARCHAR |
+
+---
+
+> **Note:** All tables have been successfully implemented on the frontend React AppContext state store.
