@@ -146,7 +146,7 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
             <div key={sIdx} className="mb-4">
               <div
                 className="px-3 mb-1.5 text-xs font-semibold uppercase tracking-wider"
-                style={{ color: 'rgba(250,248,243,0.35)', letterSpacing: '1.2px' }}
+                style={{ color: 'var(--brand-gold)', opacity: 0.9, letterSpacing: '1.2px' }}
               >
                 {section.title}
               </div>
