@@ -1,19 +1,19 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
-import type { SaleBill, Customer } from '@/types';
+import type { SaleReturn, Customer } from '@/types';
 import { Calendar, Search, ArrowRight, ArrowLeft, FileText, Edit2, Printer } from 'lucide-react';
 
-interface WeeklyTabProps {
-  onEditBill: (bill: SaleBill) => void;
-  onPrintBill: (bill: SaleBill) => void;
+interface OverallReturnTabProps {
+  onEditReturn: (ret: SaleReturn) => void;
+  onPrintReturn: (ret: SaleReturn) => void;
 }
 
-export default function WeeklyTab({ onEditBill, onPrintBill }: WeeklyTabProps) {
+export default function OverallReturnTab({ onEditReturn, onPrintReturn }: OverallReturnTabProps) {
   const { state } = useApp();
 
   // Filters
   const [nameQuery, setNameQuery] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState<string>('all'); // '0' to '11' or 'all'
+  const [selectedMonth, setSelectedMonth] = useState<string>('all'); // Default to all
 
   // Selected customer for viewing details
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
@@ -33,76 +33,57 @@ export default function WeeklyTab({ onEditBill, onPrintBill }: WeeklyTabProps) {
     { value: '11', label: 'December' },
   ];
 
-  // Helper: check if a date falls in the current week (ISO week calculation)
-  const isDateInCurrentWeek = (dateStr: string) => {
-    const d = new Date(dateStr);
-    const today = new Date();
-    
-    // Find current week Monday
-    const currentDay = today.getDay();
-    const distanceToMonday = currentDay === 0 ? -6 : 1 - currentDay;
-    const monday = new Date(today);
-    monday.setDate(today.getDate() + distanceToMonday);
-    monday.setHours(0, 0, 0, 0);
-
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
-    sunday.setHours(23, 59, 59, 999);
-
-    return d >= monday && d <= sunday;
-  };
-
-  // Filtered bills for the current week + filter inputs
-  const weeklyBills = useMemo(() => {
-    return state.saleBills.filter(bill => {
-      // 1. Must be in current week
-      if (!isDateInCurrentWeek(bill.date)) return false;
-
-      // 2. Filter by month if selected
+  // Filtered returns + filter inputs
+  const overallReturns = useMemo(() => {
+    return state.saleReturns.filter(ret => {
+      const d = new Date(ret.date);
+      
+      // 1. Filter by month if selected
       if (selectedMonth !== 'all') {
-        const billMonth = new Date(bill.date).getMonth().toString();
-        if (billMonth !== selectedMonth) return false;
+        const retMonth = d.getMonth().toString();
+        if (retMonth !== selectedMonth) return false;
       }
 
-      // 3. Filter by customer name
+      // 2. Filter by customer name
       if (nameQuery.trim()) {
-        const custName = state.customers.find(c => c.id === bill.customerId)?.name.toLowerCase() || '';
+        const custName = state.customers.find(c => c.id === ret.customerId)?.name.toLowerCase() || '';
         if (!custName.includes(nameQuery.toLowerCase())) return false;
       }
 
       return true;
     });
-  }, [state.saleBills, state.customers, selectedMonth, nameQuery]);
+  }, [state.saleReturns, state.customers, selectedMonth, nameQuery]);
 
-  // Group bills by customer for the card layout
+  // Group returns by customer for the card layout
   const customerCardsData = useMemo(() => {
-    const groups: { [customerId: string]: { customer: Customer; bills: SaleBill[]; totalCartons: number; totalPairs: number; totalValue: number } } = {};
+    const groups: { [customerId: string]: { customer: Customer; returns: SaleReturn[]; totalCartons: number; totalPairs: number; totalValue: number } } = {};
 
-    weeklyBills.forEach(bill => {
-      if (!groups[bill.customerId]) {
-        const cust = state.customers.find(c => c.id === bill.customerId) || { id: bill.customerId, name: 'Walk-in Customer', acId: '', cityId: '' };
-        groups[bill.customerId] = {
+    overallReturns.forEach(ret => {
+      if (!groups[ret.customerId]) {
+        const cust = state.customers.find(c => c.id === ret.customerId) || { id: ret.customerId, name: 'Walk-in Customer', acId: '', cityId: '' };
+        groups[ret.customerId] = {
           customer: cust,
-          bills: [],
+          returns: [],
           totalCartons: 0,
           totalPairs: 0,
           totalValue: 0
         };
       }
       
-      const grp = groups[bill.customerId];
-      grp.bills.push(bill);
+      const grp = groups[ret.customerId];
+      grp.returns.push(ret);
       
-      const billCartons = bill.items.reduce((sum, item) => sum + (item.cartons || 0), 0);
-      const billPairs = bill.items.reduce((sum, item) => sum + (item.pairs || 0), 0);
+      const retCartons = ret.items.reduce((sum, item) => sum + (item.cartons || 0), 0);
+      const retPairs = ret.items.reduce((sum, item) => sum + (item.pairs || 0), 0);
+      const retValue = ret.items.reduce((sum, item) => sum + (item.value || 0), 0);
       
-      grp.totalCartons += billCartons;
-      grp.totalPairs += billPairs;
-      grp.totalValue += bill.totalValue;
+      grp.totalCartons += retCartons;
+      grp.totalPairs += retPairs;
+      grp.totalValue += retValue;
     });
 
     return Object.values(groups).sort((a, b) => b.totalValue - a.totalValue);
-  }, [weeklyBills, state.customers]);
+  }, [overallReturns, state.customers]);
 
   const activeCustomerDetails = useMemo(() => {
     if (!selectedCustomerId) return null;
@@ -122,10 +103,10 @@ export default function WeeklyTab({ onEditBill, onPrintBill }: WeeklyTabProps) {
             </button>
             <div>
               <h3 className="font-lora font-bold text-lg text-slate-800">
-                Bills for {activeCustomerDetails.customer.name}
+                Returns for {activeCustomerDetails.customer.name}
               </h3>
               <p className="text-xs text-slate-500 mt-0.5 font-inter">
-                Weekly Summary: {activeCustomerDetails.bills.length} Invoice(s)
+                Overall Summary: {activeCustomerDetails.returns.length} Return Record(s)
               </p>
             </div>
           </div>
@@ -143,31 +124,31 @@ export default function WeeklyTab({ onEditBill, onPrintBill }: WeeklyTabProps) {
               <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500 border-slate-200">
                 <th className="p-3.5 pl-4">Date</th>
                 <th className="p-3.5 text-center">Sys ID</th>
-                <th className="p-3.5 text-center">Bill No.</th>
-                <th className="p-3.5">Sub-Customer</th>
+                <th className="p-3.5 text-center">Return No.</th>
+                <th className="p-3.5">Delivery Agent</th>
                 <th className="p-3.5 text-center">Cartons</th>
                 <th className="p-3.5 text-center">Pairs</th>
-                <th className="p-3.5">Bilty No. / Adda</th>
-                <th className="p-3.5 text-right pr-4">Invoice Value</th>
+                <th className="p-3.5">Bilty No. / GP No.</th>
+                <th className="p-3.5 text-right pr-4">Total Credit</th>
                 <th className="p-3.5 text-center pr-4" style={{ width: '120px' }}>Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
-              {activeCustomerDetails.bills.map(bill => {
-                const subCust = bill.subCustomerId ? state.subCustomers.find(sc => sc.id === bill.subCustomerId) : null;
-                const adda = state.addas.find(ad => ad.id === bill.addaId);
-                const billCartons = bill.items.reduce((sum, item) => sum + (item.cartons || 0), 0);
-                const billPairs = bill.items.reduce((sum, item) => sum + (item.pairs || 0), 0);
+              {activeCustomerDetails.returns.map(ret => {
+                const subCust = ret.subCustomerId ? state.subCustomers.find(sc => sc.id === ret.subCustomerId) : null;
+                const retCartons = ret.items.reduce((sum, item) => sum + (item.cartons || 0), 0);
+                const retPairs = ret.items.reduce((sum, item) => sum + (item.pairs || 0), 0);
+                const retValue = ret.items.reduce((sum, item) => sum + (item.value || 0), 0);
                 
                 return (
-                  <tr key={bill.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="p-3.5 pl-4 font-mono text-slate-600">{bill.date}</td>
+                  <tr key={ret.id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="p-3.5 pl-4 font-mono text-slate-600">{ret.date}</td>
                     <td className="p-3.5 text-center">
                       <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
-                        {bill.id.replace('sb_', '')}
+                        {ret.id.replace('sr_', '')}
                       </span>
                     </td>
-                    <td className="p-3.5 text-center font-mono font-bold text-slate-800">{bill.billNo}</td>
+                    <td className="p-3.5 text-center font-mono font-bold text-slate-800">{ret.billNo}</td>
                     <td className="p-3.5 text-slate-600 font-medium">
                       {subCust ? (
                         <span className="text-slate-700">{subCust.name}</span>
@@ -175,27 +156,27 @@ export default function WeeklyTab({ onEditBill, onPrintBill }: WeeklyTabProps) {
                         <span className="text-slate-400 italic text-xs">SAME (Direct)</span>
                       )}
                     </td>
-                    <td className="p-3.5 text-center font-mono font-semibold text-slate-700">{billCartons}</td>
-                    <td className="p-3.5 text-center font-mono font-semibold text-slate-700">{billPairs}</td>
+                    <td className="p-3.5 text-center font-mono font-semibold text-slate-700">{retCartons}</td>
+                    <td className="p-3.5 text-center font-mono font-semibold text-slate-700">{retPairs}</td>
                     <td className="p-3.5">
                       <div className="text-xs">
-                        <span className="font-semibold block text-slate-700">Bilty: {bill.biltyNo || '-'}</span>
-                        <span className="text-slate-400 block">{adda ? adda.name : 'No Transport'}</span>
+                        <span className="font-semibold block text-slate-700">Bilty: {ret.biltyNo || '-'}</span>
+                        <span className="text-slate-400 block">GP: {ret.gpNo || '-'}</span>
                       </div>
                     </td>
-                    <td className="p-3.5 text-right font-mono font-bold text-emerald-800 pr-4">{formatCurrency(bill.totalValue)}</td>
+                    <td className="p-3.5 text-right font-mono font-bold text-amber-800 pr-4">{formatCurrency(retValue)}</td>
                     <td className="p-3.5 text-center pr-4">
                       <div className="flex justify-center items-center gap-3">
                           <button
-                            onClick={() => onEditBill(bill)}
-                            title="Edit Bill"
+                            onClick={() => onEditReturn(ret)}
+                            title="Edit Return"
                             className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
                           >
                             <Edit2 size={15} />
                           </button>
                           <button
-                            onClick={() => onPrintBill(bill)}
-                            title="Print Bill"
+                            onClick={() => onPrintReturn(ret)}
+                            title="Print Return"
                             className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
                           >
                             <Printer size={15} />
@@ -241,7 +222,7 @@ export default function WeeklyTab({ onEditBill, onPrintBill }: WeeklyTabProps) {
         </div>
 
         <div className="text-sm font-semibold text-slate-500 font-mono">
-          {weeklyBills.length} Bills
+          {overallReturns.length} Return Records
         </div>
       </div>
 
@@ -250,8 +231,8 @@ export default function WeeklyTab({ onEditBill, onPrintBill }: WeeklyTabProps) {
         {customerCardsData.length === 0 ? (
           <div className="col-span-full card-white p-12 bg-slate-50/50 border text-center flex flex-col items-center justify-center text-slate-400">
             <Calendar size={48} className="text-slate-300 mb-3" />
-            <p className="font-lora text-lg font-semibold text-slate-500 mb-1">No Weekly Records Found</p>
-            <p className="text-sm max-w-sm">No sales were recorded for this week matching your filters.</p>
+            <p className="font-lora text-lg font-semibold text-slate-500 mb-1">No Records Found</p>
+            <p className="text-sm max-w-sm">No sale returns were recorded matching your search filters.</p>
           </div>
         ) : (
           customerCardsData.map(data => {
@@ -277,10 +258,10 @@ export default function WeeklyTab({ onEditBill, onPrintBill }: WeeklyTabProps) {
                 <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-4">
                   <div className="flex items-center gap-1.5 bg-amber-50 text-amber-800 px-2.5 py-1 rounded-full text-xs font-semibold border border-amber-200">
                     <FileText size={13} className="text-amber-600" />
-                    <span>{data.bills.length} {data.bills.length === 1 ? 'Bill' : 'Bills'}</span>
+                    <span>{data.returns.length} {data.returns.length === 1 ? 'Return' : 'Returns'}</span>
                   </div>
                   <span className="text-amber-600 font-semibold text-xs flex items-center gap-1 hover:text-amber-700 transition-colors">
-                    View Bills <ArrowRight size={14} />
+                    View Returns <ArrowRight size={14} />
                   </span>
                 </div>
               </div>

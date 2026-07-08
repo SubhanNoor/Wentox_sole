@@ -18,7 +18,6 @@ import BusinessAcSetupPage from '@/pages/BusinessAcSetupPage';
 
 // Reports
 import ReportStockPage from '@/pages/ReportStockPage';
-import ReportProductLedgerPage from '@/pages/ReportProductLedgerPage';
 import ReportKhaataPage from '@/pages/ReportKhaataPage';
 import ReportCashBookPage from '@/pages/ReportCashBookPage';
 
@@ -74,8 +73,6 @@ export default function App() {
     // Reports
     case 'report-stock':
       return <ReportStockPage />;
-    case 'report-product-ledger':
-      return <ReportProductLedgerPage />;
     case 'report-khaata':
       return <ReportKhaataPage />;
     case 'report-cashbook':

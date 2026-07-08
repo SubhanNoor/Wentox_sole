@@ -220,15 +220,29 @@ type Action =
   | { type: 'UPDATE_PRODUCT'; product: Product }
   | { type: 'DELETE_PRODUCT'; id: string }
   | { type: 'ADD_CATEGORY'; category: ProductCategory }
+  | { type: 'UPDATE_CATEGORY'; category: ProductCategory }
+  | { type: 'DELETE_CATEGORY'; id: string }
   | { type: 'ADD_CITY'; city: City }
+  | { type: 'UPDATE_CITY'; city: City }
+  | { type: 'DELETE_CITY'; id: string }
   | { type: 'ADD_SUB_CUSTOMER'; subCust: SubCustomer }
+  | { type: 'UPDATE_SUB_CUSTOMER'; subCust: SubCustomer }
+  | { type: 'DELETE_SUB_CUSTOMER'; id: string }
   | { type: 'ADD_CUSTOMER'; customer: Customer }
   
   // Account Actions
   | { type: 'ADD_GROUP_ACCOUNT'; account: GroupAccount }
+  | { type: 'UPDATE_GROUP_ACCOUNT'; account: GroupAccount }
+  | { type: 'DELETE_GROUP_ACCOUNT'; id: string }
   | { type: 'ADD_CONTROL_ACCOUNT'; account: ControlAccount }
+  | { type: 'UPDATE_CONTROL_ACCOUNT'; account: ControlAccount }
+  | { type: 'DELETE_CONTROL_ACCOUNT'; id: string }
   | { type: 'ADD_CHART_ACCOUNT'; account: ChartOfAccount }
+  | { type: 'UPDATE_CHART_ACCOUNT'; account: ChartOfAccount }
+  | { type: 'DELETE_CHART_ACCOUNT'; id: string }
   | { type: 'ADD_BUSINESS_ACCOUNT'; account: BusinessAccount }
+  | { type: 'UPDATE_BUSINESS_ACCOUNT'; account: BusinessAccount }
+  | { type: 'DELETE_BUSINESS_ACCOUNT'; id: string }
   
   // Bill Actions
   | { type: 'ADD_SALE_BILL'; bill: SaleBill }
@@ -306,22 +320,95 @@ function reducer(state: State, action: Action): State {
       return { ...state, products: state.products.filter(p => p.id !== action.id) };
     case 'ADD_CATEGORY':
       return { ...state, categories: [...state.categories, action.category] };
+    case 'UPDATE_CATEGORY':
+      return {
+        ...state,
+        categories: state.categories.map(c => c.id === action.category.id ? action.category : c)
+      };
+    case 'DELETE_CATEGORY':
+      return {
+        ...state,
+        categories: state.categories.filter(c => c.id !== action.id)
+      };
     case 'ADD_CITY':
       return { ...state, cities: [...state.cities, action.city] };
+    case 'UPDATE_CITY':
+      return {
+        ...state,
+        cities: state.cities.map(c => c.id === action.city.id ? action.city : c)
+      };
+    case 'DELETE_CITY':
+      return {
+        ...state,
+        cities: state.cities.filter(c => c.id !== action.id)
+      };
     case 'ADD_SUB_CUSTOMER':
       return { ...state, subCustomers: [...state.subCustomers, action.subCust] };
+    case 'UPDATE_SUB_CUSTOMER':
+      return {
+        ...state,
+        subCustomers: state.subCustomers.map(sc => sc.id === action.subCust.id ? action.subCust : sc)
+      };
+    case 'DELETE_SUB_CUSTOMER':
+      return {
+        ...state,
+        subCustomers: state.subCustomers.filter(sc => sc.id !== action.id)
+      };
     case 'ADD_CUSTOMER':
       return { ...state, customers: [...state.customers, action.customer] };
 
     /* ──── Account Handlers ──── */
     case 'ADD_GROUP_ACCOUNT':
       return { ...state, groupAccounts: [...state.groupAccounts, action.account] };
+    case 'UPDATE_GROUP_ACCOUNT':
+      return {
+        ...state,
+        groupAccounts: state.groupAccounts.map(g => g.id === action.account.id ? action.account : g)
+      };
+    case 'DELETE_GROUP_ACCOUNT':
+      return {
+        ...state,
+        groupAccounts: state.groupAccounts.filter(g => g.id !== action.id)
+      };
     case 'ADD_CONTROL_ACCOUNT':
       return { ...state, controlAccounts: [...state.controlAccounts, action.account] };
+    case 'UPDATE_CONTROL_ACCOUNT':
+      return {
+        ...state,
+        controlAccounts: state.controlAccounts.map(c => c.id === action.account.id ? action.account : c)
+      };
+    case 'DELETE_CONTROL_ACCOUNT':
+      return {
+        ...state,
+        controlAccounts: state.controlAccounts.filter(c => c.id !== action.id)
+      };
     case 'ADD_CHART_ACCOUNT':
       return { ...state, chartAccounts: [...state.chartAccounts, action.account] };
+    case 'UPDATE_CHART_ACCOUNT':
+      return {
+        ...state,
+        chartAccounts: state.chartAccounts.map(c => c.id === action.account.id ? action.account : c)
+      };
+    case 'DELETE_CHART_ACCOUNT':
+      return {
+        ...state,
+        chartAccounts: state.chartAccounts.filter(c => c.id !== action.id)
+      };
     case 'ADD_BUSINESS_ACCOUNT':
       return { ...state, businessAccounts: [...state.businessAccounts, action.account] };
+    case 'UPDATE_BUSINESS_ACCOUNT':
+      return {
+        ...state,
+        businessAccounts: state.businessAccounts.map(b => b.id === action.account.id ? action.account : b),
+        customers: state.customers.map(c => c.id === action.account.id ? { ...c, name: action.account.name } : c)
+      };
+    case 'DELETE_BUSINESS_ACCOUNT':
+      return {
+        ...state,
+        businessAccounts: state.businessAccounts.filter(b => b.id !== action.id),
+        customers: state.customers.filter(c => c.id !== action.id),
+        subCustomers: state.subCustomers.filter(sc => sc.customerId !== action.id)
+      };
 
     /* ──── Sale Bill Handlers ──── */
     case 'ADD_SALE_BILL': {

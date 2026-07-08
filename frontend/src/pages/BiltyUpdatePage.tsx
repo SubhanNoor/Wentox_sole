@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import type { SaleBill } from '@/types';
-import { Search, Edit, RefreshCw, Printer } from 'lucide-react';
+import { Search, Edit2, RefreshCw, Printer } from 'lucide-react';
 
 export default function BiltyUpdatePage() {
   const { state, dispatch } = useApp();
@@ -134,7 +134,7 @@ export default function BiltyUpdatePage() {
 
   return (
     <AppLayout pageTitle="Search & Bilty Adda Updation">
-      <div className="mx-auto" style={{ maxWidth: 1100 }}>
+      <div className="mx-auto" style={{ maxWidth: 1200 }}>
         
         {/* Success/Error Alerts */}
         {successMsg && (
@@ -346,7 +346,7 @@ export default function BiltyUpdatePage() {
                           onClick={() => handleSelectBill(bill)}
                           className="text-blue-600 hover:text-blue-800 p-1 flex items-center gap-1 mx-auto text-xs font-semibold"
                         >
-                          <Edit size={12} /> Select
+                          <Edit2 size={12} /> Select
                         </button>
                       </td>
                     </tr>

@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import type { SaleBill, Customer } from '@/types';
-import { Calendar, Search, ArrowRight, ArrowLeft, FileText, Pencil, Printer } from 'lucide-react';
+import { Calendar, Search, ArrowRight, ArrowLeft, FileText, Edit2, Printer } from 'lucide-react';
 
 interface OverallTabProps {
   onEditBill: (bill: SaleBill) => void;
@@ -166,20 +166,20 @@ export default function OverallTab({ onEditBill, onPrintBill }: OverallTabProps)
                     <td className="p-3.5 text-right font-mono font-bold text-emerald-800 pr-4">{formatCurrency(bill.totalValue)}</td>
                     <td className="p-3.5 text-center pr-4">
                       <div className="flex justify-center items-center gap-3">
-                        <button
-                          onClick={() => onEditBill(bill)}
-                          title="Edit Bill"
-                          className="w-8 h-8 rounded-full bg-amber-50 text-amber-600 hover:bg-amber-100 hover:text-amber-800 border border-amber-200 shadow-sm transition-all flex items-center justify-center hover:scale-105"
-                        >
-                          <Pencil size={15} />
-                        </button>
-                        <button
-                          onClick={() => onPrintBill(bill)}
-                          title="Print Bill"
-                          className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-800 border border-blue-200 shadow-sm transition-all flex items-center justify-center hover:scale-105"
-                        >
-                          <Printer size={15} />
-                        </button>
+                          <button
+                            onClick={() => onEditBill(bill)}
+                            title="Edit Bill"
+                            className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
+                          >
+                            <Edit2 size={15} />
+                          </button>
+                          <button
+                            onClick={() => onPrintBill(bill)}
+                            title="Print Bill"
+                            className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
+                          >
+                            <Printer size={15} />
+                          </button>
                       </div>
                     </td>
                   </tr>

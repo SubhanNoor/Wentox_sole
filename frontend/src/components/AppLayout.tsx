@@ -31,7 +31,6 @@ const navSections: NavSection[] = [
     title: 'Reports',
     items: [
       { page: 'report-stock', label: 'Current Stock', icon: Package },
-      { page: 'report-product-ledger', label: 'Product Ledger', icon: BookOpen },
       { page: 'report-khaata', label: 'Accounts Ledger', icon: FileText },
       { page: 'report-cashbook', label: 'Cash Book', icon: DollarSign },
     ]

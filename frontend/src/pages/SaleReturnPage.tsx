@@ -1,21 +1,20 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import type { SaleReturn, SaleReturnItem } from '@/types';
-import {
-  Plus, Edit2, Save, Trash2, Printer, Search,
-  ChevronFirst, ChevronLeft, ChevronRight, ChevronLast,
-  Lock, X
-} from 'lucide-react';
+import type { SaleReturn, SaleReturnItem, SaleBill } from '@/types';
+import WeeklyReturnTab from '@/components/WeeklyReturnTab';
+import MonthlyReturnTab from '@/components/MonthlyReturnTab';
+import OverallReturnTab from '@/components/OverallReturnTab';
+import FindReturnTab from '@/components/FindReturnTab';
+import { Save, Plus, Trash2, Printer, Lock } from 'lucide-react';
 
-export default function SaleReturnPage() {
+export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?: 'return' | 'weekly' | 'monthly' | 'overall' | 'find' }) {
   const { state, dispatch } = useApp();
 
+  const [activeTab, setActiveTab] = useState<'return' | 'weekly' | 'monthly' | 'overall' | 'find'>(initialTab);
+
   // Mode: 'view' | 'edit' | 'new'
-  const [mode, setMode] = useState<'view' | 'edit' | 'new'>('view');
-  
-  // Navigation Index
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');
 
   // Form State
   const [returnId, setReturnId] = useState('');
@@ -23,61 +22,19 @@ export default function SaleReturnPage() {
   const [storeId, setStoreId] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [subCustomerId, setSubCustomerId] = useState('');
-  const [billNo, setBillNo] = useState(''); // printed return bill number
+  const [billNo, setBillNo] = useState('');
   const [gpNo, setGpNo] = useState('');
   const [biltyNo, setBiltyNo] = useState('');
   const [remarks, setRemarks] = useState('');
   const [status, setStatus] = useState<'Posted' | 'Unposted'>('Unposted');
+  const [invoiceDiscount, setInvoiceDiscount] = useState(0);
   
   // Line items state
   const [items, setItems] = useState<SaleReturnItem[]>([]);
 
-  // Search dialog
-  const [showSearchModal, setShowSearchModal] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-
-  // Notifications
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
-  // Load a return into form fields
-  const loadReturn = (ret: SaleReturn) => {
-    setReturnId(ret.id);
-    setDate(ret.date);
-    setStoreId(ret.storeId);
-    setCustomerId(ret.customerId);
-    setSubCustomerId(ret.subCustomerId || 'sub-same');
-    setBillNo(ret.billNo);
-    setGpNo(ret.gpNo || '');
-    setBiltyNo(ret.biltyNo || '');
-    setRemarks(ret.remarks || '');
-    setStatus(ret.status);
-    setItems(ret.items);
-    setErrorMsg('');
-  };
-
-  // Load the current active return
-  useEffect(() => {
-    if (state.saleReturns.length > 0 && mode === 'view') {
-      loadReturn(state.saleReturns[currentIndex]);
-    }
-  }, [currentIndex, state.saleReturns, mode]);
-
-  // Handle Navigation
-  const handleFirst = () => {
-    if (state.saleReturns.length > 0) setCurrentIndex(0);
-  };
-  const handlePrev = () => {
-    if (currentIndex > 0) setCurrentIndex(currentIndex - 1);
-  };
-  const handleNext = () => {
-    if (currentIndex < state.saleReturns.length - 1) setCurrentIndex(currentIndex + 1);
-  };
-  const handleLast = () => {
-    if (state.saleReturns.length > 0) setCurrentIndex(state.saleReturns.length - 1);
-  };
-
-  // Get selected customer details
   const selectedCustomer = useMemo(() => {
     return state.customers.find(c => c.id === customerId);
   }, [customerId, state.customers]);
@@ -91,6 +48,86 @@ export default function SaleReturnPage() {
     return state.subCustomers.filter(sc => sc.customerId === customerId);
   }, [customerId, state.subCustomers]);
 
+  // Drafts state loaded from local cache
+  const [drafts, setDrafts] = useState<SaleReturn[]>(() => {
+    const saved = localStorage.getItem('wento_sale_return_drafts');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  // Check if all fields are filled to make the Confirm button blue
+  const isAllFieldsFilled = useMemo(() => {
+    if (!customerId) return false;
+    if (!date) return false;
+    if (!storeId) return false;
+    if (!billNo) return false;
+    if (items.length === 0) return false;
+    if (items.some(it => !it.productId || it.cartons <= 0 || it.rate <= 0)) return false;
+    return true;
+  }, [customerId, date, storeId, billNo, items]);
+
+  // Load a return into form fields
+  const loadReturn = (ret: SaleReturn) => {
+    setReturnId(ret.id);
+    setDate(ret.date);
+    setStoreId(ret.storeId);
+    setCustomerId(ret.customerId);
+    setSubCustomerId(ret.subCustomerId || 'sub-same');
+    setBillNo(ret.billNo);
+    setGpNo(ret.gpNo || '');
+    setBiltyNo(ret.biltyNo || '');
+    setRemarks(ret.remarks || '');
+    setStatus(ret.status);
+    setInvoiceDiscount(ret.invoiceDiscount || 0);
+    setItems(ret.items);
+    setErrorMsg('');
+  };
+
+  // Pre-fill a return from a Sale Bill
+  const prefillFromSaleBill = (bill: SaleBill) => {
+    setStoreId(bill.storeId);
+    setCustomerId(bill.customerId);
+    setSubCustomerId(bill.subCustomerId || 'sub-same');
+    setGpNo(bill.gpNo || '');
+    setBiltyNo(bill.biltyNo || '');
+    setRemarks(`Return from Sale Bill No. ${bill.billNo}`);
+    setInvoiceDiscount(bill.invoiceDiscount || 0);
+    const mappedItems: SaleReturnItem[] = bill.items.map((it, idx) => ({
+      id: `ret-item-${Date.now()}-${idx}`,
+      productId: it.productId,
+      productName: it.productName,
+      packing: it.packing,
+      cartons: it.cartons,
+      pairs: it.pairs,
+      rate: it.rate,
+      discountPercent: it.discountPercent,
+      discountValue: it.discountValue,
+      value: it.value
+    }));
+    setItems(mappedItems);
+    setSuccessMsg(`Prefilled return items from Sale Bill No. ${bill.billNo}`);
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
+  const handleEditSpecificReturn = (ret: SaleReturn) => {
+    loadReturn(ret);
+    setMode('edit');
+    setActiveTab('return');
+  };
+
+  const handlePrintSpecificReturn = (ret: SaleReturn) => {
+    loadReturn(ret);
+    setTimeout(() => {
+      window.print();
+    }, 150);
+  };
+
+  // Initialize new return if mode is new and not set
+  useEffect(() => {
+    if (activeTab === 'return' && mode === 'new' && !returnId) {
+      handleNew();
+    }
+  }, [activeTab, mode, returnId]);
+
   // Calculations
   const totalCartons = useMemo(() => {
     return items.reduce((sum, item) => sum + (item.cartons || 0), 0);
@@ -100,9 +137,13 @@ export default function SaleReturnPage() {
     return items.reduce((sum, item) => sum + (item.pairs || 0), 0);
   }, [items]);
 
-  const finalTotalValue = useMemo(() => {
+  const itemsTotalValue = useMemo(() => {
     return items.reduce((sum, item) => sum + (item.value || 0), 0);
   }, [items]);
+
+  const finalTotalValue = useMemo(() => {
+    return Math.max(0, itemsTotalValue - invoiceDiscount);
+  }, [itemsTotalValue, invoiceDiscount]);
 
   // Toolbar Actions
   const handleNew = () => {
@@ -117,6 +158,7 @@ export default function SaleReturnPage() {
     setBiltyNo('');
     setRemarks('');
     setStatus('Unposted');
+    setInvoiceDiscount(0);
     setItems([{
       id: 'sri_' + Date.now() + '_0',
       productId: '',
@@ -130,33 +172,6 @@ export default function SaleReturnPage() {
       value: 0
     }]);
     setErrorMsg('');
-  };
-
-  const handleEdit = () => {
-    if (status === 'Posted') {
-      setErrorMsg('Cannot edit a posted return. Unpost is not supported for returns in this screen; recreate the entry.');
-      return;
-    }
-    setMode('edit');
-    setErrorMsg('');
-  };
-
-  const handleDelete = () => {
-    if (status === 'Posted') {
-      setErrorMsg('Cannot delete a posted return.');
-      return;
-    }
-    if (window.confirm('Are you sure you want to delete this sale return?')) {
-      dispatch({ type: 'DELETE_SALE_RETURN', returnId });
-      setSuccessMsg('Sale return deleted successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-      if (currentIndex > 0) {
-        setCurrentIndex(currentIndex - 1);
-      } else {
-        setCurrentIndex(0);
-      }
-      setMode('view');
-    }
   };
 
   const handleSave = () => {
@@ -185,26 +200,61 @@ export default function SaleReturnPage() {
       biltyNo,
       remarks,
       status,
+      invoiceDiscount,
       items
     };
 
     if (mode === 'new') {
       dispatch({ type: 'ADD_SALE_RETURN', returnObj: savedReturn });
       setSuccessMsg('New sale return saved successfully.');
-      setCurrentIndex(0);
     } else {
       dispatch({ type: 'UPDATE_SALE_RETURN', returnId, returnObj: savedReturn });
       setSuccessMsg('Sale return updated successfully.');
     }
+
+    // Clean up draft from cache if saved/confirmed
+    setDrafts(prev => {
+      const updated = prev.filter(d => d.id !== returnId);
+      localStorage.setItem('wento_sale_return_drafts', JSON.stringify(updated));
+      return updated;
+    });
 
     setTimeout(() => setSuccessMsg(''), 3000);
     setMode('view');
     setErrorMsg('');
   };
 
-  const handleDone = () => {
-    setMode('view');
-    setErrorMsg('');
+  const handleSaveDraft = () => {
+    const draftReturn: SaleReturn = {
+      id: returnId || 'sr_draft_' + Date.now(),
+      date,
+      storeId,
+      customerId,
+      subCustomerId: subCustomerId === 'sub-same' ? null : subCustomerId,
+      billNo,
+      gpNo,
+      biltyNo,
+      remarks,
+      invoiceDiscount,
+      status: 'Unposted',
+      items
+    };
+
+    setDrafts(prev => {
+      const existingIdx = prev.findIndex(d => d.id === draftReturn.id);
+      let updated;
+      if (existingIdx !== -1) {
+        updated = [...prev];
+        updated[existingIdx] = draftReturn;
+      } else {
+        updated = [draftReturn, ...prev];
+      }
+      localStorage.setItem('wento_sale_return_drafts', JSON.stringify(updated));
+      return updated;
+    });
+
+    setSuccessMsg('Return saved to drafts cache.');
+    setTimeout(() => setSuccessMsg(''), 3000);
   };
 
   const handlePostToggle = () => {
@@ -214,10 +264,6 @@ export default function SaleReturnPage() {
       setSuccessMsg('Return Posted to accounts and stock updated.');
     }
     setTimeout(() => setSuccessMsg(''), 3000);
-  };
-
-  const handlePrint = () => {
-    window.print();
   };
 
   // Line Items Helper Actions
@@ -256,7 +302,7 @@ export default function SaleReturnPage() {
         if (product) {
           newItem.productName = product.name;
           newItem.packing = product.packing;
-          newItem.rate = product.costPrice + 50;
+          newItem.rate = product.costPrice + 50; // Set a default markup rate
           newItem.pairs = newItem.cartons * product.packing;
         } else {
           newItem.productName = '';
@@ -278,6 +324,7 @@ export default function SaleReturnPage() {
       } else if (field === 'discountValue') {
         newItem.discountPercent = grossValue > 0 ? parseFloat(((newItem.discountValue / grossValue) * 100).toFixed(1)) : 0;
       } else {
+        // Recalculate discount value from percent
         newItem.discountValue = Math.round(grossValue * (newItem.discountPercent / 100));
       }
 
@@ -288,30 +335,78 @@ export default function SaleReturnPage() {
     setItems(updated);
   };
 
-  // Find selection
-  const handleSelectFromFind = (ret: SaleReturn) => {
-    const idx = state.saleReturns.findIndex(r => r.id === ret.id);
-    if (idx !== -1) {
-      setCurrentIndex(idx);
-      loadReturn(ret);
-    }
-    setShowSearchModal(false);
-  };
-
-  const searchResults = useMemo(() => {
-    if (!searchQuery.trim()) return state.saleReturns;
-    const q = searchQuery.toLowerCase();
-    return state.saleReturns.filter(r => {
-      const custName = state.customers.find(c => c.id === r.customerId)?.name.toLowerCase() || '';
-      return r.billNo.toLowerCase().includes(q) || custName.includes(q);
-    });
-  }, [searchQuery, state.saleReturns, state.customers]);
-
   const isViewMode = mode === 'view';
 
   return (
     <AppLayout pageTitle="Sale Return">
-      <div className="mx-auto" style={{ maxWidth: 1100 }}>
+      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+        
+        {/* Top Tab Bar */}
+        <div className="flex gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+          <button
+            onClick={() => {
+              setActiveTab('return');
+              handleNew();
+            }}
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+              activeTab === 'return'
+                ? 'bg-[#111c2a] text-white shadow-sm'
+                : 'bg-white border text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            New Sale Return
+          </button>
+          <button
+            onClick={() => setActiveTab('weekly')}
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+              activeTab === 'weekly'
+                ? 'bg-[#111c2a] text-white shadow-sm'
+                : 'bg-white border text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Weekly Records
+          </button>
+          <button
+            onClick={() => setActiveTab('monthly')}
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+              activeTab === 'monthly'
+                ? 'bg-[#111c2a] text-white shadow-sm'
+                : 'bg-white border text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Monthly Records
+          </button>
+          <button
+            onClick={() => setActiveTab('overall')}
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+              activeTab === 'overall'
+                ? 'bg-[#111c2a] text-white shadow-sm'
+                : 'bg-white border text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Overall Records
+          </button>
+          <button
+            onClick={() => setActiveTab('find')}
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+              activeTab === 'find'
+                ? 'bg-[#111c2a] text-white shadow-sm'
+                : 'bg-white border text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Find &amp; Update Return
+          </button>
+        </div>
+
+        {/* Tab contents (records & find) */}
+        <div data-no-print>
+          {activeTab === 'weekly' && <WeeklyReturnTab onEditReturn={handleEditSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
+          {activeTab === 'monthly' && <MonthlyReturnTab onEditReturn={handleEditSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
+          {activeTab === 'overall' && <OverallReturnTab onEditReturn={handleEditSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
+          {activeTab === 'find' && <FindReturnTab onEditReturn={handleEditSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
+        </div>
+
+        <div className={activeTab === 'return' ? 'block' : 'hidden'}>
         
         {/* Banner Messages */}
         {successMsg && (
@@ -325,63 +420,130 @@ export default function SaleReturnPage() {
           </div>
         )}
 
+        {/* Drafts Loader Panel */}
+        {mode !== 'view' && drafts.length > 0 && (
+          <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-4 text-sm" data-no-print>
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-slate-700">Saved Drafts:</span>
+              <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-bold">
+                {drafts.length} incomplete return(s) cached
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <select
+                onChange={e => {
+                  const selected = drafts.find(d => d.id === e.target.value);
+                  if (selected) {
+                    loadReturn(selected);
+                    setMode('new');
+                  }
+                }}
+                className="soleria-input py-1 px-2.5 text-xs bg-white border cursor-pointer font-medium"
+                style={{ width: '220px' }}
+                value=""
+              >
+                <option value="">Select a draft to load...</option>
+                {drafts.map(d => {
+                  const custName = state.customers.find(c => c.id === d.customerId)?.name || 'Unnamed Customer';
+                  return (
+                    <option key={d.id} value={d.id}>
+                      {d.billNo || 'No Number'} - {custName} ({d.date})
+                    </option>
+                  );
+                })}
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  const selectEl = document.querySelector('select') as HTMLSelectElement;
+                  const draftId = selectEl?.value;
+                  if (draftId) {
+                    setDrafts(prev => {
+                      const updated = prev.filter(d => d.id !== draftId);
+                      localStorage.setItem('wento_sale_return_drafts', JSON.stringify(updated));
+                      return updated;
+                    });
+                    handleNew();
+                    setSuccessMsg('Draft deleted successfully.');
+                    setTimeout(() => setSuccessMsg(''), 2000);
+                  } else {
+                    setErrorMsg('Please select a draft first.');
+                    setTimeout(() => setErrorMsg(''), 2000);
+                  }
+                }}
+                className="text-xs text-rose-600 hover:text-rose-800 font-semibold transition-colors"
+              >
+                Delete Selected Draft
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Toolbar - data-no-print */}
         <div className="flex flex-wrap items-center justify-between gap-3 mb-6 p-4 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
-          {/* Main Action Buttons */}
           <div className="flex flex-wrap gap-2">
-            {isViewMode ? (
+            {mode === 'view' ? (
               <>
-                <button onClick={handleNew} className="btn-gold flex items-center gap-1.5 px-4 py-2">
-                  <Plus size={16} /> New
+                <button
+                  onClick={() => window.print()}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-700 shadow-sm transition-colors flex items-center gap-1.5"
+                >
+                  <Printer size={16} /> Print Return
                 </button>
-                <button onClick={handleEdit} className="btn-outline flex items-center gap-1.5 px-4 py-2">
-                  <Edit2 size={16} /> Edit
+                <button
+                  onClick={handleNew}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
+                >
+                  Create New Return
                 </button>
-                <button onClick={handleDelete} className="btn-danger flex items-center gap-1.5 px-4 py-2">
-                  <Trash2 size={16} /> Delete
-                </button>
+                {status === 'Unposted' && (
+                  <button onClick={handlePostToggle} className="flex items-center gap-1.5 px-4 py-2 rounded-md font-semibold text-sm transition-colors border bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
+                    <Lock size={16} /> Post Return
+                  </button>
+                )}
               </>
             ) : (
               <>
-                <button onClick={handleSave} className="btn-gold flex items-center gap-1.5 px-4 py-2" style={{ background: 'var(--success)', color: '#ffffff' }}>
-                  <Save size={16} /> Save
+                <button
+                  onClick={handleSave}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-sm border-none font-inter"
+                  style={{
+                    backgroundColor: isAllFieldsFilled ? '#2563eb' : '#f1f5f9',
+                    color: isAllFieldsFilled ? '#ffffff' : '#94a3b8',
+                    cursor: isAllFieldsFilled ? 'pointer' : 'not-allowed'
+                  }}
+                >
+                  <Save size={16} /> Confirm
                 </button>
-                <button onClick={handleDone} className="btn-outline flex items-center gap-1.5 px-4 py-2">
-                  <X size={16} /> Cancel
+                <button
+                  onClick={handleSaveDraft}
+                  className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg flex items-center gap-1.5"
+                >
+                  Save Draft
                 </button>
+                {mode === 'edit' ? (
+                  <button onClick={() => { setMode('view'); }} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
+                    Cancel Edit
+                  </button>
+                ) : (
+                  <button onClick={handleNew} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
+                    Clear Form
+                  </button>
+                )}
               </>
             )}
-            <button onClick={() => setShowSearchModal(true)} className="btn-outline flex items-center gap-1.5 px-4 py-2">
-              <Search size={16} /> Find
-            </button>
-            <button onClick={handlePrint} className="btn-outline flex items-center gap-1.5 px-4 py-2">
-              <Printer size={16} /> Print
-            </button>
-            {status === 'Unposted' && isViewMode && (
-              <button onClick={handlePostToggle} className="flex items-center gap-1.5 px-4 py-2 rounded-md font-semibold text-sm transition-colors border bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
-                <Lock size={16} /> Post Return
-              </button>
-            )}
           </div>
-
-          {/* Navigation Controls */}
-          {isViewMode && (
-            <div className="flex items-center gap-1">
-              <button onClick={handleFirst} disabled={currentIndex === 0} className="btn-outline p-2 rounded-md disabled:opacity-50">
-                <ChevronFirst size={16} />
-              </button>
-              <button onClick={handlePrev} disabled={currentIndex === 0} className="btn-outline p-2 rounded-md disabled:opacity-50">
-                <ChevronLeft size={16} />
-              </button>
-              <span className="text-xs font-semibold px-2 font-inter" style={{ color: 'var(--secondary-text)' }}>
-                {state.saleReturns.length > 0 ? `${currentIndex + 1} of ${state.saleReturns.length}` : '0 of 0'}
-              </span>
-              <button onClick={handleNext} disabled={currentIndex === state.saleReturns.length - 1} className="btn-outline p-2 rounded-md disabled:opacity-50">
-                <ChevronRight size={16} />
-              </button>
-              <button onClick={handleLast} disabled={currentIndex === state.saleReturns.length - 1} className="btn-outline p-2 rounded-md disabled:opacity-50">
-                <ChevronLast size={16} />
-              </button>
+          
+          {mode === 'edit' && (
+            <div className="text-sm font-semibold text-slate-500 font-inter">
+              Editing System Return: <span className="text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-100">{returnId}</span>
+            </div>
+          )}
+          
+          {mode === 'view' && (
+            <div className="text-sm font-semibold text-emerald-600 font-inter flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping text-[10px]"></span>
+              Return Confirmed &amp; Saved Successfully!
             </div>
           )}
         </div>
@@ -389,6 +551,7 @@ export default function SaleReturnPage() {
         {/* Invoice Layout */}
         <div className="card-white shadow-sm p-6 md:p-8" style={{ border: '1px solid var(--border-color)', background: '#ffffff' }}>
           
+          {/* Print Title (Visible only when printing) */}
           <div className="hidden print:flex items-center justify-between mb-6 pb-4 border-b">
             <div>
               <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTO ERP</h1>
@@ -445,13 +608,47 @@ export default function SaleReturnPage() {
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
-                Return Bill No.
+                Manual Invoice No.
               </label>
               <input
                 type="text"
                 value={billNo}
                 disabled={isViewMode}
-                onChange={e => setBillNo(e.target.value)}
+                onChange={e => {
+                  const val = e.target.value;
+                  setBillNo(val);
+                  if (mode === 'new' && val.trim() !== '') {
+                    // 1. Check if there is an existing return with this billNo (switch to edit mode)
+                    const matchedReturn = state.saleReturns.find(r => r.billNo.trim().toLowerCase() === val.trim().toLowerCase());
+                    if (matchedReturn) {
+                      loadReturn(matchedReturn);
+                      setMode('edit');
+                      return;
+                    }
+                    // 2. Check if there is an existing sale bill with this billNo (prefill return items)
+                    const matchedBill = state.saleBills.find(b => b.billNo.trim().toLowerCase() === val.trim().toLowerCase());
+                    if (matchedBill) {
+                      prefillFromSaleBill(matchedBill);
+                    }
+                  }
+                }}
+                onBlur={e => {
+                  const val = e.target.value;
+                  if (mode === 'new' && val.trim() !== '') {
+                    // 1. Check if there is an existing return with this billNo (switch to edit mode)
+                    const matchedReturn = state.saleReturns.find(r => r.billNo.trim().toLowerCase() === val.trim().toLowerCase());
+                    if (matchedReturn) {
+                      loadReturn(matchedReturn);
+                      setMode('edit');
+                      return;
+                    }
+                    // 2. Check if there is an existing sale bill with this billNo (prefill return items)
+                    const matchedBill = state.saleBills.find(b => b.billNo.trim().toLowerCase() === val.trim().toLowerCase());
+                    if (matchedBill) {
+                      prefillFromSaleBill(matchedBill);
+                    }
+                  }
+                }}
                 className="soleria-input"
                 style={{ fontSize: '13px' }}
               />
@@ -462,7 +659,7 @@ export default function SaleReturnPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6 pb-6 border-b" style={{ borderColor: 'var(--border-table)' }}>
             
             {/* Customer Details Box */}
-            <div className="flex flex-col gap-3 p-4 rounded-lg bg-slate-50 border" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="flex flex-col gap-3 p-4 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
               <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-1.5">
                 Customer Information
               </div>
@@ -475,7 +672,8 @@ export default function SaleReturnPage() {
                     value={customerId}
                     disabled={isViewMode}
                     onChange={e => {
-                      setCustomerId(e.target.value);
+                      const newCustId = e.target.value;
+                      setCustomerId(newCustId);
                       setSubCustomerId('sub-same');
                     }}
                     className="soleria-input cursor-pointer"
@@ -515,9 +713,9 @@ export default function SaleReturnPage() {
             </div>
 
             {/* Delivery & Dispatch Box */}
-            <div className="flex flex-col gap-3 p-4 rounded-lg bg-slate-50 border" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="flex flex-col gap-3 p-4 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
               <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-1.5">
-                Dispatch logistics
+                Dispatch Logistics
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
@@ -571,7 +769,7 @@ export default function SaleReturnPage() {
           <div className="mb-6 overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                   <th className="p-3 pl-4" style={{ minWidth: '220px' }}>Returned Article</th>
                   <th className="p-3 text-center" style={{ width: '80px' }}>Packing</th>
                   <th className="p-3 text-center" style={{ width: '90px' }}>Stock</th>
@@ -589,7 +787,7 @@ export default function SaleReturnPage() {
                   const product = state.products.find(p => p.id === item.productId);
                   const inStock = product ? product.stock : 0;
                   return (
-                    <tr key={item.id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                    <tr key={item.id} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
                       {/* Product select */}
                       <td className="p-3 pl-4">
                         <select
@@ -607,12 +805,12 @@ export default function SaleReturnPage() {
                       </td>
 
                       {/* Packing */}
-                      <td className="p-3 text-center font-mono text-sm text-slate-600">
+                      <td className="p-3 text-center text-sm text-slate-600 font-medium">
                         {item.packing || '-'}
                       </td>
 
                       {/* Stock */}
-                      <td className="p-3 text-center font-mono text-xs">
+                      <td className="p-3 text-center text-xs font-medium">
                         {item.productId ? (
                           <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
                             {inStock}
@@ -628,13 +826,13 @@ export default function SaleReturnPage() {
                           disabled={isViewMode}
                           min={1}
                           onChange={e => updateItemField(idx, 'cartons', parseInt(e.target.value) || 0)}
-                          className="soleria-input text-center font-mono"
+                          className="soleria-input text-center font-medium"
                           style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
                       </td>
 
                       {/* Pairs */}
-                      <td className="p-3 text-center font-mono text-sm font-semibold text-slate-700">
+                      <td className="p-3 text-center text-sm font-bold text-slate-700">
                         {item.pairs || '-'}
                       </td>
 
@@ -646,7 +844,7 @@ export default function SaleReturnPage() {
                           disabled={isViewMode}
                           min={0}
                           onChange={e => updateItemField(idx, 'rate', parseInt(e.target.value) || 0)}
-                          className="soleria-input text-right font-mono"
+                          className="soleria-input text-right font-medium"
                           style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
                       </td>
@@ -660,7 +858,7 @@ export default function SaleReturnPage() {
                           min={0}
                           max={100}
                           onChange={e => updateItemField(idx, 'discountPercent', parseFloat(e.target.value) || 0)}
-                          className="soleria-input text-center font-mono"
+                          className="soleria-input text-center font-medium"
                           style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
                       </td>
@@ -673,14 +871,15 @@ export default function SaleReturnPage() {
                           disabled={isViewMode}
                           min={0}
                           onChange={e => updateItemField(idx, 'discountValue', parseInt(e.target.value) || 0)}
-                          className="soleria-input text-right font-mono"
+                          className="soleria-input text-right font-medium"
                           style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
                       </td>
 
                       {/* Row Total Value */}
-                      <td className="p-3 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>
-                        {formatCurrency(item.value)}
+                      <td className="p-3 text-right font-semibold text-sm">
+                        <span style={{ color: '#B08D57' }}>Rs </span>
+                        <span style={{ color: '#B08D57' }}>{item.value.toLocaleString('en-US')}</span>
                       </td>
 
                       {/* Delete Action */}
@@ -728,32 +927,49 @@ export default function SaleReturnPage() {
                 rows={3}
                 style={{ fontSize: '13px', resize: 'none' }}
               />
-              <div className="mt-4 flex items-center gap-2">
-                <span className="text-xs font-semibold text-slate-500">Posting Status:</span>
-                <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${status === 'Posted' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
-                  {status}
-                </span>
-              </div>
             </div>
 
             {/* Calculations Box */}
-            <div className="flex flex-col gap-2.5 p-4 rounded-xl border bg-slate-50 font-inter" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="flex justify-between text-xs text-slate-500 border-b pb-1.5 mb-1">
-                <span>Description</span>
-                <span className="text-right">Value</span>
+            <div
+              className="flex flex-col justify-between p-4 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md"
+              style={{ minHeight: '160px' }}
+            >
+              <div className="text-xs font-semibold uppercase tracking-wider border-b pb-1.5 mb-2 text-slate-400 border-slate-800">
+                Calculations
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-600">Total Cartons:</span>
-                <span className="font-semibold font-mono">{totalCartons}</span>
+              <div className="flex flex-col gap-2 font-inter text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Total Cartons:</span>
+                  <span className="font-semibold">{totalCartons}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Total Pairs:</span>
+                  <span className="font-semibold">{totalPairs}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Gross Total:</span>
+                  <span className="font-semibold">Rs {itemsTotalValue.toLocaleString('en-US')}</span>
+                </div>
+                <div className="flex justify-between items-center mt-1">
+                  <span className="text-slate-400">Inv. Discount:</span>
+                  {isViewMode ? (
+                    <span className="font-semibold">Rs {invoiceDiscount.toLocaleString('en-US')}</span>
+                  ) : (
+                    <input
+                      type="number"
+                      value={invoiceDiscount || ''}
+                      onChange={e => setInvoiceDiscount(Math.max(0, parseInt(e.target.value) || 0))}
+                      className="soleria-input text-right font-medium py-0.5 px-2 border bg-slate-800 text-white border-slate-700 focus:ring-amber-500"
+                      style={{ width: '85px', fontSize: '12px' }}
+                    />
+                  )}
+                </div>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-slate-600">Total Pairs:</span>
-                <span className="font-semibold font-mono">{totalPairs}</span>
-              </div>
-              <div className="flex justify-between items-center border-t pt-2 mt-2" style={{ borderColor: 'var(--border-color)' }}>
-                <span className="font-bold text-slate-700">Total Credit Amount:</span>
-                <span className="text-xl font-bold font-mono" style={{ color: 'var(--brand-gold)' }}>
-                  {formatCurrency(finalTotalValue)}
+              <div className="flex justify-between items-center border-t pt-2 mt-2 border-[#1e293b]">
+                <span className="font-bold text-[11px] uppercase tracking-wider text-slate-400">Total Credit Amount:</span>
+                <span className="text-xl font-bold font-extrabold">
+                  <span style={{ color: '#B08D57' }}>Rs </span>
+                  <span style={{ color: '#B08D57' }}>{finalTotalValue.toLocaleString('en-US')}</span>
                 </span>
               </div>
             </div>
@@ -761,59 +977,9 @@ export default function SaleReturnPage() {
 
         </div>
 
-        {/* Find/Search Modal dialog */}
-        {showSearchModal && (
-          <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4" data-no-print>
-            <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
-              <div className="p-4 border-b flex items-center justify-between">
-                <h3 className="font-lora font-semibold text-lg text-slate-800">Find Sale Returns</h3>
-                <button onClick={() => setShowSearchModal(false)} className="text-slate-400 hover:text-slate-600">
-                  <X size={20} />
-                </button>
-              </div>
-              <div className="p-4 bg-slate-50 border-b">
-                <input
-                  type="text"
-                  placeholder="Search by customer name or return reference number..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  className="soleria-input w-full"
-                />
-              </div>
-              <div className="overflow-y-auto flex-1 p-2">
-                {searchResults.length === 0 ? (
-                  <div className="text-center p-8 text-slate-400 text-sm">No return records match your query.</div>
-                ) : (
-                  <div className="flex flex-col gap-1">
-                    {searchResults.map(ret => {
-                      const cust = state.customers.find(c => c.id === ret.customerId);
-                      return (
-                        <button
-                          key={ret.id}
-                          onClick={() => handleSelectFromFind(ret)}
-                          className="w-full text-left p-3 rounded-lg hover:bg-slate-100 flex items-center justify-between text-sm transition-colors border border-transparent hover:border-slate-200"
-                        >
-                          <div>
-                            <div className="font-semibold text-slate-700">Return No. {ret.billNo} ({ret.date})</div>
-                            <div className="text-xs text-slate-500">{cust?.name || 'Walk-in Client'}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="font-mono font-semibold" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(ret.items.reduce((s, it) => s + it.value, 0))}</div>
-                            <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded-full font-bold uppercase ${ret.status === 'Posted' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
-                              {ret.status}
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
+      </div>
       </div>
     </AppLayout>
   );
 }
+

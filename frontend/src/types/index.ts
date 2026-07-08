@@ -147,6 +147,7 @@ export interface SaleReturn {
   gpNo: string;
   biltyNo: string;
   remarks: string;
+  invoiceDiscount?: number;
   status: 'Posted' | 'Unposted';
   items: SaleReturnItem[];
 }
@@ -179,7 +180,6 @@ export type NavPage =
   | 'setup-sub-cust'
   | 'setup-city'
   | 'report-stock'
-  | 'report-product-ledger'
   | 'report-khaata'
   | 'report-cashbook'
   | 'settings';

@@ -3,6 +3,31 @@ import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Search, Printer } from 'lucide-react';
 
+const getColorFromName = (name: string): string => {
+  const words = name.trim().split(/\s+/);
+  const lastWord = words[words.length - 1];
+  const colors = ['black', 'white', 'brown', 'tan', 'blue', 'red', 'green', 'yellow', 'grey', 'gray', 'pink', 'orange', 'navy', 'gold', 'silver', 'maroon'];
+  if (colors.includes(lastWord.toLowerCase())) {
+    return lastWord.charAt(0).toUpperCase() + lastWord.slice(1).toLowerCase();
+  }
+  for (const c of colors) {
+    if (name.toLowerCase().includes(' ' + c) || name.toLowerCase().endsWith(c)) {
+      return c.charAt(0).toUpperCase() + c.slice(1).toLowerCase();
+    }
+  }
+  return 'N/A';
+};
+
+const getCleanedArticleName = (name: string, color: string): string => {
+  if (color !== 'N/A') {
+    const idx = name.toLowerCase().lastIndexOf(color.toLowerCase());
+    if (idx !== -1) {
+      return name.substring(0, idx).trim();
+    }
+  }
+  return name;
+};
+
 export default function ReportStockPage() {
   const { state } = useApp();
 
@@ -29,7 +54,11 @@ export default function ReportStockPage() {
   }, [filteredProducts]);
 
   const totalCartons = useMemo(() => {
-    return filteredProducts.reduce((sum, p) => sum + Math.round((p.stock || 0) / (p.packing || 12)), 0);
+    return filteredProducts.reduce((sum, p) => sum + Math.floor((p.stock || 0) / (p.packing || 12)), 0);
+  }, [filteredProducts]);
+
+  const totalExtraPairs = useMemo(() => {
+    return filteredProducts.reduce((sum, p) => sum + ((p.stock || 0) % (p.packing || 12)), 0);
   }, [filteredProducts]);
 
   return (
@@ -76,7 +105,7 @@ export default function ReportStockPage() {
             </div>
             <div className="text-right">
               <h2 className="font-lora font-semibold text-lg">CURRENT STOCK REPORT</h2>
-              <p className="text-xs text-slate-500 font-mono">Printed on: {new Date().toLocaleDateString()}</p>
+              <p className="text-xs text-slate-500">Printed on: {new Date().toLocaleDateString()}</p>
             </div>
           </div>
 
@@ -86,17 +115,19 @@ export default function ReportStockPage() {
                 <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                   <th className="p-3 pl-4">Product Code</th>
                   <th className="p-3">Article Name</th>
+                  <th className="p-3">Color</th>
                   <th className="p-3">Category</th>
                   <th className="p-3">Vendor</th>
-                  <th className="p-3 text-center">Packing</th>
-                  <th className="p-3 text-right">Stock (Cartons)</th>
-                  <th className="p-3 text-right">Stock (Pairs)</th>
+                  <th className="p-3 text-center">Pairs / Carton</th>
+                  <th className="p-3 text-right">Cartons</th>
+                  <th className="p-3 text-right">Extra Pairs</th>
+                  <th className="p-3 text-right">Total Pairs</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredProducts.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center p-8 text-slate-400">
+                    <td colSpan={9} className="text-center p-8 text-slate-400">
                       No products found matching stock criteria.
                     </td>
                   </tr>
@@ -105,21 +136,38 @@ export default function ReportStockPage() {
                     const catName = state.categories.find(c => c.id === prod.categoryId)?.name || 'General';
                     const vendName = state.vendors.find(v => v.id === prod.vendorId)?.name || 'General';
                     const pairs = prod.stock || 0;
-                    const cartons = Math.floor(pairs / prod.packing);
-                    const remPairs = pairs % prod.packing;
+                    const packing = prod.packing || 12;
+                    const cartons = Math.floor(pairs / packing);
+                    const remPairs = pairs % packing;
+                    const color = getColorFromName(prod.name);
+                    const cleanedName = getCleanedArticleName(prod.name, color);
 
                     return (
                       <tr key={prod.id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-3 pl-4 font-mono font-semibold text-slate-700">{prod.id}</td>
-                        <td className="p-3 font-semibold text-slate-800">{prod.name}</td>
+                        <td className="p-3 pl-4 font-semibold text-slate-700">{prod.id}</td>
+                        <td className="p-3 font-semibold text-slate-800">{cleanedName}</td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                            color.toLowerCase() === 'black' ? 'bg-slate-900 text-white' :
+                            color.toLowerCase() === 'white' ? 'bg-slate-100 text-slate-800 border border-slate-200' :
+                            color.toLowerCase() === 'brown' ? 'bg-amber-900 text-amber-50' :
+                            color.toLowerCase() === 'tan' ? 'bg-orange-100 text-orange-800' :
+                            'bg-slate-100 text-slate-600'
+                          }`}>
+                            {color}
+                          </span>
+                        </td>
                         <td className="p-3 text-slate-500">{catName}</td>
                         <td className="p-3 text-slate-500">{vendName}</td>
-                        <td className="p-3 text-center font-mono text-slate-600">{prod.packing}</td>
-                        <td className="p-3 text-right font-mono text-slate-700 font-semibold">
-                          {cartons} ctn {remPairs > 0 ? `+ ${remPairs} prs` : ''}
+                        <td className="p-3 text-center text-slate-600 font-medium">{packing}</td>
+                        <td className="p-3 text-right text-slate-700 font-bold">
+                          {cartons}
                         </td>
-                        <td className={`p-3 text-right font-mono font-semibold ${pairs <= 0 ? 'text-red-600' : 'text-slate-900'}`}>
-                          {pairs.toLocaleString()} prs
+                        <td className="p-3 text-right text-slate-700 font-medium">
+                          {remPairs > 0 ? `${remPairs}` : '-'}
+                        </td>
+                        <td className={`p-3 text-right font-bold ${pairs <= 0 ? 'text-red-600' : 'text-slate-900'}`}>
+                          {pairs.toLocaleString()}
                         </td>
                       </tr>
                     );
@@ -130,9 +178,10 @@ export default function ReportStockPage() {
               {/* Report Summary */}
               <tfoot>
                 <tr className="bg-slate-50 font-bold border-t-2 border-b text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                  <td colSpan={5} className="p-4 text-left font-lora">REPORT TOTAL</td>
-                  <td className="p-4 text-right font-mono">{totalCartons} Cartons</td>
-                  <td className="p-4 text-right font-mono text-emerald-800 text-lg" style={{ color: 'var(--brand-gold)' }}>
+                  <td colSpan={6} className="p-4 text-left font-lora">REPORT TOTAL</td>
+                  <td className="p-4 text-right text-slate-800 font-bold">{totalCartons} ctn</td>
+                  <td className="p-4 text-right text-slate-700 font-medium">{totalExtraPairs > 0 ? `${totalExtraPairs} prs` : '-'}</td>
+                  <td className="p-4 text-right text-emerald-800 text-lg" style={{ color: 'var(--brand-gold)' }}>
                     {totalPairs.toLocaleString()} Pairs
                   </td>
                 </tr>
