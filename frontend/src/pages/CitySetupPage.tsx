@@ -184,7 +184,7 @@ export default function CitySetupPage() {
                             {initialLetter}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-slate-900 group-hover:text-amber-800 transition-colors leading-tight text-[15px] truncate">
+                            <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
                               {city.name}
                             </h4>
                             <p className="text-[11px] text-slate-400 font-medium mt-0.5 uppercase tracking-wider">

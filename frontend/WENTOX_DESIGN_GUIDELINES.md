@@ -42,6 +42,10 @@ Always use a two-view structure for configuration pages, managed via React state
 *   **Structure:** Grid inputs inside rounded sub-sections.
 *   **Actions:** Right-aligned "Cancel" and "Save Details" buttons.
 
+### Tabbed Sub-Navigation Styling
+*   When switching pages/tabs inside a module, the **active tab button** must feature a premium dark navy background (`bg-[#111c2a]`) with golden text (`text-[#B08D57]`) and a subtle shadow.
+*   Inactive tab buttons must use a white/light background (`bg-white` or `hover:bg-slate-50`) with slate/muted text (`text-slate-600` or `text-slate-500`).
+
 ---
 
 ## 4. Standardized Icon Set

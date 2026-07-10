@@ -3,6 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import type { Product } from '@/types';
 import { Plus, Trash2, Edit2, Hammer, Settings, Search, ArrowLeft } from 'lucide-react';
+import SearchableSelect from '@/components/SearchableSelect';
 
 export default function ProductSetupPage() {
   const { state, dispatch } = useApp();
@@ -404,31 +405,31 @@ export default function ProductSetupPage() {
                       className="soleria-input font-semibold"
                     />
                   </div>
-                  <div>
+                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Category</label>
-                    <select
+                    <SearchableSelect
+                      options={state.categories.map(c => ({
+                        value: c.id,
+                        label: c.name
+                      }))}
                       value={categoryId}
-                      onChange={e => setCategoryId(e.target.value)}
-                      className="soleria-input cursor-pointer font-semibold"
-                    >
-                      <option value="">Select Category...</option>
-                      {state.categories.map(c => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </select>
+                      onChange={setCategoryId}
+                      placeholder="Select Category..."
+                      searchPlaceholder="Search categories..."
+                    />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Vendor Partner</label>
-                    <select
+                    <SearchableSelect
+                      options={state.vendors.map(v => ({
+                        value: v.id,
+                        label: v.name
+                      }))}
                       value={vendorId}
-                      onChange={e => setVendorId(e.target.value)}
-                      className="soleria-input cursor-pointer font-semibold"
-                    >
-                      <option value="">Select Vendor...</option>
-                      {state.vendors.map(v => (
-                        <option key={v.id} value={v.id}>{v.name}</option>
-                      ))}
-                    </select>
+                      onChange={setVendorId}
+                      placeholder="Select Vendor..."
+                      searchPlaceholder="Search vendors..."
+                    />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Batch Number</label>

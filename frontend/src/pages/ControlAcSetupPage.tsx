@@ -195,7 +195,7 @@ export default function ControlAcSetupPage() {
                             {initialLetter}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-slate-900 group-hover:text-amber-800 transition-colors leading-tight text-[15px] truncate">
+                            <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
                               {c.name}
                             </h4>
                             <p className="text-[11px] text-slate-400 font-medium mt-0.5 uppercase tracking-wider truncate">
@@ -230,101 +230,103 @@ export default function ControlAcSetupPage() {
           </div>
         ) : (
           /* View 2: Form View */
-          <div className="card-white p-6 md:p-8 bg-white border">
-            <div className="flex items-center gap-3 border-b pb-4 mb-6">
-              <button 
-                onClick={() => {
-                  setActiveTab('list');
-                  setSelectedId(null);
-                }}
-                className="p-1.5 rounded-lg border hover:bg-slate-50 transition-colors"
-              >
-                <ArrowLeft size={16} className="text-slate-600" />
-              </button>
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">
-                  {selectedId ? 'Edit Control Account' : 'Register New Control Account'}
-                </h3>
-                <p className="text-xs text-slate-500 font-medium">Configure control code, parent financial group, and listing priority.</p>
-              </div>
-            </div>
-
-            <form onSubmit={handleSave} className="max-w-xl flex flex-col gap-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Settings size={15} className="text-[#B08D57]" />
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Control Account Configuration</span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Control Code</label>
-                  <input
-                    type="text"
-                    value={id}
-                    onChange={e => setId(e.target.value)}
-                    placeholder="e.g. 1100"
-                    disabled={!!selectedId}
-                    className="soleria-input font-mono font-semibold disabled:bg-slate-100 disabled:text-slate-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Control Name</label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                    placeholder="e.g. CASH &amp; BANK ACCs"
-                    className="soleria-input font-semibold"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Parent Group A/C</label>
-                  <select
-                    value={groupId}
-                    onChange={e => setGroupId(e.target.value)}
-                    className="soleria-input cursor-pointer font-medium"
-                  >
-                    <option value="">Select Group...</option>
-                    {state.groupAccounts.map(g => (
-                      <option key={g.id} value={g.id}>{g.name} ({g.id})</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Sorting Priority</label>
-                  <input
-                    type="number"
-                    value={sorting}
-                    onChange={e => setSorting(parseInt(e.target.value) || 1)}
-                    className="soleria-input font-mono font-medium"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3 mt-6 border-t pt-4">
-                <button
-                  type="button"
+          <div className="max-w-2xl mx-auto">
+            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm">
+              <div className="flex items-center gap-3 border-b pb-4 mb-6">
+                <button 
                   onClick={() => {
                     setActiveTab('list');
                     setSelectedId(null);
                   }}
-                  className="px-5 py-2.5 text-xs font-bold text-slate-500 hover:text-slate-700 transition-colors uppercase tracking-wider"
+                  className="p-1.5 rounded-lg border hover:bg-slate-50 transition-colors"
                 >
-                  Cancel
+                  <ArrowLeft size={16} className="text-slate-600" />
                 </button>
-                <button
-                  type="submit"
-                  className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-slate-900 uppercase tracking-wider"
-                >
-                  <Save size={14} /> Save Details
-                </button>
+                <div>
+                  <h3 className="font-lora font-semibold text-lg text-slate-800">
+                    {selectedId ? 'Edit Control Account' : 'Register New Control Account'}
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">Configure control code, parent financial group, and listing priority.</p>
+                </div>
               </div>
-            </form>
+
+              <form onSubmit={handleSave} className="flex flex-col gap-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Settings size={15} className="text-[#B08D57]" />
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Control Account Configuration</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Control Code</label>
+                    <input
+                      type="text"
+                      value={id}
+                      onChange={e => setId(e.target.value)}
+                      placeholder="e.g. 1100"
+                      disabled={!!selectedId}
+                      className="soleria-input font-mono font-semibold disabled:bg-slate-100 disabled:text-slate-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Control Name</label>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={e => setName(e.target.value)}
+                      placeholder="e.g. CASH &amp; BANK ACCs"
+                      className="soleria-input font-semibold"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Parent Group A/C</label>
+                    <select
+                      value={groupId}
+                      onChange={e => setGroupId(e.target.value)}
+                      className="soleria-input cursor-pointer font-medium"
+                    >
+                      <option value="">Select Group...</option>
+                      {state.groupAccounts.map(g => (
+                        <option key={g.id} value={g.id}>{g.name} ({g.id})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Sorting Priority</label>
+                    <input
+                      type="number"
+                      value={sorting}
+                      onChange={e => setSorting(parseInt(e.target.value) || 1)}
+                      className="soleria-input font-mono font-medium"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3 mt-6 border-t pt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('list');
+                      setSelectedId(null);
+                    }}
+                    className="px-5 py-2.5 text-xs font-bold text-slate-500 hover:text-slate-700 transition-colors uppercase tracking-wider"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-slate-900 uppercase tracking-wider"
+                  >
+                    <Save size={14} /> Save Details
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
 

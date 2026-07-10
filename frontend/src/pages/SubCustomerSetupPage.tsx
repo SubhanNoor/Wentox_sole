@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
+import SearchableSelect from '@/components/SearchableSelect';
 
 export default function SubCustomerSetupPage() {
   const { state, dispatch } = useApp();
@@ -185,7 +186,7 @@ export default function SubCustomerSetupPage() {
                             {initialLetter}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-slate-900 group-hover:text-amber-800 transition-colors leading-tight text-[15px] truncate">
+                            <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
                               {sub.name}
                             </h4>
                             <p className="text-[11px] text-slate-400 font-medium mt-0.5 uppercase tracking-wider truncate">
@@ -248,16 +249,16 @@ export default function SubCustomerSetupPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Parent Customer</label>
-                    <select
+                    <SearchableSelect
+                      options={state.customers.map(c => ({
+                        value: c.id,
+                        label: `${c.name} (${c.id})`
+                      }))}
                       value={customerId}
-                      onChange={e => setCustomerId(e.target.value)}
-                      className="soleria-input cursor-pointer font-semibold"
-                    >
-                      <option value="">Select customer...</option>
-                      {state.customers.map(c => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </select>
+                      onChange={setCustomerId}
+                      placeholder="Select Customer..."
+                      searchPlaceholder="Search customers..."
+                    />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Sub Customer Name</label>

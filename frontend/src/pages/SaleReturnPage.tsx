@@ -7,6 +7,7 @@ import MonthlyReturnTab from '@/components/MonthlyReturnTab';
 import OverallReturnTab from '@/components/OverallReturnTab';
 import FindReturnTab from '@/components/FindReturnTab';
 import { Save, Plus, Trash2, Printer, Lock } from 'lucide-react';
+import SearchableSelect from '@/components/SearchableSelect';
 
 export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?: 'return' | 'weekly' | 'monthly' | 'overall' | 'find' }) {
   const { state, dispatch } = useApp();
@@ -34,6 +35,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [isPrintingSingle, setIsPrintingSingle] = useState(false);
 
   const selectedCustomer = useMemo(() => {
     return state.customers.find(c => c.id === customerId);
@@ -53,9 +55,10 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     const saved = localStorage.getItem('wento_sale_return_drafts');
     return saved ? JSON.parse(saved) : [];
   });
+  const [selectedDraftId, setSelectedDraftId] = useState('');
 
-  // Check if all fields are filled to make the Confirm button blue
-  const isAllFieldsFilled = useMemo(() => {
+  // Check if all necessary fields are filled to toggle Confirm button shade
+  const isNecessaryFieldsFilled = useMemo(() => {
     if (!customerId) return false;
     if (!date) return false;
     if (!storeId) return false;
@@ -116,8 +119,10 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   const handlePrintSpecificReturn = (ret: SaleReturn) => {
     loadReturn(ret);
+    setIsPrintingSingle(true);
     setTimeout(() => {
       window.print();
+      setIsPrintingSingle(false);
     }, 150);
   };
 
@@ -148,6 +153,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // Toolbar Actions
   const handleNew = () => {
     setMode('new');
+    setSelectedDraftId('');
     setReturnId('sr_' + Date.now());
     setDate(new Date().toISOString().split('T')[0]);
     setStoreId(state.stores[0]?.id || '');
@@ -214,10 +220,11 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
     // Clean up draft from cache if saved/confirmed
     setDrafts(prev => {
-      const updated = prev.filter(d => d.id !== returnId);
+      const updated = prev.filter(d => d.id !== returnId && d.id !== selectedDraftId);
       localStorage.setItem('wento_sale_return_drafts', JSON.stringify(updated));
       return updated;
     });
+    setSelectedDraftId('');
 
     setTimeout(() => setSuccessMsg(''), 3000);
     setMode('view');
@@ -337,6 +344,170 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   const isViewMode = mode === 'view';
 
+  if (isPrintingSingle) {
+    const customerObj = state.customers.find(c => c.id === customerId);
+    const customerName = customerObj ? customerObj.name : (customerId || 'N/A');
+    const storeObj = state.stores.find(s => s.id === storeId);
+    const storeName = storeObj ? storeObj.name : (storeId || 'N/A');
+    const returnAcId = customerObj ? customerObj.acId : '';
+    const mainAcName = state.chartAccounts.find(c => c.id === returnAcId)?.name || 'CUSTOMERS ACCOUNTS';
+
+    return (
+      <div className="excel-print-container" style={{
+        display: 'block',
+        margin: '0 auto',
+        width: '210mm',
+        padding: '10mm',
+        backgroundColor: '#ffffff',
+        color: '#000000',
+        fontFamily: 'Calibri, Arial, sans-serif',
+        boxSizing: 'border-box'
+      }}>
+        {/* Header Section */}
+        <div className="excel-print-header" style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          borderBottom: '2px solid #000000',
+          marginBottom: '15px',
+          paddingBottom: '10px'
+        }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>WENTO ERP</h1>
+            <p style={{ margin: 0, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', color: '#555555' }}>
+              Footwear Wholesale Distribution
+            </p>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>SALE RETURN INVOICE</h2>
+            <p style={{ margin: 0, fontSize: '11px', color: '#555555' }}>Status: {status}</p>
+          </div>
+        </div>
+
+        {/* Excel Grid Info */}
+        <div className="excel-grid-info" style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          border: '1px solid #000000',
+          marginBottom: '15px'
+        }}>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>System ID</label>
+            <span>{returnId}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Date</label>
+            <span>{date}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>TO Store</label>
+            <span>{storeName}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Manual Invoice No.</label>
+            <span>{billNo}</span>
+          </div>
+
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Customer Name</label>
+            <span>{customerName}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Account Group</label>
+            <span>{mainAcName}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px', gridColumn: 'span 2' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Remarks</label>
+            <span>{remarks || 'N/A'}</span>
+          </div>
+        </div>
+
+        {/* Excel Items Table */}
+        <table className="excel-print-table" style={{
+          width: '100%',
+          borderCollapse: 'collapse',
+          marginBottom: '15px'
+        }}>
+          <thead>
+            <tr style={{ backgroundColor: '#f2f2f2' }}>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '40%' }}>Returned Article Description</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '8%' }}>Packing</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '10%' }}>Cartons</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '10%' }}>Pairs</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right', width: '12%' }}>Rate</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '10%' }}>Discount</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right', width: '15%' }}>Total Credit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item, idx) => {
+              const product = state.products.find(p => p.id === item.productId);
+              const productName = product ? product.name : (item.productId || 'N/A');
+              const discountText = item.discountPercent > 0 
+                ? `${item.discountPercent}%` 
+                : item.discountValue > 0 
+                  ? `${item.discountValue.toLocaleString()}` 
+                  : '-';
+              
+              return (
+                <tr key={item.id}>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{productName}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.packing}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.cartons}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.pairs}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{item.rate.toLocaleString()}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{discountText}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{item.value.toLocaleString()}</td>
+                </tr>
+              );
+            })}
+
+            {/* Total Row */}
+            <tr style={{ fontWeight: 'bold', backgroundColor: '#fafafa' }}>
+              <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>Total Sum:</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>-</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{totalCartons}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{totalPairs}</td>
+              <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>Gross Total Credit:</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{itemsTotalValue.toLocaleString()}</td>
+            </tr>
+
+            {invoiceDiscount > 0 && (
+              <tr style={{ fontWeight: 'bold' }}>
+                <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>Invoice Discount:</td>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', color: 'red' }}>-{invoiceDiscount.toLocaleString()}</td>
+              </tr>
+            )}
+
+            <tr className="excel-print-total-row excel-print-double-bottom" style={{ 
+              fontWeight: 'bold', 
+              backgroundColor: '#f2f2f2',
+              fontSize: '12px'
+            }}>
+              <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', textTransform: 'uppercase' }}>Net Credited Amount (PKR):</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', borderBottom: '3px double #000000' }}>{finalTotalValue.toLocaleString()}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* Signatures */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '60px', fontSize: '11px' }}>
+          <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>
+            Prepared By
+          </div>
+          <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>
+            Checked By
+          </div>
+          <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>
+            Authorized Signature
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <AppLayout pageTitle="Sale Return">
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
@@ -350,7 +521,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             }}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeTab === 'return'
-                ? 'bg-[#111c2a] text-white shadow-sm'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                 : 'bg-white border text-slate-600 hover:bg-slate-50'
             }`}
           >
@@ -360,7 +531,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             onClick={() => setActiveTab('weekly')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeTab === 'weekly'
-                ? 'bg-[#111c2a] text-white shadow-sm'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                 : 'bg-white border text-slate-600 hover:bg-slate-50'
             }`}
           >
@@ -370,7 +541,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             onClick={() => setActiveTab('monthly')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeTab === 'monthly'
-                ? 'bg-[#111c2a] text-white shadow-sm'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                 : 'bg-white border text-slate-600 hover:bg-slate-50'
             }`}
           >
@@ -380,7 +551,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             onClick={() => setActiveTab('overall')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeTab === 'overall'
-                ? 'bg-[#111c2a] text-white shadow-sm'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                 : 'bg-white border text-slate-600 hover:bg-slate-50'
             }`}
           >
@@ -390,7 +561,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             onClick={() => setActiveTab('find')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeTab === 'find'
-                ? 'bg-[#111c2a] text-white shadow-sm'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                 : 'bg-white border text-slate-600 hover:bg-slate-50'
             }`}
           >
@@ -430,9 +601,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               </span>
             </div>
             <div className="flex items-center gap-3">
-              <select
+               <select
+                value={selectedDraftId}
                 onChange={e => {
-                  const selected = drafts.find(d => d.id === e.target.value);
+                  const draftId = e.target.value;
+                  setSelectedDraftId(draftId);
+                  const selected = drafts.find(d => d.id === draftId);
                   if (selected) {
                     loadReturn(selected);
                     setMode('new');
@@ -440,7 +614,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 }}
                 className="soleria-input py-1 px-2.5 text-xs bg-white border cursor-pointer font-medium"
                 style={{ width: '220px' }}
-                value=""
               >
                 <option value="">Select a draft to load...</option>
                 {drafts.map(d => {
@@ -455,14 +628,13 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               <button
                 type="button"
                 onClick={() => {
-                  const selectEl = document.querySelector('select') as HTMLSelectElement;
-                  const draftId = selectEl?.value;
-                  if (draftId) {
+                  if (selectedDraftId) {
                     setDrafts(prev => {
-                      const updated = prev.filter(d => d.id !== draftId);
+                      const updated = prev.filter(d => d.id !== selectedDraftId);
                       localStorage.setItem('wento_sale_return_drafts', JSON.stringify(updated));
                       return updated;
                     });
+                    setSelectedDraftId('');
                     handleNew();
                     setSuccessMsg('Draft deleted successfully.');
                     setTimeout(() => setSuccessMsg(''), 2000);
@@ -485,7 +657,13 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             {mode === 'view' ? (
               <>
                 <button
-                  onClick={() => window.print()}
+                  onClick={() => {
+                    setIsPrintingSingle(true);
+                    setTimeout(() => {
+                      window.print();
+                      setIsPrintingSingle(false);
+                    }, 100);
+                  }}
                   className="px-4 py-2 text-sm font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-700 shadow-sm transition-colors flex items-center gap-1.5"
                 >
                   <Printer size={16} /> Print Return
@@ -506,11 +684,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               <>
                 <button
                   onClick={handleSave}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-sm border-none font-inter"
+                  className="px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-sm font-inter hover:opacity-90"
                   style={{
-                    backgroundColor: isAllFieldsFilled ? '#2563eb' : '#f1f5f9',
-                    color: isAllFieldsFilled ? '#ffffff' : '#94a3b8',
-                    cursor: isAllFieldsFilled ? 'pointer' : 'not-allowed'
+                    backgroundColor: isNecessaryFieldsFilled ? '#111c2a' : '#e2e8f0',
+                    color: isNecessaryFieldsFilled ? '#B08D57' : '#64748b',
+                    border: isNecessaryFieldsFilled ? '1px solid #B08D57' : '1px solid #cbd5e1',
+                    cursor: 'pointer'
                   }}
                 >
                   <Save size={16} /> Confirm
@@ -579,7 +758,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
-                Date
+                Date <span className="text-red-500 font-bold">*</span>
               </label>
               <input
                 type="date"
@@ -592,7 +771,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
-                TO Store (Return Destination)
+                TO Store (Return Destination) <span className="text-red-500 font-bold">*</span>
               </label>
               <select
                 value={storeId}
@@ -608,7 +787,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
-                Manual Invoice No.
+                Manual Invoice No. <span className="text-red-500 font-bold">*</span>
               </label>
               <input
                 type="text"
@@ -666,14 +845,13 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
                   <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Select Customer Name
+                    Select Customer Name <span className="text-red-500 font-bold">*</span>
                   </label>
                   <select
                     value={customerId}
                     disabled={isViewMode}
                     onChange={e => {
-                      const newCustId = e.target.value;
-                      setCustomerId(newCustId);
+                      setCustomerId(e.target.value);
                       setSubCustomerId('sub-same');
                     }}
                     className="soleria-input cursor-pointer"
@@ -766,16 +944,16 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           </div>
 
           {/* Product Items Table */}
-          <div className="mb-6 overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--border-color)' }}>
+          <div className="mb-6 rounded-lg border bg-white overflow-visible" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="p-3 pl-4" style={{ minWidth: '220px' }}>Returned Article</th>
+                  <th className="p-3 pl-4" style={{ minWidth: '220px' }}>Returned Article <span className="text-red-500 font-bold">*</span></th>
                   <th className="p-3 text-center" style={{ width: '80px' }}>Packing</th>
                   <th className="p-3 text-center" style={{ width: '90px' }}>Stock</th>
-                  <th className="p-3 text-center" style={{ width: '90px' }}>Cartons</th>
+                  <th className="p-3 text-center" style={{ width: '90px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
                   <th className="p-3 text-center" style={{ width: '90px' }}>Pairs</th>
-                  <th className="p-3 text-right" style={{ width: '110px' }}>Rate</th>
+                  <th className="p-3 text-right" style={{ width: '110px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
                   <th className="p-3 text-center" style={{ width: '100px' }}>D%</th>
                   <th className="p-3 text-right" style={{ width: '110px' }}>D. Value</th>
                   <th className="p-3 text-right" style={{ width: '130px' }}>Total Credit</th>
@@ -790,18 +968,22 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                     <tr key={item.id} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
                       {/* Product select */}
                       <td className="p-3 pl-4">
-                        <select
-                          value={item.productId}
-                          disabled={isViewMode}
-                          onChange={e => updateItemField(idx, 'productId', e.target.value)}
-                          className="soleria-input cursor-pointer"
-                          style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
-                        >
-                          <option value="">Select article...</option>
-                          {state.products.map(p => (
-                            <option key={p.id} value={p.id}>{p.name} ({p.id})</option>
-                          ))}
-                        </select>
+                        {isViewMode ? (
+                          <span className="font-semibold text-slate-800 text-[13px] pl-2">
+                            {state.products.find(p => p.id === item.productId)?.name || 'Select article...'}
+                          </span>
+                        ) : (
+                          <SearchableSelect
+                            options={state.products.map(p => ({
+                              value: p.id,
+                              label: `${p.name} (${p.id})`
+                            }))}
+                            value={item.productId}
+                            onChange={val => updateItemField(idx, 'productId', val)}
+                            placeholder="Select article..."
+                            searchPlaceholder="Search articles..."
+                          />
+                        )}
                       </td>
 
                       {/* Packing */}

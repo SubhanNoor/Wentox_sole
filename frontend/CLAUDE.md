@@ -13,7 +13,7 @@ There is no test suite configured in this project.
 
 ## Architecture
 
-This is a single-page inventory/sales management app for a shoe-sole manufacturing business ("Starmans"), built with React 19 + TypeScript + Vite, styled with Tailwind CSS and shadcn/ui (new-york style, "@/components/ui").
+This is a single-page inventory/sales management app for a shoe-sole manufacturing business ("Wentox"), built with React 19 + TypeScript + Vite, styled with Tailwind CSS and shadcn/ui (new-york style, "@/components/ui").
 
 **State & routing are both driven by one reducer.** There is no React Router in use despite `react-router`/`react-router-dom` being installed. Instead:
 - `src/context/AppContext.tsx` holds a single `useReducer`-based global store (`AppProvider`/`useApp`) containing all domain data: articles (stock), clients/slips (sales), productions, expenses, bills, chemical purchases/usage, payments, and settings/login state.

@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
+import SearchableSelect from '@/components/SearchableSelect';
 
 export default function BusinessAcSetupPage() {
   const { state, dispatch } = useApp();
@@ -18,8 +19,10 @@ export default function BusinessAcSetupPage() {
   const [region, setRegion] = useState('LOCAL');
   const [status, setStatus] = useState<'Active' | 'Closed'>('Active');
 
-  // Search State
+  // Search and Sort State
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedChartFilter, setSelectedChartFilter] = useState<string>('');
+  const [sortBy, setSortBy] = useState<'code' | 'name'>('code');
 
   // Messages
   const [successMsg, setSuccessMsg] = useState('');
@@ -131,15 +134,27 @@ export default function BusinessAcSetupPage() {
     }
   };
 
-  const filteredAccounts = useMemo(() => {
-    if (!searchQuery.trim()) return state.businessAccounts;
-    const q = searchQuery.toLowerCase();
-    return state.businessAccounts.filter(b => 
-      b.name.toLowerCase().includes(q) || 
-      b.id.toLowerCase().includes(q) ||
-      (b.region && b.region.toLowerCase().includes(q))
-    );
-  }, [state.businessAccounts, searchQuery]);
+  const filteredAndSortedAccounts = useMemo(() => {
+    let list = state.businessAccounts;
+    if (selectedChartFilter) {
+      list = list.filter(b => b.controlId === selectedChartFilter);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(b => 
+        b.name.toLowerCase().includes(q) || 
+        b.id.toLowerCase().includes(q) ||
+        (b.region && b.region.toLowerCase().includes(q))
+      );
+    }
+    return [...list].sort((a, b) => {
+      if (sortBy === 'code') {
+        return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
+      } else {
+        return a.name.localeCompare(b.name);
+      }
+    });
+  }, [state.businessAccounts, searchQuery, sortBy, selectedChartFilter]);
 
   return (
     <AppLayout pageTitle="Business Accounts Setup">
@@ -185,49 +200,85 @@ export default function BusinessAcSetupPage() {
         {/* View 1: Business Accounts Cards Directory */}
         {activeTab === 'list' ? (
           <div className="mb-6">
-            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+            <div className="flex flex-col gap-4 mb-6">
               <div>
                 <h3 className="font-lora font-semibold text-lg text-slate-800">Business Ledgers Directory</h3>
                 <p className="text-xs text-slate-500 font-medium">Search and manage custom business ledgers, customer accounts, and expense files.</p>
               </div>
-              
-              <div className="relative min-w-[270px]">
-                <input
-                  type="text"
-                  placeholder="Search by code, account title..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold bg-white"
-                />
-                <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
+
+              {/* All Accounts select - full width, big and readable */}
+              <div className="w-full">
+                <select
+                  value={selectedChartFilter}
+                  onChange={e => setSelectedChartFilter(e.target.value)}
+                  className="soleria-input w-full py-2.5 px-3.5 text-sm font-semibold bg-white cursor-pointer shadow-sm hover:border-[#B08D57] transition-all"
+                >
+                  <option value="">All Accounts</option>
+                  {state.chartAccounts.map(c => (
+                    <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Bottom row: Sort and Search */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                {/* Sorting options */}
+                <div className="flex bg-slate-100 p-0.5 rounded-lg text-xs font-semibold border border-slate-200 self-start">
+                  <button
+                    type="button"
+                    onClick={() => setSortBy('code')}
+                    className={`px-3.5 py-2 rounded-md transition-all ${sortBy === 'code' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold scale-[1.02]' : 'text-slate-500 hover:text-slate-800'}`}
+                  >
+                    Sort by Code
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSortBy('name')}
+                    className={`px-3.5 py-2 rounded-md transition-all ${sortBy === 'name' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold scale-[1.02]' : 'text-slate-500 hover:text-slate-800'}`}
+                  >
+                    Sort by Name
+                  </button>
+                </div>
+
+                {/* Search Bar */}
+                <div className="relative flex-1 min-w-[270px] sm:max-w-sm">
+                  <input
+                    type="text"
+                    placeholder="Search by code, account title..."
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    className="soleria-input w-full py-2 px-3.5 text-sm pr-10 font-semibold bg-white shadow-sm hover:border-[#B08D57] transition-all"
+                  />
+                  <Search className="absolute right-3.5 top-2.5 text-slate-400" size={16} />
+                </div>
               </div>
             </div>
 
-            {filteredAccounts.length === 0 ? (
+            {filteredAndSortedAccounts.length === 0 ? (
               <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl bg-white">
                 No registered business accounts found matching your search.
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredAccounts.map(biz => {
+                {filteredAndSortedAccounts.map(biz => {
                   const initialLetter = biz.name.charAt(0).toUpperCase();
                   const chartName = state.chartAccounts.find(c => c.id === biz.controlId)?.name || 'UNKNOWN A/C';
 
                   return (
                     <div
                       key={biz.id}
-                      className="bg-white border rounded-xl p-5 hover:border-amber-500 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
+                      className="bg-white border rounded-xl p-5 hover:border-[#B08D57] hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
                       style={{ borderColor: 'var(--border-color)' }}
                       onClick={() => handleSelectBusinessAc(biz)}
                     >
                       <div>
-                        {/* Card Top: Code & Status badge */}
+                        {/* Card Top: Code & Parent */}
                         <div className="flex items-center justify-between mb-3.5 gap-2">
                           <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider flex-shrink-0">
                             CODE: {biz.id}
                           </span>
-                          <span className="text-[10px] font-bold text-[#B08D57] uppercase tracking-wider">
-                            {biz.status?.toUpperCase() || 'ACTIVE'}
+                          <span className="text-[10px] font-bold text-[#B08D57] uppercase tracking-wider truncate max-w-[135px]" title={chartName}>
+                            {chartName}
                           </span>
                         </div>
 
@@ -237,32 +288,42 @@ export default function BusinessAcSetupPage() {
                             {initialLetter}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-slate-900 group-hover:text-amber-800 transition-colors leading-tight text-[15px] truncate">
+                            <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
                               {biz.name}
                             </h4>
                             <p className="text-[11px] text-slate-400 font-medium mt-0.5 uppercase tracking-wider truncate">
-                              {chartName} ({biz.region || 'LOCAL'})
+                              {biz.region || 'LOCAL'}
                             </p>
                           </div>
                         </div>
                       </div>
 
                       {/* Card Bottom: Actions */}
-                      <div className="border-t pt-3 mt-1 flex items-center justify-end gap-3" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => handleSelectBusinessAc(biz)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
-                          title="Edit Business Account"
-                        >
-                          <Edit2 size={15} />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteBusinessAc(biz.id)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                          title="Delete Business Account"
-                        >
-                          <Trash2 size={15} />
-                        </button>
+                      <div className="border-t pt-3 mt-1 flex items-center justify-between gap-3" onClick={(e) => e.stopPropagation()}>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider border ${
+                          biz.status === 'Active' 
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                            : 'bg-rose-50 text-rose-700 border-rose-200'
+                        }`}>
+                          {biz.status === 'Active' ? 'Active' : 'Inactive'}
+                        </span>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleSelectBusinessAc(biz)}
+                            className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
+                            title="Edit Business Account"
+                          >
+                            <Edit2 size={15} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteBusinessAc(biz.id)}
+                            className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
+                            title="Delete Business Account"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -272,126 +333,128 @@ export default function BusinessAcSetupPage() {
           </div>
         ) : (
           /* View 2: Form View */
-          <div className="card-white p-6 md:p-8 bg-white border">
-            <div className="flex items-center gap-3 border-b pb-4 mb-6">
-              <button 
-                onClick={() => {
-                  setActiveTab('list');
-                  setSelectedId(null);
-                }}
-                className="p-1.5 rounded-lg border hover:bg-slate-50 transition-colors"
-              >
-                <ArrowLeft size={16} className="text-slate-600" />
-              </button>
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">
-                  {selectedId ? 'Edit Business Account' : 'Register New Business Account'}
-                </h3>
-                <p className="text-xs text-slate-500 font-medium">Configure properties, parent chart accounts, and tracking status parameters.</p>
-              </div>
-            </div>
-
-            <form onSubmit={handleSave} className="max-w-xl flex flex-col gap-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Settings size={15} className="text-[#B08D57]" />
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Business Account Configuration</span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Business Account Code</label>
-                  <input
-                    type="text"
-                    value={id}
-                    onChange={e => setId(e.target.value)}
-                    placeholder="e.g. 11000105"
-                    disabled={!!selectedId}
-                    className="soleria-input font-mono font-semibold disabled:bg-slate-100 disabled:text-slate-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Account Title / Name</label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                    placeholder="e.g. Shalimar Footwear Agency"
-                    className="soleria-input font-semibold"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Parent Chart of Account</label>
-                  <select
-                    value={controlId}
-                    onChange={e => setControlId(e.target.value)}
-                    className="soleria-input cursor-pointer font-medium"
-                  >
-                    <option value="">Select Chart A/C...</option>
-                    {state.chartAccounts.map(c => (
-                      <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Region / Location</label>
-                  <input
-                    type="text"
-                    value={region}
-                    onChange={e => setRegion(e.target.value)}
-                    placeholder="e.g. LOCAL, SOUTH"
-                    className="soleria-input font-medium"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Link Code</label>
-                  <input
-                    type="text"
-                    value={linkCode}
-                    onChange={e => setLinkCode(e.target.value)}
-                    className="soleria-input font-mono font-medium"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
-                  <select
-                    value={status}
-                    onChange={e => setStatus(e.target.value as any)}
-                    className="soleria-input cursor-pointer font-medium"
-                  >
-                    <option value="Active">Active</option>
-                    <option value="Closed">Closed</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3 mt-6 border-t pt-4">
-                <button
-                  type="button"
+          <div className="max-w-2xl mx-auto">
+            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm">
+              <div className="flex items-center gap-3 border-b pb-4 mb-6">
+                <button 
                   onClick={() => {
                     setActiveTab('list');
                     setSelectedId(null);
                   }}
-                  className="px-5 py-2.5 text-xs font-bold text-slate-500 hover:text-slate-700 transition-colors uppercase tracking-wider"
+                  className="p-1.5 rounded-lg border hover:bg-slate-50 transition-colors"
                 >
-                  Cancel
+                  <ArrowLeft size={16} className="text-slate-600" />
                 </button>
-                <button
-                  type="submit"
-                  className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-slate-900 uppercase tracking-wider"
-                >
-                  <Save size={14} /> Save Details
-                </button>
+                <div>
+                  <h3 className="font-lora font-semibold text-lg text-slate-800">
+                    {selectedId ? 'Edit Business Account' : 'Register New Business Account'}
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">Configure properties, parent chart accounts, and tracking status parameters.</p>
+                </div>
               </div>
-            </form>
+
+              <form onSubmit={handleSave} className="flex flex-col gap-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Settings size={15} className="text-[#B08D57]" />
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Business Account Configuration</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Business Account Code</label>
+                    <input
+                      type="text"
+                      value={id}
+                      onChange={e => setId(e.target.value)}
+                      placeholder="e.g. 11000105"
+                      disabled={!!selectedId}
+                      className="soleria-input font-mono font-semibold disabled:bg-slate-100 disabled:text-slate-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Account Title / Name</label>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={e => setName(e.target.value)}
+                      placeholder="e.g. Shalimar Footwear Agency"
+                      className="soleria-input font-semibold"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Parent Chart of Account</label>
+                    <SearchableSelect
+                      options={state.chartAccounts.map(c => ({
+                        value: c.id,
+                        label: `${c.name} (${c.id})`
+                      }))}
+                      value={controlId}
+                      onChange={setControlId}
+                      placeholder="Select Chart A/C..."
+                      searchPlaceholder="Search chart accounts..."
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Region / Location</label>
+                    <input
+                      type="text"
+                      value={region}
+                      onChange={e => setRegion(e.target.value)}
+                      placeholder="e.g. LOCAL, SOUTH"
+                      className="soleria-input font-medium"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Link Code</label>
+                    <input
+                      type="text"
+                      value={linkCode}
+                      onChange={e => setLinkCode(e.target.value)}
+                      className="soleria-input font-mono font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
+                    <select
+                      value={status}
+                      onChange={e => setStatus(e.target.value as any)}
+                      className="soleria-input cursor-pointer font-medium"
+                    >
+                      <option value="Active">Active</option>
+                      <option value="Closed">Closed</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3 mt-6 border-t pt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('list');
+                      setSelectedId(null);
+                    }}
+                    className="px-5 py-2.5 text-xs font-bold text-slate-500 hover:text-slate-700 transition-colors uppercase tracking-wider"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-slate-900 uppercase tracking-wider"
+                  >
+                    <Save size={14} /> Save Details
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
 

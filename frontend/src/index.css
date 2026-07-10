@@ -533,6 +533,7 @@
   }
 
   @page {
+    size: A4;
     margin: 8mm;
   }
 

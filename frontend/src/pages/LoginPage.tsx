@@ -61,7 +61,7 @@ export default function LoginPage() {
               className="font-lora font-semibold"
               style={{ fontSize: '30px', color: '#ffffff', lineHeight: 1.22 }}
             >
-              Wento<br />ERP System
+              Wentox<br />Warehouse
             </h2>
             <div
               className="mt-4 rounded-full"

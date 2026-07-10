@@ -4,7 +4,7 @@ import type {
   City, Store, Adda, Vendor, ProductCategory, Product,
   GroupAccount, ControlAccount, ChartOfAccount, BusinessAccount,
   Customer, SubCustomer, SaleBill, SaleReturn,
-  Receipt
+  Receipt, Expense
 } from '@/types';
 
 /* ──────────────────── Demo Data ──────────────────── */
@@ -178,6 +178,11 @@ const demoReceipts: Receipt[] = [
   { id: 'r2', date: '2026-07-04', customerId: 'c2', amount: 50000, paymentMode: 'Cheque', details: 'HBL Cheque No. 9812401', remarks: 'Cleared' },
 ];
 
+const demoExpenses: Expense[] = [
+  { id: 'exp1', date: '2026-07-02', businessAccountId: '12000101', amount: 3500, paymentMode: 'Cash', details: 'Office utilities bill payment', remarks: 'Paid via Cash Vault' },
+  { id: 'exp2', date: '2026-07-05', businessAccountId: '21000101', amount: 15000, paymentMode: 'Cheque', details: 'Cheque No. 441098 HBL', remarks: 'Paid to Decent PU' }
+];
+
 /* ──────────────────── App State ──────────────────── */
 
 interface State {
@@ -204,6 +209,7 @@ interface State {
   saleBills: SaleBill[];
   saleReturns: SaleReturn[];
   receipts: Receipt[];
+  expenses: Expense[];
   
   settings: { username: string; password: string };
 }
@@ -260,6 +266,9 @@ type Action =
   
   // Receipt Actions
   | { type: 'ADD_RECEIPT'; receipt: Receipt }
+  // Expense Actions
+  | { type: 'ADD_EXPENSE'; expense: Expense }
+  | { type: 'DELETE_EXPENSE'; id: string }
   | { type: 'UPDATE_SETTINGS'; settings: { username: string; password: string } };
 
 const initialState: State = {
@@ -286,6 +295,7 @@ const initialState: State = {
   saleBills: demoSaleBills,
   saleReturns: demoSaleReturns,
   receipts: demoReceipts,
+  expenses: demoExpenses,
   
   settings: { username: 'admin', password: 'admin' },
 };
@@ -614,6 +624,12 @@ function reducer(state: State, action: Action): State {
     /* ──── Receipt Handlers ──── */
     case 'ADD_RECEIPT':
       return { ...state, receipts: [action.receipt, ...state.receipts] };
+
+    /* ──── Expense Handlers ──── */
+    case 'ADD_EXPENSE':
+      return { ...state, expenses: [action.expense, ...state.expenses] };
+    case 'DELETE_EXPENSE':
+      return { ...state, expenses: state.expenses.filter(e => e.id !== action.id) };
 
     case 'UPDATE_SETTINGS':
       return { ...state, settings: action.settings };

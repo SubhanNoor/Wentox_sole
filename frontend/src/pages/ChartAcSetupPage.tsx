@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
+import SearchableSelect from '@/components/SearchableSelect';
 
 export default function ChartAcSetupPage() {
   const { state, dispatch } = useApp();
@@ -17,8 +18,10 @@ export default function ChartAcSetupPage() {
   const [linkCode, setLinkCode] = useState('A');
   const [status, setStatus] = useState<'Active' | 'Closed'>('Active');
 
-  // Search State
+  // Search and Sort State
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>('');
+  const [sortBy, setSortBy] = useState<'code' | 'name'>('code');
 
   // Messages
   const [successMsg, setSuccessMsg] = useState('');
@@ -48,13 +51,13 @@ export default function ChartAcSetupPage() {
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!id.trim()) return setErrorMsg('Chart Account code is required.');
-    if (!name.trim()) return setErrorMsg('Chart Account name is required.');
-    if (!controlId) return setErrorMsg('Please select a parent Control A/C.');
+    if (!id.trim()) return setErrorMsg('Account code is required.');
+    if (!name.trim()) return setErrorMsg('Account name is required.');
+    if (!controlId) return setErrorMsg('Please select a parent Group A/C.');
 
     // Duplicate check if adding new
     if (!selectedId && state.chartAccounts.some(c => c.id.toLowerCase() === id.trim().toLowerCase())) {
-      return setErrorMsg('A Chart Account with this code already exists.');
+      return setErrorMsg('An Account with this code already exists.');
     }
 
     const chartData = {
@@ -67,10 +70,10 @@ export default function ChartAcSetupPage() {
 
     if (selectedId) {
       dispatch({ type: 'UPDATE_CHART_ACCOUNT', account: chartData });
-      setSuccessMsg('Chart Account updated successfully.');
+      setSuccessMsg('Account updated successfully.');
     } else {
       dispatch({ type: 'ADD_CHART_ACCOUNT', account: chartData });
-      setSuccessMsg('Chart Account registered successfully.');
+      setSuccessMsg('Account registered successfully.');
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
@@ -79,29 +82,40 @@ export default function ChartAcSetupPage() {
   };
 
   const handleDeleteChart = (chartId: string) => {
-    // Safety check: is it linked to business accounts?
     const inUse = state.businessAccounts.some(b => b.controlId === chartId);
     if (inUse) {
-      setErrorMsg('Cannot delete: This chart account is linked to active business accounts.');
+      setErrorMsg('Cannot delete: This account is linked to active business accounts.');
       setTimeout(() => setErrorMsg(''), 4000);
       return;
     }
 
-    if (window.confirm('Are you sure you want to delete this Chart Account?')) {
+    if (window.confirm('Are you sure you want to delete this Account?')) {
       dispatch({ type: 'DELETE_CHART_ACCOUNT', id: chartId });
-      setSuccessMsg('Chart Account deleted successfully.');
+      setSuccessMsg('Account deleted successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
     }
   };
 
-  const filteredCharts = useMemo(() => {
-    if (!searchQuery.trim()) return state.chartAccounts;
-    const q = searchQuery.toLowerCase();
-    return state.chartAccounts.filter(c => 
-      c.name.toLowerCase().includes(q) || 
-      c.id.toLowerCase().includes(q)
-    );
-  }, [state.chartAccounts, searchQuery]);
+  const filteredAndSortedCharts = useMemo(() => {
+    let list = state.chartAccounts;
+    if (selectedGroupFilter) {
+      list = list.filter(c => c.controlId === selectedGroupFilter);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(c => 
+        c.name.toLowerCase().includes(q) || 
+        c.id.toLowerCase().includes(q)
+      );
+    }
+    return [...list].sort((a, b) => {
+      if (sortBy === 'code') {
+        return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
+      } else {
+        return a.name.localeCompare(b.name);
+      }
+    });
+  }, [state.chartAccounts, searchQuery, sortBy, selectedGroupFilter]);
 
   return (
     <AppLayout pageTitle="Chart of Accounts Setup">
@@ -124,13 +138,13 @@ export default function ChartAcSetupPage() {
               }}
               className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'list' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
-              Chart Accounts Directory
+              Accounts Directory
             </button>
             <button
               onClick={handleAddNew}
               className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'form' && !selectedId ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
-              Add New Chart Account
+              Add New Account
             </button>
           </div>
 
@@ -139,7 +153,7 @@ export default function ChartAcSetupPage() {
               onClick={handleAddNew}
               className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm"
             >
-              <Plus size={16} /> Register Chart Account
+              <Plus size={16} /> Register Account
             </button>
           )}
         </div>
@@ -147,49 +161,85 @@ export default function ChartAcSetupPage() {
         {/* View 1: Chart Accounts Cards Directory */}
         {activeTab === 'list' ? (
           <div className="mb-6">
-            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+            <div className="flex flex-col gap-4 mb-6">
               <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">Chart Accounts Directory</h3>
-                <p className="text-xs text-slate-500 font-medium">Search and manage Chart accounts defining reporting codes and sub-ledgers.</p>
+                <h3 className="font-lora font-semibold text-lg text-slate-800">Accounts Directory</h3>
+                <p className="text-xs text-slate-500 font-medium">Search and manage accounts defining reporting codes and sub-ledgers.</p>
               </div>
-              
-              <div className="relative min-w-[270px]">
-                <input
-                  type="text"
-                  placeholder="Search by code, chart name..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold bg-white"
-                />
-                <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
+
+              {/* Group Filter select - full width, big and readable */}
+              <div className="w-full">
+                <select
+                  value={selectedGroupFilter}
+                  onChange={e => setSelectedGroupFilter(e.target.value)}
+                  className="soleria-input w-full py-2.5 px-3.5 text-sm font-semibold bg-white cursor-pointer shadow-sm hover:border-[#B08D57] transition-all"
+                >
+                  <option value="">All Group Accounts</option>
+                  {state.groupAccounts.map(g => (
+                    <option key={g.id} value={g.id}>{g.name} ({g.id})</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Bottom row: Sort and Search */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                {/* Sorting options */}
+                <div className="flex bg-slate-100 p-0.5 rounded-lg text-xs font-semibold border border-slate-200 self-start">
+                  <button
+                    type="button"
+                    onClick={() => setSortBy('code')}
+                    className={`px-3.5 py-2 rounded-md transition-all ${sortBy === 'code' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold scale-[1.02]' : 'text-slate-500 hover:text-slate-800'}`}
+                  >
+                    Sort by Code
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSortBy('name')}
+                    className={`px-3.5 py-2 rounded-md transition-all ${sortBy === 'name' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold scale-[1.02]' : 'text-slate-500 hover:text-slate-800'}`}
+                  >
+                    Sort by Name
+                  </button>
+                </div>
+
+                {/* Search Bar */}
+                <div className="relative flex-1 min-w-[270px] sm:max-w-sm">
+                  <input
+                    type="text"
+                    placeholder="Search by code, account name..."
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    className="soleria-input w-full py-2 px-3.5 text-sm pr-10 font-semibold bg-white shadow-sm hover:border-[#B08D57] transition-all"
+                  />
+                  <Search className="absolute right-3.5 top-2.5 text-slate-400" size={16} />
+                </div>
               </div>
             </div>
 
-            {filteredCharts.length === 0 ? (
+            {filteredAndSortedCharts.length === 0 ? (
               <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl bg-white">
-                No registered chart accounts found matching your search.
+                No registered accounts found matching your search.
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredCharts.map(c => {
+                {filteredAndSortedCharts.map(c => {
                   const initialLetter = c.name.charAt(0).toUpperCase();
-                  const controlName = state.controlAccounts.find(ctrl => ctrl.id === c.controlId)?.name || 'UNKNOWN CONTROL';
+                  const groupName = state.groupAccounts.find(g => g.id === c.controlId)?.name || 'UNKNOWN GROUP';
 
                   return (
                     <div
                       key={c.id}
-                      className="bg-white border rounded-xl p-5 hover:border-amber-500 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
+                      className="bg-white border rounded-xl p-5 hover:border-[#B08D57] hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
                       style={{ borderColor: 'var(--border-color)' }}
                       onClick={() => handleSelectChart(c)}
                     >
                       <div>
-                        {/* Card Top: Code & Parent control */}
+                        {/* Card Top: Code & Parent group */}
                         <div className="flex items-center justify-between mb-3.5 gap-2">
                           <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider flex-shrink-0">
                             CODE: {c.id}
                           </span>
-                          <span className="text-[10px] font-bold text-[#B08D57] uppercase tracking-wider truncate max-w-[135px]" title={controlName}>
-                            {controlName}
+                          <span className="text-[10px] font-bold text-[#B08D57] uppercase tracking-wider truncate max-w-[135px]" title={groupName}>
+                            {groupName}
                           </span>
                         </div>
 
@@ -199,32 +249,42 @@ export default function ChartAcSetupPage() {
                             {initialLetter}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-slate-900 group-hover:text-amber-800 transition-colors leading-tight text-[15px] truncate">
+                            <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
                               {c.name}
                             </h4>
                             <p className="text-[11px] text-slate-400 font-medium mt-0.5 uppercase tracking-wider truncate">
-                              Chart A/C (Status: {c.status})
+                              Account
                             </p>
                           </div>
                         </div>
                       </div>
 
                       {/* Card Bottom: Actions */}
-                      <div className="border-t pt-3 mt-1 flex items-center justify-end gap-3" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => handleSelectChart(c)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
-                          title="Edit Chart Account"
-                        >
-                          <Edit2 size={15} />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteChart(c.id)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                          title="Delete Chart Account"
-                        >
-                          <Trash2 size={15} />
-                        </button>
+                      <div className="border-t pt-3 mt-1 flex items-center justify-between gap-3" onClick={(e) => e.stopPropagation()}>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider border ${
+                          c.status === 'Active' 
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                            : 'bg-rose-50 text-rose-700 border-rose-200'
+                        }`}>
+                          {c.status === 'Active' ? 'Active' : 'Inactive'}
+                        </span>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleSelectChart(c)}
+                            className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
+                            title="Edit Account"
+                          >
+                            <Edit2 size={15} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteChart(c.id)}
+                            className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
+                            title="Delete Account"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -234,113 +294,115 @@ export default function ChartAcSetupPage() {
           </div>
         ) : (
           /* View 2: Form View */
-          <div className="card-white p-6 md:p-8 bg-white border">
-            <div className="flex items-center gap-3 border-b pb-4 mb-6">
-              <button 
-                onClick={() => {
-                  setActiveTab('list');
-                  setSelectedId(null);
-                }}
-                className="p-1.5 rounded-lg border hover:bg-slate-50 transition-colors"
-              >
-                <ArrowLeft size={16} className="text-slate-600" />
-              </button>
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">
-                  {selectedId ? 'Edit Chart Account' : 'Register New Chart Account'}
-                </h3>
-                <p className="text-xs text-slate-500 font-medium">Configure chart account details, parent control structures, and status parameters.</p>
-              </div>
-            </div>
-
-            <form onSubmit={handleSave} className="max-w-xl flex flex-col gap-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Settings size={15} className="text-[#B08D57]" />
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Chart Account Configuration</span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Chart Code</label>
-                  <input
-                    type="text"
-                    value={id}
-                    onChange={e => setId(e.target.value)}
-                    placeholder="e.g. 110001"
-                    disabled={!!selectedId}
-                    className="soleria-input font-mono font-semibold disabled:bg-slate-100 disabled:text-slate-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Chart Name</label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                    placeholder="e.g. CUSTOMERS BALANCES"
-                    className="soleria-input font-semibold"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Parent Control A/C</label>
-                  <select
-                    value={controlId}
-                    onChange={e => setControlId(e.target.value)}
-                    className="soleria-input cursor-pointer font-medium"
-                  >
-                    <option value="">Select Control A/C...</option>
-                    {state.controlAccounts.map(c => (
-                      <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Link Code</label>
-                  <input
-                    type="text"
-                    value={linkCode}
-                    onChange={e => setLinkCode(e.target.value)}
-                    className="soleria-input font-mono font-medium"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
-                <select
-                  value={status}
-                  onChange={e => setStatus(e.target.value as any)}
-                  className="soleria-input cursor-pointer font-medium"
-                >
-                  <option value="Active">Active</option>
-                  <option value="Closed">Closed</option>
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-3 mt-6 border-t pt-4">
-                <button
-                  type="button"
+          <div className="max-w-2xl mx-auto">
+            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm">
+              <div className="flex items-center gap-3 border-b pb-4 mb-6">
+                <button 
                   onClick={() => {
                     setActiveTab('list');
                     setSelectedId(null);
                   }}
-                  className="px-5 py-2.5 text-xs font-bold text-slate-500 hover:text-slate-700 transition-colors uppercase tracking-wider"
+                  className="p-1.5 rounded-lg border hover:bg-slate-50 transition-colors"
                 >
-                  Cancel
+                  <ArrowLeft size={16} className="text-slate-600" />
                 </button>
-                <button
-                  type="submit"
-                  className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-slate-900 uppercase tracking-wider"
-                >
-                  <Save size={14} /> Save Details
-                </button>
+                <div>
+                  <h3 className="font-lora font-semibold text-lg text-slate-800">
+                    {selectedId ? 'Edit Account' : 'Register New Account'}
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">Configure account details, parent group structures, and status parameters.</p>
+                </div>
               </div>
-            </form>
+
+              <form onSubmit={handleSave} className="flex flex-col gap-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Settings size={15} className="text-[#B08D57]" />
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Account Configuration</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Account Code</label>
+                    <input
+                      type="text"
+                      value={id}
+                      onChange={e => setId(e.target.value)}
+                      placeholder="e.g. 110001"
+                      disabled={!!selectedId}
+                      className="soleria-input font-mono font-semibold disabled:bg-slate-100 disabled:text-slate-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Account Name</label>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={e => setName(e.target.value)}
+                      placeholder="e.g. CUSTOMERS BALANCES"
+                      className="soleria-input font-semibold"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Parent Group A/C</label>
+                    <SearchableSelect
+                      options={state.groupAccounts.map(g => ({
+                        value: g.id,
+                        label: `${g.name} (${g.id})`
+                      }))}
+                      value={controlId}
+                      onChange={setControlId}
+                      placeholder="Select Group..."
+                      searchPlaceholder="Search group accounts..."
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Link Code</label>
+                    <input
+                      type="text"
+                      value={linkCode}
+                      onChange={e => setLinkCode(e.target.value)}
+                      className="soleria-input font-mono font-medium"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
+                  <select
+                    value={status}
+                    onChange={e => setStatus(e.target.value as any)}
+                    className="soleria-input cursor-pointer font-medium"
+                  >
+                    <option value="Active">Active</option>
+                    <option value="Closed">Closed</option>
+                  </select>
+                </div>
+
+                <div className="flex justify-end gap-3 mt-6 border-t pt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('list');
+                      setSelectedId(null);
+                    }}
+                    className="px-5 py-2.5 text-xs font-bold text-slate-500 hover:text-slate-700 transition-colors uppercase tracking-wider"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-slate-900 uppercase tracking-wider"
+                  >
+                    <Save size={14} /> Save Details
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
 

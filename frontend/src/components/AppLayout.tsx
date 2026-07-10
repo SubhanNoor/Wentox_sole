@@ -3,7 +3,7 @@ import { useApp } from '@/context/AppContext';
 import {
   ShoppingCart, Receipt, Package, FileText, Layers,
   Settings, LogOut, Lock, Menu, X, ChevronDown, MapPin,
-  Users, Folder, BookOpen, DollarSign, ListCollapse, List
+  Users, Folder, BookOpen, DollarSign, ListCollapse, List, Wallet
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 
@@ -25,6 +25,7 @@ const navSections: NavSection[] = [
       { page: 'sale-bill', label: 'Sale Bill', icon: ShoppingCart },
       { page: 'sale-return', label: 'Sale Return', icon: Receipt },
       { page: 'receipts-jamma', label: 'Receipts (Jamma)', icon: DollarSign },
+      { page: 'expenses-entry', label: 'Expenses (Kharch)', icon: Wallet },
     ]
   },
   {
@@ -120,7 +121,7 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
               </div>
               <div>
                 <div className="font-lora font-semibold text-lg tracking-wide" style={{ color: '#ffffff' }}>
-                  WENTO ERP
+                  WENTOX WAREHOUSE
                 </div>
                 <div
                   className="text-xs font-inter tracking-widest uppercase"
@@ -223,7 +224,7 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
               <span className="font-inter font-semibold text-xs" style={{ color: 'var(--brand-navy)' }}>WA</span>
             </div>
             <div className="flex-1 text-left">
-              <div className="text-white font-semibold text-sm">Wento Admin</div>
+              <div className="text-white font-semibold text-sm">Wentox Admin</div>
               <div style={{ color: 'var(--brand-gold)', fontSize: '11px' }}>Administrator</div>
             </div>
             <ChevronDown

@@ -162,6 +162,16 @@ export interface Receipt {
   remarks: string;
 }
 
+export interface Expense {
+  id: string; // Auto PK
+  date: string;
+  businessAccountId: string;
+  amount: number;
+  paymentMode: 'Cash' | 'Cheque' | 'Online';
+  details: string;
+  remarks: string;
+}
+
 export type NavPage =
   | 'login'
   | 'sale-bill'
@@ -171,6 +181,7 @@ export type NavPage =
   | 'monthly-records'
   | 'overall-records'
   | 'receipts-jamma'
+  | 'expenses-entry'
   | 'setup-product'
   | 'setup-category'
   | 'setup-group-ac'

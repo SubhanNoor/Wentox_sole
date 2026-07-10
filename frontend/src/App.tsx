@@ -3,6 +3,7 @@ import LoginPage from '@/pages/LoginPage';
 import SaleBillPage from '@/pages/SaleBillPage';
 import SaleReturnPage from '@/pages/SaleReturnPage';
 import ReceiptsPage from '@/pages/ReceiptsPage';
+import ExpensesPage from '@/pages/ExpensesPage';
 
 // Setups
 import ProductSetupPage from '@/pages/ProductSetupPage';
@@ -49,6 +50,8 @@ export default function App() {
       return <SaleBillPage initialTab="overall" />;
     case 'receipts-jamma':
       return <ReceiptsPage />;
+    case 'expenses-entry':
+      return <ExpensesPage />;
 
     // System Setup
     case 'setup-product':
