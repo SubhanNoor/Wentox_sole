@@ -175,6 +175,16 @@ export interface Expense {
   remarks: string;
 }
 
+export interface ProductionLog {
+  id: string;
+  date: string;
+  productId: string;
+  quantity: number; // total pairs
+  qtyValue: number; // input quantity
+  unitType: 'cartons' | 'pairs';
+  packing: number;
+}
+
 export type NavPage =
   | 'login'
   | 'sale-bill'

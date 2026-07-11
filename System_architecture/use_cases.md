@@ -178,17 +178,29 @@
 
 ---
 
-### UC-08: View Current Product Stock
+### UC-08: Manage Stock & Production Logs
 
-**Actor:** Warehouse staff / Sales staff  
-**Goal:** Check how many units of a product are currently in stock  
-**Screen:** Current Stock
+**Actor:** Warehouse staff / Sales staff / Production manager  
+**Goal:** Track inventory and log daily/weekly/monthly/overall production  
+**Screen:** Stock & Production Center
 
-**Steps:**
-1. Open Current Stock screen
-2. Browse or search the product list
-3. System displays current stock quantity for each product/article
-4. User can print the stock report in A4 format
+**Steps to view stock & production:**
+1. Open Stock & Production Center screen.
+2. The page lands on the **Current Stock** tab, showing real-time inventory counts (cartons, extra pairs, total pairs).
+3. Switch between tabs to view historical production records:
+   - **Daily Production**: Production logs for a single chosen date (defaults to today).
+   - **Weekly Production**: Production logs for the selected week (Monday to Sunday).
+   - **Monthly Production**: Production logs for the selected month and year.
+   - **Overall Production**: Production logs for all time (with custom start/end date range filters).
+4. Apply search filters (by Article Name/Code or Category) which remain active across all tabs.
+5. Click **Print Report** to generate a clean A4 Excel-style layout of the current tab's records.
+
+**Steps to add stock / log production:**
+1. From the **Current Stock** tab, locate the product and click the square plus (`+`) button at the end of the row.
+2. In the modal, input the quantity to add and select the unit type (**Carton(s)** or **Pair(s)**).
+3. Choose the **Production Date** (defaults to the current date).
+4. Review the **Updated Stock Preview** showing how the warehouse levels will change.
+5. Click **Confirm Add & Log** to update the product stock level and save the production log.
 
 ---
 
@@ -291,6 +303,22 @@
 4. System auto-generates city code (for new entries)
 5. Enter city/district name
 6. Click **Save**
+
+---
+
+### UC-21: Manage Transport Addas
+
+**Actor:** Admin  
+**Goal:** Add, edit, or delete transport addas (dispatch terminals) in the system  
+**Screen:** Transport Addas Setup
+
+**Steps:**
+1. Open Transport Addas screen from the sidebar.
+2. Browse existing addas in the list tab, utilizing the text search filter.
+3. Click **Add New** or select an existing Adda to edit.
+4. Fill in the Adda name and optional details.
+5. Click **Save** to persist the record.
+6. To delete an Adda, click **Delete** (the system automatically checks if the Adda is assigned to any existing sale bills; if it is active, deletion is blocked to maintain referential integrity).
 
 ---
 
@@ -420,7 +448,7 @@
 
 ---
 
-> **Total Use Cases:** 20  
-> **Document Version:** 2.0  
+> **Total Use Cases:** 21  
+> **Document Version:** 2.1  
 > **Last Updated:** July 2026  
 > **System:** Wentox Warehouse ERP — Footwear Wholesale Distribution

@@ -4,7 +4,7 @@ import type {
   City, Store, Adda, Vendor, ProductCategory, Product,
   GroupAccount, ControlAccount, ChartOfAccount, BusinessAccount,
   Customer, SubCustomer, SaleBill, SaleReturn,
-  Receipt, Expense
+  Receipt, Expense, ProductionLog
 } from '@/types';
 
 /* ──────────────────── Demo Data ──────────────────── */
@@ -210,6 +210,7 @@ interface State {
   saleReturns: SaleReturn[];
   receipts: Receipt[];
   expenses: Expense[];
+  productionLogs: ProductionLog[];
   
   settings: { username: string; password: string };
 }
@@ -218,6 +219,7 @@ type Action =
   | { type: 'LOGIN'; payload: { username: string; password: string } }
   | { type: 'LOGOUT' }
   | { type: 'NAVIGATE'; page: string }
+  | { type: 'ADD_PRODUCTION_LOG'; log: ProductionLog }
   | { type: 'SELECT_BILL'; billId: string | null }
   | { type: 'SELECT_RETURN'; returnId: string | null }
   
@@ -302,6 +304,7 @@ const initialState: State = {
   saleReturns: demoSaleReturns,
   receipts: demoReceipts,
   expenses: demoExpenses,
+  productionLogs: [],
   
   settings: { username: 'admin', password: 'admin' },
 };
@@ -323,6 +326,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, selectedBillId: action.billId };
     case 'SELECT_RETURN':
       return { ...state, selectedReturnId: action.returnId };
+    case 'ADD_PRODUCTION_LOG':
+      return { ...state, productionLogs: [...state.productionLogs, action.log] };
 
     /* ──── Setup Handlers ──── */
     case 'ADD_PRODUCT':
