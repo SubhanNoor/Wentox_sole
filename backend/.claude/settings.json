@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/backend/.claude/hooks/pre-edit-approval.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "agent",
+            "prompt": "Act as the `debugger` subagent defined in .claude/agents/debugger.md (senior SQL/Node.js debugging specialist). Review the code changes made during this session (check `git diff` / recently modified files) for bugs, root causes, missing transactions on multi-write SQL, N+1 queries, missing indexes, missing `await`/blocking sync calls, and any other issues per that agent's workflow. Reproduce problems where possible, fix the root cause (not just the symptom), and verify the fix. If no application code was changed this session (e.g. docs/planning only), say so and do nothing else. Report findings concisely per the debugger agent's 'Explain in plain language' step."
+          }
+        ]
+      }
+    ]
+  }
+}

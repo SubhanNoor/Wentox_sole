@@ -1,4 +1,4 @@
-# Wento ERP — Project Overview
+# WentoX  — Project Overview
 
 ---
 
@@ -32,24 +32,25 @@ The goal of this project is to **redesign and rebuild the software** as a modern
 
 ## Modules to Rebuild
 
-| # | Module | Type |
-|---|---|---|
-| 1 | Sale Bill | Data Entry |
-| 2 | Sale Return | Data Entry |
-| 3 | Receipts / Jamma | Data Entry |
-| 4 | Product Detail Info | Setup |
-| 5 | Product Category | Setup |
-| 6 | Product Current Stock | Report |
-| 7 | Product Ledger | Report |
-| 8 | Search & Bilty Adda Updation | Data Entry + Search |
-| 9 | Sub Customer | Setup |
-| 10 | City Creation | Setup |
-| 11 | Group Accounts | Accounts Setup |
-| 12 | Control Accounts | Accounts Setup |
-| 13 | Chart of Accounts | Accounts Setup |
-| 14 | Business Accounts | Accounts Setup |
-| 15 | Business Accounts Ledger (Khaata) | Report |
-| 16 | Cash Book Summary | Report |
+
+| #  | Module                            | Type                |
+| -- | --------------------------------- | ------------------- |
+| 1  | Sale Bill                         | Data Entry          |
+| 2  | Sale Return                       | Data Entry          |
+| 3  | Receipts / Jamma                  | Data Entry          |
+| 4  | Product Detail Info               | Setup               |
+| 5  | Product Category                  | Setup               |
+| 6  | Product Current Stock             | Report              |
+| 7  | Product Ledger                    | Report              |
+| 8  | Search & Bilty Adda Updation      | Data Entry + Search |
+| 9  | Sub Customer                      | Setup               |
+| 10 | City Creation                     | Setup               |
+| 11 | Group Accounts                    | Accounts Setup      |
+| 12 | Control Accounts                  | Accounts Setup      |
+| 13 | Chart of Accounts                 | Accounts Setup      |
+| 14 | Business Accounts                 | Accounts Setup      |
+| 15 | Business Accounts Ledger (Khaata) | Report              |
+| 16 | Cash Book Summary                 | Report              |
 
 ---
 
@@ -68,16 +69,17 @@ Class (ASSETS / LIABILITY / INCOME / EXPENSES)
 
 ## Key Business Concepts
 
-| Term | Meaning |
-|---|---|
-| **Bilty** | Delivery receipt issued by transport company |
-| **Adda** | Transport station/company used for delivery |
-| **Jamma / Receipts** | Cash or cheque received from customers |
-| **Khaata** | Urdu for ledger — account book |
-| **SAME delivery** | Direct delivery to customer's warehouse, no middleman |
-| **Sub-customer** | A delivery agent or middleman between the company and the end customer |
-| **Packing** | Number of pairs per carton (usually 12) |
-| **Posting** | Finalizing a transaction so it reflects in accounts |
+
+| Term                 | Meaning                                                                |
+| -------------------- | ---------------------------------------------------------------------- |
+| **Bilty**            | Delivery receipt issued by transport company                           |
+| **Adda**             | Transport station/company used for delivery                            |
+| **Jamma / Receipts** | Cash or cheque received from customers                                 |
+| **Khaata**           | Urdu for ledger — account book                                        |
+| **SAME delivery**    | Direct delivery to customer's warehouse, no middleman                  |
+| **Sub-customer**     | A delivery agent or middleman between the company and the end customer |
+| **Packing**          | Number of pairs per carton (usually 12)                                |
+| **Posting**          | Finalizing a transaction so it reflects in accounts                    |
 
 ---
 
