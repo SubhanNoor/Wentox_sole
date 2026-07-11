@@ -96,6 +96,16 @@ export default function ChartAcSetupPage() {
     }
   };
 
+  const groupFilterOptions = useMemo(() => {
+    return [
+      { value: '', label: 'All Group Accounts' },
+      ...state.groupAccounts.map(g => ({
+        value: g.id,
+        label: `${g.name} (${g.id})`
+      }))
+    ];
+  }, [state.groupAccounts]);
+
   const filteredAndSortedCharts = useMemo(() => {
     let list = state.chartAccounts;
     if (selectedGroupFilter) {
@@ -169,16 +179,13 @@ export default function ChartAcSetupPage() {
 
               {/* Group Filter select - full width, big and readable */}
               <div className="w-full">
-                <select
+                <SearchableSelect
+                  options={groupFilterOptions}
                   value={selectedGroupFilter}
-                  onChange={e => setSelectedGroupFilter(e.target.value)}
-                  className="soleria-input w-full py-2.5 px-3.5 text-sm font-semibold bg-white cursor-pointer shadow-sm hover:border-[#B08D57] transition-all"
-                >
-                  <option value="">All Group Accounts</option>
-                  {state.groupAccounts.map(g => (
-                    <option key={g.id} value={g.id}>{g.name} ({g.id})</option>
-                  ))}
-                </select>
+                  onChange={setSelectedGroupFilter}
+                  placeholder="All Group Accounts"
+                  searchPlaceholder="Search group accounts..."
+                />
               </div>
 
               {/* Bottom row: Sort and Search */}
@@ -295,7 +302,7 @@ export default function ChartAcSetupPage() {
         ) : (
           /* View 2: Form View */
           <div className="max-w-2xl mx-auto">
-            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm">
+            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" style={{ overflow: 'visible' }}>
               <div className="flex items-center gap-3 border-b pb-4 mb-6">
                 <button 
                   onClick={() => {

@@ -9,6 +9,7 @@ export default function OverallExpensesTab() {
   // Filters
   const [nameQuery, setNameQuery] = useState('');
   const [selectedMonth, setSelectedMonth] = useState<string>('all'); // '0' to '11' or 'all'
+  const [selectedYear, setSelectedYear] = useState<string>('all'); // Default to all
 
   // Selected business account for viewing details
   const [selectedBizId, setSelectedBizId] = useState<string | null>(null);
@@ -28,16 +29,52 @@ export default function OverallExpensesTab() {
     { value: '11', label: 'December' },
   ];
 
+  // Extract unique years from expenses for the filter
+  const yearsList = useMemo(() => {
+    const years = new Set<string>();
+    state.expenses.forEach(e => {
+      if (e.date) {
+        const parts = e.date.split('-');
+        if (parts[0] && parts[0].length === 4) {
+          years.add(parts[0]);
+        }
+      }
+    });
+    // Always guarantee current year is in the list
+    years.add(new Date().getFullYear().toString());
+    return Array.from(years).sort((a, b) => b.localeCompare(a));
+  }, [state.expenses]);
+
   // Filtered expenses + filter inputs
   const overallExpenses = useMemo(() => {
     return state.expenses.filter(e => {
-      // 1. Filter by month if selected
+      let eYear = '';
+      let eMonth = '';
+
+      if (e.date) {
+        const parts = e.date.split('-');
+        if (parts[0]) eYear = parts[0];
+        if (parts[1]) {
+          const mVal = parseInt(parts[1], 10) - 1;
+          eMonth = mVal.toString();
+        }
+      } else {
+        const d = new Date(e.date);
+        eYear = d.getFullYear().toString();
+        eMonth = d.getMonth().toString();
+      }
+
+      // 1. Filter by year if selected
+      if (selectedYear !== 'all') {
+        if (eYear !== selectedYear) return false;
+      }
+
+      // 2. Filter by month if selected
       if (selectedMonth !== 'all') {
-        const eMonth = new Date(e.date).getMonth().toString();
         if (eMonth !== selectedMonth) return false;
       }
 
-      // 2. Filter by business account name or code
+      // 3. Filter by business account name or code
       if (nameQuery.trim()) {
         const biz = state.businessAccounts.find(b => b.id === e.businessAccountId);
         const bizName = biz?.name.toLowerCase() || '';
@@ -48,7 +85,7 @@ export default function OverallExpensesTab() {
 
       return true;
     });
-  }, [state.expenses, state.businessAccounts, selectedMonth, nameQuery]);
+  }, [state.expenses, state.businessAccounts, selectedYear, selectedMonth, nameQuery]);
 
   // Group expenses by business account for the card layout
   const bizCardsData = useMemo(() => {
@@ -157,7 +194,7 @@ export default function OverallExpensesTab() {
     <div className="mx-auto" style={{ maxWidth: 1200 }}>
       {/* Premium Big and Readable Filter Toolbar */}
       <div className="flex flex-col gap-4 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
           <div className="col-span-1 md:col-span-2">
             <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Search Ledger Title or Code</label>
             <div className="relative">
@@ -182,6 +219,20 @@ export default function OverallExpensesTab() {
               <option value="all">All Months</option>
               {monthsList.map(m => (
                 <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="col-span-1">
+            <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Filter by Year</label>
+            <select
+              value={selectedYear}
+              onChange={e => setSelectedYear(e.target.value)}
+              className="soleria-input py-2.5 px-3.5 w-full cursor-pointer text-sm font-semibold bg-white hover:border-[#B08D57] transition-all shadow-sm"
+            >
+              <option value="all">All Years</option>
+              {yearsList.map(y => (
+                <option key={y} value={y}>{y}</option>
               ))}
             </select>
           </div>

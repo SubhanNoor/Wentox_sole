@@ -50,6 +50,111 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   const [newSubCustomerName, setNewSubCustomerName] = useState('');
   const [isPrintingSingle, setIsPrintingSingle] = useState(false);
 
+  // Add new customer modal state
+  const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false);
+  const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerCityId, setNewCustomerCityId] = useState('');
+
+  const customerOptions = useMemo(() => {
+    return state.customers.map(c => ({
+      value: c.id,
+      label: c.name
+    }));
+  }, [state.customers]);
+
+  const mainAcOptions = useMemo(() => {
+    const list = state.chartAccounts.map(ac => ({
+      value: ac.id,
+      label: `${ac.name} (${ac.id})`
+    }));
+    list.push({ value: 'custom', label: 'Other / Custom Group...' });
+    return list;
+  }, [state.chartAccounts]);
+
+  const addaOptions = useMemo(() => {
+    return state.addas.map(ad => ({
+      value: ad.id,
+      label: ad.name
+    }));
+  }, [state.addas]);
+
+  const getNextCustomerCode = () => {
+    const customerAccounts = state.businessAccounts.filter(acc => acc.controlId === '110001');
+    if (customerAccounts.length === 0) return '11000101';
+    
+    // Extract suffixes
+    const suffixes = customerAccounts.map(acc => {
+      const suffixStr = acc.id.substring(6); // '110001' is 6 characters
+      const num = parseInt(suffixStr, 10);
+      return isNaN(num) ? 0 : num;
+    });
+    
+    const maxSuffix = Math.max(...suffixes, 0);
+    const nextSuffix = maxSuffix + 1;
+    const formattedSuffix = nextSuffix < 10 ? `0${nextSuffix}` : `${nextSuffix}`;
+    return `110001${formattedSuffix}`;
+  };
+
+  const handleCreateCustomer = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCustomerName.trim()) {
+      alert('Customer name is required.');
+      return;
+    }
+    const cityId = newCustomerCityId || state.cities[0]?.id || 'ct1';
+    const newId = getNextCustomerCode();
+
+    // 1. Dispatch ADD_BUSINESS_ACCOUNT
+    dispatch({
+      type: 'ADD_BUSINESS_ACCOUNT',
+      account: {
+        id: newId,
+        name: newCustomerName.trim(),
+        controlId: '110001',
+        linkCode: 'A',
+        region: 'LOCAL',
+        status: 'Active'
+      }
+    });
+
+    // 2. Dispatch ADD_CUSTOMER
+    dispatch({
+      type: 'ADD_CUSTOMER',
+      customer: {
+        id: newId,
+        name: newCustomerName.trim(),
+        acId: '110001',
+        cityId
+      }
+    });
+
+    // 3. Dispatch ADD_SUB_CUSTOMER (default SAME sub customer)
+    dispatch({
+      type: 'ADD_SUB_CUSTOMER',
+      subCust: {
+        id: 'sub_' + newId,
+        name: 'SAME (Direct)',
+        customerId: newId
+      }
+    });
+
+    // Select the new customer
+    setCustomerId(newId);
+    setMainAcId('110001');
+    setCustomMainAcName('');
+    setDeliveryType('1');
+    setSubCustomerId('sub-same');
+    setCustomAddress('');
+
+    // Close and reset
+    setIsAddCustomerOpen(false);
+    setNewCustomerName('');
+    setNewCustomerCityId('');
+    
+    setSuccessMsg('New customer added successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
   const filteredSubCustomers = useMemo(() => {
     return state.subCustomers.filter(sc => sc.customerId === customerId);
   }, [customerId, state.subCustomers]);
@@ -621,7 +726,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         </div>
 
         {/* Tab contents (records & find) */}
-        <div data-no-print>
+        <div>
           {activeTab === 'weekly' && <WeeklyTab onEditBill={handleEditSpecificBill} onPrintBill={handlePrintSpecificBill} />}
           {activeTab === 'monthly' && <MonthlyTab onEditBill={handleEditSpecificBill} onPrintBill={handlePrintSpecificBill} />}
           {activeTab === 'overall' && <OverallTab onEditBill={handleEditSpecificBill} onPrintBill={handlePrintSpecificBill} />}
@@ -774,7 +879,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         </div>
 
         {/* Invoice Layout */}
-        <div className="card-white shadow-sm p-6 md:p-8" style={{ border: '1px solid var(--border-color)', background: '#ffffff' }}>
+        <div className="card-white shadow-sm p-6 md:p-8" style={{ border: '1px solid var(--border-color)', background: '#ffffff', overflow: 'visible' }}>
           
           {/* Print Title (Visible only when printing) */}
           <div className="hidden print:flex items-center justify-between mb-6 pb-4 border-b">
@@ -856,18 +961,27 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Select Customer Name <span className="text-red-500 font-bold">*</span>
-                  </label>
-                  <select
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="block text-xs font-medium text-slate-600">
+                      Select Customer Name <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    {!isViewMode && (
+                      <button
+                        type="button"
+                        onClick={() => setIsAddCustomerOpen(true)}
+                        className="text-[10px] font-bold text-blue-600 hover:text-blue-800 underline transition-colors"
+                      >
+                        + Add New Customer
+                      </button>
+                    )}
+                  </div>
+                  <SearchableSelect
+                    options={customerOptions}
                     value={customerId}
-                    disabled={isViewMode}
-                    onChange={e => {
-                      const newCustId = e.target.value;
-                      setCustomerId(newCustId);
-                      
+                    onChange={(val) => {
+                      setCustomerId(val);
                       // Auto account group selection
-                      const newCust = state.customers.find(c => c.id === newCustId);
+                      const newCust = state.customers.find(c => c.id === val);
                       if (newCust) {
                         setMainAcId(newCust.acId || '');
                         setCustomMainAcName('');
@@ -875,20 +989,14 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                         setMainAcId('');
                         setCustomMainAcName('');
                       }
-                      
-                      // Keep delivery type as primary same-as-customer by default
                       setDeliveryType('1');
                       setSubCustomerId('sub-same');
                       setCustomAddress('');
                     }}
-                    className="soleria-input cursor-pointer"
-                    style={{ fontSize: '13px' }}
-                  >
-                    <option value="">Select customer...</option>
-                    {state.customers.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
+                    placeholder="Select customer..."
+                    searchPlaceholder="Search customer by name or code..."
+                    disabled={isViewMode}
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
@@ -906,24 +1014,19 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   <label className="block text-xs font-medium text-slate-600 mb-1">
                     Main Account Group
                   </label>
-                  <select
+                  <SearchableSelect
+                    options={mainAcOptions}
                     value={mainAcId}
-                    disabled={isViewMode}
-                    onChange={e => {
-                      setMainAcId(e.target.value);
-                      if (e.target.value !== 'custom') {
+                    onChange={(val) => {
+                      setMainAcId(val);
+                      if (val !== 'custom') {
                         setCustomMainAcName('');
                       }
                     }}
-                    className="soleria-input cursor-pointer"
-                    style={{ fontSize: '13px' }}
-                  >
-                    <option value="">Select Account Group...</option>
-                    {state.chartAccounts.map(ac => (
-                      <option key={ac.id} value={ac.id}>{ac.name}</option>
-                    ))}
-                    <option value="custom">Other / Custom Group...</option>
-                  </select>
+                    placeholder="Select Account Group..."
+                    searchPlaceholder="Search Account Group..."
+                    disabled={isViewMode}
+                  />
                   {mainAcId === 'custom' && (
                     <input
                       type="text"
@@ -966,7 +1069,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                     className="soleria-input cursor-pointer"
                     style={{ fontSize: '13px' }}
                   >
-                    <option value="1">1 = SAME (Direct)</option>
+                    <option value="1">SAME (Direct)</option>
                     <option value="custom">Custom Agent / Sub-Customer</option>
                   </select>
                 </div>
@@ -1030,18 +1133,14 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   <label className="block text-xs font-medium text-slate-600 mb-1">
                     Transport Adda
                   </label>
-                  <select
+                  <SearchableSelect
+                    options={addaOptions}
                     value={addaId}
+                    onChange={setAddaId}
+                    placeholder="Select Adda..."
+                    searchPlaceholder="Search Adda..."
                     disabled={isViewMode}
-                    onChange={e => setAddaId(e.target.value)}
-                    className="soleria-input cursor-pointer"
-                    style={{ fontSize: '13px' }}
-                  >
-                    <option value="">Select Adda...</option>
-                    {state.addas.map(ad => (
-                      <option key={ad.id} value={ad.id}>{ad.name}</option>
-                    ))}
-                  </select>
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
@@ -1372,6 +1471,70 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Add New Customer Modal */}
+      {isAddCustomerOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+          <form onSubmit={handleCreateCustomer} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+            <h3 className="font-lora font-bold text-lg text-slate-800 mb-4">
+              Add New Customer
+            </h3>
+            
+            <div className="mb-4">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                Customer Name <span className="text-red-500 font-bold">*</span>
+              </label>
+              <input
+                type="text"
+                value={newCustomerName}
+                onChange={e => setNewCustomerName(e.target.value)}
+                placeholder="Enter customer name..."
+                className="soleria-input font-semibold"
+                autoFocus
+                required
+              />
+            </div>
+
+            <div className="mb-6">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                Select City <span className="text-red-500 font-bold">*</span>
+              </label>
+              <select
+                value={newCustomerCityId}
+                onChange={e => setNewCustomerCityId(e.target.value)}
+                className="soleria-input cursor-pointer font-semibold"
+                required
+              >
+                <option value="">Select City...</option>
+                {state.cities.map(ct => (
+                  <option key={ct.id} value={ct.id}>{ct.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Actions */}
+            <div className="flex justify-end gap-2 text-sm font-semibold">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAddCustomerOpen(false);
+                  setNewCustomerName('');
+                  setNewCustomerCityId('');
+                }}
+                className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 bg-[#111c2a] text-[#B08D57] rounded-lg hover:opacity-90 transition-opacity"
+              >
+                Save Customer
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </AppLayout>

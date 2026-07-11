@@ -134,6 +134,23 @@ export default function BusinessAcSetupPage() {
     }
   };
 
+  const chartOptions = useMemo(() => {
+    return state.chartAccounts.map(c => ({
+      value: c.id,
+      label: `${c.name} (${c.id})`
+    }));
+  }, [state.chartAccounts]);
+
+  const chartFilterOptions = useMemo(() => {
+    return [
+      { value: '', label: 'All Accounts' },
+      ...state.chartAccounts.map(c => ({
+        value: c.id,
+        label: `${c.name} (${c.id})`
+      }))
+    ];
+  }, [state.chartAccounts]);
+
   const filteredAndSortedAccounts = useMemo(() => {
     let list = state.businessAccounts;
     if (selectedChartFilter) {
@@ -208,16 +225,13 @@ export default function BusinessAcSetupPage() {
 
               {/* All Accounts select - full width, big and readable */}
               <div className="w-full">
-                <select
+                <SearchableSelect
+                  options={chartFilterOptions}
                   value={selectedChartFilter}
-                  onChange={e => setSelectedChartFilter(e.target.value)}
-                  className="soleria-input w-full py-2.5 px-3.5 text-sm font-semibold bg-white cursor-pointer shadow-sm hover:border-[#B08D57] transition-all"
-                >
-                  <option value="">All Accounts</option>
-                  {state.chartAccounts.map(c => (
-                    <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
-                  ))}
-                </select>
+                  onChange={setSelectedChartFilter}
+                  placeholder="All Accounts"
+                  searchPlaceholder="Search accounts..."
+                />
               </div>
 
               {/* Bottom row: Sort and Search */}
@@ -334,7 +348,7 @@ export default function BusinessAcSetupPage() {
         ) : (
           /* View 2: Form View */
           <div className="max-w-2xl mx-auto">
-            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm">
+            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" style={{ overflow: 'visible' }}>
               <div className="flex items-center gap-3 border-b pb-4 mb-6">
                 <button 
                   onClick={() => {
@@ -388,10 +402,7 @@ export default function BusinessAcSetupPage() {
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Parent Chart of Account</label>
                     <SearchableSelect
-                      options={state.chartAccounts.map(c => ({
-                        value: c.id,
-                        label: `${c.name} (${c.id})`
-                      }))}
+                      options={chartOptions}
                       value={controlId}
                       onChange={setControlId}
                       placeholder="Select Chart A/C..."

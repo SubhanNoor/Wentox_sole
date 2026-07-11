@@ -14,6 +14,7 @@ export default function OverallReturnTab({ onEditReturn, onPrintReturn }: Overal
   // Filters
   const [nameQuery, setNameQuery] = useState('');
   const [selectedMonth, setSelectedMonth] = useState<string>('all'); // Default to all
+  const [selectedYear, setSelectedYear] = useState<string>('all'); // Default to all
 
   // Selected customer for viewing details
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
@@ -33,18 +34,52 @@ export default function OverallReturnTab({ onEditReturn, onPrintReturn }: Overal
     { value: '11', label: 'December' },
   ];
 
+  // Extract unique years from sale returns for the filter
+  const yearsList = useMemo(() => {
+    const years = new Set<string>();
+    state.saleReturns.forEach(ret => {
+      if (ret.date) {
+        const parts = ret.date.split('-');
+        if (parts[0] && parts[0].length === 4) {
+          years.add(parts[0]);
+        }
+      }
+    });
+    // Always guarantee current year is in the list
+    years.add(new Date().getFullYear().toString());
+    return Array.from(years).sort((a, b) => b.localeCompare(a));
+  }, [state.saleReturns]);
+
   // Filtered returns + filter inputs
   const overallReturns = useMemo(() => {
     return state.saleReturns.filter(ret => {
-      const d = new Date(ret.date);
-      
-      // 1. Filter by month if selected
+      let retYear = '';
+      let retMonth = '';
+
+      if (ret.date) {
+        const parts = ret.date.split('-');
+        if (parts[0]) retYear = parts[0];
+        if (parts[1]) {
+          const mVal = parseInt(parts[1], 10) - 1;
+          retMonth = mVal.toString();
+        }
+      } else {
+        const d = new Date(ret.date);
+        retYear = d.getFullYear().toString();
+        retMonth = d.getMonth().toString();
+      }
+
+      // 1. Filter by year if selected
+      if (selectedYear !== 'all') {
+        if (retYear !== selectedYear) return false;
+      }
+
+      // 2. Filter by month if selected
       if (selectedMonth !== 'all') {
-        const retMonth = d.getMonth().toString();
         if (retMonth !== selectedMonth) return false;
       }
 
-      // 2. Filter by customer name
+      // 3. Filter by customer name
       if (nameQuery.trim()) {
         const custName = state.customers.find(c => c.id === ret.customerId)?.name.toLowerCase() || '';
         if (!custName.includes(nameQuery.toLowerCase())) return false;
@@ -52,7 +87,7 @@ export default function OverallReturnTab({ onEditReturn, onPrintReturn }: Overal
 
       return true;
     });
-  }, [state.saleReturns, state.customers, selectedMonth, nameQuery]);
+  }, [state.saleReturns, state.customers, selectedYear, selectedMonth, nameQuery]);
 
   // Group returns by customer for the card layout
   const customerCardsData = useMemo(() => {
@@ -217,6 +252,17 @@ export default function OverallReturnTab({ onEditReturn, onPrintReturn }: Overal
             <option value="all">All Months</option>
             {monthsList.map(m => (
               <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
+
+          <select
+            value={selectedYear}
+            onChange={e => setSelectedYear(e.target.value)}
+            className="soleria-input py-2 cursor-pointer text-sm max-w-[150px]"
+          >
+            <option value="all">All Years</option>
+            {yearsList.map(y => (
+              <option key={y} value={y}>{y}</option>
             ))}
           </select>
         </div>

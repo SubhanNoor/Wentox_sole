@@ -14,6 +14,7 @@ export default function OverallTab({ onEditBill, onPrintBill }: OverallTabProps)
   // Filters
   const [nameQuery, setNameQuery] = useState('');
   const [selectedMonth, setSelectedMonth] = useState<string>('all'); // Default to all
+  const [selectedYear, setSelectedYear] = useState<string>('all'); // Default to all
 
   // Selected customer for viewing details
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
@@ -33,18 +34,52 @@ export default function OverallTab({ onEditBill, onPrintBill }: OverallTabProps)
     { value: '11', label: 'December' },
   ];
 
+  // Extract unique years from sale bills for the filter
+  const yearsList = useMemo(() => {
+    const years = new Set<string>();
+    state.saleBills.forEach(bill => {
+      if (bill.date) {
+        const parts = bill.date.split('-');
+        if (parts[0] && parts[0].length === 4) {
+          years.add(parts[0]);
+        }
+      }
+    });
+    // Always guarantee current year is in the list
+    years.add(new Date().getFullYear().toString());
+    return Array.from(years).sort((a, b) => b.localeCompare(a));
+  }, [state.saleBills]);
+
   // Filtered bills + filter inputs
   const overallBills = useMemo(() => {
     return state.saleBills.filter(bill => {
-      const d = new Date(bill.date);
-      
-      // 1. Filter by month if selected
+      let billYear = '';
+      let billMonth = '';
+
+      if (bill.date) {
+        const parts = bill.date.split('-');
+        if (parts[0]) billYear = parts[0];
+        if (parts[1]) {
+          const mVal = parseInt(parts[1], 10) - 1;
+          billMonth = mVal.toString();
+        }
+      } else {
+        const d = new Date(bill.date);
+        billYear = d.getFullYear().toString();
+        billMonth = d.getMonth().toString();
+      }
+
+      // 1. Filter by year if selected
+      if (selectedYear !== 'all') {
+        if (billYear !== selectedYear) return false;
+      }
+
+      // 2. Filter by month if selected
       if (selectedMonth !== 'all') {
-        const billMonth = d.getMonth().toString();
         if (billMonth !== selectedMonth) return false;
       }
 
-      // 2. Filter by customer name
+      // 3. Filter by customer name
       if (nameQuery.trim()) {
         const custName = state.customers.find(c => c.id === bill.customerId)?.name.toLowerCase() || '';
         if (!custName.includes(nameQuery.toLowerCase())) return false;
@@ -52,7 +87,7 @@ export default function OverallTab({ onEditBill, onPrintBill }: OverallTabProps)
 
       return true;
     });
-  }, [state.saleBills, state.customers, selectedMonth, nameQuery]);
+  }, [state.saleBills, state.customers, selectedYear, selectedMonth, nameQuery]);
 
   // Group bills by customer for the card layout
   const customerCardsData = useMemo(() => {
@@ -216,6 +251,17 @@ export default function OverallTab({ onEditBill, onPrintBill }: OverallTabProps)
             <option value="all">All Months</option>
             {monthsList.map(m => (
               <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
+
+          <select
+            value={selectedYear}
+            onChange={e => setSelectedYear(e.target.value)}
+            className="soleria-input py-2 cursor-pointer text-sm max-w-[150px]"
+          >
+            <option value="all">All Years</option>
+            {yearsList.map(y => (
+              <option key={y} value={y}>{y}</option>
             ))}
           </select>
         </div>

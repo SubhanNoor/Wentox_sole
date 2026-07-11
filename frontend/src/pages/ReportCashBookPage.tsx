@@ -176,8 +176,8 @@ export default function ReportCashBookPage() {
           
           <div className="flex items-center justify-between border-b pb-4 mb-6">
             <div>
-              <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTO ERP</h1>
-              <p className="text-xs uppercase tracking-widest text-slate-500 font-inter">Footwear Distribution ERP</p>
+              <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTOX</h1>
+              <p className="text-xs uppercase tracking-widest text-slate-500 font-inter">Footwear Distribution </p>
             </div>
             <div className="text-right">
               <h2 className="font-lora font-semibold text-lg uppercase">Cash Book Statement</h2>

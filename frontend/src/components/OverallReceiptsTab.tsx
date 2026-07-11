@@ -9,6 +9,7 @@ export default function OverallReceiptsTab() {
   // Filters
   const [nameQuery, setNameQuery] = useState('');
   const [selectedMonth, setSelectedMonth] = useState<string>('all'); // '0' to '11' or 'all'
+  const [selectedYear, setSelectedYear] = useState<string>('all'); // Default to all
 
   // Selected customer for viewing details
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
@@ -28,16 +29,52 @@ export default function OverallReceiptsTab() {
     { value: '11', label: 'December' },
   ];
 
+  // Extract unique years from receipts for the filter
+  const yearsList = useMemo(() => {
+    const years = new Set<string>();
+    state.receipts.forEach(r => {
+      if (r.date) {
+        const parts = r.date.split('-');
+        if (parts[0] && parts[0].length === 4) {
+          years.add(parts[0]);
+        }
+      }
+    });
+    // Always guarantee current year is in the list
+    years.add(new Date().getFullYear().toString());
+    return Array.from(years).sort((a, b) => b.localeCompare(a));
+  }, [state.receipts]);
+
   // Filtered receipts + filter inputs
   const overallReceipts = useMemo(() => {
     return state.receipts.filter(r => {
-      // 1. Filter by month if selected
+      let rYear = '';
+      let rMonth = '';
+
+      if (r.date) {
+        const parts = r.date.split('-');
+        if (parts[0]) rYear = parts[0];
+        if (parts[1]) {
+          const mVal = parseInt(parts[1], 10) - 1;
+          rMonth = mVal.toString();
+        }
+      } else {
+        const d = new Date(r.date);
+        rYear = d.getFullYear().toString();
+        rMonth = d.getMonth().toString();
+      }
+
+      // 1. Filter by year if selected
+      if (selectedYear !== 'all') {
+        if (rYear !== selectedYear) return false;
+      }
+
+      // 2. Filter by month if selected
       if (selectedMonth !== 'all') {
-        const rMonth = new Date(r.date).getMonth().toString();
         if (rMonth !== selectedMonth) return false;
       }
 
-      // 2. Filter by customer name or code
+      // 3. Filter by customer name or code
       if (nameQuery.trim()) {
         const cust = state.customers.find(c => c.id === r.customerId);
         const custName = cust?.name.toLowerCase() || '';
@@ -48,7 +85,7 @@ export default function OverallReceiptsTab() {
 
       return true;
     });
-  }, [state.receipts, state.customers, selectedMonth, nameQuery]);
+  }, [state.receipts, state.customers, selectedYear, selectedMonth, nameQuery]);
 
   // Group receipts by customer for the card layout
   const customerCardsData = useMemo(() => {
@@ -170,6 +207,17 @@ export default function OverallReceiptsTab() {
             <option value="all">All Months</option>
             {monthsList.map(m => (
               <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
+
+          <select
+            value={selectedYear}
+            onChange={e => setSelectedYear(e.target.value)}
+            className="soleria-input py-2 cursor-pointer text-sm max-w-[150px]"
+          >
+            <option value="all">All Years</option>
+            {yearsList.map(y => (
+              <option key={y} value={y}>{y}</option>
             ))}
           </select>
         </div>

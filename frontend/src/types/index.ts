@@ -16,6 +16,8 @@ export interface Adda {
 export interface Vendor {
   id: string;
   name: string;
+  phone?: string;
+  city?: string;
 }
 
 export interface ProductCategory {
@@ -26,6 +28,7 @@ export interface ProductCategory {
 export interface Product {
   id: string; // Product Code
   name: string;
+  color?: string;
   categoryId: string;
   vendorId: string;
   batchNo: number;
@@ -184,12 +187,14 @@ export type NavPage =
   | 'expenses-entry'
   | 'setup-product'
   | 'setup-category'
+  | 'setup-vendor'
   | 'setup-group-ac'
   | 'setup-control-ac'
   | 'setup-chart-ac'
   | 'setup-business-ac'
   | 'setup-sub-cust'
   | 'setup-city'
+  | 'setup-adda'
   | 'report-stock'
   | 'report-khaata'
   | 'report-cashbook'

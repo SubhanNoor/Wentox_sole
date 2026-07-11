@@ -570,7 +570,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
         </div>
 
         {/* Tab contents (records & find) */}
-        <div data-no-print>
+        <div>
           {activeTab === 'weekly' && <WeeklyReturnTab onEditReturn={handleEditSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
           {activeTab === 'monthly' && <MonthlyReturnTab onEditReturn={handleEditSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
           {activeTab === 'overall' && <OverallReturnTab onEditReturn={handleEditSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}

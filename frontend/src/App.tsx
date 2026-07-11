@@ -8,8 +8,10 @@ import ExpensesPage from '@/pages/ExpensesPage';
 // Setups
 import ProductSetupPage from '@/pages/ProductSetupPage';
 import CategorySetupPage from '@/pages/CategorySetupPage';
+import VendorSetupPage from '@/pages/VendorSetupPage';
 import SubCustomerSetupPage from '@/pages/SubCustomerSetupPage';
 import CitySetupPage from '@/pages/CitySetupPage';
+import AddaSetupPage from '@/pages/AddaSetupPage';
 
 // Accounting Setups
 import GroupAcSetupPage from '@/pages/GroupAcSetupPage';
@@ -58,10 +60,14 @@ export default function App() {
       return <ProductSetupPage />;
     case 'setup-category':
       return <CategorySetupPage />;
+    case 'setup-vendor':
+      return <VendorSetupPage />;
     case 'setup-sub-cust':
       return <SubCustomerSetupPage />;
     case 'setup-city':
       return <CitySetupPage />;
+    case 'setup-adda':
+      return <AddaSetupPage />;
 
     // Accounting Setup
     case 'setup-group-ac':

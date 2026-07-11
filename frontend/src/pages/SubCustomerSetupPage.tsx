@@ -2,7 +2,6 @@ import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
-import SearchableSelect from '@/components/SearchableSelect';
 
 export default function SubCustomerSetupPage() {
   const { state, dispatch } = useApp();
@@ -249,16 +248,16 @@ export default function SubCustomerSetupPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Parent Customer</label>
-                    <SearchableSelect
-                      options={state.customers.map(c => ({
-                        value: c.id,
-                        label: `${c.name} (${c.id})`
-                      }))}
+                    <select
                       value={customerId}
-                      onChange={setCustomerId}
-                      placeholder="Select Customer..."
-                      searchPlaceholder="Search customers..."
-                    />
+                      onChange={e => setCustomerId(e.target.value)}
+                      className="soleria-input cursor-pointer font-semibold"
+                    >
+                      <option value="">Select Customer...</option>
+                      {state.customers.map(c => (
+                        <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Sub Customer Name</label>

@@ -3,7 +3,7 @@ import { useApp } from '@/context/AppContext';
 import {
   ShoppingCart, Receipt, Package, FileText, Layers,
   Settings, LogOut, Lock, Menu, X, ChevronDown, MapPin,
-  Users, Folder, BookOpen, DollarSign, ListCollapse, List, Wallet
+  Users, Folder, BookOpen, DollarSign, ListCollapse, List, Wallet, Truck, Milestone
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 
@@ -41,8 +41,10 @@ const navSections: NavSection[] = [
     items: [
       { page: 'setup-product', label: 'Product Details', icon: Folder },
       { page: 'setup-category', label: 'Categories', icon: Layers },
+      { page: 'setup-vendor', label: 'Vendors', icon: Truck },
       { page: 'setup-sub-cust', label: 'Sub Customers', icon: Users },
       { page: 'setup-city', label: 'City Creation', icon: MapPin },
+      { page: 'setup-adda', label: 'Transport Addas', icon: Milestone },
     ]
   },
   {
@@ -107,25 +109,28 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
         style={{ width: 256, background: 'var(--brand-navy)' }}
       >
         {/* Logo Block */}
-        <div className="px-5 pt-6 pb-4">
-          <div className="flex items-center gap-3 justify-between">
-            <div className="flex items-center gap-3">
+        <div className="px-4 pt-6 pb-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5 min-w-0">
               <div
                 className="flex items-center justify-center flex-shrink-0"
                 style={{
-                  width: 38, height: 38, borderRadius: 9,
+                  width: 36, height: 36, borderRadius: 8,
                   background: 'var(--brand-gold)'
                 }}
               >
-                <span className="font-lora font-bold text-xl" style={{ color: 'var(--brand-navy)' }}>W</span>
+                <span className="font-lora font-bold text-lg" style={{ color: 'var(--brand-navy)' }}>W</span>
               </div>
-              <div>
-                <div className="font-lora font-semibold text-lg tracking-wide" style={{ color: '#ffffff' }}>
+              <div className="min-w-0">
+                <div 
+                  className="font-lora font-bold tracking-wide text-white truncate"
+                  style={{ fontSize: '14.5px', lineHeight: '1.2' }}
+                >
                   WENTOX WAREHOUSE
                 </div>
                 <div
-                  className="text-xs font-inter tracking-widest uppercase"
-                  style={{ color: 'var(--brand-gold)', letterSpacing: '1.6px', fontSize: '10.5px' }}
+                  className="font-inter tracking-widest uppercase font-semibold"
+                  style={{ color: 'var(--brand-gold)', letterSpacing: '1.1px', fontSize: '9px', marginTop: '1px' }}
                 >
                   Footwear Distribution
                 </div>
@@ -262,7 +267,7 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
                 className="font-lora uppercase tracking-widest"
                 style={{ fontSize: '12.5px', letterSpacing: '2.5px', color: 'var(--brand-navy)' }}
               >
-                WENTO
+                WENTOX
               </span>
               <div
                 className="h-0.5 w-12 solera-pulse rounded-full"

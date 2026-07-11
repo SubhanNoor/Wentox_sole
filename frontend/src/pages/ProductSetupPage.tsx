@@ -3,7 +3,6 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import type { Product } from '@/types';
 import { Plus, Trash2, Edit2, Hammer, Settings, Search, ArrowLeft } from 'lucide-react';
-import SearchableSelect from '@/components/SearchableSelect';
 
 export default function ProductSetupPage() {
   const { state, dispatch } = useApp();
@@ -18,6 +17,7 @@ export default function ProductSetupPage() {
   // Form State
   const [id, setId] = useState('');
   const [name, setName] = useState('');
+  const [color, setColor] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [vendorId, setVendorId] = useState('');
   const [batchNo, setBatchNo] = useState(0);
@@ -74,6 +74,7 @@ export default function ProductSetupPage() {
     setSelectedProductId('');
     setId((Math.floor(Math.random() * 9000) + 1000).toString());
     setName('');
+    setColor('');
     setCategoryId(state.categories[0]?.id || '');
     setVendorId(state.vendors[0]?.id || '');
     setBatchNo(100);
@@ -95,6 +96,7 @@ export default function ProductSetupPage() {
     setSelectedProductId(prod.id);
     setId(prod.id);
     setName(prod.name);
+    setColor(prod.color || '');
     setCategoryId(prod.categoryId);
     setVendorId(prod.vendorId);
     setBatchNo(prod.batchNo || 0);
@@ -132,6 +134,7 @@ export default function ProductSetupPage() {
     const savedProduct: Product = {
       id,
       name,
+      color: color.trim() || undefined,
       categoryId,
       vendorId,
       batchNo,
@@ -266,6 +269,7 @@ export default function ProductSetupPage() {
                   <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                     <th className="p-3 pl-4">Code</th>
                     <th className="p-3">Article Name</th>
+                    <th className="p-3">Color</th>
                     <th className="p-3">Category</th>
                     <th className="p-3">Vendor</th>
                     <th className="p-3 text-center">Packing (Pairs)</th>
@@ -312,6 +316,21 @@ export default function ProductSetupPage() {
                         >
                           <td className="p-3 pl-4 font-semibold text-slate-700">{prod.id}</td>
                           <td className="p-3 font-semibold text-slate-900">{prod.name}</td>
+                          <td className="p-3">
+                            {prod.color ? (
+                              <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                                prod.color.toLowerCase() === 'black' ? 'bg-slate-900 text-white' :
+                                prod.color.toLowerCase() === 'white' ? 'bg-slate-100 text-slate-800 border border-slate-200' :
+                                prod.color.toLowerCase() === 'brown' ? 'bg-amber-900 text-amber-50' :
+                                prod.color.toLowerCase() === 'tan' ? 'bg-orange-100 text-orange-800' :
+                                'bg-slate-100 text-slate-600'
+                              }`}>
+                                {prod.color}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 text-xs italic">N/A</span>
+                            )}
+                          </td>
                           <td className="p-3 text-slate-500 font-medium">{catName}</td>
                           <td className="p-3 text-slate-600 font-semibold">{vendorName}</td>
                           <td className="p-3 text-center font-semibold text-slate-700">{prod.packing}</td>
@@ -395,41 +414,51 @@ export default function ProductSetupPage() {
                       className="soleria-input font-semibold"
                     />
                   </div>
-                  <div className="col-span-2">
+                  <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Product Article Name</label>
                     <input
                       type="text"
                       value={name}
                       onChange={e => setName(e.target.value)}
-                      placeholder="e.g. F-751 Leather Sole Tan"
+                      placeholder="e.g. F-751 Leather Sole"
                       className="soleria-input font-semibold"
                     />
                   </div>
-                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Category</label>
-                    <SearchableSelect
-                      options={state.categories.map(c => ({
-                        value: c.id,
-                        label: c.name
-                      }))}
-                      value={categoryId}
-                      onChange={setCategoryId}
-                      placeholder="Select Category..."
-                      searchPlaceholder="Search categories..."
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Color</label>
+                    <input
+                      type="text"
+                      value={color}
+                      onChange={e => setColor(e.target.value)}
+                      placeholder="e.g. Black, White, Tan"
+                      className="soleria-input font-semibold"
                     />
                   </div>
                   <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Category</label>
+                    <select
+                      value={categoryId}
+                      onChange={e => setCategoryId(e.target.value)}
+                      className="soleria-input cursor-pointer font-semibold"
+                    >
+                      <option value="">Select Category...</option>
+                      {state.categories.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Vendor Partner</label>
-                    <SearchableSelect
-                      options={state.vendors.map(v => ({
-                        value: v.id,
-                        label: v.name
-                      }))}
+                    <select
                       value={vendorId}
-                      onChange={setVendorId}
-                      placeholder="Select Vendor..."
-                      searchPlaceholder="Search vendors..."
-                    />
+                      onChange={e => setVendorId(e.target.value)}
+                      className="soleria-input cursor-pointer font-semibold"
+                    >
+                      <option value="">Select Vendor...</option>
+                      {state.vendors.map(v => (
+                        <option key={v.id} value={v.id}>{v.name}</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Batch Number</label>

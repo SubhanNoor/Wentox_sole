@@ -31,9 +31,9 @@ const demoAddas: Adda[] = [
 ];
 
 const demoVendors: Vendor[] = [
-  { id: 'v1', name: 'Decent Polyurethane' },
-  { id: 'v2', name: 'Lahore Chemical Industries' },
-  { id: 'v3', name: 'Star Sole Materials' },
+  { id: 'v1', name: 'Decent Polyurethane', phone: '0300-1234567', city: 'Lahore' },
+  { id: 'v2', name: 'Lahore Chemical Industries', phone: '042-3588991', city: 'Lahore' },
+  { id: 'v3', name: 'Star Sole Materials', phone: '0321-7654321', city: 'Karachi' },
 ];
 
 const demoCategories: ProductCategory[] = [
@@ -228,6 +228,9 @@ type Action =
   | { type: 'ADD_CATEGORY'; category: ProductCategory }
   | { type: 'UPDATE_CATEGORY'; category: ProductCategory }
   | { type: 'DELETE_CATEGORY'; id: string }
+  | { type: 'ADD_VENDOR'; vendor: Vendor }
+  | { type: 'UPDATE_VENDOR'; vendor: Vendor }
+  | { type: 'DELETE_VENDOR'; id: string }
   | { type: 'ADD_CITY'; city: City }
   | { type: 'UPDATE_CITY'; city: City }
   | { type: 'DELETE_CITY'; id: string }
@@ -235,6 +238,9 @@ type Action =
   | { type: 'UPDATE_SUB_CUSTOMER'; subCust: SubCustomer }
   | { type: 'DELETE_SUB_CUSTOMER'; id: string }
   | { type: 'ADD_CUSTOMER'; customer: Customer }
+  | { type: 'ADD_ADDA'; adda: Adda }
+  | { type: 'UPDATE_ADDA'; adda: Adda }
+  | { type: 'DELETE_ADDA'; id: string }
   
   // Account Actions
   | { type: 'ADD_GROUP_ACCOUNT'; account: GroupAccount }
@@ -340,6 +346,18 @@ function reducer(state: State, action: Action): State {
         ...state,
         categories: state.categories.filter(c => c.id !== action.id)
       };
+    case 'ADD_VENDOR':
+      return { ...state, vendors: [...state.vendors, action.vendor] };
+    case 'UPDATE_VENDOR':
+      return {
+        ...state,
+        vendors: state.vendors.map(v => v.id === action.vendor.id ? action.vendor : v)
+      };
+    case 'DELETE_VENDOR':
+      return {
+        ...state,
+        vendors: state.vendors.filter(v => v.id !== action.id)
+      };
     case 'ADD_CITY':
       return { ...state, cities: [...state.cities, action.city] };
     case 'UPDATE_CITY':
@@ -366,6 +384,18 @@ function reducer(state: State, action: Action): State {
       };
     case 'ADD_CUSTOMER':
       return { ...state, customers: [...state.customers, action.customer] };
+    case 'ADD_ADDA':
+      return { ...state, addas: [...state.addas, action.adda] };
+    case 'UPDATE_ADDA':
+      return {
+        ...state,
+        addas: state.addas.map(a => a.id === action.adda.id ? action.adda : a)
+      };
+    case 'DELETE_ADDA':
+      return {
+        ...state,
+        addas: state.addas.filter(a => a.id !== action.id)
+      };
 
     /* ──── Account Handlers ──── */
     case 'ADD_GROUP_ACCOUNT':
