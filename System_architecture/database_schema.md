@@ -8,11 +8,16 @@ Version 3.0 — designed for the Node.js + Express + `pg` backend (Electron desk
 ## Design Decisions
 
 ### 1. Stock is derived from `stock_movements` (no stored stock column)
-There is no purchase/production use case yet, so stock enters the system through manual
-**OPENING / ADJUSTMENT** movements (admin entry). Posting a sale bill inserts negative `SALE`
+Stock enters the system through **PRODUCTION** entries (UC-08 "Confirm Add & Log") and manual
+**OPENING / ADJUSTMENT** movements. Posting a sale bill inserts negative `SALE`
 movements per item; posting a sale return inserts positive `SALE_RETURN` movements.
 
 > Current stock of a product = `SUM(qty_pairs)` over its movements (UC-08).
+
+PRODUCTION movements double as the **production log** (UC-08 Daily/Weekly/Monthly/Overall tabs):
+they record the raw input (`input_qty` + `input_unit` CARTONS/PAIRS) and a `packing` snapshot,
+while `qty_pairs` always stores the normalized total pairs. Stock display in cartons + extra
+pairs is derived: `cartons = total_pairs / packing`, `extra = total_pairs % packing`.
 
 This makes stock always consistent with transactions and trivially auditable. The business has a
 **single store**, so movements carry no `store_id` (the `stores` table remains as bill metadata only).
@@ -58,7 +63,7 @@ CREATE TYPE account_class       AS ENUM ('ASSETS','LIABILITY','INCOME','EXPENSES
 CREATE TYPE account_status      AS ENUM ('ACTIVE','CLOSED');
 CREATE TYPE payment_mode        AS ENUM ('CASH','CHEQUE','ONLINE');
 CREATE TYPE posting_status      AS ENUM ('POSTED','UNPOSTED');
-CREATE TYPE stock_movement_type AS ENUM ('OPENING','ADJUSTMENT','SALE','SALE_RETURN');
+CREATE TYPE stock_movement_type AS ENUM ('OPENING','ADJUSTMENT','PRODUCTION','SALE','SALE_RETURN');
 CREATE TYPE delivery_type       AS ENUM ('SAME','CUSTOM');
 ```
 
@@ -108,12 +113,23 @@ CREATE TABLE cities (
 );
 
 CREATE TABLE stores  (LIKE cities INCLUDING ALL);  -- store_id PK, name UNIQUE  (illustrative; real DDL spells columns out)
-CREATE TABLE addas   (LIKE cities INCLUDING ALL);  -- adda_id  PK, name UNIQUE
-CREATE TABLE vendors (LIKE cities INCLUDING ALL);  -- vendor_id PK, name UNIQUE
+CREATE TABLE addas   (LIKE cities INCLUDING ALL);  -- adda_id  PK, name UNIQUE (UC-21: delete blocked if referenced by sale bills)
+
+CREATE TABLE vendors (
+  vendor_id  INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name       VARCHAR(100) NOT NULL UNIQUE,
+  phone      VARCHAR(30),
+  city       VARCHAR(100),
+  is_active  BOOLEAN      NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
 ```
 
 > In the actual migration each table is written out explicitly with its own PK column name
-> (`store_id`, `adda_id`, `vendor_id`) — same columns as `cities` otherwise.
+> (`store_id`, `adda_id`) — same columns as `cities` otherwise.
+> UC-21: hard-deleting an adda is blocked when sale bills reference it (FK RESTRICT); use
+> `is_active = false` instead.
 
 ---
 
@@ -137,6 +153,7 @@ CREATE TABLE product_categories (
 CREATE TABLE products (
   product_id    INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name          VARCHAR(150) NOT NULL,
+  color         VARCHAR(50),
   category_id   INT NOT NULL REFERENCES product_categories(category_id),
   vendor_id     INT REFERENCES vendors(vendor_id),
   batch_no      VARCHAR(50),
@@ -401,9 +418,12 @@ CREATE TABLE stock_movements (
   movement_id   INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   product_id    INT NOT NULL REFERENCES products(product_id),
   movement_type stock_movement_type NOT NULL,
-  qty_pairs     INT NOT NULL,          -- signed: SALE negative, SALE_RETURN/OPENING/ADJUSTMENT positive or negative
-  movement_date DATE NOT NULL,
-  source_type   VARCHAR(20),           -- 'SALE_BILL' | 'SALE_RETURN' | NULL (manual)
+  qty_pairs     INT NOT NULL,          -- signed, normalized to pairs: SALE negative; PRODUCTION/SALE_RETURN positive
+  movement_date DATE NOT NULL,         -- production date for PRODUCTION rows (UC-08 logs)
+  input_qty     INT,                   -- PRODUCTION only: quantity as entered by the user
+  input_unit    VARCHAR(10) CHECK (input_unit IN ('CARTONS','PAIRS')),  -- PRODUCTION only
+  packing       INT,                   -- PRODUCTION only: packing snapshot at entry time
+  source_type   VARCHAR(20),           -- 'SALE_BILL' | 'SALE_RETURN' | NULL (manual/production)
   source_id     INT,                   -- bill_id / return_id
   remarks       TEXT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -445,7 +465,7 @@ CREATE INDEX idx_ledger_date    ON ledger_entries(entry_date);
 | 1 | users | UC-19, UC-20 | ✅ |
 | 2 | cities | UC-14 | |
 | 3 | stores | UC-01 | |
-| 4 | addas | UC-01, UC-07 | |
+| 4 | addas | UC-01, UC-07, UC-21 | |
 | 5 | vendors | UC-11 | |
 | 6 | product_categories | UC-12 | |
 | 7 | products | UC-11 | |
@@ -470,8 +490,9 @@ CREATE INDEX idx_ledger_date    ON ledger_entries(entry_date);
 
 ## Open Questions
 
-1. **Production / Purchase entry** — stock currently enters only via OPENING/ADJUSTMENT. If a
-   production or purchase screen is added later, it becomes a new `stock_movement_type` value.
+1. ~~Production entry~~ — resolved in v3.1: UC-08 production logging is covered by `PRODUCTION`
+   stock movements (with `input_qty` / `input_unit` / `packing` snapshot). A separate *purchase*
+   entry, if ever needed, becomes another `stock_movement_type` value.
 2. **CASH / SALES account codes** — which existing chart accounts represent Cash-in-hand and
    Sales income? They must be seeded/configured before posting works.
 3. **`products.p1`, `p2`, `na`** — legacy column names of unknown meaning; kept verbatim. Rename

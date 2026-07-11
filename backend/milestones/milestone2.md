@@ -12,17 +12,18 @@ Standard endpoints per module: `GET /` (list, active by default), `GET /:id`, `P
 ## Module 2.2 — Stores
 - [ ] `stores` (routes/controller/service/repository) CRUD
 
-## Module 2.3 — Addas
+## Module 2.3 — Addas (UC-21)
 - [ ] `addas` (routes/controller/service/repository) CRUD
+- [ ] Delete guard: block deletion when the adda is referenced by any sale bill (return 409)
 
 ## Module 2.4 — Vendors
-- [ ] `vendors` (routes/controller/service/repository) CRUD
+- [ ] `vendors` (routes/controller/service/repository) CRUD (name, phone, city)
 
 ## Module 2.5 — Product Categories (UC-12)
 - [ ] `categories` (routes/controller/service/repository) CRUD
 
 ## Module 2.6 — Products (UC-11)
-- [ ] `products` (routes/controller/service/repository) CRUD with full cost-breakdown fields
+- [ ] `products` (routes/controller/service/repository) CRUD with full cost-breakdown fields + optional color
 - [ ] Validation: packing > 0, category required, money fields numeric
 - [ ] List endpoint joins category + vendor names (for searchable dropdowns)
 

@@ -33,6 +33,18 @@ Log every completed task here (newest first within its milestone). Format:
   SQL only; services: ApiError + withTransaction). All files pass `node --check`.
 - **Files:** `backend/src/{routes,controllers,services,repositories}/**`, `backend/src/errors/ApiError.js`
 
+### 2026-07-11 — Schema v3.1 for updated use cases (UC-08 production, UC-21 addas)
+- **What:** Use cases v2.1 changed UC-08 to "Manage Stock & Production Logs" and added UC-21
+  (Transport Addas with delete protection). Schema updated: `PRODUCTION` added to
+  `stock_movement_type`; `stock_movements` gained `input_qty`, `input_unit` (CARTONS/PAIRS) and
+  `packing` snapshot so PRODUCTION rows double as the production log; `vendors` gained
+  `phone`/`city`; `products` gained `color` (matching new frontend types).
+- **How:** No new table needed — production logs are PRODUCTION stock movements filtered by date.
+  Adda delete protection comes from the existing FK (RESTRICT) + a 409 guard in the service
+  (Milestone 2.3). Milestones 2/4/5 and routes README updated accordingly.
+- **Files:** `System_architecture/database_schema.md`, `backend/src/db/migrations/001_init.sql`,
+  `backend/milestones/milestone{2,4,5}.md`, `backend/src/routes/README.md`
+
 ## Milestone 2 — Setup & Lookup CRUD
 _Not started._
 

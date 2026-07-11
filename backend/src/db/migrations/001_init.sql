@@ -5,7 +5,7 @@ CREATE TYPE account_class       AS ENUM ('ASSETS','LIABILITY','INCOME','EXPENSES
 CREATE TYPE account_status      AS ENUM ('ACTIVE','CLOSED');
 CREATE TYPE payment_mode        AS ENUM ('CASH','CHEQUE','ONLINE');
 CREATE TYPE posting_status      AS ENUM ('POSTED','UNPOSTED');
-CREATE TYPE stock_movement_type AS ENUM ('OPENING','ADJUSTMENT','SALE','SALE_RETURN');
+CREATE TYPE stock_movement_type AS ENUM ('OPENING','ADJUSTMENT','PRODUCTION','SALE','SALE_RETURN');
 CREATE TYPE delivery_type       AS ENUM ('SAME','CUSTOM');
 
 -- ===== updated_at trigger =====
@@ -53,6 +53,8 @@ CREATE TABLE addas (
 CREATE TABLE vendors (
   vendor_id  INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name       VARCHAR(100) NOT NULL UNIQUE,
+  phone      VARCHAR(30),
+  city       VARCHAR(100),
   is_active  BOOLEAN      NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ  NOT NULL DEFAULT now()
@@ -70,6 +72,7 @@ CREATE TABLE product_categories (
 CREATE TABLE products (
   product_id    INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name          VARCHAR(150) NOT NULL,
+  color         VARCHAR(50),
   category_id   INT NOT NULL REFERENCES product_categories(category_id),
   vendor_id     INT REFERENCES vendors(vendor_id),
   batch_no      VARCHAR(50),
@@ -285,6 +288,9 @@ CREATE TABLE stock_movements (
   movement_type stock_movement_type NOT NULL,
   qty_pairs     INT NOT NULL,
   movement_date DATE NOT NULL,
+  input_qty     INT,
+  input_unit    VARCHAR(10) CHECK (input_unit IN ('CARTONS','PAIRS')),
+  packing       INT,
   source_type   VARCHAR(20),
   source_id     INT,
   remarks       TEXT,

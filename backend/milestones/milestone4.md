@@ -32,6 +32,7 @@ a single DB transaction (`withTransaction`).
 - [ ] `GET /api/sale-bills/bilty-search` — filters: date range, customer, sub-customer, bill no, radio All / Without Bilty / Without Adda / With Bilty (uses partial indexes)
 - [ ] `PATCH /api/sale-bills/:id/bilty` — update bilty_no + adda_id (allowed on POSTED bills; non-financial)
 
-## Module 4.6 — Stock Opening / Adjustment
-- [ ] `stock` (routes/controller/service/repository) — `POST /api/stock/adjustments` (OPENING/ADJUSTMENT movements, signed qty)
+## Module 4.6 — Stock & Production Entry (UC-08)
+- [ ] `stock` (routes/controller/service/repository) — `POST /api/stock/production` (PRODUCTION movement: input_qty + input_unit CARTONS/PAIRS, packing snapshot, qty_pairs normalized server-side)
+- [ ] `POST /api/stock/adjustments` — OPENING/ADJUSTMENT movements, signed qty
 - [ ] `GET /api/stock/movements?product_id=` — movement history

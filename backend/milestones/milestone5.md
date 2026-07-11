@@ -4,7 +4,8 @@
 AppContext demo data to the real API, and the whole thing packaged as an Electron desktop app.
 
 ## Module 5.1 — Reports
-- [ ] `GET /api/reports/stock` — current stock per product (`SUM(qty_pairs)` from stock_movements) (UC-08)
+- [ ] `GET /api/reports/stock` — current stock per product: `SUM(qty_pairs)`, displayed as cartons + extra pairs via packing (UC-08 Current Stock tab)
+- [ ] `GET /api/reports/production` — production logs (PRODUCTION movements) with daily/weekly/monthly/overall date filters + article/category search (UC-08 tabs)
 - [ ] `GET /api/reports/khaata` — business accounts ledger: date range, Summary / Detail / Customer views, opening balance + running balance (UC-09)
 - [ ] `GET /api/reports/cash-book` — per-date cash summary from CASH-account ledger entries: receipts in, expenses out, opening/closing balance (UC-10)
 

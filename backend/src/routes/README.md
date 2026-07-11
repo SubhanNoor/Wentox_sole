@@ -22,7 +22,7 @@ Maps URLs + HTTP verbs to controller functions. **No logic here** — just `rout
 | `saleReturns.routes.js` | `/api/sale-returns` | Sale returns (UC-03/04) |
 | `receipts.routes.js` | `/api/receipts` | Receipts / Jamma (UC-05) |
 | `expenses.routes.js` | `/api/expenses` | Expenses / Kharch (UC-06) |
-| `stock.routes.js` | `/api/stock` | Opening/adjustment movements + movement history |
-| `reports.routes.js` | `/api/reports` | Stock, Khaata, Cash Book reports (UC-08/09/10) |
+| `stock.routes.js` | `/api/stock` | Production entries (UC-08), opening/adjustment movements, movement history |
+| `reports.routes.js` | `/api/reports` | Current stock + production logs (UC-08), Khaata (UC-09), Cash Book (UC-10) |
 
 Adding a feature: create the 4 layer files, then add one `router.use(...)` line in `index.js`.
