@@ -221,12 +221,16 @@ RECEIPTS (JAMMA)
             Balance = 1,020,000 − (20,000 + 1,000,000) = 0  ✓ math checks out
 ```
 
-Sale Report's "Commission" column (TASK-18) is explicitly **not** this —
-per new_features.md's own note (line 392 vs. line 457), TASK-18's table
-calls sale-time discounts "Commission" while the later clarification section
-insists Commission = payment-time-only and discount is separate. **This is a
-direct contradiction inside new_features.md itself** — flagged for the
-client, see §10.
+**RESOLVED (client-confirmed):** Discount and Commission are different
+things. Discount is applied at sale time (D%/Invoice Discount) and already
+reduces `Total Sales Amount`. Commission is recorded only at payment time in
+Receipts and is separate. TASK-18's own table (line 392) describes Commission
+using the discount definition, but the doc's own later "COMMISSION —
+Clarification" section explicitly overrides this and names TASK-18 directly:
+*"Sale Report (TASK-18) — commission column = total commission given during
+payments NOT sale discounts"* (line 457). So Sale Report's Commission column
+= sum of Commission recorded on Receipts in that date range, not sale-time
+discounts. Discounts are not double-counted as a separate report line.
 
 ---
 
@@ -300,33 +304,51 @@ WentoX
 These are things new_features.md implies but never fully specifies — worth
 settling before writing schema/code:
 
-1. **Purchase Return has no defined page/flow.** Vendor Report (TASK-10
-   UPDATE) needs a "Purchase Return" column, but no task defines how a
-   purchase return is entered. Needs its own page (mirroring Sale Return) or
-   an explicit decision to fold it into Purchase with a signed quantity.
-2. **"Payment Paid" to vendors has no defined page.** Same issue — Vendor
-   Report needs vendor payment data, but "Payments (Naam)" (TASK task list,
-   old architecture.md) was never fleshed out in new_features.md. Is this the
-   same `expenses` flow scoped to a vendor's business account, or a new table?
-3. **Commission contradiction inside new_features.md itself** (§7 above):
-   TASK-18's table defines "Commission" as sale-bill discount (D%/Invoice
-   Discount), while the dedicated "COMMISSION — Clarification" section later
-   in the same file insists Commission is payment-time-only and explicitly
-   NOT a discount. These can't both be true — needs a decision on which
-   definition the Sale Report column actually uses.
-4. **Commission row polarity** — never stated as debit or credit; only
-   inferable from the worked balance example (§5/§7). Confirm explicitly.
-5. **`stock_movements.movement_type` has no PURCHASE value** — schema
-   migration needed before Purchase page can persist stock-in events.
-6. **Regions as a lookup** — TASK-07 wants a Region field/dropdown on
-   Customer, but no `regions` table exists; today `region` is a free-text
-   column only on `business_accounts`. Decide: new `regions` table, or reuse
-   `cities`?
-7. **`BiltyUpdatePage.tsx` is fully built but orphaned** (no nav entry, not
-   imported anywhere) despite the schema having partial indexes built
-   specifically for its query pattern (`bilty_no IS NULL`, `adda_id IS
-   NULL`). Likely just needs to be wired into nav — worth confirming it's
-   still wanted as-is before building anything new for the same purpose.
+1. ~~**Purchase Return has no defined page/flow.**~~ — **RESOLVED**: gets its
+   own dedicated page, mirroring Sale Return exactly — own table
+   (`purchase_returns`/`purchase_return_items`), reduces stock back down,
+   feeds Vendor Report's "Purchase Return" column.
+2. ~~**"Payment Paid" to vendors has no defined page.**~~ — **RESOLVED**:
+   vendor payments are **Expense entries** where the selected account's
+   parent group is "Vendors" — no new transaction page needed, Expenses
+   already covers this. Client-confirmed: a vendor is a **single source of
+   truth** shared by Purchase and Expense/payment — creating a Vendor in
+   Setup must auto-create/link a `business_accounts` row under a "Vendors"
+   `group_accounts` group, so `vendors.vendor_id` (used by Purchase) and that
+   linked `business_accounts.ba_id` (used by Expenses) resolve to the same
+   real-world vendor. Requires: a new `vendors.ba_id` FK (nullable →
+   `business_accounts`, backfilled on vendor create), a reserved "Vendors"
+   `group_accounts` row, and Vendor Report joining Purchase totals (via
+   `vendor_id`) with Expense/payment totals (via the linked `ba_id`) for the
+   same vendor. **RESOLVED**: creating a Vendor in Setup auto-creates its
+   linked `business_accounts` row under the "Vendors" group — single form,
+   no separate account-setup step exposed to the user.
+3. ~~**Commission contradiction inside new_features.md itself**~~ — **RESOLVED**:
+   Commission = payment-time only (Receipts), separate from sale-time
+   Discount. Sale Report's Commission column sums Receipts-side commission,
+   not sale-time discounts. See §7.
+4. ~~**Commission row polarity**~~ — **RESOLVED**: Commission is a **credit**
+   row, same side as the payment — it reduces payable, functioning like a
+   discount but applied at payment time instead of sale time. Client wants
+   the ledger/receipt display to show **both** figures explicitly: the
+   original amount owed (bill amount, unchanged) and the amount owed after
+   commission is applied — not just a net balance, so the user can see the
+   before/after at a glance (e.g. "Amount Due: 1,020,000 → After Commission:
+   1,000,000").
+5. ~~**`stock_movements.movement_type` has no PURCHASE value**~~ —
+   **RESOLVED**: add both `PURCHASE` and `PURCHASE_RETURN` enum values
+   (mirroring `SALE`/`SALE_RETURN`) — one migration, before Purchase/Purchase
+   Return pages are built.
+6. ~~**Regions as a lookup**~~ — **RESOLVED**: new dedicated `regions` table
+   (independent of `cities`). Customer identification hierarchy is
+   **Region first, then City** — `customers` needs both `region_id` (FK →
+   new `regions`) and `city_id`/city reference, with Region as the primary
+   search/grouping key and City secondary (matches the existing Key Rule
+   "Customer search: Primary = Region, Secondary = City").
+7. ~~**`BiltyUpdatePage.tsx` is fully built but orphaned**~~ — **RESOLVED**:
+   still wanted as-is (client-confirmed). Just needs a nav entry added under
+   Reports ("Search & Bilty Adda Updation", matching the old architecture.md
+   page map) — no rework needed.
 8. **Frontend↔backend integration is 0%.** Every new feature discussion
    needs to account for the fact that today's frontend doesn't call the
    backend at all — this isn't purely additive work, it's also the point at
@@ -366,9 +388,14 @@ source of truth beyond a small dismissal table.
   both places).
 - `receipts.cheque_status`: `PENDING | DEPOSITED | ENDORSED | PARTIALLY_ENDORSED
   | CLEARED | BOUNCED` (superset needed once §13's endorsement flow is added).
-- Credit-period concept for overdue detection: either a global
-  `settings.default_credit_days`, or a per-customer `customers.credit_days`
-  column — needs a client decision.
+- **RESOLVED**: no global credit-period setting. Instead, an **optional
+  payable due-date field** entered per transaction — `sale_bills.due_date`
+  (customer side) and the equivalent on vendor payables (Purchase /
+  Expense-as-vendor-payment) — user may leave it blank. If set, it feeds the
+  Payment Overdue alert once the date passes; if left blank, that
+  bill/purchase never generates a payment-overdue alert (no fallback
+  default). Cheque due-date alerts (from `receipts.cheque_date`) are
+  unconditional — always generated, not optional, independent of this field.
 - New table `alert_dismissals`: `id, alert_key, dismissed_at, dismissed_until`
   — lets a user snooze/dismiss a derived alert without deleting underlying data.
 
@@ -377,8 +404,9 @@ source of truth beyond a small dismissal table.
   - **Cheque due/overdue**: `receipts` where `payment_mode = 'CHEQUE'` and
     `cheque_status IN ('PENDING','PARTIALLY_ENDORSED')`, `cheque_date` within
     next N days (amber) or already past (red).
-  - **Payment overdue**: customers with positive outstanding balance whose
-    oldest unpaid activity exceeds the credit period.
+  - **Payment overdue**: sale bills / vendor payables where an explicit
+    `due_date` was entered and has passed, and the balance is still positive.
+    Records with no `due_date` set never appear here.
   - Filters out anything present in (non-expired) `alert_dismissals`.
 - Optional (v2): Electron main-process daily job (`node-cron`) firing a native
   OS notification in addition to in-app polling — desktop-app nicety, not
@@ -441,10 +469,16 @@ allocation *is* that transaction, just sourced from a cheque instead of cash.
   "Payment Paid" column.
 - Business account side: `EXPENSE_PAYMENT` allocations feed Payment Trail
   the same way.
-- Cash Book: endorsed amounts never touch the business's own bank/cash and
-  must not inflate cash-in-hand/bank totals, but should still appear as a
-  distinct labeled row ("Endorsed — not deposited") for audit purposes —
-  needs client confirmation on exact visibility.
+- **RESOLVED (client-confirmed)**: treat it as real cash flow, not an
+  off-books transfer. The cheque receipt already counts as a Jamma
+  (in-flow) on the day it's received. When later endorsed to a vendor/
+  expense, that allocation counts as a Naam (out-flow) in Cash Book **on the
+  day of the endorsement** — i.e. both legs hit Cash Book's daily in/out
+  totals on their own respective dates, same as if the cheque had been
+  deposited and a separate cash/bank payment made to the vendor. No special
+  "excluded from totals" treatment — `cheque_allocations` rows feed Cash
+  Book's outflow side directly via `disposition_type IN ('VENDOR_PAYMENT',
+  'EXPENSE_PAYMENT')`, dated by `allocation_date`.
 
 ### Bounced-cheque cascade (critical edge case)
 If a cheque bounces after being endorsed, **both sides must reverse
@@ -519,7 +553,8 @@ Legend: ✅ Done · ⚠️ Partial/needs rework · ❌ Not started
       via direct dispatch in `ReportStockPage.tsx`)
 - [ ] ❌ Current Stock redesign — table + expandable sub-rows + color field
       in add dialog (TASK-03)
-- [ ] ❌ `stock_movements.movement_type` needs a `PURCHASE` value added
+- [ ] ❌ `stock_movements.movement_type` needs `PURCHASE` and
+      `PURCHASE_RETURN` values added
 - [ ] ⚠️ Product Ledger — exists as tabs, needs date/vendor/article/category
       filters (TASK-02 / TASK-02 UPDATE)
 
@@ -531,21 +566,31 @@ Legend: ✅ Done · ⚠️ Partial/needs rework · ❌ Not started
 - [ ] ⚠️ Cash Book — exists but reads receipts only, never expenses; needs
       full redesign with opening cash / Jamma / Naam / cash-in-hand (TASK-15)
 - [ ] ❌ Sale Analysis (TASK-09)
-- [ ] ❌ Sale Report (TASK-18) — blocked on resolving the Commission
-      definition contradiction (gap #3)
-- [ ] ❌ Vendor Report + grouped summary (TASK-10 / TASK-10 UPDATE) — blocked
-      on Purchase + Purchase Return + vendor payments existing first
+- [ ] ❌ Sale Report (TASK-18) — Commission column = payment-time Commission
+      only, not sale-time discount (gap #3, resolved)
+- [ ] ❌ Vendor Report + grouped summary (TASK-10 / TASK-10 UPDATE) — needs
+      Purchase + Purchase Return + vendor payments (Expense-as-vendor,
+      linked via `vendors.ba_id`) built first
 - [ ] ❌ Payment Trail (TASK-17)
 - [ ] ❌ Unified tabbed Reports sidebar section (TASK-19)
 - [ ] ❌ Export as PDF/Excel everywhere Print exists (TASK-04)
-- [ ] ⚠️ `BiltyUpdatePage.tsx` — fully built but orphaned, just needs a nav
-      entry (confirm still wanted before touching)
+- [ ] ⚠️ `BiltyUpdatePage.tsx` — kept as-is, just needs a nav entry added
+      under Reports
 
 ### New: Alerts & cheque endorsement (this conversation)
-- [ ] ❌ §12 Cheque due / payment overdue alerts — schema, endpoint, bell UI
+- [ ] ❌ §12 Cheque due / payment overdue alerts — schema (`due_date` on
+      sale bills/vendor payables, cheque fields, `alert_dismissals`),
+      endpoint, bell UI
 - [ ] ❌ §13 Cheque endorsement / pass-through payments — `cheque_allocations`
-      table, disposition UI, bounced-cheque reversal cascade
-- [ ] ❌ Client decisions needed first: credit-period source (global vs.
-      per-customer), Cash Book visibility of endorsed cheques, Commission
-      polarity and TASK-18 vs. clarification-section contradiction, regions
-      table vs. reusing cities
+      table, disposition UI, Cash Book in/out dating, bounced-cheque
+      reversal cascade
+
+**All client decisions from §10 are now resolved** (see §10 for details):
+Purchase Return has its own page; vendor payments are Expense entries with
+vendor auto-linked to a `business_accounts` row; Commission is payment-time
+credit shown alongside the original amount owed; stock enum gets
+`PURCHASE`/`PURCHASE_RETURN`; Regions is a new table, checked before City;
+`BiltyUpdatePage.tsx` is kept; payable due-dates are optional per-transaction
+(no global credit period), cheque due-dates always alert; endorsed cheques
+post as real Cash Book in/out entries on their respective dates, not
+excluded from totals.
