@@ -594,3 +594,47 @@ credit shown alongside the original amount owed; stock enum gets
 (no global credit period), cheque due-dates always alert; endorsed cheques
 post as real Cash Book in/out entries on their respective dates, not
 excluded from totals.
+
+---
+
+## 14. Addendum: Vendor Stock sub-page (post-doc note, not part of original spec) — TBD
+
+**Status: TBD** — noted here for later spec/schema/task-numbering, not yet
+turned into a formal TASK-xx or built.
+
+New instruction on top of the STOCK section (§9) — kept here rather than
+editing §9 directly so the original spec stays untouched:
+
+- When a **Purchase** (TASK-01) is recorded from a vendor, in addition to
+  increasing overall `Current Stock`, it must also be reflected under a new
+  **Vendor Stock** sub-page.
+- **Location**: `STOCK` → `Vendor Stock`, living alongside `Current Stock`
+  and `Product Ledger` as a third sub-page inside the existing Stock page
+  (same nav level, not a separate top-level section).
+- **Purpose**: shows the current stock broken down **per vendor** — i.e.
+  for each vendor, what stock currently on hand originated from purchases
+  made from that vendor. This is distinct from `Current Stock` (which shows
+  total stock per article, no vendor breakdown) and from `Vendor Report`
+  under Reports (§9, TASK-10 — which is purchase/payment totals in Rupees,
+  not physical stock quantities).
+- Data source: derived from `Purchase` line items (vendor + product + qty)
+  net of `Purchase Return` and stock consumed since, same underlying
+  `stock_movements`-style ledger already planned for Current Stock (§6),
+  just filtered/grouped by `vendor_id` instead of aggregated across all
+  vendors.
+
+## 15. Addendum: Home page — nearest-date alerts — TBD
+
+**Status: TBD** — noted here for later spec/schema/task-numbering, not yet
+turned into a formal TASK-xx or built.
+
+- On the **HOME** page (§9, TASK-13), add an **alerts** section/widget
+  surfacing items sorted by **closest/nearest due date first** — e.g. the
+  soonest-due cheque or payable, so the most urgent item is always what the
+  user sees first on landing.
+- This overlaps with — and should reuse the same underlying data as — the
+  Cheque Due & Payment Alerts work already planned in §12 (`due_date` on
+  sale bills/vendor payables, cheque fields, `alert_dismissals`, bell UI).
+  The difference is *where* it's surfaced: §12 is the bell/notification
+  mechanism; this is a dedicated "nearest date" alerts view directly on the
+  Home landing page itself.
