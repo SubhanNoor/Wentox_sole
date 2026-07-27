@@ -1,7 +1,8 @@
 import { Fragment, useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Printer, ChevronDown, ChevronRight } from 'lucide-react';
+import { Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
+import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 
 interface SaleReportRow {
   key: string;
@@ -106,6 +107,22 @@ export function SaleReportContent() {
       .sort((a, b) => a.regionName.localeCompare(b.regionName));
   }, [state.customers, state.regions, customerRows]);
 
+  const handleExportExcel = () => {
+    const headers = [groupMode === 'region' ? 'Region' : groupMode === 'customer' ? 'Customer' : 'Summary', 'Total Sales', 'Total Cartons', 'Commission', 'Sale Return', 'Net Sales', 'Payment'];
+    let rows: (string | number)[][];
+    if (groupMode === 'overall') {
+      rows = [[overallRow.label, overallRow.totalSales, overallRow.totalCartons, overallRow.commission, overallRow.saleReturn, overallRow.netSales, overallRow.payment]];
+    } else if (groupMode === 'customer') {
+      rows = customerRows.map(r => [r.label, r.totalSales, r.totalCartons, r.commission, r.saleReturn, r.netSales, r.payment]);
+    } else {
+      rows = regionGroups.flatMap(g => [
+        [g.regionName, g.totalSales, g.totalCartons, g.commission, g.saleReturn, g.netSales, g.payment],
+        ...g.customers.map(c => [`  ${c.label}`, c.totalSales, c.totalCartons, c.commission, c.saleReturn, c.netSales, c.payment])
+      ]);
+    }
+    exportRowsToExcel(`sale-report-${groupMode}`, headers, rows);
+  };
+
   return (
       <div className="mx-auto" style={{ maxWidth: 1150 }}>
 
@@ -191,9 +208,17 @@ export function SaleReportContent() {
             )}
           </div>
 
-          <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-            <Printer size={16} /> Print
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+              <Printer size={16} /> Print
+            </button>
+            <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+              <FileDown size={16} /> Export PDF
+            </button>
+            <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+              <FileSpreadsheet size={16} /> Export Excel
+            </button>
+          </div>
         </div>
 
         {/* Report Sheet */}

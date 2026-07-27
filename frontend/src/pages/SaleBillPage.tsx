@@ -6,7 +6,8 @@ import WeeklyTab from '@/components/WeeklyTab';
 import MonthlyTab from '@/components/MonthlyTab';
 import OverallTab from '@/components/OverallTab';
 import FindTab from '@/components/FindTab';
-import { Save, Plus, Trash2, Printer, Lock } from 'lucide-react';
+import { Save, Plus, Trash2, Printer, Lock, FileDown, FileSpreadsheet } from 'lucide-react';
+import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
 
 export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 'billing' | 'weekly' | 'monthly' | 'overall' | 'find' }) {
@@ -842,6 +843,22 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   className="px-4 py-2 text-sm font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-700 shadow-sm transition-colors flex items-center gap-1.5"
                 >
                   <Printer size={16} /> Print Invoice
+                </button>
+                <button
+                  onClick={exportToPDF}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5"
+                >
+                  <FileDown size={16} /> Export PDF
+                </button>
+                <button
+                  onClick={() => {
+                    const headers = ['Article', 'Packing', 'Cartons', 'Pairs', 'Rate', 'D%', 'D. Value', 'Total Value'];
+                    const rows = items.map(it => [it.productName, it.packing, it.cartons, it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
+                    exportRowsToExcel(`sale-bill-${billNo || billId}`, headers, rows);
+                  }}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5"
+                >
+                  <FileSpreadsheet size={16} /> Export Excel
                 </button>
                 <button
                   onClick={handleNew}

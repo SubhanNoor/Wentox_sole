@@ -1,7 +1,8 @@
 import { Fragment, useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Search, Printer, ChevronDown, ChevronRight } from 'lucide-react';
+import { Search, Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
+import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 
 interface ProductLedgerEntry {
   date: string;
@@ -270,6 +271,26 @@ export default function ReportStockPage() {
     }), { debit: 0, credit: 0 });
   }, [ledgerTableEntries]);
 
+  const handleExportExcel = () => {
+    if (activeStockTab === 'current') {
+      const headers = ['Product Code', 'Category', 'Total Pairs'];
+      const rows = groupedArticles.map(g => [g.code, state.categories.find(c => c.id === g.categoryId)?.name || 'General', g.products.reduce((s, p) => s + (p.stock || 0), 0)]);
+      exportRowsToExcel('current-stock', headers, rows);
+    } else if (activeStockTab === 'ledger') {
+      const headers = ['Date', 'Product Code', 'Article', 'Color', 'Vendor', 'Type', 'Ref', 'Debit (IN)', 'Credit (OUT)'];
+      const rows = ledgerTableEntries.map(e => [e.date, e.productCode, e.articleName, e.color, e.vendorName, e.type, e.ref, e.debit, e.credit]);
+      exportRowsToExcel('product-ledger', headers, rows);
+    } else {
+      const headers = ['Date', 'Product Code', 'Article Name', 'Color', 'Category', 'Packing', 'Qty Added', 'Unit', 'Total Pairs'];
+      const rows = filteredLogs.map(log => {
+        const prod = state.products.find(p => p.id === log.productId);
+        const color = prod?.color || getColorFromName(prod?.name || '');
+        return [log.date, log.productId, prod ? getCleanedArticleName(prod.name, color) : '', color, prod ? (state.categories.find(c => c.id === prod.categoryId)?.name || 'General') : '', log.packing, log.qtyValue, log.unitType, log.quantity];
+      });
+      exportRowsToExcel(`production-${activeStockTab}`, headers, rows);
+    }
+  };
+
   return (
     <AppLayout pageTitle="Stock & Production Center">
       <div className="mx-auto" style={{ maxWidth: 1000 }}>
@@ -367,9 +388,17 @@ export default function ReportStockPage() {
                 </select>
               </div>
 
-              <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm shrink-0">
-                <Printer size={16} /> Print Report
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+                  <Printer size={16} /> Print Report
+                </button>
+                <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+                  <FileDown size={16} /> Export PDF
+                </button>
+                <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+                  <FileSpreadsheet size={16} /> Export Excel
+                </button>
+              </div>
             </div>
 
             {/* Timeframe Filters based on Active Tab */}

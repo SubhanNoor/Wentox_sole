@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Printer } from 'lucide-react';
+import { Printer, FileDown, FileSpreadsheet } from 'lucide-react';
+import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 
 // Maps each Payment Trail category to the Chart of Account it's sourced from.
 // "Cash at Banks" is a running balance (holdings), not a spend total — see below.
@@ -48,6 +49,12 @@ export function PaymentTrailContent() {
 
   const grandTotal = useMemo(() => spendRows.reduce((s, r) => s + r.amount, 0), [spendRows]);
 
+  const handleExportExcel = () => {
+    const headers = ['Account Title', 'Amount'];
+    const rows: (string | number)[][] = [...spendRows.map(r => [r.label, r.amount]), ['Cash at Banks', cashAtBanks]];
+    exportRowsToExcel('payment-trail', headers, rows);
+  };
+
   return (
       <div className="mx-auto" style={{ maxWidth: 900 }}>
 
@@ -63,9 +70,17 @@ export function PaymentTrailContent() {
               <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
             </div>
           </div>
-          <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-            <Printer size={16} /> Print
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+              <Printer size={16} /> Print
+            </button>
+            <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+              <FileDown size={16} /> Export PDF
+            </button>
+            <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+              <FileSpreadsheet size={16} /> Export Excel
+            </button>
+          </div>
         </div>
 
         {/* Report Sheet */}

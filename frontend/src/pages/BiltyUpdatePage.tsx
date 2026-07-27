@@ -2,7 +2,8 @@ import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import type { SaleBill } from '@/types';
-import { Search, Edit2, RefreshCw, Printer } from 'lucide-react';
+import { Search, Edit2, RefreshCw, Printer, FileDown, FileSpreadsheet } from 'lucide-react';
+import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 
 export default function BiltyUpdatePage() {
   const { state, dispatch } = useApp();
@@ -73,6 +74,17 @@ export default function BiltyUpdatePage() {
   // Print results
   const handlePrint = () => {
     window.print();
+  };
+
+  const handleExportExcel = () => {
+    const headers = ['Invoice Date', 'Inv. No (Sys)', 'Manual No.', 'Customer Name', 'Sub Customer Name', 'Bilty No.', 'Transport Adda', 'Adda Code'];
+    const rows = filteredInvoices.map(bill => {
+      const custName = state.customers.find(c => c.id === bill.customerId)?.name || '-';
+      const subCustName = bill.subCustomerId ? state.subCustomers.find(sc => sc.id === bill.subCustomerId)?.name : 'SAME (Direct)';
+      const addaName = bill.addaId ? state.addas.find(ad => ad.id === bill.addaId)?.name : 'Not Assigned';
+      return [bill.date, bill.id, bill.billNo, custName, subCustName || '-', bill.biltyNo || '-', addaName || '-', bill.addaId || '-'];
+    });
+    exportRowsToExcel('bilty-adda-search', headers, rows);
   };
 
   // Filter and Sort Logic
@@ -278,9 +290,17 @@ export default function BiltyUpdatePage() {
           <span className="text-sm font-semibold text-slate-600">
             Found {filteredInvoices.length} invoices matching filters
           </span>
-          <button onClick={handlePrint} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
-            <Printer size={14} /> Print Report
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={handlePrint} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
+              <Printer size={14} /> Print Report
+            </button>
+            <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
+              <FileDown size={14} /> Export PDF
+            </button>
+            <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
+              <FileSpreadsheet size={14} /> Export Excel
+            </button>
+          </div>
         </div>
 
         {/* Invoices Table */}

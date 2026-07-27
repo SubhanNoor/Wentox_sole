@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Printer, Search } from 'lucide-react';
+import { Printer, Search, FileDown, FileSpreadsheet } from 'lucide-react';
+import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 
 interface VendorLedgerRow {
   date: string;
@@ -104,6 +105,18 @@ export function VendorReportContent() {
     return rows;
   }, [vendorLedgerEntries, fromDate, toDate]);
 
+  const handleExportGroupedExcel = () => {
+    const headers = ['Vendor / Supplier', 'Total Purchase', 'Purchase Return', 'Net Purchase', 'Payment Paid'];
+    const rows = vendorGroupRows.map(r => [r.vendorName, r.totalPurchase, r.purchaseReturn, r.netPurchase, r.paymentPaid]);
+    exportRowsToExcel('vendor-report-grouped', headers, rows);
+  };
+
+  const handleExportLedgerExcel = () => {
+    const headers = ['Date', 'Type', 'Ref', 'Debit', 'Credit', 'Balance'];
+    const rows = runningVendorLedger.map(row => [row.date, row.type, row.ref, row.debit, row.credit, row.balance]);
+    exportRowsToExcel(`vendor-ledger-${selectedVendor?.name || 'export'}`, headers, rows);
+  };
+
   return (
       <div className="mx-auto" style={{ maxWidth: 1150 }}>
 
@@ -134,9 +147,17 @@ export function VendorReportContent() {
                   <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
                 </div>
               </div>
-              <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-                <Printer size={16} /> Print
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+                  <Printer size={16} /> Print
+                </button>
+                <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+                  <FileDown size={16} /> Export PDF
+                </button>
+                <button onClick={handleExportGroupedExcel} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+                  <FileSpreadsheet size={16} /> Export Excel
+                </button>
+              </div>
             </div>
 
             {/* Grouped Report Sheet */}
@@ -231,6 +252,12 @@ export function VendorReportContent() {
                 </div>
                 <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm self-end h-9 mt-4">
                   <Printer size={16} /> Print Statement
+                </button>
+                <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm self-end h-9 mt-4">
+                  <FileDown size={16} /> Export PDF
+                </button>
+                <button onClick={handleExportLedgerExcel} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm self-end h-9 mt-4">
+                  <FileSpreadsheet size={16} /> Export Excel
                 </button>
               </div>
             </div>

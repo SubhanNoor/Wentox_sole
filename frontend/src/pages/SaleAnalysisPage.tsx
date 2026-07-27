@@ -1,7 +1,8 @@
 import { Fragment, useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Printer, ChevronDown, ChevronRight } from 'lucide-react';
+import { Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
+import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 
 interface CustomerAnalysisRow {
   customerId: string;
@@ -102,6 +103,17 @@ export function SaleAnalysisContent() {
     }), { totalSales: 0, saleReturns: 0, paymentReceived: 0, balance: 0 });
   }, [customerRows]);
 
+  const handleExportExcel = () => {
+    const headers = [groupMode === 'customer' ? 'Customer' : 'Region', 'Total Sales', 'Sale Returns', 'Payment Received', 'Balance'];
+    const rows = groupMode === 'customer'
+      ? customerRows.map(r => [r.customerName, r.totalSales, r.saleReturns, r.paymentReceived, r.balance])
+      : regionGroups.flatMap(g => [
+          [g.regionName, g.totalSales, g.saleReturns, g.paymentReceived, g.balance],
+          ...g.customers.map(c => [`  ${c.customerName}`, c.totalSales, c.saleReturns, c.paymentReceived, c.balance])
+        ]);
+    exportRowsToExcel(`sale-analysis-${groupMode}`, headers, rows);
+  };
+
   return (
       <div className="mx-auto" style={{ maxWidth: 1100 }}>
 
@@ -181,9 +193,17 @@ export function SaleAnalysisContent() {
             )}
           </div>
 
-          <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-            <Printer size={16} /> Print
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+              <Printer size={16} /> Print
+            </button>
+            <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+              <FileDown size={16} /> Export PDF
+            </button>
+            <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+              <FileSpreadsheet size={16} /> Export Excel
+            </button>
+          </div>
         </div>
 
         {/* Report Sheet */}

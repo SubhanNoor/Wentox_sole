@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Printer, Download, MapPin, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Search, Printer, Download, MapPin, Edit2, Trash2, FileDown } from 'lucide-react';
+import { exportToPDF } from '@/lib/export';
 import type { Customer } from '@/types';
 
 interface ProductLedgerRow {
@@ -370,6 +371,9 @@ export default function CustomerSetupPage() {
                 </button>
                 <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
                   <Printer size={16} /> Print
+                </button>
+                <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+                  <FileDown size={16} /> Export PDF
                 </button>
               </div>
             </div>

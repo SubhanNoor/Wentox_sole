@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import type { SaleReturn } from '@/types';
-import { Search, Printer, Calendar, FileText, User, Edit2, Package, Layers } from 'lucide-react';
+import { Search, Printer, Calendar, FileText, User, Edit2, Package, Layers, FileDown, FileSpreadsheet } from 'lucide-react';
+import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 
 interface FindReturnTabProps {
   onEditReturn: (ret: SaleReturn) => void;
@@ -71,6 +72,18 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
     fromDate, toDate, billNoQuery, biltyNoQuery,
     customerQuery, subCustomerQuery, articleFilter, missingFilter
   ]);
+
+  const handleExportExcel = () => {
+    const headers = ['Date', 'Sys ID', 'Bill No.', 'Customer', 'Cartons', 'Pairs', 'Total Value', 'Status'];
+    const rows = filteredReturns.map(ret => {
+      const cust = state.customers.find(c => c.id === ret.customerId);
+      const cartons = ret.items.reduce((s, it) => s + (it.cartons || 0), 0);
+      const pairs = ret.items.reduce((s, it) => s + (it.pairs || 0), 0);
+      const value = ret.items.reduce((s, it) => s + (it.value || 0), 0);
+      return [ret.date, ret.id, ret.billNo, cust?.name || '-', cartons, pairs, value, ret.status];
+    });
+    exportRowsToExcel('sale-returns-search', headers, rows);
+  };
 
   // Compute overall summary totals for return logs search
   const { totalCartons, totalPairs, totalValue } = useMemo(() => {
@@ -252,9 +265,17 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
               Sale Returns&nbsp;
               <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs font-bold ml-1">{filteredReturns.length}</span>
             </span>
-            <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
-              <Printer size={12} /> Print Results
-            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
+                <Printer size={12} /> Print Results
+              </button>
+              <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
+                <FileDown size={12} /> Export PDF
+              </button>
+              <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
+                <FileSpreadsheet size={12} /> Export Excel
+              </button>
+            </div>
           </div>
 
           <div className="overflow-hidden">
