@@ -1,7 +1,15 @@
-import { useState, useMemo } from 'react';
+import { Fragment, useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Search, Printer } from 'lucide-react';
+import { Search, Printer, ChevronDown, ChevronRight } from 'lucide-react';
+
+interface ProductLedgerEntry {
+  date: string;
+  type: 'Production' | 'Sale' | 'Sale Return';
+  ref: string;
+  debit: number;  // IN
+  credit: number; // OUT
+}
 
 const getColorFromName = (name: string): string => {
   const words = name.trim().split(/\s+/);
@@ -26,6 +34,24 @@ const getCleanedArticleName = (name: string, color: string): string => {
     }
   }
   return name;
+};
+
+// Articles are grouped by their leading style code (e.g. "P-101" in
+// "P-101 Jogger Sole Black") — different colors of the same article share
+// this code and must appear together as one row with an expandable panel,
+// not as separate rows.
+const getArticleCode = (name: string): string => {
+  const match = name.trim().match(/^([A-Za-z]+-\d+)/);
+  return match ? match[1] : name.trim().split(/\s+/)[0];
+};
+
+const getCommonName = (name: string, code: string, color: string): string => {
+  let rest = name.startsWith(code) ? name.slice(code.length).trim() : name;
+  if (color !== 'N/A') {
+    const idx = rest.toLowerCase().lastIndexOf(color.toLowerCase());
+    if (idx !== -1) rest = rest.substring(0, idx).trim();
+  }
+  return rest;
 };
 
 // Date range calculation helpers
@@ -64,15 +90,38 @@ const getMonthName = (m: number): string => {
 export default function ReportStockPage() {
   const { state, dispatch } = useApp();
 
-  const [activeStockTab, setActiveStockTab] = useState<'current' | 'daily' | 'weekly' | 'monthly' | 'overall'>('current');
+  const [activeStockTab, setActiveStockTab] = useState<'current' | 'ledger' | 'daily' | 'weekly' | 'monthly' | 'overall'>('current');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
 
   // Add stock state variables
-  const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<{ code: string; commonName: string; categoryId: string; vendorId: string; packing: number; products: any[] } | null>(null);
   const [addQuantity, setAddQuantity] = useState<number>(0);
   const [qtyType, setQtyType] = useState<'cartons' | 'pairs'>('cartons');
   const [productionDate, setProductionDate] = useState(new Date().toISOString().split('T')[0]);
+  const [addColor, setAddColor] = useState('');
+  const [isNewColor, setIsNewColor] = useState(false);
+
+  // Expandable row state (TASK-03) — keyed by article group code, not product id,
+  // since all color variants of an article now live under one row.
+  const [expandedArticleCode, setExpandedArticleCode] = useState<string | null>(null);
+
+  const getProductLedgerEntries = (productIds: string[]): ProductLedgerEntry[] => {
+    const idSet = new Set(productIds);
+    const entries: ProductLedgerEntry[] = [];
+    state.productionLogs
+      .filter(l => idSet.has(l.productId))
+      .forEach(l => entries.push({ date: l.date, type: 'Production', ref: l.id.replace('pl_', ''), debit: l.quantity, credit: 0 }));
+    state.saleBills
+      .filter(b => b.status === 'Posted')
+      .forEach(b => b.items.filter(it => idSet.has(it.productId))
+        .forEach(it => entries.push({ date: b.date, type: 'Sale', ref: b.billNo, debit: 0, credit: it.pairs })));
+    state.saleReturns
+      .filter(r => r.status === 'Posted')
+      .forEach(r => r.items.filter(it => idSet.has(it.productId))
+        .forEach(it => entries.push({ date: r.date, type: 'Sale Return', ref: r.billNo, debit: it.pairs, credit: 0 })));
+    return entries.sort((a, b) => a.date.localeCompare(b.date));
+  };
 
   // Production log filtering states
   const [dailyDate, setDailyDate] = useState(new Date().toISOString().split('T')[0]);
@@ -81,6 +130,11 @@ export default function ReportStockPage() {
   const [monthlyYear, setMonthlyYear] = useState(new Date().getFullYear());
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+
+  // Product Ledger tab filtering state (TASK-02 / TASK-02 UPDATE)
+  const [ledgerFromDate, setLedgerFromDate] = useState('');
+  const [ledgerToDate, setLedgerToDate] = useState('');
+  const [ledgerVendorFilter, setLedgerVendorFilter] = useState('all');
 
   // 1. Current stock filter memo
   const filteredProducts = useMemo(() => {
@@ -97,6 +151,22 @@ export default function ReportStockPage() {
 
     return result;
   }, [state.products, selectedCategory, searchQuery]);
+
+  // Group products into articles: different colors of the same style code
+  // (e.g. "P-101") are variants under one row, not separate rows.
+  const groupedArticles = useMemo(() => {
+    const groups: Record<string, { code: string; commonName: string; categoryId: string; vendorId: string; packing: number; products: typeof filteredProducts }> = {};
+    filteredProducts.forEach(p => {
+      const code = getArticleCode(p.name);
+      const color = p.color || getColorFromName(p.name);
+      const commonName = getCommonName(p.name, code, color);
+      if (!groups[code]) {
+        groups[code] = { code, commonName, categoryId: p.categoryId, vendorId: p.vendorId, packing: p.packing, products: [] };
+      }
+      groups[code].products.push(p);
+    });
+    return Object.values(groups).sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
+  }, [filteredProducts]);
 
   const totalPairs = useMemo(() => {
     return filteredProducts.reduce((sum, p) => sum + (p.stock || 0), 0);
@@ -172,6 +242,34 @@ export default function ReportStockPage() {
     return filteredLogs.reduce((sum, log) => sum + log.quantity, 0);
   }, [filteredLogs]);
 
+  // 3. Product Ledger tab: full Debit(IN)/Credit(OUT) list across all articles,
+  // filtered by date range, vendor, and article/category (TASK-02 / TASK-02 UPDATE)
+  const ledgerTableEntries = useMemo(() => {
+    const rows: (ProductLedgerEntry & { productId: string; productCode: string; articleName: string; color: string; vendorName: string })[] = [];
+
+    filteredProducts.forEach(p => {
+      if (ledgerVendorFilter !== 'all' && p.vendorId !== ledgerVendorFilter) return;
+      const color = p.color || getColorFromName(p.name);
+      const articleName = getCleanedArticleName(p.name, color);
+      const vendorName = state.vendors.find(v => v.id === p.vendorId)?.name || 'General';
+
+      getProductLedgerEntries([p.id]).forEach(entry => {
+        if (ledgerFromDate && entry.date < ledgerFromDate) return;
+        if (ledgerToDate && entry.date > ledgerToDate) return;
+        rows.push({ ...entry, productId: p.id, productCode: p.id, articleName, color, vendorName });
+      });
+    });
+
+    return rows.sort((a, b) => a.date.localeCompare(b.date));
+  }, [filteredProducts, ledgerVendorFilter, ledgerFromDate, ledgerToDate, state.vendors, state.productionLogs, state.saleBills, state.saleReturns]);
+
+  const ledgerTotals = useMemo(() => {
+    return ledgerTableEntries.reduce((acc, e) => ({
+      debit: acc.debit + e.debit,
+      credit: acc.credit + e.credit
+    }), { debit: 0, credit: 0 });
+  }, [ledgerTableEntries]);
+
   return (
     <AppLayout pageTitle="Stock & Production Center">
       <div className="mx-auto" style={{ maxWidth: 1000 }}>
@@ -187,6 +285,16 @@ export default function ReportStockPage() {
             }`}
           >
             Current Stock
+          </button>
+          <button
+            onClick={() => setActiveStockTab('ledger')}
+            className={`px-4 py-2 border-b-2 transition-colors ${
+              activeStockTab === 'ledger'
+                ? 'border-[#B08D57] text-[#111c2a]'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Product Ledger
           </button>
           <button
             onClick={() => setActiveStockTab('daily')}
@@ -267,6 +375,42 @@ export default function ReportStockPage() {
             {/* Timeframe Filters based on Active Tab */}
             {activeStockTab !== 'current' && (
               <div className="flex flex-wrap items-center gap-4 pt-3 border-t" style={{ borderColor: 'var(--border-color)' }}>
+                {activeStockTab === 'ledger' && (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-semibold text-slate-500 uppercase">From Date:</label>
+                      <input
+                        type="date"
+                        value={ledgerFromDate}
+                        onChange={e => setLedgerFromDate(e.target.value)}
+                        className="soleria-input py-1.5 px-3 text-sm font-semibold"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-semibold text-slate-500 uppercase">To Date:</label>
+                      <input
+                        type="date"
+                        value={ledgerToDate}
+                        onChange={e => setLedgerToDate(e.target.value)}
+                        className="soleria-input py-1.5 px-3 text-sm font-semibold"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-semibold text-slate-500 uppercase">Vendor:</label>
+                      <select
+                        value={ledgerVendorFilter}
+                        onChange={e => setLedgerVendorFilter(e.target.value)}
+                        className="soleria-input py-1.5 px-3 text-sm font-semibold cursor-pointer"
+                      >
+                        <option value="all">All Vendors</option>
+                        {state.vendors.map(v => (
+                          <option key={v.id} value={v.id}>{v.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+
                 {activeStockTab === 'daily' && (
                   <div className="flex items-center gap-2">
                     <label className="text-xs font-semibold text-slate-500 uppercase">Production Date:</label>
@@ -359,94 +503,189 @@ export default function ReportStockPage() {
                 <table className="w-full text-left border-collapse text-sm">
                   <thead>
                     <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                      <th className="p-3 pl-4">Product Code</th>
-                      <th className="p-3">Article Name</th>
-                      <th className="p-3">Color</th>
+                      <th className="p-3 pl-4" style={{ width: '30px' }}></th>
+                      <th className="p-3">Product Code</th>
                       <th className="p-3">Category</th>
-                      <th className="p-3">Vendor</th>
-                      <th className="p-3 text-center">Pairs / Carton</th>
-                      <th className="p-3 text-right">Cartons</th>
-                      <th className="p-3 text-right">Extra Pairs</th>
                       <th className="p-3 text-right">Total Pairs</th>
                       <th className="p-3 text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredProducts.length === 0 ? (
+                    {groupedArticles.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="text-center p-8 text-slate-400">
+                        <td colSpan={5} className="text-center p-8 text-slate-400">
                           No products found matching stock criteria.
                         </td>
                       </tr>
                     ) : (
-                      filteredProducts.map(prod => {
-                        const catName = state.categories.find(c => c.id === prod.categoryId)?.name || 'General';
-                        const vendName = state.vendors.find(v => v.id === prod.vendorId)?.name || 'General';
-                        const pairs = prod.stock || 0;
-                        const packing = prod.packing || 12;
-                        const cartons = Math.floor(pairs / packing);
-                        const remPairs = pairs % packing;
-                        const color = prod.color || getColorFromName(prod.name);
-                        const cleanedName = getCleanedArticleName(prod.name, color);
+                      groupedArticles.map(group => {
+                        const catName = state.categories.find(c => c.id === group.categoryId)?.name || 'General';
+                        const vendName = state.vendors.find(v => v.id === group.vendorId)?.name || 'General';
+                        const groupTotalPairs = group.products.reduce((sum, p) => sum + (p.stock || 0), 0);
+                        const isExpanded = expandedArticleCode === group.code;
 
                         return (
-                          <tr key={prod.id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                            <td className="p-3 pl-4 font-semibold text-slate-700">{prod.id}</td>
-                            <td className="p-3 font-semibold text-slate-800">{cleanedName}</td>
-                            <td className="p-3">
-                              <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                                color.toLowerCase() === 'black' ? 'bg-slate-900 text-white' :
-                                color.toLowerCase() === 'white' ? 'bg-slate-100 text-slate-800 border border-slate-200' :
-                                color.toLowerCase() === 'brown' ? 'bg-amber-900 text-amber-50' :
-                                color.toLowerCase() === 'tan' ? 'bg-orange-100 text-orange-800' :
-                                'bg-slate-100 text-slate-600'
-                              }`}>
-                                {color}
-                              </span>
-                            </td>
-                            <td className="p-3 text-slate-500">{catName}</td>
-                            <td className="p-3 text-slate-500">{vendName}</td>
-                            <td className="p-3 text-center text-slate-600 font-medium">{packing}</td>
-                            <td className="p-3 text-right text-slate-700 font-bold">
-                              {cartons}
-                            </td>
-                            <td className="p-3 text-right text-slate-700 font-medium">
-                              {remPairs > 0 ? `${remPairs}` : '-'}
-                            </td>
-                            <td className={`p-3 text-right font-bold ${pairs <= 0 ? 'text-red-600' : 'text-slate-900'}`}>
-                              {pairs.toLocaleString()}
-                            </td>
-                            <td className="p-3 text-center">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedProduct(prod);
-                                  setAddQuantity(1);
-                                  setQtyType('cartons');
-                                  setProductionDate(new Date().toISOString().split('T')[0]);
-                                }}
-                                className="border border-black rounded bg-transparent text-black hover:bg-slate-50 transition-colors flex items-center justify-center mx-auto font-black text-xs"
-                                style={{ width: '22px', height: '22px' }}
-                                title="Add Stock"
-                              >
-                                +
-                              </button>
-                            </td>
-                          </tr>
+                          <Fragment key={group.code}>
+                            <tr
+                              className="border-b hover:bg-slate-50/50 cursor-pointer"
+                              style={{ borderColor: 'var(--border-table)' }}
+                              onClick={() => setExpandedArticleCode(isExpanded ? null : group.code)}
+                            >
+                              <td className="p-3 pl-4 text-slate-400">
+                                {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                              </td>
+                              <td className="p-3 font-semibold text-slate-700">
+                                {group.code}
+                                <span className="block text-xs font-normal text-slate-500">
+                                  {group.commonName} <span className="text-slate-400">({group.products.length} color{group.products.length !== 1 ? 's' : ''})</span>
+                                </span>
+                              </td>
+                              <td className="p-3 text-slate-500">{catName}</td>
+                              <td className={`p-3 text-right font-bold ${groupTotalPairs <= 0 ? 'text-red-600' : 'text-slate-900'}`}>
+                                {groupTotalPairs.toLocaleString()}
+                              </td>
+                              <td className="p-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedGroup(group);
+                                    setAddQuantity(1);
+                                    setQtyType('cartons');
+                                    setProductionDate(new Date().toISOString().split('T')[0]);
+                                    setAddColor('');
+                                    setIsNewColor(group.products.length === 0);
+                                  }}
+                                  className="border border-black rounded bg-transparent text-black hover:bg-slate-50 transition-colors flex items-center justify-center mx-auto font-black text-xs"
+                                  style={{ width: '22px', height: '22px' }}
+                                  title="Add Stock"
+                                >
+                                  +
+                                </button>
+                              </td>
+                            </tr>
+                            {isExpanded && (
+                              <tr className="bg-slate-50/70 border-b" style={{ borderColor: 'var(--border-table)' }}>
+                                <td></td>
+                                <td colSpan={4} className="p-4">
+                                  <div className="text-[11px] text-slate-400 mb-2">Vendor: {vendName}</div>
+
+                                  {/* Color variant sub-rows */}
+                                  <div className="bg-white border rounded-lg overflow-hidden mb-4" style={{ borderColor: 'var(--border-color)' }}>
+                                    <table className="w-full text-left border-collapse text-xs">
+                                      <thead>
+                                        <tr className="bg-slate-50 text-slate-400 uppercase tracking-wider" style={{ borderColor: 'var(--border-color)' }}>
+                                          <th className="p-2 pl-3">Content Color</th>
+                                          <th className="p-2 text-center">Pairs / Carton</th>
+                                          <th className="p-2 text-right">Total Cartons</th>
+                                          <th className="p-2 text-right">Extra Pairs</th>
+                                          <th className="p-2 text-right pr-3">Total Pairs</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {group.products.map(p => {
+                                          const pPairs = p.stock || 0;
+                                          const pPacking = p.packing || 12;
+                                          const pCartons = Math.floor(pPairs / pPacking);
+                                          const pRemPairs = pPairs % pPacking;
+                                          const pColor = p.color || getColorFromName(p.name);
+                                          return (
+                                            <tr key={p.id} className="border-t" style={{ borderColor: 'var(--border-table)' }}>
+                                              <td className="p-2 pl-3">
+                                                <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${
+                                                  pColor.toLowerCase() === 'black' ? 'bg-slate-900 text-white' :
+                                                  pColor.toLowerCase() === 'white' ? 'bg-slate-100 text-slate-800 border border-slate-200' :
+                                                  pColor.toLowerCase() === 'brown' ? 'bg-amber-900 text-amber-50' :
+                                                  pColor.toLowerCase() === 'tan' ? 'bg-orange-100 text-orange-800' :
+                                                  'bg-slate-100 text-slate-600'
+                                                }`}>
+                                                  {pColor}
+                                                </span>
+                                                <span className="ml-2 text-slate-400 font-mono">{p.id}</span>
+                                              </td>
+                                              <td className="p-2 text-center font-medium text-slate-700">{pPacking}</td>
+                                              <td className="p-2 text-right font-bold text-slate-800">{pCartons}</td>
+                                              <td className="p-2 text-right text-slate-700">{pRemPairs || '-'}</td>
+                                              <td className="p-2 text-right pr-3 font-bold" style={{ color: 'var(--brand-gold)' }}>{pPairs.toLocaleString()}</td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
                         );
                       })
                     )}
                   </tbody>
-                  
+
                   <tfoot>
                     <tr className="bg-slate-50 font-bold border-t-2 border-b text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                      <td colSpan={6} className="p-4 text-left font-lora">REPORT TOTAL</td>
-                      <td className="p-4 text-right text-slate-800 font-bold">{totalCartons} ctn</td>
-                      <td className="p-4 text-right text-slate-700 font-medium">{totalExtraPairs > 0 ? `${totalExtraPairs} prs` : '-'}</td>
-                      <td className="p-4 text-right text-emerald-800 text-lg" style={{ color: 'var(--brand-gold)' }}>
+                      <td colSpan={3} className="p-4 text-left font-lora">REPORT TOTAL</td>
+                      <td className="p-4 text-right text-lg" style={{ color: 'var(--brand-gold)' }}>
                         {totalPairs.toLocaleString()} Pairs
                       </td>
                       <td className="p-4"></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            ) : activeStockTab === 'ledger' ? (
+              // Product Ledger View (TASK-02 / TASK-02 UPDATE)
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                      <th className="p-3 pl-4">Date</th>
+                      <th className="p-3">Product Code</th>
+                      <th className="p-3">Article</th>
+                      <th className="p-3">Color</th>
+                      <th className="p-3">Vendor</th>
+                      <th className="p-3">Type</th>
+                      <th className="p-3">Ref</th>
+                      <th className="p-3 text-right">Debit (IN)</th>
+                      <th className="p-3 text-right">Credit (OUT)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ledgerTableEntries.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="text-center p-8 text-slate-400">
+                          No product ledger movements found matching your filters.
+                        </td>
+                      </tr>
+                    ) : (
+                      ledgerTableEntries.map((entry, idx) => (
+                        <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                          <td className="p-3 pl-4 font-mono text-slate-600">{entry.date}</td>
+                          <td className="p-3 font-semibold text-slate-700">{entry.productCode}</td>
+                          <td className="p-3 text-slate-700">{entry.articleName}</td>
+                          <td className="p-3 text-slate-500">{entry.color}</td>
+                          <td className="p-3 text-slate-500">{entry.vendorName}</td>
+                          <td className="p-3">
+                            <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                              entry.type === 'Production' ? 'bg-emerald-50 text-emerald-700' :
+                              entry.type === 'Sale' ? 'bg-rose-50 text-rose-700' :
+                              'bg-blue-50 text-blue-700'
+                            }`}>
+                              {entry.type}
+                            </span>
+                          </td>
+                          <td className="p-3 text-slate-500">{entry.ref}</td>
+                          <td className="p-3 text-right font-semibold text-emerald-700">{entry.debit > 0 ? entry.debit : '-'}</td>
+                          <td className="p-3 text-right font-semibold text-rose-700">{entry.credit > 0 ? entry.credit : '-'}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-slate-50 font-bold border-t-2 border-b text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
+                      <td colSpan={7} className="p-4 text-left font-lora">REPORT TOTAL</td>
+                      <td className="p-4 text-right text-emerald-800">{ledgerTotals.debit.toLocaleString()}</td>
+                      <td className="p-4 text-right text-rose-800">{ledgerTotals.credit.toLocaleString()}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -688,137 +927,213 @@ export default function ReportStockPage() {
       </div>
 
       {/* Add Stock Modal */}
-      {selectedProduct && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
-            <h3 className="font-lora font-bold text-lg text-slate-800 mb-2">
-              Add Stock / Log Production
-            </h3>
-            <p className="text-xs text-slate-500 mb-4 font-semibold uppercase tracking-wider">
-              {selectedProduct.id} — {getCleanedArticleName(selectedProduct.name, selectedProduct.color || getColorFromName(selectedProduct.name))}
-            </p>
+      {selectedGroup && (() => {
+        const matchedProduct = addColor.trim()
+          ? selectedGroup.products.find(p => (p.color || getColorFromName(p.name)).toLowerCase() === addColor.trim().toLowerCase())
+          : undefined;
+        const basePacking = matchedProduct?.packing || selectedGroup.packing || 12;
+        const baseStock = matchedProduct?.stock || 0;
+        const existingColors = selectedGroup.products.map(p => p.color || getColorFromName(p.name));
 
-            <div className="bg-slate-50 p-3 rounded-lg border mb-4 text-xs font-semibold text-slate-600 flex justify-between">
-              <div>
-                <span className="block text-[10px] uppercase text-slate-400">Current Stock</span>
-                <span className="text-slate-800 font-bold">
-                  {Math.floor((selectedProduct.stock || 0) / (selectedProduct.packing || 12))} ctn
-                  { (selectedProduct.stock || 0) % (selectedProduct.packing || 12) > 0 && ` & ${(selectedProduct.stock || 0) % (selectedProduct.packing || 12)} prs` }
-                  {` (Total: ${selectedProduct.stock || 0} Pairs)`}
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="block text-[10px] uppercase text-slate-400">Packing</span>
-                <span className="text-slate-800">{selectedProduct.packing || 12} Pairs/Ctn</span>
-              </div>
-            </div>
+        return (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+              <h3 className="font-lora font-bold text-lg text-slate-800 mb-2">
+                Add Stock / Log Production
+              </h3>
+              <p className="text-xs text-slate-500 mb-4 font-semibold uppercase tracking-wider">
+                {selectedGroup.code} — {selectedGroup.commonName}
+              </p>
 
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Add Quantity</label>
+              {matchedProduct && (
+                <div className="bg-slate-50 p-3 rounded-lg border mb-4 text-xs font-semibold text-slate-600 flex justify-between">
+                  <div>
+                    <span className="block text-[10px] uppercase text-slate-400">Current Stock ({matchedProduct.color || getColorFromName(matchedProduct.name)})</span>
+                    <span className="text-slate-800 font-bold">
+                      {Math.floor(baseStock / basePacking)} ctn
+                      { baseStock % basePacking > 0 && ` & ${baseStock % basePacking} prs` }
+                      {` (Total: ${baseStock} Pairs)`}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="block text-[10px] uppercase text-slate-400">Packing</span>
+                    <span className="text-slate-800">{basePacking} Pairs/Ctn</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Content Color */}
+              <div className="mb-4">
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  Content Color <span className="text-red-500 font-bold">*</span>
+                </label>
+                {isNewColor ? (
+                  <input
+                    type="text"
+                    value={addColor}
+                    onChange={e => setAddColor(e.target.value)}
+                    placeholder="Type new color..."
+                    autoFocus
+                    onBlur={() => {
+                      if (!addColor.trim() && existingColors.length > 0) setIsNewColor(false);
+                    }}
+                    className="soleria-input font-bold"
+                  />
+                ) : (
+                  <select
+                    value={existingColors.includes(addColor) ? addColor : ''}
+                    onChange={e => {
+                      if (e.target.value === '__new__') {
+                        setIsNewColor(true);
+                        setAddColor('');
+                      } else {
+                        setAddColor(e.target.value);
+                      }
+                    }}
+                    className="soleria-input cursor-pointer font-bold"
+                  >
+                    <option value="">Select existing color...</option>
+                    {existingColors.map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                    <option value="__new__">+ Add New Color (type manually)...</option>
+                  </select>
+                )}
+                {!matchedProduct && addColor.trim() && (
+                  <p className="text-[10px] text-amber-600 mt-1">
+                    "{addColor.trim()}" is a new color — a new article record will be created for it.
+                  </p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Add Quantity</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={addQuantity || ''}
+                    onChange={e => setAddQuantity(Math.max(1, parseInt(e.target.value) || 0))}
+                    className="soleria-input text-center font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Unit Type</label>
+                  <select
+                    value={qtyType}
+                    onChange={e => setQtyType(e.target.value as 'cartons' | 'pairs')}
+                    className="soleria-input cursor-pointer font-bold"
+                  >
+                    <option value="cartons">Carton(s)</option>
+                    <option value="pairs">Pair(s)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Production Date Selector */}
+              <div className="mb-4">
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Production Date</label>
                 <input
-                  type="number"
-                  min="1"
-                  value={addQuantity || ''}
-                  onChange={e => setAddQuantity(Math.max(1, parseInt(e.target.value) || 0))}
-                  className="soleria-input text-center font-bold"
-                  autoFocus
+                  type="date"
+                  value={productionDate}
+                  onChange={e => setProductionDate(e.target.value)}
+                  className="soleria-input font-bold"
                 />
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Unit Type</label>
-                <select
-                  value={qtyType}
-                  onChange={e => setQtyType(e.target.value as 'cartons' | 'pairs')}
-                  className="soleria-input cursor-pointer font-bold"
+
+              {/* Preview */}
+              {(() => {
+                const increment = qtyType === 'cartons' ? addQuantity * basePacking : addQuantity;
+                const newTotal = baseStock + increment;
+                const newCartons = Math.floor(newTotal / basePacking);
+                const newRemPairs = newTotal % basePacking;
+                return (
+                  <div className="bg-amber-50 border border-amber-100 p-3 rounded-lg text-xs font-semibold text-slate-700 mb-6">
+                    <span className="block text-[10px] uppercase text-amber-600 mb-0.5">Updated Stock Preview</span>
+                    <span className="font-bold text-amber-800">
+                      {newCartons} ctn
+                      { newRemPairs > 0 && ` & ${newRemPairs} prs` }
+                      {` (Total: ${newTotal} Pairs)`}
+                    </span>
+                  </div>
+                );
+              })()}
+
+              {/* Actions */}
+              <div className="flex justify-end gap-2 text-sm font-semibold">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedGroup(null);
+                    setAddQuantity(0);
+                    setAddColor('');
+                    setIsNewColor(false);
+                  }}
+                  className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
                 >
-                  <option value="cartons">Carton(s)</option>
-                  <option value="pairs">Pair(s)</option>
-                </select>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!addColor.trim()}
+                  onClick={() => {
+                    const increment = qtyType === 'cartons' ? addQuantity * basePacking : addQuantity;
+
+                    if (matchedProduct) {
+                      // Existing color variant — increment its stock
+                      dispatch({
+                        type: 'UPDATE_PRODUCT',
+                        product: { ...matchedProduct, stock: (matchedProduct.stock || 0) + increment }
+                      });
+                      dispatch({
+                        type: 'ADD_PRODUCTION_LOG',
+                        log: {
+                          id: 'pl_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+                          date: productionDate,
+                          productId: matchedProduct.id,
+                          quantity: increment,
+                          qtyValue: addQuantity,
+                          unitType: qtyType,
+                          packing: matchedProduct.packing || 12
+                        }
+                      });
+                    } else {
+                      // New color variant — create a new product record under this article
+                      const sibling = selectedGroup.products[0];
+                      const nextId = String(Math.max(0, ...state.products.map(p => parseInt(p.id, 10) || 0)) + 1);
+                      const newProduct = sibling
+                        ? { ...sibling, id: nextId, name: `${selectedGroup.code} ${selectedGroup.commonName} ${addColor.trim()}`.trim(), color: addColor.trim(), stock: increment }
+                        : { id: nextId, name: `${selectedGroup.code} ${selectedGroup.commonName} ${addColor.trim()}`.trim(), categoryId: selectedGroup.categoryId, vendorId: selectedGroup.vendorId, batchNo: 0, packing: selectedGroup.packing || 12, costPrice: 0, labour: 0, proiCost: 0, soleStich: 0, pasting: 0, trim: 0, finishing: 0, socksPasting: 0, dc: 0, sockStich: 0, sheet: 0, stubble: 0, bottom: 0, p1: 0, p2: 0, na: 0, color: addColor.trim(), stock: increment };
+
+                      dispatch({ type: 'ADD_PRODUCT', product: newProduct });
+                      dispatch({
+                        type: 'ADD_PRODUCTION_LOG',
+                        log: {
+                          id: 'pl_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+                          date: productionDate,
+                          productId: nextId,
+                          quantity: increment,
+                          qtyValue: addQuantity,
+                          unitType: qtyType,
+                          packing: selectedGroup.packing || 12
+                        }
+                      });
+                    }
+
+                    setSelectedGroup(null);
+                    setAddQuantity(0);
+                    setAddColor('');
+                    setIsNewColor(false);
+                  }}
+                  className="px-4 py-2 bg-[#111c2a] text-[#B08D57] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Confirm Add &amp; Log
+                </button>
               </div>
             </div>
-
-            {/* Production Date Selector */}
-            <div className="mb-4">
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Production Date</label>
-              <input
-                type="date"
-                value={productionDate}
-                onChange={e => setProductionDate(e.target.value)}
-                className="soleria-input font-bold"
-              />
-            </div>
-
-            {/* Will become preview */}
-            {(() => {
-              const increment = qtyType === 'cartons' ? addQuantity * (selectedProduct.packing || 12) : addQuantity;
-              const newTotal = (selectedProduct.stock || 0) + increment;
-              const newCartons = Math.floor(newTotal / (selectedProduct.packing || 12));
-              const newRemPairs = newTotal % (selectedProduct.packing || 12);
-              return (
-                <div className="bg-amber-50 border border-amber-100 p-3 rounded-lg text-xs font-semibold text-slate-700 mb-6">
-                  <span className="block text-[10px] uppercase text-amber-600 mb-0.5">Updated Stock Preview</span>
-                  <span className="font-bold text-amber-800">
-                    {newCartons} ctn
-                    { newRemPairs > 0 && ` & ${newRemPairs} prs` }
-                    {` (Total: ${newTotal} Pairs)`}
-                  </span>
-                </div>
-              );
-            })()}
-
-            {/* Actions */}
-            <div className="flex justify-end gap-2 text-sm font-semibold">
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedProduct(null);
-                  setAddQuantity(0);
-                }}
-                className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const increment = qtyType === 'cartons' ? addQuantity * (selectedProduct.packing || 12) : addQuantity;
-                  const updatedProd = {
-                    ...selectedProduct,
-                    stock: (selectedProduct.stock || 0) + increment
-                  };
-                  
-                  // 1. Update product stock level in state
-                  dispatch({
-                    type: 'UPDATE_PRODUCT',
-                    product: updatedProd
-                  });
-
-                  // 2. Add production log record
-                  dispatch({
-                    type: 'ADD_PRODUCTION_LOG',
-                    log: {
-                      id: 'pl_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
-                      date: productionDate,
-                      productId: selectedProduct.id,
-                      quantity: increment,
-                      qtyValue: addQuantity,
-                      unitType: qtyType,
-                      packing: selectedProduct.packing || 12
-                    }
-                  });
-
-                  setSelectedProduct(null);
-                  setAddQuantity(0);
-                }}
-                className="px-4 py-2 bg-[#111c2a] text-[#B08D57] rounded-lg hover:opacity-90 transition-opacity"
-              >
-                Confirm Add &amp; Log
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </AppLayout>
   );
 }

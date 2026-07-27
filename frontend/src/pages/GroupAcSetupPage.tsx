@@ -70,10 +70,10 @@ export default function GroupAcSetupPage() {
   };
 
   const handleDeleteGroup = (grpId: string) => {
-    // Safety check: is it linked to any control accounts?
-    const inUse = state.controlAccounts.some(c => c.groupId === grpId);
+    // Safety check: is it linked to any chart accounts?
+    const inUse = state.chartAccounts.some(c => c.groupId === grpId);
     if (inUse) {
-      setErrorMsg('Cannot delete: This group account is linked to active control accounts.');
+      setErrorMsg('Cannot delete: This group account is linked to active chart accounts.');
       setTimeout(() => setErrorMsg(''), 4000);
       return;
     }

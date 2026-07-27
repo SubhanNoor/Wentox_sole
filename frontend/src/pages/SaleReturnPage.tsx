@@ -46,9 +46,19 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     return state.chartAccounts.find(a => a.id === selectedCustomer.acId)?.name || 'CUSTOMERS ACCOUNTS';
   }, [selectedCustomer, state.chartAccounts]);
 
-  const filteredSubCustomers = useMemo(() => {
-    return state.subCustomers.filter(sc => sc.customerId === customerId);
-  }, [customerId, state.subCustomers]);
+  // Sub Customers are an independent flat list (no parent Customer link)
+  const filteredSubCustomers = state.subCustomers;
+
+  // Customer search: Primary = Region, Secondary = City
+  const sortedCustomers = useMemo(() => {
+    const regionName = (id: string) => state.regions.find(r => r.id === id)?.name || '';
+    const cityName = (id: string) => state.cities.find(ct => ct.id === id)?.name || '';
+    return [...state.customers].sort((a, b) => {
+      const regionCmp = regionName(a.regionId).localeCompare(regionName(b.regionId));
+      if (regionCmp !== 0) return regionCmp;
+      return cityName(a.cityId).localeCompare(cityName(b.cityId));
+    });
+  }, [state.customers, state.regions, state.cities]);
 
   // Drafts state loaded from local cache
   const [drafts, setDrafts] = useState<SaleReturn[]>(() => {
@@ -295,6 +305,50 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   const handleRemoveItemRow = (idx: number) => {
     if (items.length <= 1) return;
     setItems(items.filter((_, i) => i !== idx));
+  };
+
+  // TASK-12: products previously purchased by the selected customer (from their posted Sale Bills)
+  // — used to auto-fill a line item; does not change how the return is manually entered.
+  const customerPurchaseHistory = useMemo(() => {
+    if (!customerId) return [];
+    const seen = new Map<string, string>(); // productId -> productName
+    state.saleBills
+      .filter(b => b.customerId === customerId && b.status === 'Posted')
+      .forEach(bill => {
+        bill.items.forEach(it => {
+          if (it.productId && !seen.has(it.productId)) {
+            seen.set(it.productId, it.productName);
+          }
+        });
+      });
+    return Array.from(seen.entries()).map(([productId, productName]) => ({ productId, productName }));
+  }, [customerId, state.saleBills]);
+
+  const handleQuickAddFromHistory = (productId: string) => {
+    if (!productId) return;
+    const product = state.products.find(p => p.id === productId);
+    if (!product) return;
+
+    const filledItem: SaleReturnItem = {
+      id: 'sri_' + Date.now() + '_' + items.length,
+      productId: product.id,
+      productName: product.name,
+      packing: product.packing,
+      cartons: 0,
+      pairs: 0,
+      rate: product.costPrice + 50,
+      discountPercent: 0,
+      discountValue: 0,
+      value: 0
+    };
+
+    // Fill the last row if it's still empty, otherwise append a new one
+    const lastIdx = items.length - 1;
+    if (items.length > 0 && !items[lastIdx].productId) {
+      setItems(items.map((it, i) => i === lastIdx ? filledItem : it));
+    } else {
+      setItems([...items, filledItem]);
+    }
   };
 
   const updateItemField = (idx: number, field: keyof SaleReturnItem, val: any) => {
@@ -858,7 +912,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                     style={{ fontSize: '13px' }}
                   >
                     <option value="">Select customer...</option>
-                    {state.customers.map(c => (
+                    {sortedCustomers.map(c => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
@@ -900,18 +954,17 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   <label className="block text-xs font-medium text-slate-600 mb-1">
                     Delivery Agent (if any)
                   </label>
-                  <select
+                  <SearchableSelect
+                    options={[
+                      { value: 'sub-same', label: 'SAME (Direct)' },
+                      ...filteredSubCustomers.map(sc => ({ value: sc.id, label: sc.name }))
+                    ]}
                     value={subCustomerId}
+                    onChange={setSubCustomerId}
+                    placeholder="Select delivery agent..."
+                    searchPlaceholder="Search sub-customers..."
                     disabled={isViewMode}
-                    onChange={e => setSubCustomerId(e.target.value)}
-                    className="soleria-input cursor-pointer"
-                    style={{ fontSize: '13px' }}
-                  >
-                    <option value="sub-same">SAME (Direct)</option>
-                    {filteredSubCustomers.map(sc => (
-                      <option key={sc.id} value={sc.id}>{sc.name}</option>
-                    ))}
-                  </select>
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
@@ -1083,14 +1136,34 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </table>
           </div>
 
-          {/* Add Row Button */}
+          {/* Add Row Button + Prior Purchase Quick-Add */}
           {!isViewMode && (
-            <button
-              onClick={handleAddItemRow}
-              className="btn-dashed flex items-center gap-1 mb-6 px-3 py-1.5"
-            >
-              <Plus size={14} /> Add Item Row
-            </button>
+            <div className="flex flex-wrap items-center gap-3 mb-6">
+              <button
+                onClick={handleAddItemRow}
+                className="btn-dashed flex items-center gap-1 px-3 py-1.5"
+              >
+                <Plus size={14} /> Add Item Row
+              </button>
+
+              {customerId && (
+                <div className="flex items-center gap-2 min-w-[280px]">
+                  <span className="text-xs font-medium text-slate-500 whitespace-nowrap">
+                    Previously bought by this customer:
+                  </span>
+                  <div className="flex-1">
+                    <SearchableSelect
+                      options={customerPurchaseHistory.map(h => ({ value: h.productId, label: h.productName }))}
+                      value=""
+                      onChange={handleQuickAddFromHistory}
+                      placeholder={customerPurchaseHistory.length ? 'Select to auto-fill...' : 'No prior purchases found'}
+                      searchPlaceholder="Search prior purchases..."
+                      disabled={customerPurchaseHistory.length === 0}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
           {/* Invoice Summary and Remarks */}

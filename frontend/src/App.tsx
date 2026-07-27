@@ -1,7 +1,10 @@
 import { useApp } from '@/context/AppContext';
 import LoginPage from '@/pages/LoginPage';
+import HomePage from '@/pages/HomePage';
 import SaleBillPage from '@/pages/SaleBillPage';
 import SaleReturnPage from '@/pages/SaleReturnPage';
+import PurchasePage from '@/pages/PurchasePage';
+import PurchaseReturnPage from '@/pages/PurchaseReturnPage';
 import ReceiptsPage from '@/pages/ReceiptsPage';
 import ExpensesPage from '@/pages/ExpensesPage';
 
@@ -9,13 +12,14 @@ import ExpensesPage from '@/pages/ExpensesPage';
 import ProductSetupPage from '@/pages/ProductSetupPage';
 import CategorySetupPage from '@/pages/CategorySetupPage';
 import VendorSetupPage from '@/pages/VendorSetupPage';
+import CustomerSetupPage from '@/pages/CustomerSetupPage';
 import SubCustomerSetupPage from '@/pages/SubCustomerSetupPage';
 import CitySetupPage from '@/pages/CitySetupPage';
+import RegionSetupPage from '@/pages/RegionSetupPage';
 import AddaSetupPage from '@/pages/AddaSetupPage';
 
 // Accounting Setups
 import GroupAcSetupPage from '@/pages/GroupAcSetupPage';
-import ControlAcSetupPage from '@/pages/ControlAcSetupPage';
 import ChartAcSetupPage from '@/pages/ChartAcSetupPage';
 import BusinessAcSetupPage from '@/pages/BusinessAcSetupPage';
 
@@ -38,10 +42,16 @@ export default function App() {
   const page = state.currentPage;
 
   switch (page) {
+    case 'home':
+      return <HomePage />;
     case 'sale-bill':
       return <SaleBillPage />;
     case 'sale-return':
       return <SaleReturnPage />;
+    case 'purchase-entry':
+      return <PurchasePage />;
+    case 'purchase-return':
+      return <PurchaseReturnPage />;
     case 'find-bill':
       return <SaleBillPage initialTab="find" />;
     case 'weekly-records':
@@ -62,18 +72,20 @@ export default function App() {
       return <CategorySetupPage />;
     case 'setup-vendor':
       return <VendorSetupPage />;
+    case 'setup-customer':
+      return <CustomerSetupPage />;
     case 'setup-sub-cust':
       return <SubCustomerSetupPage />;
     case 'setup-city':
       return <CitySetupPage />;
+    case 'setup-region':
+      return <RegionSetupPage />;
     case 'setup-adda':
       return <AddaSetupPage />;
 
     // Accounting Setup
     case 'setup-group-ac':
       return <GroupAcSetupPage />;
-    case 'setup-control-ac':
-      return <ControlAcSetupPage />;
     case 'setup-chart-ac':
       return <ChartAcSetupPage />;
     case 'setup-business-ac':
@@ -91,6 +103,6 @@ export default function App() {
       return <SettingsPage />;
 
     default:
-      return <SaleBillPage />;
+      return <HomePage />;
   }
 }

@@ -68,17 +68,19 @@ the resolved decisions.
 
 ## Milestone 4 — Stock
 
-**Goal:** Bring stock views in line with the new Purchase flow and
-redesign requirements.
+**Goal:** Redesign the stock views. **Scope correction (this cycle):**
+Purchase (M3) was clarified to be **raw-material purchasing**, separate
+from `Product.stock` (pairs) — it does NOT feed Current Stock or Product
+Ledger. Production remains the only stock-in source for finished articles.
+The original plan item "Purchase as a stock-in source" is dropped.
 
 - [ ] Current Stock redesign — table + expandable sub-rows, color field in
       add-stock dialog (TASK-03)
-- [ ] Current Stock / Product Ledger reflect Purchase as a stock-in source
-      (alongside existing Production)
 - [ ] Product Ledger — date range, vendor, article/category filters
       (TASK-02 UPDATE)
-- [ ] Verify: a Purchase entry shows up correctly in both Current Stock and
-      Product Ledger as an IN movement, distinct from Production
+- [ ] Verify: Current Stock redesign renders correctly against existing
+      Production-only stock-in data; Purchase records remain absent from
+      both views (by design)
 
 ---
 
@@ -136,6 +138,20 @@ place first.
 - [ ] Verify: exact-match, over-match (remainder must be explicitly
       assigned, never silently orphaned), and under-match endorsement
       scenarios, plus a full bounce-after-endorsement reversal
+
+### YBD (client still deciding) — Cheque Register / Section
+- [ ] **YBD**: a dedicated Cheque section/page listing every cheque received
+      (across all Receipts) as its own row — Cheque No, Date on Cheque,
+      Received Date, Amount, Customer, current status
+      (Pending/Deposited/Endorsed/Partially Endorsed/Cleared/Bounced) — a
+      single place to see all outstanding cheques at a glance, instead of
+      hunting through Receipts. Not yet scoped: whether it's a standalone
+      page vs. a tab inside Reports, whether it needs its own filters
+      (date range / status / customer), and whether status changes
+      (deposit/endorse/bounce) happen inline here or only from the
+      "Dispose of Cheque" workflow above. Revisit once §12/§13 are further
+      along — this would likely reuse the same `chequeStatus` field and
+      cheque_allocations concept, just as a dedicated register view.
 
 ---
 

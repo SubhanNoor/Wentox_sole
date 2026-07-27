@@ -5,9 +5,14 @@ import { Printer, Search } from 'lucide-react';
 
 interface KhaataRow {
   date: string;
-  type: 'Opening Balance' | 'Sale Bill' | 'Sale Return' | 'Receipt (Jamma)';
-  refId: string;
-  description: string;
+  type: 'Opening Balance' | 'Sale Bill' | 'Sale Return' | 'Receipt (Jamma)' | 'Commission';
+  invNo: string;    // system-generated id
+  billNo: string;   // manual bill number, '-' for non-bill rows
+  narration: string; // free text (blank for cheque rows, which use the 3 sub-columns instead)
+  chequeNo?: string;
+  chequeDate?: string;
+  chequeReceivedDate?: string;
+  pairs: number;    // only filled for sale/return rows
   debit: number;  // increases customer receivable
   credit: number; // decreases customer receivable
 }
@@ -58,14 +63,21 @@ export default function ReportKhaataPage() {
     if (!customerId) return [];
     const entries: KhaataRow[] = [];
 
+    const deliveryNarration = (subCustomerId: string | null) => {
+      if (!subCustomerId) return 'SAME';
+      return state.subCustomers.find(sc => sc.id === subCustomerId)?.name || 'SAME';
+    };
+
     // 1. Sale Bills (Debit the Customer)
     state.saleBills.forEach(bill => {
       if (bill.customerId !== customerId || bill.status !== 'Posted') return;
       entries.push({
         date: bill.date,
         type: 'Sale Bill',
-        refId: bill.billNo,
-        description: `Sale of sole articles. Total Cartons: ${bill.items.reduce((s, it) => s + it.cartons, 0)}`,
+        invNo: bill.id,
+        billNo: bill.billNo,
+        narration: deliveryNarration(bill.subCustomerId),
+        pairs: bill.items.reduce((s, it) => s + it.pairs, 0),
         debit: bill.totalValue,
         credit: 0
       });
@@ -78,8 +90,10 @@ export default function ReportKhaataPage() {
       entries.push({
         date: ret.date,
         type: 'Sale Return',
-        refId: ret.billNo,
-        description: `Returned defective articles. Total Cartons: ${ret.items.reduce((s, it) => s + it.cartons, 0)}`,
+        invNo: ret.id,
+        billNo: ret.billNo,
+        narration: deliveryNarration(ret.subCustomerId),
+        pairs: ret.items.reduce((s, it) => s + it.pairs, 0),
         debit: 0,
         credit: totalCreditVal
       });
@@ -88,21 +102,41 @@ export default function ReportKhaataPage() {
     // 3. Receipts / Payments Jamma (Credit the Customer)
     state.receipts.forEach(rec => {
       if (rec.customerId !== customerId) return;
+      const isCheque = rec.paymentMode === 'Cheque';
       entries.push({
         date: rec.date,
         type: 'Receipt (Jamma)',
-        refId: rec.id.substring(3, 9),
-        description: `Payment received: Mode ${rec.paymentMode}. Details: ${rec.details || 'N/A'}`,
+        invNo: rec.id,
+        billNo: '-',
+        narration: isCheque ? '' : (rec.remarks || rec.details || rec.paymentMode.toUpperCase()),
+        chequeNo: isCheque ? rec.chequeNo : undefined,
+        chequeDate: isCheque ? rec.chequeDate : undefined,
+        chequeReceivedDate: isCheque ? rec.chequeReceivedDate : undefined,
+        pairs: 0,
         debit: 0,
         credit: rec.amount
       });
+
+      // 4. Commission — payment-time only, credit side, same as the payment
+      if (rec.commission && rec.commission > 0) {
+        entries.push({
+          date: rec.date,
+          type: 'Commission',
+          invNo: rec.id,
+          billNo: '-',
+          narration: 'Commission',
+          pairs: 0,
+          debit: 0,
+          credit: rec.commission
+        });
+      }
     });
 
     // Sort by Date
     entries.sort((a, b) => a.date.localeCompare(b.date));
 
     return entries;
-  }, [customerId, state.saleBills, state.saleReturns, state.receipts]);
+  }, [customerId, state.saleBills, state.saleReturns, state.receipts, state.subCustomers]);
 
   // Compute running balance with date filtering
   const runningKhaata = useMemo(() => {
@@ -129,8 +163,10 @@ export default function ReportKhaataPage() {
       {
         date: fromDate ? `Before ${fromDate}` : '---',
         type: 'Opening Balance' as const,
-        refId: '-',
-        description: fromDate ? `Opening balance before ${fromDate}` : 'Opening Balance brought forward',
+        invNo: '-',
+        billNo: '-',
+        narration: fromDate ? `Opening balance before ${fromDate}` : 'Opening Balance brought forward',
+        pairs: 0,
         debit: 0,
         credit: 0,
         balance: openingBalance
@@ -145,6 +181,14 @@ export default function ReportKhaataPage() {
     ];
 
     return finalRows;
+  }, [khaataEntries, fromDate, toDate]);
+
+  const khaataTotals = useMemo(() => {
+    return khaataEntries.reduce((acc, e) => {
+      const inRange = (!fromDate || e.date >= fromDate) && (!toDate || e.date <= toDate);
+      if (!inRange) return acc;
+      return { debit: acc.debit + e.debit, credit: acc.credit + e.credit };
+    }, { debit: 0, credit: 0 });
   }, [khaataEntries, fromDate, toDate]);
 
   return (
@@ -341,8 +385,10 @@ export default function ReportKhaataPage() {
                     <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                       <th className="p-3 pl-4">Date</th>
                       <th className="p-3">Type</th>
-                      <th className="p-3 text-center">Ref ID</th>
-                      <th className="p-3" style={{ minWidth: '200px' }}>Description</th>
+                      <th className="p-3 text-center">Inv #</th>
+                      <th className="p-3 text-center">Bill #</th>
+                      <th className="p-3" style={{ minWidth: '220px' }}>Narration</th>
+                      <th className="p-3 text-center">Pairs</th>
                       <th className="p-3 text-right">Debit (Dr)</th>
                       <th className="p-3 text-right">Credit (Cr)</th>
                       <th className="p-3 text-right">Balance</th>
@@ -351,28 +397,41 @@ export default function ReportKhaataPage() {
                   <tbody>
                     {runningKhaata.length === 1 && runningKhaata[0].balance === 0 && runningKhaata[0].debit === 0 && runningKhaata[0].credit === 0 ? (
                       <tr>
-                        <td colSpan={7} className="text-center p-8 text-slate-400">
+                        <td colSpan={9} className="text-center p-8 text-slate-400">
                           No ledger entries found matching selection or date range.
                         </td>
                       </tr>
                     ) : (
                       runningKhaata.map((row, idx) => {
                         const displayBal = Math.abs(row.balance);
+                        const isRed = row.credit > 0;
 
                         return (
                           <tr
                             key={idx}
-                            className={`border-b text-slate-700 ${row.type === 'Opening Balance' ? 'bg-slate-50 font-medium' : 'hover:bg-slate-50/30'}`}
+                            className={`border-b ${row.type === 'Opening Balance' ? 'bg-slate-50 font-medium text-slate-700' : isRed ? 'text-rose-700 hover:bg-rose-50/30' : 'text-slate-700 hover:bg-slate-50/30'}`}
                             style={{ borderColor: 'var(--border-table)' }}
                           >
-                            <td className="p-3 pl-4 font-semibold text-slate-700">{row.date}</td>
+                            <td className="p-3 pl-4 font-semibold">{row.date}</td>
                             <td className="p-3">
-                              <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${row.type === 'Sale Bill' ? 'bg-rose-50 text-rose-700' : row.type === 'Receipt (Jamma)' ? 'bg-emerald-50 text-emerald-700' : row.type === 'Sale Return' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-700'}`}>
+                              <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${row.type === 'Sale Bill' ? 'bg-rose-50 text-rose-700' : row.type === 'Receipt (Jamma)' ? 'bg-emerald-50 text-emerald-700' : row.type === 'Sale Return' ? 'bg-blue-50 text-blue-700' : row.type === 'Commission' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-700'}`}>
                                 {row.type}
                               </span>
                             </td>
-                            <td className="p-3 text-center font-medium text-slate-600">{row.refId}</td>
-                            <td className="p-3 text-xs text-slate-500 font-medium">{row.description}</td>
+                            <td className="p-3 text-center font-mono text-xs">{row.invNo}</td>
+                            <td className="p-3 text-center font-medium">{row.billNo}</td>
+                            <td className="p-3 text-xs font-medium">
+                              {row.chequeNo ? (
+                                <div className="flex flex-col gap-0.5">
+                                  <span><span className="text-slate-400">Cheque No:</span> {row.chequeNo}</span>
+                                  <span><span className="text-slate-400">Date on Cheque:</span> {row.chequeDate}</span>
+                                  <span><span className="text-slate-400">Received:</span> {row.chequeReceivedDate}</span>
+                                </div>
+                              ) : (
+                                row.narration
+                              )}
+                            </td>
+                            <td className="p-3 text-center text-slate-600 font-medium">{row.pairs > 0 ? row.pairs : '-'}</td>
                             <td className="p-3 text-right text-rose-700 font-bold">
                               {row.debit > 0 ? formatCurrency(row.debit) : '-'}
                             </td>
@@ -387,6 +446,16 @@ export default function ReportKhaataPage() {
                       })
                     )}
                   </tbody>
+                  <tfoot>
+                    <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
+                      <td colSpan={6} className="p-4 text-left font-lora">TOTAL</td>
+                      <td className="p-4 text-right text-rose-800">{formatCurrency(khaataTotals.debit)}</td>
+                      <td className="p-4 text-right text-emerald-800">{formatCurrency(khaataTotals.credit)}</td>
+                      <td className="p-4 text-right" style={{ color: 'var(--brand-gold)' }}>
+                        {formatCurrency(Math.abs(runningKhaata[runningKhaata.length - 1]?.balance || 0))}
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
             </div>

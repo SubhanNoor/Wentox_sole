@@ -17,8 +17,12 @@ export default function ReceiptsPage() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [customerId, setCustomerId] = useState('');
   const [amount, setAmount] = useState<number>(0);
+  const [commission, setCommission] = useState<number>(0);
   const [paymentMode, setPaymentMode] = useState<'Cash' | 'Cheque' | 'Online'>('Cash');
   const [details, setDetails] = useState('');
+  const [chequeNo, setChequeNo] = useState('');
+  const [chequeDate, setChequeDate] = useState('');
+  const [chequeReceivedDate, setChequeReceivedDate] = useState('');
   const [remarks, setRemarks] = useState('');
 
   // Dropdown search state
@@ -39,15 +43,23 @@ export default function ReceiptsPage() {
     return state.chartAccounts.find(a => a.id === selectedCustomer.acId)?.name || 'CUSTOMERS ACCOUNTS';
   }, [selectedCustomer, state.chartAccounts]);
 
-  // Dropdown list filter
+  // Dropdown list filter — Customer search: Primary = Region, Secondary = City
   const filteredDropdownCustomers = useMemo(() => {
-    if (!customerSearchQuery.trim()) return state.customers;
-    const query = customerSearchQuery.toLowerCase();
-    return state.customers.filter(c => 
-      c.name.toLowerCase().includes(query) || 
-      c.id.toLowerCase().includes(query)
-    );
-  }, [customerSearchQuery, state.customers]);
+    const regionName = (id: string) => state.regions.find(r => r.id === id)?.name || '';
+    const cityName = (id: string) => state.cities.find(ct => ct.id === id)?.name || '';
+    const query = customerSearchQuery.trim().toLowerCase();
+    const list = query
+      ? state.customers.filter(c =>
+          c.name.toLowerCase().includes(query) ||
+          c.id.toLowerCase().includes(query)
+        )
+      : state.customers;
+    return [...list].sort((a, b) => {
+      const regionCmp = regionName(a.regionId).localeCompare(regionName(b.regionId));
+      if (regionCmp !== 0) return regionCmp;
+      return cityName(a.cityId).localeCompare(cityName(b.cityId));
+    });
+  }, [customerSearchQuery, state.customers, state.regions, state.cities]);
 
   // Customer balance calculations
   const customerBalanceDetails = useMemo(() => {
@@ -68,41 +80,62 @@ export default function ReceiptsPage() {
       .filter(rec => rec.customerId === customerId)
       .reduce((sum, rec) => sum + rec.amount, 0);
 
-    const currentBalance = totalDebit - (totalReturns + totalReceipts);
-    const remainingBalance = currentBalance - amount;
+    // 4. Prior Commission (Credits) — payment-time only, never changes the sale bill itself
+    const totalCommission = state.receipts
+      .filter(rec => rec.customerId === customerId)
+      .reduce((sum, rec) => sum + (rec.commission || 0), 0);
+
+    const currentBalance = totalDebit - (totalReturns + totalReceipts + totalCommission);
+    const afterCommission = currentBalance - commission;
+    const remainingBalance = afterCommission - amount;
 
     return {
       currentBalance,
+      afterCommission,
       remainingBalance
     };
-  }, [customerId, state.saleBills, state.saleReturns, state.receipts, amount]);
+  }, [customerId, state.saleBills, state.saleReturns, state.receipts, amount, commission]);
 
   const handleSaveReceipt = (e: React.FormEvent) => {
     e.preventDefault();
     if (!date) return setErrorMsg('Please pick a date.');
     if (!customerId) return setErrorMsg('Please select a customer.');
     if (amount <= 0) return setErrorMsg('Amount must be greater than 0.');
+    if (paymentMode === 'Cheque' && !chequeNo.trim()) return setErrorMsg('Cheque No. is required for cheque payments.');
+    if (paymentMode === 'Cheque' && !chequeDate) return setErrorMsg('Date on Cheque is required for cheque payments.');
 
     const newReceipt: Receipt = {
       id: 'rc_' + Date.now(),
       date,
       customerId,
       amount,
+      commission: commission || undefined,
       paymentMode,
       details,
+      ...(paymentMode === 'Cheque' ? {
+        chequeNo: chequeNo.trim(),
+        chequeDate,
+        chequeReceivedDate: chequeReceivedDate || date,
+        chequeStatus: 'PENDING' as const
+      } : {}),
       remarks
     };
 
     dispatch({ type: 'ADD_RECEIPT', receipt: newReceipt });
-    
-    setSuccessMsg(`Receipt of ${formatCurrency(amount)} saved successfully against customer!`);
+
+    const commissionNote = commission > 0 ? ` (+ ${formatCurrency(commission)} commission)` : '';
+    setSuccessMsg(`Receipt of ${formatCurrency(amount)}${commissionNote} saved successfully against customer!`);
     setTimeout(() => setSuccessMsg(''), 3500);
 
     // Reset Form
     setCustomerId('');
     setCustomerSearchQuery('');
     setAmount(0);
+    setCommission(0);
     setDetails('');
+    setChequeNo('');
+    setChequeDate('');
+    setChequeReceivedDate('');
     setRemarks('');
     setErrorMsg('');
   };
@@ -230,7 +263,9 @@ export default function ReceiptsPage() {
                               style={{ borderColor: 'var(--border-table)' }}
                             >
                               <span>{c.name}</span>
-                              <span className="font-mono text-xs text-slate-400">Code: {c.id}</span>
+                              <span className="font-mono text-xs text-slate-400">
+                                {state.regions.find(r => r.id === c.regionId)?.name || 'No Region'} · Code: {c.id}
+                              </span>
                             </button>
                           ))
                         )}
@@ -253,11 +288,19 @@ export default function ReceiptsPage() {
                     </div>
                     <div className="grid grid-cols-2 gap-2 pt-0.5">
                       <div>
-                        <span className="block text-slate-500 font-medium mb-0.5">Current Balance:</span>
+                        <span className="block text-slate-500 font-medium mb-0.5">Amount Due:</span>
                         <span className={`font-bold font-mono text-sm ${customerBalanceDetails.currentBalance > 0 ? 'text-rose-700' : customerBalanceDetails.currentBalance < 0 ? 'text-emerald-700' : 'text-slate-600'}`}>
                           {formatCurrency(customerBalanceDetails.currentBalance)}
                         </span>
                       </div>
+                      {commission > 0 && (
+                        <div>
+                          <span className="block text-slate-500 font-medium mb-0.5">After Commission:</span>
+                          <span className={`font-bold font-mono text-sm ${customerBalanceDetails.afterCommission > 0 ? 'text-rose-700' : customerBalanceDetails.afterCommission < 0 ? 'text-emerald-700' : 'text-slate-600'}`}>
+                            {formatCurrency(customerBalanceDetails.afterCommission)}
+                          </span>
+                        </div>
+                      )}
                       <div>
                         <span className="block text-slate-500 font-medium mb-0.5">Remaining Balance:</span>
                         <span className={`font-bold font-mono text-sm ${customerBalanceDetails.remainingBalance > 0 ? 'text-rose-700' : customerBalanceDetails.remainingBalance < 0 ? 'text-emerald-700' : 'text-slate-600'}`}>
@@ -276,6 +319,20 @@ export default function ReceiptsPage() {
                     value={amount || ''}
                     onChange={e => setAmount(Math.max(0, parseInt(e.target.value) || 0))}
                     placeholder="Enter amount in Rs..."
+                    className="soleria-input font-semibold font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    Commission (PKR) <span className="text-slate-400 font-normal normal-case">— optional, reduces payable only</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={commission || ''}
+                    onChange={e => setCommission(Math.max(0, parseInt(e.target.value) || 0))}
+                    placeholder="Enter commission given, if any..."
                     className="soleria-input font-semibold font-mono"
                   />
                 </div>
@@ -310,15 +367,56 @@ export default function ReceiptsPage() {
                 {paymentMode !== 'Cash' && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      {paymentMode === 'Cheque' ? 'Cheque No. & Bank Name' : 'Online Reference Code / Details'}
+                      {paymentMode === 'Cheque' ? 'Bank Name / Details' : 'Online Reference Code / Details'}
                     </label>
                     <input
                       type="text"
                       value={details}
                       onChange={e => setDetails(e.target.value)}
-                      placeholder={paymentMode === 'Cheque' ? 'e.g. MCB Cheque No. 982341' : 'e.g. Alfa ref 980124'}
+                      placeholder={paymentMode === 'Cheque' ? 'e.g. MCB Bank, Gulberg Branch' : 'e.g. Alfa ref 980124'}
                       className="soleria-input"
                     />
+                  </div>
+                )}
+
+                {paymentMode === 'Cheque' && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        Cheque No. <span className="text-red-500 font-bold">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={chequeNo}
+                        onChange={e => setChequeNo(e.target.value)}
+                        placeholder="e.g. 982341"
+                        className="soleria-input font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        Date on Cheque <span className="text-red-500 font-bold">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        value={chequeDate}
+                        onChange={e => setChequeDate(e.target.value)}
+                        className="soleria-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        Cheque Received Date
+                      </label>
+                      <input
+                        type="date"
+                        value={chequeReceivedDate}
+                        onChange={e => setChequeReceivedDate(e.target.value)}
+                        placeholder={date}
+                        className="soleria-input"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-0.5">Defaults to Receipt Date if left blank</p>
+                    </div>
                   </div>
                 )}
 

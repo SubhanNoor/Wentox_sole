@@ -2,8 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
   ShoppingCart, Receipt, Package, FileText, Layers,
-  Settings, LogOut, Lock, Menu, X, ChevronDown, MapPin,
-  Users, Folder, BookOpen, DollarSign, ListCollapse, List, Wallet, Truck, Milestone
+  Settings, LogOut, Lock, Menu, X, ChevronDown, MapPin, Home,
+  Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 
@@ -24,6 +24,8 @@ const navSections: NavSection[] = [
     items: [
       { page: 'sale-bill', label: 'Sale Bill', icon: ShoppingCart },
       { page: 'sale-return', label: 'Sale Return', icon: Receipt },
+      { page: 'purchase-entry', label: 'Purchase', icon: ShoppingBag },
+      { page: 'purchase-return', label: 'Purchase Return', icon: Undo2 },
       { page: 'receipts-jamma', label: 'Receipts (Jamma)', icon: DollarSign },
       { page: 'expenses-entry', label: 'Expenses (Kharch)', icon: Wallet },
     ]
@@ -42,8 +44,10 @@ const navSections: NavSection[] = [
       { page: 'setup-product', label: 'Product Details', icon: Folder },
       { page: 'setup-category', label: 'Categories', icon: Layers },
       { page: 'setup-vendor', label: 'Vendors', icon: Truck },
+      { page: 'setup-customer', label: 'Customers', icon: Users },
       { page: 'setup-sub-cust', label: 'Sub Customers', icon: Users },
       { page: 'setup-city', label: 'City Creation', icon: MapPin },
+      { page: 'setup-region', label: 'Regions', icon: MapPin },
       { page: 'setup-adda', label: 'Transport Addas', icon: Milestone },
     ]
   },
@@ -51,7 +55,6 @@ const navSections: NavSection[] = [
     title: 'Accounting Setup',
     items: [
       { page: 'setup-group-ac', label: 'Group Accounts', icon: ListCollapse },
-      { page: 'setup-control-ac', label: 'Control Accounts', icon: List },
       { page: 'setup-chart-ac', label: 'Chart of Accounts', icon: BookOpen },
       { page: 'setup-business-ac', label: 'Business Accounts', icon: Settings },
     ]
@@ -111,7 +114,11 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
         {/* Logo Block */}
         <div className="px-4 pt-6 pb-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5 min-w-0">
+            <button
+              onClick={() => navigate('home')}
+              className="flex items-center gap-2.5 min-w-0 text-left"
+              title="Home"
+            >
               <div
                 className="flex items-center justify-center flex-shrink-0"
                 style={{
@@ -122,7 +129,7 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
                 <span className="font-lora font-bold text-lg" style={{ color: 'var(--brand-navy)' }}>W</span>
               </div>
               <div className="min-w-0">
-                <div 
+                <div
                   className="font-lora font-bold tracking-wide text-white truncate"
                   style={{ fontSize: '14.5px', lineHeight: '1.2' }}
                 >
@@ -135,7 +142,7 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
                   Footwear Distribution
                 </div>
               </div>
-            </div>
+            </button>
             <button
               onClick={() => setSidebarOpen(false)}
               className="sidebar-close-btn"
@@ -259,6 +266,15 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
             aria-label="Open menu"
           >
             <Menu size={22} color="var(--dark-heading)" />
+          </button>
+          <button
+            onClick={() => navigate('home')}
+            className="flex items-center justify-center rounded-lg transition-colors flex-shrink-0"
+            style={{ width: 36, height: 36 }}
+            title="Home"
+            aria-label="Go to Home"
+          >
+            <Home size={20} color="var(--dark-heading)" />
           </button>
           <div className="flex items-center gap-4 flex-1 min-w-0">
             {/* Brand mark */}

@@ -3,86 +3,94 @@ import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
 
-export default function SubCustomerSetupPage() {
+export default function RegionSetupPage() {
   const { state, dispatch } = useApp();
 
   // Tab State: 'list' | 'form'
   const [activeTab, setActiveTab] = useState<'list' | 'form'>('list');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [regionSearch, setRegionSearch] = useState('');
 
   // Editing state
-  const [selectedSubId, setSelectedSubId] = useState<string | null>(null);
+  const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
 
   // Form State
-  const [subName, setSubName] = useState('');
+  const [regionName, setRegionName] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
   const handleAddNew = () => {
-    setSelectedSubId(null);
-    setSubName('');
+    setSelectedRegionId(null);
+    setRegionName('');
     setErrorMsg('');
     setActiveTab('form');
   };
 
-  const handleSelectSubCustomer = (sub: { id: string; name: string }) => {
-    setSelectedSubId(sub.id);
-    setSubName(sub.name);
+  const handleSelectRegion = (region: { id: string; name: string }) => {
+    setSelectedRegionId(region.id);
+    setRegionName(region.name);
     setErrorMsg('');
     setActiveTab('form');
   };
 
-  const handleSaveSubCustomer = (e: React.FormEvent) => {
+  const handleSaveRegion = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!subName.trim()) return setErrorMsg('Please enter a Sub Customer name.');
+    if (!regionName.trim()) {
+      return setErrorMsg('Region name is required.');
+    }
 
-    if (selectedSubId) {
+    if (selectedRegionId) {
       // Edit mode
       dispatch({
-        type: 'UPDATE_SUB_CUSTOMER',
-        subCust: { id: selectedSubId, name: subName.trim() }
+        type: 'UPDATE_REGION',
+        region: { id: selectedRegionId, name: regionName.trim() }
       });
-      setSuccessMsg('Sub Customer details updated successfully.');
+      setSuccessMsg('Region details updated successfully.');
     } else {
       // Add mode
-      const newId = 'sub_' + Date.now();
+      const newId = 'rg_' + Date.now();
       dispatch({
-        type: 'ADD_SUB_CUSTOMER',
-        subCust: { id: newId, name: subName.trim() }
+        type: 'ADD_REGION',
+        region: { id: newId, name: regionName.trim() }
       });
-      setSuccessMsg('New Sub Customer registered successfully.');
+      setSuccessMsg('New region registered successfully.');
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
-    setSubName('');
-    setSelectedSubId(null);
+    setRegionName('');
+    setSelectedRegionId(null);
     setErrorMsg('');
     setActiveTab('list');
   };
 
-  const handleDeleteSubCustomer = (id: string) => {
-    if (window.confirm('Are you sure you want to delete this Sub Customer?')) {
-      dispatch({ type: 'DELETE_SUB_CUSTOMER', id });
-      setSuccessMsg('Sub Customer deleted successfully.');
+  const handleDeleteRegion = (id: string) => {
+    const customerCount = state.customers.filter(c => c.regionId === id).length;
+    if (customerCount > 0) {
+      alert(`Cannot delete this region. It is currently assigned to ${customerCount} registered customers.`);
+      return;
+    }
+
+    if (window.confirm('Are you sure you want to delete this region?')) {
+      dispatch({ type: 'DELETE_REGION', id });
+      setSuccessMsg('Region deleted successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
-      setSelectedSubId(null);
+      setSelectedRegionId(null);
       setActiveTab('list');
     }
   };
 
-  const filteredSubCustomers = useMemo(() => {
-    if (!searchQuery.trim()) return state.subCustomers;
-    const q = searchQuery.toLowerCase();
-    return state.subCustomers.filter(sc =>
-      sc.name.toLowerCase().includes(q) ||
-      sc.id.toLowerCase().includes(q)
+  const filteredRegions = useMemo(() => {
+    if (!regionSearch.trim()) return state.regions;
+    const q = regionSearch.toLowerCase();
+    return state.regions.filter(r =>
+      r.name.toLowerCase().includes(q) ||
+      r.id.toLowerCase().includes(q)
     );
-  }, [state.subCustomers, searchQuery]);
+  }, [state.regions, regionSearch]);
 
   return (
-    <AppLayout pageTitle="Sub Customer Setup">
+    <AppLayout pageTitle="Region Setup">
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
-        
+
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
         )}
@@ -96,17 +104,17 @@ export default function SubCustomerSetupPage() {
             <button
               onClick={() => {
                 setActiveTab('list');
-                setSelectedSubId(null);
+                setSelectedRegionId(null);
               }}
               className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'list' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
-              Sub Customers Directory
+              Active Regions
             </button>
             <button
               onClick={handleAddNew}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'form' && !selectedSubId ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'form' && !selectedRegionId ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
-              Add New Sub Customer
+              Add New Region
             </button>
           </div>
 
@@ -115,53 +123,56 @@ export default function SubCustomerSetupPage() {
               onClick={handleAddNew}
               className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm"
             >
-              <Plus size={16} /> Register Sub Customer
+              <Plus size={16} /> Create Region
             </button>
           )}
         </div>
 
-        {/* View 1: Sub Customers Directory List */}
+        {/* View 1: Regions Directory List */}
         {activeTab === 'list' ? (
           <div className="mb-6">
             <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
               <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">Sub Customers Directory</h3>
-                <p className="text-xs text-slate-500 font-medium">Search and manage sub customers/delivery agents (independent, no parent account link).</p>
+                <h3 className="font-lora font-semibold text-lg text-slate-800">Regions Directory</h3>
+                <p className="text-xs text-slate-500 font-medium">Search and manage regions used for primary customer identification (checked before City).</p>
               </div>
 
-              <div className="relative min-w-[265px]">
+              <div className="relative min-w-[240px]">
                 <input
                   type="text"
-                  placeholder="Search by name or code..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Search by code, region name..."
+                  value={regionSearch}
+                  onChange={e => setRegionSearch(e.target.value)}
                   className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold bg-white"
                 />
                 <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
               </div>
             </div>
 
-            {filteredSubCustomers.length === 0 ? (
+            {filteredRegions.length === 0 ? (
               <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
-                No registered sub customers found matching your search.
+                No registered regions found matching your search.
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredSubCustomers.map(sub => {
-                  const initialLetter = sub.name.charAt(0).toUpperCase();
+                {filteredRegions.map(region => {
+                  const initialLetter = region.name.charAt(0).toUpperCase();
 
                   return (
                     <div
-                      key={sub.id}
+                      key={region.id}
                       className="bg-white border rounded-xl p-5 hover:border-amber-500 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
                       style={{ borderColor: 'var(--border-color)' }}
-                      onClick={() => handleSelectSubCustomer(sub)}
+                      onClick={() => handleSelectRegion(region)}
                     >
                       <div>
-                        {/* Card Top: Code badge */}
-                        <div className="flex items-center justify-between mb-3.5 gap-2">
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider flex-shrink-0">
-                            CODE: {sub.id}
+                        {/* Card Top: Code & Status badge */}
+                        <div className="flex items-center justify-between mb-3.5">
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
+                            CODE: {region.id}
+                          </span>
+                          <span className="text-[10px] font-bold text-[#B08D57] uppercase tracking-wider">
+                            ACTIVE
                           </span>
                         </div>
 
@@ -172,11 +183,8 @@ export default function SubCustomerSetupPage() {
                           </div>
                           <div className="flex-1 min-w-0">
                             <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
-                              {sub.name}
+                              {region.name}
                             </h4>
-                            <p className="text-[11px] text-slate-400 font-medium mt-0.5 uppercase tracking-wider truncate">
-                              AGENT / SUB DESTINATION
-                            </p>
                           </div>
                         </div>
                       </div>
@@ -184,16 +192,16 @@ export default function SubCustomerSetupPage() {
                       {/* Card Bottom: Actions */}
                       <div className="border-t pt-3 mt-1 flex items-center justify-end gap-3" onClick={(e) => e.stopPropagation()}>
                         <button
-                          onClick={() => handleSelectSubCustomer(sub)}
+                          onClick={() => handleSelectRegion(region)}
                           className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
-                          title="Edit Sub Customer"
+                          title="Edit Region"
                         >
                           <Edit2 size={15} />
                         </button>
                         <button
-                          onClick={() => handleDeleteSubCustomer(sub.id)}
+                          onClick={() => handleDeleteRegion(region.id)}
                           className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                          title="Delete Sub Customer"
+                          title="Delete Region"
                         >
                           <Trash2 size={15} />
                         </button>
@@ -205,13 +213,13 @@ export default function SubCustomerSetupPage() {
             )}
           </div>
         ) : (
-          /* View 2: Add New / Edit Sub Customer Form */
+          /* View 2: Add New / Edit Region Form */
           <div className="card-white p-6 md:p-8 bg-white border">
             <div className="flex items-center gap-2 border-b pb-3 mb-6">
               <button
                 onClick={() => {
                   setActiveTab('list');
-                  setSelectedSubId(null);
+                  setSelectedRegionId(null);
                 }}
                 className="p-1.5 hover:bg-slate-100 rounded text-slate-500 hover:text-slate-800 transition-colors"
               >
@@ -219,27 +227,29 @@ export default function SubCustomerSetupPage() {
               </button>
               <div>
                 <h3 className="font-lora font-semibold text-lg text-[#111c2a]">
-                  {selectedSubId ? `Edit Sub Customer: ${subName}` : 'Register New Sub Customer'}
+                  {selectedRegionId ? `Edit Region: ${regionName}` : 'Register New Region'}
                 </h3>
-                <p className="text-xs text-slate-500 font-medium">Register an independent sub customer agent or sub destination account.</p>
+                <p className="text-xs text-slate-500 font-medium">Specify the name of the active region below.</p>
               </div>
             </div>
 
-            <form onSubmit={handleSaveSubCustomer} className="flex flex-col gap-6">
-              {/* Setup Configuration */}
+            <form onSubmit={handleSaveRegion} className="flex flex-col gap-6">
+              {/* Region Details */}
               <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-4" style={{ borderColor: 'var(--border-color)' }}>
                 <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
-                  <Settings size={15} className="text-[#B08D57]" /> Sub Customer Details
+                  <Settings size={15} className="text-[#B08D57]" /> Region Configuration
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Sub Customer Name</label>
-                  <input
-                    type="text"
-                    value={subName}
-                    onChange={e => setSubName(e.target.value)}
-                    placeholder="e.g. Salim Agent LHR"
-                    className="soleria-input font-semibold"
-                  />
+                <div className="flex flex-col gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Region Name</label>
+                    <input
+                      type="text"
+                      value={regionName}
+                      onChange={e => setRegionName(e.target.value)}
+                      placeholder="e.g. NORTH, SOUTH, LOCAL"
+                      className="soleria-input font-semibold"
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -249,7 +259,7 @@ export default function SubCustomerSetupPage() {
                   type="button"
                   onClick={() => {
                     setActiveTab('list');
-                    setSelectedSubId(null);
+                    setSelectedRegionId(null);
                   }}
                   className="btn-outline px-5 py-2"
                 >
@@ -259,7 +269,7 @@ export default function SubCustomerSetupPage() {
                   type="submit"
                   className="btn-gold px-6 py-2 flex items-center gap-1.5"
                 >
-                  <Save size={16} /> Save Sub Customer Details
+                  <Save size={16} /> Save Region Details
                 </button>
               </div>
             </form>

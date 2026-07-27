@@ -83,22 +83,16 @@ export default function BusinessAcSetupPage() {
       // Also auto-add to customers if linked under customer balances (e.g. 110001)
       if (controlId === '110001') {
         const cityId = state.cities[0]?.id || 'ct1';
+        const regionId = state.regions.find(r => r.name.toLowerCase() === region.trim().toLowerCase())?.id
+          || state.regions[0]?.id || '';
         dispatch({
           type: 'ADD_CUSTOMER',
           customer: {
             id: id.trim(),
             name: name.trim(),
             acId: controlId,
+            regionId,
             cityId
-          }
-        });
-        // also create default SAME sub customer
-        dispatch({
-          type: 'ADD_SUB_CUSTOMER',
-          subCust: {
-            id: 'sub_' + id.trim(),
-            name: 'SAME (Direct)',
-            customerId: id.trim()
           }
         });
       }
@@ -115,14 +109,6 @@ export default function BusinessAcSetupPage() {
     const hasBills = state.saleBills.some(bill => bill.customerId === bizId);
     if (hasBills) {
       setErrorMsg('Cannot delete: This business account is linked to active sale bills.');
-      setTimeout(() => setErrorMsg(''), 4000);
-      return;
-    }
-
-    // Safety check: is it in use by sub-customers (other than auto SAME)?
-    const customSubs = state.subCustomers.filter(sc => sc.customerId === bizId && sc.name !== 'SAME (Direct)');
-    if (customSubs.length > 0) {
-      setErrorMsg('Cannot delete: This customer has custom registered agents/sub-customers mapped.');
       setTimeout(() => setErrorMsg(''), 4000);
       return;
     }

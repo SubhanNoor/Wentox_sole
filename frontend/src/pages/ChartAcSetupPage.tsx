@@ -14,7 +14,7 @@ export default function ChartAcSetupPage() {
   // Form State
   const [id, setId] = useState('');
   const [name, setName] = useState('');
-  const [controlId, setControlId] = useState('');
+  const [groupId, setGroupId] = useState('');
   const [linkCode, setLinkCode] = useState('A');
   const [status, setStatus] = useState<'Active' | 'Closed'>('Active');
 
@@ -31,7 +31,7 @@ export default function ChartAcSetupPage() {
     setSelectedId(null);
     setId('');
     setName('');
-    setControlId('');
+    setGroupId('');
     setLinkCode('A');
     setStatus('Active');
     setErrorMsg('');
@@ -42,7 +42,7 @@ export default function ChartAcSetupPage() {
     setSelectedId(c.id);
     setId(c.id);
     setName(c.name);
-    setControlId(c.controlId);
+    setGroupId(c.groupId);
     setLinkCode(c.linkCode || 'A');
     setStatus(c.status || 'Active');
     setErrorMsg('');
@@ -53,7 +53,7 @@ export default function ChartAcSetupPage() {
     e.preventDefault();
     if (!id.trim()) return setErrorMsg('Account code is required.');
     if (!name.trim()) return setErrorMsg('Account name is required.');
-    if (!controlId) return setErrorMsg('Please select a parent Group A/C.');
+    if (!groupId) return setErrorMsg('Please select a parent Group A/C.');
 
     // Duplicate check if adding new
     if (!selectedId && state.chartAccounts.some(c => c.id.toLowerCase() === id.trim().toLowerCase())) {
@@ -63,7 +63,7 @@ export default function ChartAcSetupPage() {
     const chartData = {
       id: id.trim(),
       name: name.trim(),
-      controlId,
+      groupId,
       linkCode: linkCode.trim(),
       status
     };
@@ -109,7 +109,7 @@ export default function ChartAcSetupPage() {
   const filteredAndSortedCharts = useMemo(() => {
     let list = state.chartAccounts;
     if (selectedGroupFilter) {
-      list = list.filter(c => c.controlId === selectedGroupFilter);
+      list = list.filter(c => c.groupId === selectedGroupFilter);
     }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -230,7 +230,7 @@ export default function ChartAcSetupPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredAndSortedCharts.map(c => {
                   const initialLetter = c.name.charAt(0).toUpperCase();
-                  const groupName = state.groupAccounts.find(g => g.id === c.controlId)?.name || 'UNKNOWN GROUP';
+                  const groupName = state.groupAccounts.find(g => g.id === c.groupId)?.name || 'UNKNOWN GROUP';
 
                   return (
                     <div
@@ -360,8 +360,8 @@ export default function ChartAcSetupPage() {
                         value: g.id,
                         label: `${g.name} (${g.id})`
                       }))}
-                      value={controlId}
-                      onChange={setControlId}
+                      value={groupId}
+                      onChange={setGroupId}
                       placeholder="Select Group..."
                       searchPlaceholder="Search group accounts..."
                     />

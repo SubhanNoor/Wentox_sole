@@ -80,7 +80,7 @@ export default function WeeklyTab({ onEditBill, onPrintBill }: WeeklyTabProps) {
 
     weeklyBills.forEach(bill => {
       if (!groups[bill.customerId]) {
-        const cust = state.customers.find(c => c.id === bill.customerId) || { id: bill.customerId, name: 'Walk-in Customer', acId: '', cityId: '' };
+        const cust = state.customers.find(c => c.id === bill.customerId) || { id: bill.customerId, name: 'Walk-in Customer', acId: '', regionId: '', cityId: '' };
         groups[bill.customerId] = {
           customer: cust,
           bills: [],

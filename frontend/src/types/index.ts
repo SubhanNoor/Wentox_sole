@@ -3,6 +3,11 @@ export interface City {
   name: string;
 }
 
+export interface Region {
+  id: string; // Code
+  name: string;
+}
+
 export interface Store {
   id: string;
   name: string;
@@ -18,6 +23,8 @@ export interface Vendor {
   name: string;
   phone?: string;
   city?: string;
+  regionId?: string;
+  baId: string; // linked Business Account under the "Vendors" chart account
 }
 
 export interface ProductCategory {
@@ -58,17 +65,10 @@ export interface GroupAccount {
   class: 'ASSETS' | 'LIABILITY' | 'INCOME' | 'EXPENSES';
 }
 
-export interface ControlAccount {
-  id: string; // Code
-  name: string;
-  groupId: string;
-  sorting: number;
-}
-
 export interface ChartOfAccount {
   id: string; // Code
   name: string;
-  controlId: string;
+  groupId: string; // parent Group Account
   linkCode: string;
   status: 'Active' | 'Closed';
 }
@@ -86,13 +86,13 @@ export interface Customer {
   id: string; // Code
   name: string;
   acId: string; // Chart of Account ID
+  regionId: string; // primary identification, checked before City
   cityId: string;
 }
 
 export interface SubCustomer {
   id: string; // Code
   name: string;
-  customerId: string;
 }
 
 export interface SaleBillItem {
@@ -123,6 +123,7 @@ export interface SaleBill {
   remarks: string;
   invoiceDiscount: number;
   totalValue: number;
+  dueDate?: string; // optional — blank means no payment-overdue alert for this bill
   status: 'Posted' | 'Unposted';
   items: SaleBillItem[];
 }
@@ -155,13 +156,20 @@ export interface SaleReturn {
   items: SaleReturnItem[];
 }
 
+export type ChequeStatus = 'PENDING' | 'DEPOSITED' | 'ENDORSED' | 'PARTIALLY_ENDORSED' | 'CLEARED' | 'BOUNCED';
+
 export interface Receipt {
   id: string; // Auto PK
   date: string;
   customerId: string;
   amount: number;
+  commission?: number; // payment-time only, reduces payable — never changes the sale bill
   paymentMode: 'Cash' | 'Cheque' | 'Online';
-  details: string; // bank details, cheque no, etc.
+  details: string; // bank details, online ref, etc.
+  chequeNo?: string;
+  chequeDate?: string; // date written on the cheque
+  chequeReceivedDate?: string; // date physically received
+  chequeStatus?: ChequeStatus;
   remarks: string;
 }
 
@@ -173,6 +181,42 @@ export interface Expense {
   paymentMode: 'Cash' | 'Cheque' | 'Online';
   details: string;
   remarks: string;
+}
+
+export interface PurchaseItem {
+  id: string;
+  materialName: string; // free text, raw material — not linked to Product
+  unit: string; // e.g. Meters, Buckles, KG — dropdown or self-typed
+  quantity: number;
+  pricePerUnit: number;
+  totalPrice: number; // auto = quantity * pricePerUnit
+}
+
+export interface Purchase {
+  id: string; // Auto-generated PK
+  date: string;
+  vendorId: string;
+  remarks: string;
+  items: PurchaseItem[];
+  totalValue: number;
+}
+
+export interface PurchaseReturnItem {
+  id: string;
+  materialName: string;
+  unit: string;
+  quantity: number;
+  pricePerUnit: number;
+  totalPrice: number;
+}
+
+export interface PurchaseReturn {
+  id: string; // Auto-generated PK
+  date: string;
+  vendorId: string;
+  remarks: string;
+  items: PurchaseReturnItem[];
+  totalValue: number;
 }
 
 export interface ProductionLog {
@@ -187,8 +231,11 @@ export interface ProductionLog {
 
 export type NavPage =
   | 'login'
+  | 'home'
   | 'sale-bill'
   | 'sale-return'
+  | 'purchase-entry'
+  | 'purchase-return'
   | 'find-bill'
   | 'weekly-records'
   | 'monthly-records'
@@ -198,12 +245,13 @@ export type NavPage =
   | 'setup-product'
   | 'setup-category'
   | 'setup-vendor'
+  | 'setup-customer'
   | 'setup-group-ac'
-  | 'setup-control-ac'
   | 'setup-chart-ac'
   | 'setup-business-ac'
   | 'setup-sub-cust'
   | 'setup-city'
+  | 'setup-region'
   | 'setup-adda'
   | 'report-stock'
   | 'report-khaata'

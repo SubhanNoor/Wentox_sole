@@ -30,6 +30,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   const [biltyNo, setBiltyNo] = useState('');
   const [addaId, setAddaId] = useState('');
   const [remarks, setRemarks] = useState('');
+  const [dueDate, setDueDate] = useState('');
   const [invoiceDiscount, setInvoiceDiscount] = useState(0);
   const [status, setStatus] = useState<'Posted' | 'Unposted'>('Unposted');
   
@@ -53,14 +54,24 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   // Add new customer modal state
   const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerRegionId, setNewCustomerRegionId] = useState('');
   const [newCustomerCityId, setNewCustomerCityId] = useState('');
 
+  // Customer search: Primary = Region, Secondary = City
   const customerOptions = useMemo(() => {
-    return state.customers.map(c => ({
-      value: c.id,
-      label: c.name
-    }));
-  }, [state.customers]);
+    const regionName = (id: string) => state.regions.find(r => r.id === id)?.name || '';
+    const cityName = (id: string) => state.cities.find(ct => ct.id === id)?.name || '';
+    return [...state.customers]
+      .sort((a, b) => {
+        const regionCmp = regionName(a.regionId).localeCompare(regionName(b.regionId));
+        if (regionCmp !== 0) return regionCmp;
+        return cityName(a.cityId).localeCompare(cityName(b.cityId));
+      })
+      .map(c => ({
+        value: c.id,
+        label: `${c.name} — ${regionName(c.regionId) || 'No Region'} / ${cityName(c.cityId) || 'No City'}`
+      }));
+  }, [state.customers, state.regions, state.cities]);
 
   const mainAcOptions = useMemo(() => {
     const list = state.chartAccounts.map(ac => ({
@@ -101,7 +112,12 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       alert('Customer name is required.');
       return;
     }
+    if (!newCustomerRegionId) {
+      alert('Region is required.');
+      return;
+    }
     const cityId = newCustomerCityId || state.cities[0]?.id || 'ct1';
+    const regionName = state.regions.find(r => r.id === newCustomerRegionId)?.name || 'LOCAL';
     const newId = getNextCustomerCode();
 
     // 1. Dispatch ADD_BUSINESS_ACCOUNT
@@ -112,7 +128,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         name: newCustomerName.trim(),
         controlId: '110001',
         linkCode: 'A',
-        region: 'LOCAL',
+        region: regionName,
         status: 'Active'
       }
     });
@@ -124,17 +140,8 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         id: newId,
         name: newCustomerName.trim(),
         acId: '110001',
+        regionId: newCustomerRegionId,
         cityId
-      }
-    });
-
-    // 3. Dispatch ADD_SUB_CUSTOMER (default SAME sub customer)
-    dispatch({
-      type: 'ADD_SUB_CUSTOMER',
-      subCust: {
-        id: 'sub_' + newId,
-        name: 'SAME (Direct)',
-        customerId: newId
       }
     });
 
@@ -149,15 +156,15 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     // Close and reset
     setIsAddCustomerOpen(false);
     setNewCustomerName('');
+    setNewCustomerRegionId('');
     setNewCustomerCityId('');
-    
+
     setSuccessMsg('New customer added successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
-  const filteredSubCustomers = useMemo(() => {
-    return state.subCustomers.filter(sc => sc.customerId === customerId);
-  }, [customerId, state.subCustomers]);
+  // Sub Customers are an independent flat list (no parent Customer link)
+  const filteredSubCustomers = state.subCustomers;
   const isCustomDelivery = useMemo(() => {
     return deliveryType === 'custom';
   }, [deliveryType]);
@@ -211,6 +218,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setBiltyNo(bill.biltyNo);
     setAddaId(bill.addaId);
     setRemarks(bill.remarks);
+    setDueDate(bill.dueDate || '');
     setInvoiceDiscount(bill.invoiceDiscount);
     setStatus(bill.status);
     setItems(bill.items);
@@ -282,6 +290,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setBiltyNo('');
     setAddaId(state.addas[0]?.id || '');
     setRemarks('');
+    setDueDate('');
     setInvoiceDiscount(0);
     setStatus('Unposted');
     setItems([{
@@ -333,6 +342,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       biltyNo,
       addaId,
       remarks,
+      dueDate: dueDate || undefined,
       invoiceDiscount,
       totalValue: finalTotalValue,
       status,
@@ -374,6 +384,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       biltyNo,
       addaId,
       remarks,
+      dueDate: dueDate || undefined,
       invoiceDiscount,
       totalValue: finalTotalValue,
       status: 'Unposted',
@@ -980,14 +991,20 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                     value={customerId}
                     onChange={(val) => {
                       setCustomerId(val);
-                      // Auto account group selection
+                      // Auto-fill Main A/C from the customer's account, if one exists
                       const newCust = state.customers.find(c => c.id === val);
-                      if (newCust) {
-                        setMainAcId(newCust.acId || '');
+                      const hasValidAc = newCust?.acId && state.chartAccounts.some(ac => ac.id === newCust.acId);
+                      if (hasValidAc) {
+                        setMainAcId(newCust.acId);
                         setCustomMainAcName('');
+                        setErrorMsg('');
                       } else {
                         setMainAcId('');
                         setCustomMainAcName('');
+                        if (newCust) {
+                          setErrorMsg('Please add customer account first.');
+                          setTimeout(() => setErrorMsg(''), 4000);
+                        }
                       }
                       setDeliveryType('1');
                       setSubCustomerId('sub-same');
@@ -1062,8 +1079,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                         setSubCustomerId('sub-same');
                         setCustomAddress('');
                       } else {
-                        const realSubs = filteredSubCustomers.filter(sc => sc.id !== 'sub-same');
-                        setSubCustomerId(realSubs[0]?.id || '');
+                        setSubCustomerId(filteredSubCustomers[0]?.id || '');
                       }
                     }}
                     className="soleria-input cursor-pointer"
@@ -1082,35 +1098,21 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       {!isViewMode && (
                         <button
                           type="button"
-                          disabled={!customerId}
-                          onClick={() => {
-                            if (!customerId) {
-                              setErrorMsg('Please select a main customer first.');
-                              setTimeout(() => setErrorMsg(''), 3000);
-                              return;
-                            }
-                            setIsAddSubCustomerOpen(true);
-                          }}
-                          className={`text-[10px] font-bold underline transition-colors ${
-                            customerId ? 'text-blue-600 hover:text-blue-800' : 'text-slate-400 cursor-not-allowed'
-                          }`}
+                          onClick={() => setIsAddSubCustomerOpen(true)}
+                          className="text-[10px] font-bold underline transition-colors text-blue-600 hover:text-blue-800"
                         >
                           + Add New
                         </button>
                       )}
                     </div>
-                    <select
+                    <SearchableSelect
+                      options={filteredSubCustomers.map(sc => ({ value: sc.id, label: sc.name }))}
                       value={subCustomerId}
+                      onChange={setSubCustomerId}
+                      placeholder="Select sub-customer..."
+                      searchPlaceholder="Search sub-customers..."
                       disabled={isViewMode}
-                      onChange={e => setSubCustomerId(e.target.value)}
-                      className="soleria-input cursor-pointer"
-                      style={{ fontSize: '13px' }}
-                    >
-                      <option value="">Select sub-customer...</option>
-                      {filteredSubCustomers.map(sc => (
-                        <option key={sc.id} value={sc.id}>{sc.name}</option>
-                      ))}
-                    </select>
+                    />
                   </div>
                 )}
                 {isCustomDelivery && (
@@ -1338,6 +1340,21 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 rows={4}
                 style={{ fontSize: '13px', resize: 'none', minHeight: '120px' }}
               />
+
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mt-1">
+                Payment Due Date <span className="text-slate-400 font-normal normal-case">— optional</span>
+              </label>
+              <input
+                type="date"
+                value={dueDate}
+                disabled={isViewMode}
+                onChange={e => setDueDate(e.target.value)}
+                className="soleria-input"
+                style={{ fontSize: '13px' }}
+              />
+              <p className="text-[10px] text-slate-400 -mt-1">
+                Leave blank if this customer has no fixed payment terms — no overdue alert will be generated.
+              </p>
             </div>
 
             {/* Calculations Box */}
@@ -1398,19 +1415,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               Add New Sub-Customer
             </h3>
             
-            {/* Main Customer Link Display */}
-            <div className="mb-4">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                Main Customer
-              </label>
-              <input
-                type="text"
-                disabled
-                value={state.customers.find(c => c.id === customerId)?.name || 'Please select a main customer first'}
-                className="soleria-input bg-slate-50 text-slate-500 font-medium"
-              />
-            </div>
-
             {/* Sub-Customer Name Input */}
             <div className="mb-6">
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
@@ -1441,11 +1445,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               <button
                 type="button"
                 onClick={() => {
-                  if (!customerId) {
-                    setErrorMsg('Please select a main customer first.');
-                    setTimeout(() => setErrorMsg(''), 3000);
-                    return;
-                  }
                   if (!newSubCustomerName.trim()) {
                     alert('Sub-customer name cannot be empty.');
                     return;
@@ -1455,8 +1454,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                     type: 'ADD_SUB_CUSTOMER',
                     subCust: {
                       id: newId,
-                      name: newSubCustomerName.trim(),
-                      customerId
+                      name: newSubCustomerName.trim()
                     }
                   });
                   setSubCustomerId(newId);
@@ -1497,6 +1495,23 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               />
             </div>
 
+            <div className="mb-4">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                Select Region <span className="text-red-500 font-bold">*</span>
+              </label>
+              <select
+                value={newCustomerRegionId}
+                onChange={e => setNewCustomerRegionId(e.target.value)}
+                className="soleria-input cursor-pointer font-semibold"
+                required
+              >
+                <option value="">Select Region...</option>
+                {state.regions.map(rg => (
+                  <option key={rg.id} value={rg.id}>{rg.name}</option>
+                ))}
+              </select>
+            </div>
+
             <div className="mb-6">
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                 Select City <span className="text-red-500 font-bold">*</span>
@@ -1521,6 +1536,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 onClick={() => {
                   setIsAddCustomerOpen(false);
                   setNewCustomerName('');
+                  setNewCustomerRegionId('');
                   setNewCustomerCityId('');
                 }}
                 className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"

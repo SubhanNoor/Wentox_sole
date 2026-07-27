@@ -80,7 +80,7 @@ export default function WeeklyReturnTab({ onEditReturn, onPrintReturn }: WeeklyR
 
     weeklyReturns.forEach(ret => {
       if (!groups[ret.customerId]) {
-        const cust = state.customers.find(c => c.id === ret.customerId) || { id: ret.customerId, name: 'Walk-in Customer', acId: '', cityId: '' };
+        const cust = state.customers.find(c => c.id === ret.customerId) || { id: ret.customerId, name: 'Walk-in Customer', acId: '', regionId: '', cityId: '' };
         groups[ret.customerId] = {
           customer: cust,
           returns: [],

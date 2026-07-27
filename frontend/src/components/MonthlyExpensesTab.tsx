@@ -222,7 +222,13 @@ export default function MonthlyExpensesTab() {
                     </h4>
                     <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{data.businessAccount.region}</span>
                   </div>
-                  
+
+                  {data.businessAccount.controlId === '210001' && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300 mb-2">
+                      Vendor Payment
+                    </span>
+                  )}
+
                   <div className="font-mono text-xs text-slate-400 mb-4">Code: {data.businessAccount.id}</div>
                   
                   <div className="text-xs font-semibold text-slate-700 flex justify-between bg-slate-50 p-2.5 rounded-lg border border-slate-100">

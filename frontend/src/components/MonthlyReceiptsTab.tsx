@@ -58,7 +58,7 @@ export default function MonthlyReceiptsTab() {
 
     monthlyReceipts.forEach(r => {
       if (!groups[r.customerId]) {
-        const cust = state.customers.find(c => c.id === r.customerId) || { id: r.customerId, name: 'Walk-in Customer', acId: '', cityId: '' };
+        const cust = state.customers.find(c => c.id === r.customerId) || { id: r.customerId, name: 'Walk-in Customer', acId: '', regionId: '', cityId: '' };
         groups[r.customerId] = {
           customer: cust,
           receipts: [],

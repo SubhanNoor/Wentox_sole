@@ -40,28 +40,68 @@ export default function VendorSetupPage() {
     setActiveTab('form');
   };
 
+  // Generate the next Business Account code under the "Vendors" chart account (210001)
+  const getNextVendorAccountCode = () => {
+    const vendorAccounts = state.businessAccounts.filter(acc => acc.controlId === '210001');
+    if (vendorAccounts.length === 0) return '21000101';
+
+    const suffixes = vendorAccounts.map(acc => {
+      const suffixStr = acc.id.substring(6); // '210001' is 6 characters
+      const num = parseInt(suffixStr, 10);
+      return isNaN(num) ? 0 : num;
+    });
+
+    const maxSuffix = Math.max(...suffixes, 0);
+    const nextSuffix = maxSuffix + 1;
+    const formattedSuffix = nextSuffix < 10 ? `0${nextSuffix}` : `${nextSuffix}`;
+    return `210001${formattedSuffix}`;
+  };
+
   const handleSaveVendor = (e: React.FormEvent) => {
     e.preventDefault();
     if (!vendorName.trim()) {
       return setErrorMsg('Vendor name is required.');
     }
 
-    const savedVendor: Vendor = {
-      id: selectedVendorId || 'v_' + Date.now(),
-      name: vendorName.trim(),
-      phone: vendorPhone.trim() || undefined,
-      city: vendorCity.trim() || undefined
-    };
-
     if (selectedVendorId) {
-      // Edit mode
+      // Edit mode — the linked Business Account's name is kept in sync by the reducer
+      const existingVendor = state.vendors.find(v => v.id === selectedVendorId);
+      const savedVendor: Vendor = {
+        id: selectedVendorId,
+        name: vendorName.trim(),
+        phone: vendorPhone.trim() || undefined,
+        city: vendorCity.trim() || undefined,
+        baId: existingVendor?.baId || ''
+      };
       dispatch({
         type: 'UPDATE_VENDOR',
         vendor: savedVendor
       });
       setSuccessMsg('Vendor details updated successfully.');
     } else {
-      // Add mode
+      // Add mode — auto-create the linked Business Account under "Vendors"
+      const newId = 'v_' + Date.now();
+      const baId = getNextVendorAccountCode();
+
+      dispatch({
+        type: 'ADD_BUSINESS_ACCOUNT',
+        account: {
+          id: baId,
+          name: `${vendorName.trim()} A/C`,
+          controlId: '210001',
+          linkCode: 'A',
+          region: 'LOCAL',
+          status: 'Active'
+        }
+      });
+
+      const savedVendor: Vendor = {
+        id: newId,
+        name: vendorName.trim(),
+        phone: vendorPhone.trim() || undefined,
+        city: vendorCity.trim() || undefined,
+        baId
+      };
       dispatch({
         type: 'ADD_VENDOR',
         vendor: savedVendor

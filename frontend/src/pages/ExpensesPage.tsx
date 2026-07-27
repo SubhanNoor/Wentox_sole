@@ -36,6 +36,15 @@ export default function ExpensesPage() {
     return state.chartAccounts.find(a => a.id === selectedBizAc.controlId)?.name || 'EXPENSES ACCOUNTS';
   }, [selectedBizAc, state.chartAccounts]);
 
+  // Vendor payments are Expense entries where the selected account's parent
+  // chart account is "VENDORS ACCOUNTS" (210001) — no separate transaction
+  // page, this is purely a UI-level distinction that feeds Vendor Report.
+  const isVendorPayment = selectedBizAc?.controlId === '210001';
+  const linkedVendor = useMemo(() => {
+    if (!isVendorPayment || !selectedBizAc) return undefined;
+    return state.vendors.find(v => v.baId === selectedBizAc.id);
+  }, [isVendorPayment, selectedBizAc, state.vendors]);
+
   const handleSaveExpense = (e: React.FormEvent) => {
     e.preventDefault();
     if (!date) return setErrorMsg('Please pick a date.');
@@ -53,8 +62,12 @@ export default function ExpensesPage() {
     };
 
     dispatch({ type: 'ADD_EXPENSE', expense: newExpense });
-    
-    setSuccessMsg(`Expense of ${formatCurrency(amount)} saved successfully against ledger account!`);
+
+    setSuccessMsg(
+      isVendorPayment
+        ? `Vendor payment of ${formatCurrency(amount)} recorded against ${linkedVendor?.name || 'vendor'}!`
+        : `Expense of ${formatCurrency(amount)} saved successfully against ledger account!`
+    );
     setTimeout(() => setSuccessMsg(''), 3500);
 
     // Reset Form
@@ -160,7 +173,17 @@ export default function ExpensesPage() {
                 </div>
 
                 {selectedBizAc && (
-                  <div className="flex flex-col gap-2.5 p-3.5 bg-slate-50 border border-slate-200 rounded-lg text-xs">
+                  <div className={`flex flex-col gap-2.5 p-3.5 border rounded-lg text-xs ${isVendorPayment ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
+                    {isVendorPayment && (
+                      <div className="flex items-center gap-1.5 pb-2 border-b border-amber-200/70">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300">
+                          Vendor Payment
+                        </span>
+                        <span className="text-amber-700 font-medium">
+                          Counts toward {linkedVendor?.name || 'this vendor'}'s "Payment Paid" total in Vendor Report
+                        </span>
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <span className="block text-slate-500 font-medium">Account Code:</span>

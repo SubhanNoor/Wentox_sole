@@ -1,9 +1,9 @@
 import React, { createContext, useContext, useReducer } from 'react';
 import type { ReactNode } from 'react';
 import type {
-  City, Store, Adda, Vendor, ProductCategory, Product,
-  GroupAccount, ControlAccount, ChartOfAccount, BusinessAccount,
-  Customer, SubCustomer, SaleBill, SaleReturn,
+  City, Region, Store, Adda, Vendor, ProductCategory, Product,
+  GroupAccount, ChartOfAccount, BusinessAccount,
+  Customer, SubCustomer, SaleBill, SaleReturn, Purchase, PurchaseReturn,
   Receipt, Expense, ProductionLog
 } from '@/types';
 
@@ -16,6 +16,13 @@ const demoCities: City[] = [
   { id: 'ct4', name: 'Mardan' },
   { id: 'ct5', name: 'Multan' },
   { id: 'ct6', name: 'Sukkur' },
+];
+
+const demoRegions: Region[] = [
+  { id: 'rg1', name: 'LOCAL' },
+  { id: 'rg2', name: 'NORTH' },
+  { id: 'rg3', name: 'SOUTH' },
+  { id: 'rg4', name: 'CENTRAL' },
 ];
 
 const demoStores: Store[] = [
@@ -31,9 +38,9 @@ const demoAddas: Adda[] = [
 ];
 
 const demoVendors: Vendor[] = [
-  { id: 'v1', name: 'Decent Polyurethane', phone: '0300-1234567', city: 'Lahore' },
-  { id: 'v2', name: 'Lahore Chemical Industries', phone: '042-3588991', city: 'Lahore' },
-  { id: 'v3', name: 'Star Sole Materials', phone: '0321-7654321', city: 'Karachi' },
+  { id: 'v1', name: 'Decent Polyurethane', phone: '0300-1234567', city: 'Lahore', regionId: 'rg1', baId: '21000101' },
+  { id: 'v2', name: 'Lahore Chemical Industries', phone: '042-3588991', city: 'Lahore', regionId: 'rg1', baId: '21000102' },
+  { id: 'v3', name: 'Star Sole Materials', phone: '0321-7654321', city: 'Karachi', regionId: 'rg3', baId: '21000103' },
 ];
 
 const demoCategories: ProductCategory[] = [
@@ -55,6 +62,11 @@ const demoProducts: Product[] = [
     dc: 12, sockStich: 6, sheet: 25, stubble: 10, bottom: 40, p1: 10, p2: 5, na: 0, stock: 95
   },
   {
+    id: '1004', name: 'P-101 Jogger Sole White', categoryId: 'cat1', vendorId: 'v1', batchNo: 405, packing: 12,
+    costPrice: 420, labour: 15, proiCost: 5, soleStich: 20, pasting: 10, trim: 5, finishing: 8, socksPasting: 4,
+    dc: 12, sockStich: 6, sheet: 25, stubble: 10, bottom: 40, p1: 10, p2: 5, na: 0, stock: 60
+  },
+  {
     id: '2001', name: 'E-551 Casual Slipper Brown', categoryId: 'cat2', vendorId: 'v2', batchNo: 120, packing: 12,
     costPrice: 220, labour: 10, proiCost: 2, soleStich: 0, pasting: 8, trim: 4, finishing: 5, socksPasting: 3,
     dc: 8, sockStich: 0, sheet: 15, stubble: 5, bottom: 20, p1: 5, p2: 2, na: 0, stock: 320
@@ -73,23 +85,14 @@ const demoGroupAccounts: GroupAccount[] = [
   { id: '4000', name: 'EXPENSES', class: 'EXPENSES' },
 ];
 
-const demoControlAccounts: ControlAccount[] = [
-  { id: '1100', name: 'TRADE DEBTORS (RECEIVABLES)', groupId: '1000', sorting: 1 },
-  { id: '1200', name: 'CASH & BANK BALANCES', groupId: '1000', sorting: 2 },
-  { id: '2100', name: 'TRADE CREDITORS (PAYABLES)', groupId: '2000', sorting: 1 },
-  { id: '3100', name: 'SALES REVENUE', groupId: '3000', sorting: 1 },
-  { id: '4100', name: 'DIRECT OPERATING COSTS', groupId: '4000', sorting: 1 },
-  { id: '4200', name: 'ADMINISTRATIVE EXPENSES', groupId: '4000', sorting: 2 },
-];
-
 const demoChartAccounts: ChartOfAccount[] = [
-  { id: '110001', name: 'CUSTOMERS ACCOUNTS', controlId: '1100', linkCode: 'A', status: 'Active' },
-  { id: '120001', name: 'CASH IN HAND', controlId: '1200', linkCode: 'A', status: 'Active' },
-  { id: '120002', name: 'BANK ALFALAH AC - 0124', controlId: '1200', linkCode: 'A', status: 'Active' },
-  { id: '210001', name: 'VENDORS ACCOUNTS', controlId: '2100', linkCode: 'A', status: 'Active' },
-  { id: '310001', name: 'WHOLESALE SHOE SALES', controlId: '3100', linkCode: 'A', status: 'Active' },
-  { id: '410001', name: 'LABOUR WAGES CHARGES', controlId: '4100', linkCode: 'A', status: 'Active' },
-  { id: '420001', name: 'UTILITIES & BILLS EXPENSE', controlId: '4200', linkCode: 'A', status: 'Active' },
+  { id: '110001', name: 'CUSTOMERS ACCOUNTS', groupId: '1000', linkCode: 'A', status: 'Active' },
+  { id: '120001', name: 'CASH IN HAND', groupId: '1000', linkCode: 'A', status: 'Active' },
+  { id: '120002', name: 'BANK ALFALAH AC - 0124', groupId: '1000', linkCode: 'A', status: 'Active' },
+  { id: '210001', name: 'VENDORS ACCOUNTS', groupId: '2000', linkCode: 'A', status: 'Active' },
+  { id: '310001', name: 'WHOLESALE SHOE SALES', groupId: '3000', linkCode: 'A', status: 'Active' },
+  { id: '410001', name: 'LABOUR WAGES CHARGES', groupId: '4000', linkCode: 'A', status: 'Active' },
+  { id: '420001', name: 'UTILITIES & BILLS EXPENSE', groupId: '4000', linkCode: 'A', status: 'Active' },
 ];
 
 const demoBusinessAccounts: BusinessAccount[] = [
@@ -99,21 +102,22 @@ const demoBusinessAccounts: BusinessAccount[] = [
   { id: '11000104', name: 'Mardan Shoe Mart (MRD)', controlId: '110001', linkCode: 'A', region: 'NORTH', status: 'Active' },
   { id: '12000101', name: 'Lahore Cash Vault', controlId: '120001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '21000101', name: 'Decent Polyurethane A/C', controlId: '210001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '21000102', name: 'Lahore Chemical Industries A/C', controlId: '210001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '21000103', name: 'Star Sole Materials A/C', controlId: '210001', linkCode: 'A', region: 'SOUTH', status: 'Active' },
 ];
 
 const demoCustomers: Customer[] = [
-  { id: 'c1', name: 'Ahmed Footwear (LHR)', acId: '110001', cityId: 'ct1' },
-  { id: 'c2', name: 'Karachi Boot House (KHI)', acId: '110001', cityId: 'ct2' },
-  { id: 'c3', name: 'Malik Traders (HYD)', acId: '110001', cityId: 'ct3' },
-  { id: 'c4', name: 'Mardan Shoe Mart (MRD)', acId: '110001', cityId: 'ct4' },
+  { id: 'c1', name: 'Ahmed Footwear (LHR)', acId: '110001', regionId: 'rg1', cityId: 'ct1' },
+  { id: 'c2', name: 'Karachi Boot House (KHI)', acId: '110001', regionId: 'rg3', cityId: 'ct2' },
+  { id: 'c3', name: 'Malik Traders (HYD)', acId: '110001', regionId: 'rg3', cityId: 'ct3' },
+  { id: 'c4', name: 'Mardan Shoe Mart (MRD)', acId: '110001', regionId: 'rg2', cityId: 'ct4' },
 ];
 
 const demoSubCustomers: SubCustomer[] = [
-  { id: 'sub-same', name: 'SAME (Direct)', customerId: 'c1' },
-  { id: 'sub1', name: 'Saleem Transport Agent', customerId: 'c1' },
-  { id: 'sub2', name: 'Liaqat Traders Karachi', customerId: 'c2' },
-  { id: 'sub3', name: 'Ghafoor Bakhsh Agency', customerId: 'c3' },
-  { id: 'sub4', name: 'Khyber Delivery Hub', customerId: 'c4' },
+  { id: 'sub1', name: 'Saleem Transport Agent' },
+  { id: 'sub2', name: 'Liaqat Traders Karachi' },
+  { id: 'sub3', name: 'Ghafoor Bakhsh Agency' },
+  { id: 'sub4', name: 'Khyber Delivery Hub' },
 ];
 
 const demoSaleBills: SaleBill[] = [
@@ -183,6 +187,22 @@ const demoExpenses: Expense[] = [
   { id: 'exp2', date: '2026-07-05', businessAccountId: '21000101', amount: 15000, paymentMode: 'Cheque', details: 'Cheque No. 441098 HBL', remarks: 'Paid to Decent PU' }
 ];
 
+const demoPurchases: Purchase[] = [
+  {
+    id: 'pu1',
+    date: '2026-07-03',
+    vendorId: 'v1',
+    remarks: 'Raw material restock',
+    items: [
+      { id: 'pui1', materialName: 'PU Sheet Roll', unit: 'Meters', quantity: 200, pricePerUnit: 85, totalPrice: 17000 },
+      { id: 'pui2', materialName: 'Buckle Fasteners', unit: 'Buckles', quantity: 500, pricePerUnit: 12, totalPrice: 6000 }
+    ],
+    totalValue: 23000
+  }
+];
+
+const demoPurchaseReturns: PurchaseReturn[] = [];
+
 /* ──────────────────── App State ──────────────────── */
 
 interface State {
@@ -192,6 +212,7 @@ interface State {
   selectedReturnId: string | null;
   
   cities: City[];
+  regions: Region[];
   stores: Store[];
   addas: Adda[];
   vendors: Vendor[];
@@ -199,7 +220,6 @@ interface State {
   products: Product[];
   
   groupAccounts: GroupAccount[];
-  controlAccounts: ControlAccount[];
   chartAccounts: ChartOfAccount[];
   businessAccounts: BusinessAccount[];
   
@@ -208,6 +228,8 @@ interface State {
   
   saleBills: SaleBill[];
   saleReturns: SaleReturn[];
+  purchases: Purchase[];
+  purchaseReturns: PurchaseReturn[];
   receipts: Receipt[];
   expenses: Expense[];
   productionLogs: ProductionLog[];
@@ -236,10 +258,15 @@ type Action =
   | { type: 'ADD_CITY'; city: City }
   | { type: 'UPDATE_CITY'; city: City }
   | { type: 'DELETE_CITY'; id: string }
+  | { type: 'ADD_REGION'; region: Region }
+  | { type: 'UPDATE_REGION'; region: Region }
+  | { type: 'DELETE_REGION'; id: string }
   | { type: 'ADD_SUB_CUSTOMER'; subCust: SubCustomer }
   | { type: 'UPDATE_SUB_CUSTOMER'; subCust: SubCustomer }
   | { type: 'DELETE_SUB_CUSTOMER'; id: string }
   | { type: 'ADD_CUSTOMER'; customer: Customer }
+  | { type: 'UPDATE_CUSTOMER'; customer: Customer }
+  | { type: 'DELETE_CUSTOMER'; id: string }
   | { type: 'ADD_ADDA'; adda: Adda }
   | { type: 'UPDATE_ADDA'; adda: Adda }
   | { type: 'DELETE_ADDA'; id: string }
@@ -248,9 +275,6 @@ type Action =
   | { type: 'ADD_GROUP_ACCOUNT'; account: GroupAccount }
   | { type: 'UPDATE_GROUP_ACCOUNT'; account: GroupAccount }
   | { type: 'DELETE_GROUP_ACCOUNT'; id: string }
-  | { type: 'ADD_CONTROL_ACCOUNT'; account: ControlAccount }
-  | { type: 'UPDATE_CONTROL_ACCOUNT'; account: ControlAccount }
-  | { type: 'DELETE_CONTROL_ACCOUNT'; id: string }
   | { type: 'ADD_CHART_ACCOUNT'; account: ChartOfAccount }
   | { type: 'UPDATE_CHART_ACCOUNT'; account: ChartOfAccount }
   | { type: 'DELETE_CHART_ACCOUNT'; id: string }
@@ -271,7 +295,13 @@ type Action =
   | { type: 'UPDATE_SALE_RETURN'; returnId: string; returnObj: SaleReturn }
   | { type: 'DELETE_SALE_RETURN'; returnId: string }
   | { type: 'POST_SALE_RETURN'; returnId: string }
-  
+
+  // Purchase Actions
+  | { type: 'ADD_PURCHASE'; purchase: Purchase }
+  | { type: 'DELETE_PURCHASE'; id: string }
+  | { type: 'ADD_PURCHASE_RETURN'; purchaseReturn: PurchaseReturn }
+  | { type: 'DELETE_PURCHASE_RETURN'; id: string }
+
   // Receipt Actions
   | { type: 'ADD_RECEIPT'; receipt: Receipt }
   // Expense Actions
@@ -286,6 +316,7 @@ const initialState: State = {
   selectedReturnId: null,
   
   cities: demoCities,
+  regions: demoRegions,
   stores: demoStores,
   addas: demoAddas,
   vendors: demoVendors,
@@ -293,7 +324,6 @@ const initialState: State = {
   products: demoProducts,
   
   groupAccounts: demoGroupAccounts,
-  controlAccounts: demoControlAccounts,
   chartAccounts: demoChartAccounts,
   businessAccounts: demoBusinessAccounts,
   
@@ -302,6 +332,8 @@ const initialState: State = {
   
   saleBills: demoSaleBills,
   saleReturns: demoSaleReturns,
+  purchases: demoPurchases,
+  purchaseReturns: demoPurchaseReturns,
   receipts: demoReceipts,
   expenses: demoExpenses,
   productionLogs: [],
@@ -314,7 +346,7 @@ function reducer(state: State, action: Action): State {
     case 'LOGIN': {
       const { username, password } = action.payload;
       if (username === state.settings.username && password === state.settings.password) {
-        return { ...state, isLoggedIn: true, currentPage: 'sale-bill' };
+        return { ...state, isLoggedIn: true, currentPage: 'home' };
       }
       return state;
     }
@@ -356,13 +388,21 @@ function reducer(state: State, action: Action): State {
     case 'UPDATE_VENDOR':
       return {
         ...state,
-        vendors: state.vendors.map(v => v.id === action.vendor.id ? action.vendor : v)
+        vendors: state.vendors.map(v => v.id === action.vendor.id ? action.vendor : v),
+        businessAccounts: state.businessAccounts.map(b =>
+          b.id === action.vendor.baId ? { ...b, name: `${action.vendor.name} A/C` } : b
+        )
       };
-    case 'DELETE_VENDOR':
+    case 'DELETE_VENDOR': {
+      const deletedVendor = state.vendors.find(v => v.id === action.id);
       return {
         ...state,
-        vendors: state.vendors.filter(v => v.id !== action.id)
+        vendors: state.vendors.filter(v => v.id !== action.id),
+        businessAccounts: deletedVendor
+          ? state.businessAccounts.filter(b => b.id !== deletedVendor.baId)
+          : state.businessAccounts
       };
+    }
     case 'ADD_CITY':
       return { ...state, cities: [...state.cities, action.city] };
     case 'UPDATE_CITY':
@@ -374,6 +414,18 @@ function reducer(state: State, action: Action): State {
       return {
         ...state,
         cities: state.cities.filter(c => c.id !== action.id)
+      };
+    case 'ADD_REGION':
+      return { ...state, regions: [...state.regions, action.region] };
+    case 'UPDATE_REGION':
+      return {
+        ...state,
+        regions: state.regions.map(r => r.id === action.region.id ? action.region : r)
+      };
+    case 'DELETE_REGION':
+      return {
+        ...state,
+        regions: state.regions.filter(r => r.id !== action.id)
       };
     case 'ADD_SUB_CUSTOMER':
       return { ...state, subCustomers: [...state.subCustomers, action.subCust] };
@@ -389,6 +441,20 @@ function reducer(state: State, action: Action): State {
       };
     case 'ADD_CUSTOMER':
       return { ...state, customers: [...state.customers, action.customer] };
+    case 'UPDATE_CUSTOMER':
+      return {
+        ...state,
+        customers: state.customers.map(c => c.id === action.customer.id ? action.customer : c),
+        businessAccounts: state.businessAccounts.map(b =>
+          b.id === action.customer.id ? { ...b, name: action.customer.name } : b
+        )
+      };
+    case 'DELETE_CUSTOMER':
+      return {
+        ...state,
+        customers: state.customers.filter(c => c.id !== action.id),
+        businessAccounts: state.businessAccounts.filter(b => b.id !== action.id)
+      };
     case 'ADD_ADDA':
       return { ...state, addas: [...state.addas, action.adda] };
     case 'UPDATE_ADDA':
@@ -415,18 +481,6 @@ function reducer(state: State, action: Action): State {
         ...state,
         groupAccounts: state.groupAccounts.filter(g => g.id !== action.id)
       };
-    case 'ADD_CONTROL_ACCOUNT':
-      return { ...state, controlAccounts: [...state.controlAccounts, action.account] };
-    case 'UPDATE_CONTROL_ACCOUNT':
-      return {
-        ...state,
-        controlAccounts: state.controlAccounts.map(c => c.id === action.account.id ? action.account : c)
-      };
-    case 'DELETE_CONTROL_ACCOUNT':
-      return {
-        ...state,
-        controlAccounts: state.controlAccounts.filter(c => c.id !== action.id)
-      };
     case 'ADD_CHART_ACCOUNT':
       return { ...state, chartAccounts: [...state.chartAccounts, action.account] };
     case 'UPDATE_CHART_ACCOUNT':
@@ -451,8 +505,7 @@ function reducer(state: State, action: Action): State {
       return {
         ...state,
         businessAccounts: state.businessAccounts.filter(b => b.id !== action.id),
-        customers: state.customers.filter(c => c.id !== action.id),
-        subCustomers: state.subCustomers.filter(sc => sc.customerId !== action.id)
+        customers: state.customers.filter(c => c.id !== action.id)
       };
 
     /* ──── Sale Bill Handlers ──── */
@@ -655,6 +708,16 @@ function reducer(state: State, action: Action): State {
         products: updatedProducts
       };
     }
+
+    /* ──── Purchase Handlers ──── */
+    case 'ADD_PURCHASE':
+      return { ...state, purchases: [action.purchase, ...state.purchases] };
+    case 'DELETE_PURCHASE':
+      return { ...state, purchases: state.purchases.filter(p => p.id !== action.id) };
+    case 'ADD_PURCHASE_RETURN':
+      return { ...state, purchaseReturns: [action.purchaseReturn, ...state.purchaseReturns] };
+    case 'DELETE_PURCHASE_RETURN':
+      return { ...state, purchaseReturns: state.purchaseReturns.filter(p => p.id !== action.id) };
 
     /* ──── Receipt Handlers ──── */
     case 'ADD_RECEIPT':
