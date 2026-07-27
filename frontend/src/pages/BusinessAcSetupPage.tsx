@@ -113,6 +113,14 @@ export default function BusinessAcSetupPage() {
       return;
     }
 
+    // Safety check: is it the linked ledger account for a Vendor?
+    const linkedVendor = state.vendors.find(v => v.baId === bizId);
+    if (linkedVendor) {
+      setErrorMsg(`Cannot delete: This is the ledger account for vendor "${linkedVendor.name}". Delete the vendor instead.`);
+      setTimeout(() => setErrorMsg(''), 4000);
+      return;
+    }
+
     if (window.confirm('Are you sure you want to delete this Business Account?')) {
       dispatch({ type: 'DELETE_BUSINESS_ACCOUNT', id: bizId });
       setSuccessMsg('Business Account deleted successfully.');

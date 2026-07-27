@@ -26,6 +26,7 @@ import BusinessAcSetupPage from '@/pages/BusinessAcSetupPage';
 // Reports
 import ReportStockPage from '@/pages/ReportStockPage';
 import ReportsHubPage from '@/pages/ReportsHubPage';
+import BiltyUpdatePage from '@/pages/BiltyUpdatePage';
 
 // Settings
 import SettingsPage from '@/pages/SettingsPage';
@@ -95,6 +96,8 @@ export default function App() {
       return <ReportStockPage />;
     case 'reports':
       return <ReportsHubPage />;
+    case 'bilty-update':
+      return <BiltyUpdatePage />;
 
     case 'settings':
       return <SettingsPage />;

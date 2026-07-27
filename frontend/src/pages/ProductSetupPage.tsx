@@ -177,6 +177,16 @@ export default function ProductSetupPage() {
   };
 
   const handleDeleteProduct = (pId: string) => {
+    // Safety check: is it referenced in any historical transactions?
+    const inSaleBills = state.saleBills.some(b => b.items.some(it => it.productId === pId));
+    const inSaleReturns = state.saleReturns.some(r => r.items.some(it => it.productId === pId));
+    const inProductionLogs = state.productionLogs.some(l => l.productId === pId);
+    if (inSaleBills || inSaleReturns || inProductionLogs) {
+      setErrorMsg('Cannot delete: this article has sale bill, sale return, or production history linked to it.');
+      setTimeout(() => setErrorMsg(''), 4000);
+      return;
+    }
+
     if (window.confirm('Are you sure you want to delete this product?')) {
       dispatch({ type: 'DELETE_PRODUCT', id: pId });
       setSuccessMsg('Product deleted successfully.');

@@ -93,6 +93,7 @@ const demoChartAccounts: ChartOfAccount[] = [
   { id: '310001', name: 'WHOLESALE SHOE SALES', groupId: '3000', linkCode: 'A', status: 'Active' },
   { id: '410001', name: 'LABOUR WAGES CHARGES', groupId: '4000', linkCode: 'A', status: 'Active' },
   { id: '420001', name: 'UTILITIES & BILLS EXPENSE', groupId: '4000', linkCode: 'A', status: 'Active' },
+  { id: '440001', name: 'DIRECTORS EXPENSES - DRAWINGS', groupId: '4000', linkCode: 'A', status: 'Active' },
 ];
 
 const demoBusinessAccounts: BusinessAccount[] = [
@@ -104,6 +105,7 @@ const demoBusinessAccounts: BusinessAccount[] = [
   { id: '21000101', name: 'Decent Polyurethane A/C', controlId: '210001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '21000102', name: 'Lahore Chemical Industries A/C', controlId: '210001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '21000103', name: 'Star Sole Materials A/C', controlId: '210001', linkCode: 'A', region: 'SOUTH', status: 'Active' },
+  { id: '44000101', name: "Director's Drawings A/C", controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
 ];
 
 const demoCustomers: Customer[] = [
@@ -499,7 +501,8 @@ function reducer(state: State, action: Action): State {
       return {
         ...state,
         businessAccounts: state.businessAccounts.map(b => b.id === action.account.id ? action.account : b),
-        customers: state.customers.map(c => c.id === action.account.id ? { ...c, name: action.account.name } : c)
+        customers: state.customers.map(c => c.id === action.account.id ? { ...c, name: action.account.name } : c),
+        vendors: state.vendors.map(v => v.baId === action.account.id ? { ...v, name: action.account.name } : v)
       };
     case 'DELETE_BUSINESS_ACCOUNT':
       return {

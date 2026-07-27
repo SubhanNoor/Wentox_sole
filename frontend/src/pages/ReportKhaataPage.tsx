@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Printer, Search } from 'lucide-react';
+import { Printer, Search, FileDown, FileSpreadsheet } from 'lucide-react';
+import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 
 interface KhaataRow {
   date: string;
@@ -191,6 +192,16 @@ export function ReportKhaataContent() {
     }, { debit: 0, credit: 0 });
   }, [khaataEntries, fromDate, toDate]);
 
+  const handleExportExcel = () => {
+    const headers = ['Date', 'Type', 'Inv #', 'Bill #', 'Narration', 'Pairs', 'Debit', 'Credit', 'Balance'];
+    const rows = runningKhaata.map(row => [
+      row.date, row.type, row.invNo, row.billNo,
+      row.chequeNo ? `Cheque ${row.chequeNo} / ${row.chequeDate} / Recv ${row.chequeReceivedDate}` : row.narration,
+      row.pairs, row.debit, row.credit, row.balance
+    ]);
+    exportRowsToExcel(`account-ledger-${selectedCustomer?.name || 'export'}`, headers, rows);
+  };
+
   return (
       <div className="mx-auto" style={{ maxWidth: 1000 }}>
         
@@ -323,7 +334,14 @@ export function ReportKhaataContent() {
                 </div>
               </div>
               
-              <div className="flex items-center gap-4">
+              <div className="flex flex-col items-end gap-2">
+                <div className="text-right">
+                  <span className="block text-[10px] font-semibold text-slate-500 uppercase">Opening Balance</span>
+                  <span className="font-bold font-mono text-sm" style={{ color: 'var(--brand-gold)' }}>
+                    {formatCurrency(Math.abs(runningKhaata[0]?.balance || 0))}
+                  </span>
+                </div>
+                <div className="flex items-center gap-4">
                 <div className="flex items-center gap-3">
                   <div>
                     <span className="block text-xs font-semibold text-slate-500 uppercase mb-0.5">From:</span>
@@ -351,6 +369,19 @@ export function ReportKhaataContent() {
                 >
                   <Printer size={16} /> Print Statement
                 </button>
+                <button
+                  onClick={exportToPDF}
+                  className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm self-end h-9 mt-4"
+                >
+                  <FileDown size={16} /> Export PDF
+                </button>
+                <button
+                  onClick={handleExportExcel}
+                  className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm self-end h-9 mt-4"
+                >
+                  <FileSpreadsheet size={16} /> Export Excel
+                </button>
+                </div>
               </div>
             </div>
 

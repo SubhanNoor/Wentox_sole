@@ -6,7 +6,7 @@ import WeeklyTab from '@/components/WeeklyTab';
 import MonthlyTab from '@/components/MonthlyTab';
 import OverallTab from '@/components/OverallTab';
 import FindTab from '@/components/FindTab';
-import { Save, Plus, Trash2, Printer } from 'lucide-react';
+import { Save, Plus, Trash2, Printer, Lock } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
 
 export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 'billing' | 'weekly' | 'monthly' | 'overall' | 'find' }) {
@@ -408,6 +408,14 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
+  const handlePostToggle = () => {
+    if (status === 'Unposted') {
+      dispatch({ type: 'POST_SALE_BILL', billId });
+      setStatus('Posted');
+      setSuccessMsg('Bill Posted — stock deducted and it now appears in the Account Ledger.');
+    }
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
 
 
   // Line Items Helper Actions
@@ -841,6 +849,11 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 >
                   Create New Bill
                 </button>
+                {status === 'Unposted' && (
+                  <button onClick={handlePostToggle} className="flex items-center gap-1.5 px-4 py-2 rounded-md font-semibold text-sm transition-colors border bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
+                    <Lock size={16} /> Post Bill
+                  </button>
+                )}
               </>
             ) : (
               <>

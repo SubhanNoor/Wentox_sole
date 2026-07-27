@@ -3,7 +3,7 @@ import { useApp } from '@/context/AppContext';
 import {
   ShoppingCart, Receipt, Package, FileText, Layers,
   Settings, LogOut, Lock, Menu, X, ChevronDown, MapPin, Home,
-  Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2
+  Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 
@@ -35,6 +35,7 @@ const navSections: NavSection[] = [
     items: [
       { page: 'report-stock', label: 'Current Stock', icon: Package },
       { page: 'reports', label: 'Reports', icon: FileText },
+      { page: 'bilty-update', label: 'Search & Bilty Adda Updation', icon: Search },
     ]
   },
   {

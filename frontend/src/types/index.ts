@@ -255,4 +255,5 @@ export type NavPage =
   | 'setup-adda'
   | 'report-stock'
   | 'reports'
+  | 'bilty-update'
   | 'settings';
