@@ -638,3 +638,103 @@ turned into a formal TASK-xx or built.
   The difference is *where* it's surfaced: §12 is the bell/notification
   mechanism; this is a dedicated "nearest date" alerts view directly on the
   Home landing page itself.
+
+---
+
+## 16. Account Hierarchy Reference (Group → Chart → Business Accounts)
+
+The accounting side of the app is a strict **3-level hierarchy**. Every
+level narrows down to something more specific than the one above it, and
+every record at one level belongs to exactly one record at the level above.
+This section documents what the hierarchy means and exactly what exists in
+each level today (frontend demo data, as of this milestone cycle).
+
+### Level 1 — Group Accounts (the broadest classification)
+
+The top of the tree. Just four fixed categories, matching standard
+accounting classes. Nothing else can be added here — every Chart of
+Account must belong to one of these four.
+
+| ID | Name | Class |
+|---|---|---|
+| 1000 | ASSETS | ASSETS |
+| 2000 | LIABILITY | LIABILITY |
+| 3000 | INCOME | INCOME |
+| 4000 | EXPENSES | EXPENSES |
+
+### Level 2 — Chart of Accounts (named ledger categories)
+
+Each Chart of Account belongs to exactly one Group Account (via `groupId`).
+These are the categories a bookkeeper would recognize — "Customers,"
+"Vendors," "Cash in Hand," etc. — but they are not things you transact
+against directly; they're a bucket that Business Accounts live inside.
+
+| ID | Name | Parent Group | Notes |
+|---|---|---|---|
+| 110001 | CUSTOMERS ACCOUNTS | ASSETS | Holds every Customer's linked account |
+| 120001 | CASH IN HAND | ASSETS | Physical cash vault(s) |
+| 120002 | BANK ALFALAH AC - 0124 | ASSETS | The literal bank account — source for the "Cash at Banks" figure in Payment Trail (§17 report) |
+| 210001 | VENDORS ACCOUNTS | LIABILITY | Holds every Vendor's linked account |
+| 310001 | WHOLESALE SHOE SALES | INCOME | Sales revenue |
+| 410001 | LABOUR WAGES CHARGES | EXPENSES | Maps to Payment Trail's "Employees" row |
+| 420001 | UTILITIES & BILLS EXPENSE | EXPENSES | Maps to Payment Trail's "Business Running Expenses" row |
+| 440001 | DIRECTORS EXPENSES - DRAWINGS | EXPENSES | **Added this cycle** — nothing existed for this category before, even though TASK-14 (role restrictions) and TASK-17 (Payment Trail) both name it explicitly |
+
+### Level 3 — Business Accounts (the real, transactable entities)
+
+Each Business Account belongs to exactly one Chart of Account (via
+`controlId`). This is the bottom of the hierarchy — the actual thing a user
+picks when entering a Sale Bill, Receipt, or Expense.
+
+| ID | Name | Parent Chart Account |
+|---|---|---|
+| 11000101 | Ahmed Footwear (LHR) | CUSTOMERS ACCOUNTS |
+| 11000102 | Karachi Boot House (KHI) | CUSTOMERS ACCOUNTS |
+| 11000103 | Malik Traders (HYD) | CUSTOMERS ACCOUNTS |
+| 11000104 | Mardan Shoe Mart (MRD) | CUSTOMERS ACCOUNTS |
+| 12000101 | Lahore Cash Vault | CASH IN HAND |
+| 21000101 | Decent Polyurethane A/C | VENDORS ACCOUNTS |
+| 21000102 | Lahore Chemical Industries A/C | VENDORS ACCOUNTS |
+| 21000103 | Star Sole Materials A/C | VENDORS ACCOUNTS |
+| 44000101 | Director's Drawings A/C | DIRECTORS EXPENSES - DRAWINGS — **added this cycle** alongside its parent chart account |
+
+### How Customer / Vendor tie into this
+
+A Customer and a Vendor are not separate data structures floating outside
+this hierarchy — each one **is** a Business Account under the hood, linked
+by ID:
+
+- **Customer** ↔ Business Account: `Customer.id === BusinessAccount.id`
+  (e.g. `Customer` "Ahmed Footwear (LHR)" and `BusinessAccount` id
+  `11000101` are the same record, just accessed two different ways).
+- **Vendor** ↔ Business Account: `Vendor.baId → BusinessAccount.id` (a
+  separate link field, since Vendor and BusinessAccount use different ID
+  spaces — `v1`/`v2`/`v3` vs `21000101` etc. — see §10 gap #2 resolution).
+
+So a full roll-up for a single transaction looks like, e.g.:
+
+```
+Sale Bill against "Ahmed Footwear (LHR)"
+  → Business Account 11000101 "Ahmed Footwear (LHR)"
+    → Chart of Account 110001 "CUSTOMERS ACCOUNTS"
+      → Group Account 1000 "ASSETS"
+
+Expense paid to "Decent Polyurethane"
+  → Vendor v1 → linked Business Account 21000101 "Decent Polyurethane A/C"
+    → Chart of Account 210001 "VENDORS ACCOUNTS"
+      → Group Account 2000 "LIABILITY"
+```
+
+### Known gap: empty categories
+
+Two Chart of Accounts currently have **zero** Business Accounts under them:
+
+- **410001 LABOUR WAGES CHARGES** ("Employees" in Payment Trail)
+- **420001 UTILITIES & BILLS EXPENSE** ("Business Running Expenses" in Payment Trail)
+
+Until someone creates at least one Business Account under each (e.g. an
+"Office Utilities A/C" under 420001), those two rows in the Payment Trail
+report (§17) will always show zero — there's nowhere yet to attach an
+Expense entry that would count toward them. This isn't a bug; it's simply
+unpopulated setup data, same category of gap that "Directors Expenses -
+Drawings" was in before this cycle.
