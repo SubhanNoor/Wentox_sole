@@ -1,501 +1,1125 @@
-# WentoX — Database Schema (PostgreSQL)
+# WentoX — Database Schema (Microsoft SQL Server)
 
-Version 3.0 — designed for the Node.js + Express + `pg` backend (Electron desktop app, locally installed PostgreSQL).
-19 tables + 6 enum types. Normalized to 3NF. All money columns are `NUMERIC`, never floats/INT.
+**Version 4.0 — tentative, for review before the migration script is written.**
 
----
+Derived **solely** from `architecture-v2.md` (the single source of truth for this project) plus the
+client decisions recorded in §2 below. The previous v3 schema, `use_cases.md`, `architecture.md`,
+`new_features-v1.0.md` and the applied PostgreSQL migration `backend/src/db/migrations/001_init.sql`
+were **not** used as inputs — they are known-stale and are being regenerated downstream of this file.
 
-## Design Decisions
+30 tables. Normalised to 3NF. Every money column is `DECIMAL`, never `FLOAT`/`REAL`.
 
-### 1. Stock is derived from `stock_movements` (no stored stock column)
-Stock enters the system through **PRODUCTION** entries (UC-08 "Confirm Add & Log") and manual
-**OPENING / ADJUSTMENT** movements. Posting a sale bill inserts negative `SALE`
-movements per item; posting a sale return inserts positive `SALE_RETURN` movements.
-
-> Current stock of a product = `SUM(qty_pairs)` over its movements (UC-08).
-
-PRODUCTION movements double as the **production log** (UC-08 Daily/Weekly/Monthly/Overall tabs):
-they record the raw input (`input_qty` + `input_unit` CARTONS/PAIRS) and a `packing` snapshot,
-while `qty_pairs` always stores the normalized total pairs. Stock display in cartons + extra
-pairs is derived: `cartons = total_pairs / packing`, `extra = total_pairs % packing`.
-
-This makes stock always consistent with transactions and trivially auditable. The business has a
-**single store**, so movements carry no `store_id` (the `stores` table remains as bill metadata only).
-
-### 2. Double-entry ledger via `ledger_entries` (posting semantics)
-`Posted/Unposted` status is made meaningful by a journal table. **Posting** a document writes its
-ledger rows (and stock movements, for bills/returns) inside **one DB transaction**; **unposting**
-deletes them in one transaction.
-
-| Document | Debit | Credit |
-| --- | --- | --- |
-| Sale Bill (net value) | Customer's chart account | SALES account |
-| Sale Return (credit value) | SALES account | Customer's chart account |
-| Receipt (Jamma) | CASH account | Customer's chart account |
-| Expense (Kharch) | Expense head (business account) | CASH account |
-
-- **UC-09 Khaata** (business accounts ledger) = query `ledger_entries` filtered by account + date range.
-- **UC-10 Cash Book** = query `ledger_entries` on the designated CASH account, grouped by date.
-- CASH and SALES are seeded chart accounts referenced by code from app config.
-
-### 3. Enum strategy
-Postgres native `CREATE TYPE ... AS ENUM` for small, stable sets (account class, payment mode,
-posting status, movement type, delivery type). Values are UPPERCASE; the API maps to/from the
-frontend's display labels.
-
-### 4. Conventions applied to every table
-- PK: `GENERATED ALWAYS AS IDENTITY`.
-- Audit: `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`
-  (bumped by a shared `set_updated_at()` trigger).
-- Soft delete on lookup/setup tables via `is_active BOOLEAN NOT NULL DEFAULT true` (transactions are never soft-deleted; they are unposted/edited).
-- Document numbers (`bill_no`, `gp_no`, `bilty_no`) are `VARCHAR(30)` — real-world numbers can be alphanumeric.
-- Indexes on every FK used in filters, on transaction dates, and partial indexes for the UC-07
-  "without bilty / without adda" filters.
-- Editing rule (recommended): financial fields editable only while **UNPOSTED**; `bilty_no`/`adda_id`
-  (UC-07) may be updated on posted bills since they are non-financial.
+> **Status of this document:** nothing here is built yet. This is the design to review. Once
+> approved it becomes the migration script verbatim — the DDL below is real, runnable T-SQL, not
+> pseudo-code, so there is no translation step in which errors can creep in.
 
 ---
 
-## Enum Types
+## 1. What changed versus the previous schema
+
+`architecture-v2.md` §0 states the situation plainly: the old Postgres schema is missing large
+parts of the target system. This version closes those gaps.
+
+| Area | Previous state | This version |
+|---|---|---|
+| Platform | PostgreSQL (native `ENUM`, `TIMESTAMPTZ`, `IDENTITY`) | **MS SQL Server** (`CHECK` constraints, `DATETIME2`, `IDENTITY(1,1)`) |
+| Control Accounts | `control_accounts` table, parent of chart + business accounts | **Dropped entirely** (§9 / TASK-11). Hierarchy is now Group → Chart → Business |
+| Products | One flat `products` table, colour as a loose column | Split into **`articles` + `article_colors`**, so TASK-03's article rows with colour sub-rows are a real relationship, not string-parsing |
+| Regions | Free-text `region` column on `business_accounts` | Real **`regions`** lookup; customer identification is Region first, City second (§10 gap 6, §11) |
+| Sub customers | `customer_id NOT NULL` FK to parent | **Parent FK removed** — independent flat list (§10, TASK-06) |
+| Purchases | Did not exist | **`purchases` + `purchase_items` + returns**, feeding a separate vendor stock (§2 below) |
+| Materials | Did not exist | **`materials`** — self-building lookup, auto-registered the first time a name is typed (§2 below) |
+| Vendor ↔ accounts | No link | **`vendors.ba_id`** → `business_accounts`, so Purchase and Expense-as-vendor-payment resolve to the same real vendor (§10 gap 2) |
+| Commission | Did not exist | **`receipts.commission`**, posted as a credit row on the customer ledger (§7) |
+| Cheques | `details` free text only | **`cheque_no` / `cheque_date` / `cheque_received_date` / `cheque_status`** (§12), plus `cheque_allocations` for endorsement (§13) |
+| Roles | No role column | **`users.role`** + a data-driven restriction flag on accounts (§8 / TASK-14) |
+| Due dates / alerts | Did not exist | Optional `due_date` on sale bills and purchases, plus `alert_dismissals` (§12) |
+
+---
+
+## 2. Client decisions that shape this schema
+
+Settled directly with the client. Where one of these conflicts with `architecture-v2.md`, the
+client's answer wins and the conflict is called out explicitly.
+
+1. **Purchase buys raw materials, entered open-ended** — "PU Sheet Roll", "Buckle Fasteners", in
+   units like Meters and Buckles. The user types **any** new material name freely; from then on
+   that name **comes back as a dropdown option from the database**, so the next purchase picks the
+   existing name instead of retyping it. Entry stays open-ended; only re-entry is constrained.
+   This is what prevents the same material fragmenting into several near-identical stock lines.
+2. **Purchases never touch finished-goods (pairs) stock.** They feed a **separate vendor stock**,
+   shown as a `Vendor Stock` sub-page inside the Stock page.
+   > ⚠️ **This overrides `architecture-v2.md` §6 and §10 gap 5**, which called for adding
+   > `PURCHASE` and `PURCHASE_RETURN` values to `stock_movements.movement_type`. Those values are
+   > **not** added here — pairs stock still moves only via Production, Sale and Sale Return.
+   > §14's Vendor Stock sub-page is therefore expressed in **material units, not pairs**.
+3. **Vendor stock is a movement ledger**, not a running-balance column — signed rows, balance is
+   `SUM(qty)`. Same auditable pattern as `stock_movements`.
+4. **Purchase is a posted document** (Posted/Unposted, like Sale Bill). Posting writes ledger
+   entries **and** vendor-stock movements inside one transaction.
+5. **Vendor stock is reduced two ways**: by a Purchase Return, and by a manual "this much has been
+   used" reduction entered against a specific vendor's stock line on the Vendor Stock page.
+6. **Articles split into `articles` + `article_colors`** — cost breakdown on the article, colour
+   and an optional packing override on the variant.
+7. **Customers mirror vendors** — own PK plus a unique `ba_id` into `business_accounts`.
+
+---
+
+## 3. Conventions applied to every table
+
+- **Schema:** everything in `dbo`.
+- **PK:** `INT IDENTITY(1,1)`, named `PK_<table>`.
+- **Naming:** `snake_case` tables and columns; constraints prefixed `PK_ FK_ UQ_ CK_ DF_`, indexes `IX_`.
+- **Text:** `NVARCHAR` for anything a human types (names, remarks, addresses — Urdu/mixed script safe).
+  `VARCHAR` only for machine codes and enum-style values.
+- **Money:** `DECIMAL(14,2)`. **Rates/costs:** `DECIMAL(12,2)`. **Material quantities:** `DECIMAL(14,3)`
+  (materials are sold by weight/length, so fractional). **Pairs/cartons:** `INT` (never fractional).
+- **Dates:** `DATE` for business dates (bill date, cheque date). `DATETIME2(0)` for audit stamps.
+- **Audit:** every table has `created_at`/`updated_at DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME()`.
+  `updated_at` is maintained by a per-table `AFTER UPDATE` trigger (§13 — MS SQL has no shared
+  trigger function, so one trigger per table, generated by script).
+- **Soft delete:** `is_active BIT NOT NULL DEFAULT 1` on lookup/setup tables. Transactions are never
+  soft-deleted — they are unposted or edited.
+- **Document numbers:** `VARCHAR(30)` — real-world bill/GP/bilty numbers are alphanumeric.
+- **FK behaviour:** default `NO ACTION` (= RESTRICT), so a referenced Adda or Customer cannot be
+  hard-deleted. Only document→line-item relationships use `ON DELETE CASCADE`.
+- **Nullable uniques:** MS SQL's `UNIQUE` constraint permits only one NULL, so nullable unique
+  columns use a **filtered unique index** (`WHERE col IS NOT NULL`) instead.
+- **Required SET options:** the migration must run — and the application must connect — with
+  `ANSI_NULLS`, `QUOTED_IDENTIFIER`, `ANSI_PADDING`, `ANSI_WARNINGS`, `ARITHABORT` and
+  `CONCAT_NULL_YIELDS_NULL` **ON**, and `NUMERIC_ROUNDABORT` **OFF**. This is not optional
+  housekeeping: every filtered index below will fail to build, and later `INSERT`/`UPDATE`
+  statements against those tables will fail at runtime, if a session has the wrong options set.
+- **Collation:** the database should use a **case-insensitive** collation (e.g.
+  `SQL_Latin1_General_CP1_CI_AS`). `UQ_materials_name` relies on it — retyping `pu sheet roll`
+  must collide with `PU Sheet Roll` rather than create a duplicate material.
+
+### 3.1 Enum replacement
+
+MS SQL has no `CREATE TYPE ... AS ENUM`. Each former enum becomes a `VARCHAR` column with a named
+`CHECK`. Values are UPPERCASE; the API maps them to the frontend's display labels.
+
+| Former enum | Column type | Allowed values |
+|---|---|---|
+| `account_class` | `VARCHAR(10)` | `ASSETS`, `LIABILITY`, `INCOME`, `EXPENSES` |
+| `account_status` | `VARCHAR(10)` | `ACTIVE`, `CLOSED` |
+| `payment_mode` | `VARCHAR(10)` | `CASH`, `CHEQUE`, `ONLINE` |
+| `posting_status` | `VARCHAR(10)` | `POSTED`, `UNPOSTED` |
+| `delivery_type` | `VARCHAR(10)` | `SAME`, `CUSTOM` |
+| `stock_movement_type` | `VARCHAR(15)` | `OPENING`, `ADJUSTMENT`, `PRODUCTION`, `SALE`, `SALE_RETURN` |
+| `vendor_stock_movement_type` | `VARCHAR(20)` | `PURCHASE`, `PURCHASE_RETURN`, `CONSUMPTION`, `ADJUSTMENT` |
+| `cheque_status` | `VARCHAR(20)` | `PENDING`, `DEPOSITED`, `ENDORSED`, `PARTIALLY_ENDORSED`, `CLEARED`, `BOUNCED` |
+| `user_role` | `VARCHAR(10)` | `ADMIN`, `USER` |
+
+---
+
+## 4. Design decisions
+
+### 4.1 Pairs stock is derived from `stock_movements` — no stored stock column
+
+Per §6, current stock of a colour variant is `SUM(qty_pairs)` over its movements. Sale rows are
+negative; Production and Sale Return rows are positive. This keeps stock always consistent with
+transactions and trivially auditable, and it is what makes the Product Ledger (TASK-02) free —
+the ledger *is* the movement table, filtered.
+
+`PRODUCTION` rows double as the production log: they keep the raw user input (`input_qty` +
+`input_unit`) and a `packing` snapshot, while `qty_pairs` always stores normalised total pairs.
+The carton/extra-pair display in TASK-03's sub-rows is derived:
+`cartons = total_pairs / packing`, `extra = total_pairs % packing`.
+
+The business has a **single store**, so movements carry no `store_id` — `stores` remains bill
+metadata only.
+
+### 4.2 Vendor stock is a second, independent ledger
+
+Because purchases are raw materials in their own units (§2 decisions 1–2), mixing them into
+`stock_movements` would mean one table holding two incompatible quantity units. Instead
+`vendor_stock_movements` is a parallel ledger keyed on vendor + material + unit. The Vendor Stock
+page is a single `GROUP BY`; the Current Stock page never sees these rows.
+
+### 4.3 `materials` is a self-building lookup, not a master list to maintain
+
+Per §2 decision 1, material entry is open-ended but re-entry is not. The `materials` table is never
+curated by hand and has no setup screen:
+
+- The Purchase line's material field is a **searchable dropdown reading `materials`**, plus the
+  option to type something new.
+- Typing a name that does not exist **auto-creates the row** as part of saving the purchase — the
+  user experiences it as free text.
+- Every subsequent purchase finds that name in the dropdown instead of retyping it.
+
+Purchase lines therefore store a `material_id`, not a string, which is what makes vendor-stock
+totals reliable: the same material can no longer split across "PU Sheet", "PU sheet roll" and
+"P.U. Sheet Roll". `materials.name` carries a `UNIQUE` constraint on a case-insensitive collation,
+so a differently-cased retype resolves to the existing row rather than creating a twin.
+
+This also supplies the repair path that free text could never have: if two rows do get created for
+the same real material, an admin can repoint one `material_id` and delete the duplicate, and all
+history corrects itself. Renaming a material likewise propagates to historical documents by
+design — it is the same physical material, so its current name is the right one to display.
+
+`materials.default_unit` pre-fills the unit on a new purchase line; the line keeps its own `unit`
+column, since the same material may occasionally be bought in a different unit.
+
+### 4.4 Double-entry via `ledger_entries`, with real foreign keys
+
+`POSTED`/`UNPOSTED` is made meaningful by a journal table. **Posting** a document writes its ledger
+rows (and its stock/vendor-stock rows) inside one transaction; **unposting** deletes them in one
+transaction.
+
+The previous design used a polymorphic `account_type` + `account_id` pair, which SQL Server cannot
+enforce with a foreign key — a typo could point a ledger row at a nonexistent account and nothing
+would object. This version uses **two nullable FK columns, `ac_id` and `ba_id`, with a `CHECK` that
+exactly one is populated**. Same flexibility, real referential integrity.
+
+### 4.5 A Vendor and a Customer are both a `business_accounts` row plus a profile
+
+Resolving §10 gap 2: a vendor must be a single source of truth shared by Purchase (which needs
+`vendor_id`) and Expense-as-vendor-payment (which needs `ba_id`). So `vendors` carries a unique
+`ba_id`, auto-created under the reserved **VENDORS ACCOUNTS** chart account when the vendor is
+created — one form, no separate account-setup step exposed to the user.
+
+`customers` follows the identical pattern under the reserved **CUSTOMERS ACCOUNTS** chart account.
+`customers.ba_id` is **nullable**, and that is precisely what drives TASK-05: when a customer is
+selected on a Sale Bill and `ba_id IS NULL`, the UI shows *"Please add customer account first"*.
+
+### 4.6 Role restriction is data-driven, not hardcoded
+
+§8 blocks the `USER` role from "Bank Accounts" and "Directors Expenses - Drawings". Rather than
+matching account names in application code, `chart_of_accounts.is_restricted BIT` marks them, and
+the middleware filters on the flag. Adding a future restricted account is then a data change.
+
+### 4.7 Editing rule
+
+Financial fields are editable only while `UNPOSTED`. `bilty_no` and `adda_id` may be updated on
+posted bills, since they are non-financial dispatch metadata (§9's Search & Bilty Adda Updation).
+
+---
+
+## 5. Schema DDL
+
+### 5.1 System / auth
 
 ```sql
-CREATE TYPE account_class       AS ENUM ('ASSETS','LIABILITY','INCOME','EXPENSES');
-CREATE TYPE account_status      AS ENUM ('ACTIVE','CLOSED');
-CREATE TYPE payment_mode        AS ENUM ('CASH','CHEQUE','ONLINE');
-CREATE TYPE posting_status      AS ENUM ('POSTED','UNPOSTED');
-CREATE TYPE stock_movement_type AS ENUM ('OPENING','ADJUSTMENT','PRODUCTION','SALE','SALE_RETURN');
-CREATE TYPE delivery_type       AS ENUM ('SAME','CUSTOM');
+CREATE TABLE dbo.users (
+  user_id       INT IDENTITY(1,1) NOT NULL,
+  username      VARCHAR(50)   NOT NULL,
+  password_hash VARCHAR(100)  NOT NULL,                       -- bcrypt
+  full_name     NVARCHAR(100) NULL,
+  role          VARCHAR(10)   NOT NULL CONSTRAINT DF_users_role      DEFAULT ('USER'),
+  is_active     BIT           NOT NULL CONSTRAINT DF_users_active    DEFAULT (1),
+  created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_users_created   DEFAULT (SYSUTCDATETIME()),
+  updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_users_updated   DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_users      PRIMARY KEY (user_id),
+  CONSTRAINT UQ_users_name UNIQUE (username),
+  CONSTRAINT CK_users_role CHECK (role IN ('ADMIN','USER'))
+);
 ```
 
-Shared trigger function:
+### 5.2 Setup / lookup
 
 ```sql
-CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
+CREATE TABLE dbo.regions (                                    -- §10 gap 6, TASK-07
+  region_id  INT IDENTITY(1,1) NOT NULL,
+  name       NVARCHAR(100) NOT NULL,
+  is_active  BIT          NOT NULL CONSTRAINT DF_regions_active  DEFAULT (1),
+  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_regions_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_regions_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_regions      PRIMARY KEY (region_id),
+  CONSTRAINT UQ_regions_name UNIQUE (name)
+);
+
+CREATE TABLE dbo.cities (
+  city_id    INT IDENTITY(1,1) NOT NULL,
+  name       NVARCHAR(100) NOT NULL,
+  region_id  INT          NULL,                               -- optional roll-up of city into region
+  is_active  BIT          NOT NULL CONSTRAINT DF_cities_active  DEFAULT (1),
+  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_cities_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_cities_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_cities        PRIMARY KEY (city_id),
+  CONSTRAINT UQ_cities_name   UNIQUE (name),
+  CONSTRAINT FK_cities_region FOREIGN KEY (region_id) REFERENCES dbo.regions(region_id)
+);
+CREATE INDEX IX_cities_region ON dbo.cities(region_id);
+
+CREATE TABLE dbo.stores (
+  store_id   INT IDENTITY(1,1) NOT NULL,
+  name       NVARCHAR(100) NOT NULL,
+  is_active  BIT          NOT NULL CONSTRAINT DF_stores_active  DEFAULT (1),
+  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_stores_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_stores_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_stores      PRIMARY KEY (store_id),
+  CONSTRAINT UQ_stores_name UNIQUE (name)
+);
+
+CREATE TABLE dbo.addas (                                      -- transport terminals
+  adda_id    INT IDENTITY(1,1) NOT NULL,
+  name       NVARCHAR(100) NOT NULL,
+  city_id    INT          NULL,
+  details    NVARCHAR(200) NULL,
+  is_active  BIT          NOT NULL CONSTRAINT DF_addas_active  DEFAULT (1),
+  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_addas_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_addas_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_addas      PRIMARY KEY (adda_id),
+  CONSTRAINT UQ_addas_name UNIQUE (name),
+  CONSTRAINT FK_addas_city FOREIGN KEY (city_id) REFERENCES dbo.cities(city_id)
+);
+-- Hard-deleting an adda referenced by a sale bill is blocked by FK NO ACTION; use is_active = 0.
+
+CREATE TABLE dbo.materials (                                  -- §4.3 self-building; no setup screen
+  material_id  INT IDENTITY(1,1) NOT NULL,
+  name         NVARCHAR(150) NOT NULL,                       -- as first typed, e.g. 'PU Sheet Roll'
+  default_unit NVARCHAR(30)  NULL,                           -- pre-fills the unit on a new line
+  is_active    BIT          NOT NULL CONSTRAINT DF_materials_active  DEFAULT (1),
+  created_at   DATETIME2(0) NOT NULL CONSTRAINT DF_materials_created DEFAULT (SYSUTCDATETIME()),
+  updated_at   DATETIME2(0) NOT NULL CONSTRAINT DF_materials_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_materials      PRIMARY KEY (material_id),
+  -- case-insensitive collation: retyping 'pu sheet roll' resolves to the existing row, never a twin
+  CONSTRAINT UQ_materials_name UNIQUE (name)
+);
+CREATE INDEX IX_materials_name ON dbo.materials(name) WHERE is_active = 1;   -- dropdown typeahead
+
+CREATE TABLE dbo.product_categories (
+  category_id INT IDENTITY(1,1) NOT NULL,
+  name        NVARCHAR(100) NOT NULL,
+  is_active   BIT          NOT NULL CONSTRAINT DF_categories_active  DEFAULT (1),
+  created_at  DATETIME2(0) NOT NULL CONSTRAINT DF_categories_created DEFAULT (SYSUTCDATETIME()),
+  updated_at  DATETIME2(0) NOT NULL CONSTRAINT DF_categories_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_product_categories      PRIMARY KEY (category_id),
+  CONSTRAINT UQ_product_categories_name UNIQUE (name)
+);
+```
+
+### 5.3 Accounts hierarchy — Group → Chart → Business
+
+`control_accounts` is **deleted** (§9, TASK-11). `chart_of_accounts` now hangs directly off
+`group_accounts`, and `business_accounts` off `chart_of_accounts`.
+
+```sql
+CREATE TABLE dbo.group_accounts (
+  group_id   INT IDENTITY(1,1) NOT NULL,
+  code       VARCHAR(20)   NOT NULL,                          -- e.g. '1000'
+  name       NVARCHAR(100) NOT NULL,
+  class      VARCHAR(10)   NOT NULL,
+  sorting    INT          NOT NULL CONSTRAINT DF_groups_sort    DEFAULT (0),
+  is_active  BIT          NOT NULL CONSTRAINT DF_groups_active  DEFAULT (1),
+  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_groups_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_groups_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_group_accounts       PRIMARY KEY (group_id),
+  CONSTRAINT UQ_group_accounts_code  UNIQUE (code),
+  CONSTRAINT UQ_group_accounts_name  UNIQUE (name),
+  CONSTRAINT CK_group_accounts_class CHECK (class IN ('ASSETS','LIABILITY','INCOME','EXPENSES'))
+);
+
+CREATE TABLE dbo.chart_of_accounts (
+  ac_id         INT IDENTITY(1,1) NOT NULL,
+  code          VARCHAR(20)   NOT NULL,                       -- e.g. '110001'
+  name          NVARCHAR(100) NOT NULL,
+  group_id      INT           NOT NULL,                       -- was control_id (control accounts removed)
+  link_code     VARCHAR(20)   NULL,
+  is_restricted BIT           NOT NULL CONSTRAINT DF_chart_restricted DEFAULT (0),  -- §8 / TASK-14
+  status        VARCHAR(10)   NOT NULL CONSTRAINT DF_chart_status     DEFAULT ('ACTIVE'),
+  sorting       INT           NOT NULL CONSTRAINT DF_chart_sort       DEFAULT (0),
+  created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_chart_created    DEFAULT (SYSUTCDATETIME()),
+  updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_chart_updated    DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_chart_of_accounts        PRIMARY KEY (ac_id),
+  CONSTRAINT UQ_chart_of_accounts_code   UNIQUE (code),
+  CONSTRAINT UQ_chart_of_accounts_name   UNIQUE (group_id, name),
+  CONSTRAINT FK_chart_of_accounts_group  FOREIGN KEY (group_id) REFERENCES dbo.group_accounts(group_id),
+  CONSTRAINT CK_chart_of_accounts_status CHECK (status IN ('ACTIVE','CLOSED'))
+);
+CREATE INDEX IX_chart_of_accounts_group ON dbo.chart_of_accounts(group_id);
+
+CREATE TABLE dbo.business_accounts (
+  ba_id      INT IDENTITY(1,1) NOT NULL,
+  code       VARCHAR(20)   NOT NULL,                          -- e.g. '11000101'
+  name       NVARCHAR(100) NOT NULL,
+  ac_id      INT           NOT NULL,                          -- was control_id; parent chart account
+  link_code  VARCHAR(20)   NULL,
+  region_id  INT           NULL,
+  status     VARCHAR(10)   NOT NULL CONSTRAINT DF_ba_status  DEFAULT ('ACTIVE'),
+  created_at DATETIME2(0)  NOT NULL CONSTRAINT DF_ba_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2(0)  NOT NULL CONSTRAINT DF_ba_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_business_accounts        PRIMARY KEY (ba_id),
+  CONSTRAINT UQ_business_accounts_code   UNIQUE (code),
+  CONSTRAINT FK_business_accounts_chart  FOREIGN KEY (ac_id)     REFERENCES dbo.chart_of_accounts(ac_id),
+  CONSTRAINT FK_business_accounts_region FOREIGN KEY (region_id) REFERENCES dbo.regions(region_id),
+  CONSTRAINT CK_business_accounts_status CHECK (status IN ('ACTIVE','CLOSED'))
+);
+CREATE INDEX IX_business_accounts_chart  ON dbo.business_accounts(ac_id);
+CREATE INDEX IX_business_accounts_region ON dbo.business_accounts(region_id);
+```
+
+### 5.4 Parties — vendors, customers, sub customers
+
+```sql
+CREATE TABLE dbo.vendors (
+  vendor_id  INT IDENTITY(1,1) NOT NULL,
+  name       NVARCHAR(100) NOT NULL,
+  phone      VARCHAR(30)   NULL,
+  address    NVARCHAR(200) NULL,
+  region_id  INT           NULL,
+  city_id    INT           NULL,
+  ba_id      INT           NULL,   -- §10 gap 2: auto-created under VENDORS ACCOUNTS on vendor create
+  is_active  BIT          NOT NULL CONSTRAINT DF_vendors_active  DEFAULT (1),
+  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_vendors_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_vendors_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_vendors        PRIMARY KEY (vendor_id),
+  CONSTRAINT UQ_vendors_name   UNIQUE (name),
+  CONSTRAINT FK_vendors_ba     FOREIGN KEY (ba_id)     REFERENCES dbo.business_accounts(ba_id),
+  CONSTRAINT FK_vendors_region FOREIGN KEY (region_id) REFERENCES dbo.regions(region_id),
+  CONSTRAINT FK_vendors_city   FOREIGN KEY (city_id)   REFERENCES dbo.cities(city_id)
+);
+-- Filtered unique: one vendor per business account, but many vendors may await backfill (NULL).
+CREATE UNIQUE INDEX UQ_vendors_ba ON dbo.vendors(ba_id) WHERE ba_id IS NOT NULL;
+
+CREATE TABLE dbo.customers (
+  customer_id INT IDENTITY(1,1) NOT NULL,
+  name        NVARCHAR(150) NOT NULL,
+  ba_id       INT           NULL,   -- NULL is exactly TASK-05's "Please add customer account first"
+  region_id   INT           NOT NULL,                         -- §11: primary search key
+  city_id     INT           NULL,                             -- §11: secondary search key
+  phone       VARCHAR(30)   NULL,
+  address     NVARCHAR(200) NULL,
+  is_active   BIT          NOT NULL CONSTRAINT DF_customers_active  DEFAULT (1),
+  created_at  DATETIME2(0) NOT NULL CONSTRAINT DF_customers_created DEFAULT (SYSUTCDATETIME()),
+  updated_at  DATETIME2(0) NOT NULL CONSTRAINT DF_customers_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_customers        PRIMARY KEY (customer_id),
+  CONSTRAINT FK_customers_ba     FOREIGN KEY (ba_id)     REFERENCES dbo.business_accounts(ba_id),
+  CONSTRAINT FK_customers_region FOREIGN KEY (region_id) REFERENCES dbo.regions(region_id),
+  CONSTRAINT FK_customers_city   FOREIGN KEY (city_id)   REFERENCES dbo.cities(city_id)
+);
+CREATE UNIQUE INDEX UQ_customers_ba     ON dbo.customers(ba_id) WHERE ba_id IS NOT NULL;
+CREATE INDEX        IX_customers_region ON dbo.customers(region_id, city_id);   -- Region first, City second
+CREATE INDEX        IX_customers_name   ON dbo.customers(name);
+
+CREATE TABLE dbo.sub_customers (                              -- TASK-06: NO parent customer FK
+  sub_customer_id INT IDENTITY(1,1) NOT NULL,
+  name            NVARCHAR(150) NOT NULL,
+  phone           VARCHAR(30)   NULL,
+  address         NVARCHAR(200) NULL,
+  is_active       BIT          NOT NULL CONSTRAINT DF_subcust_active  DEFAULT (1),
+  created_at      DATETIME2(0) NOT NULL CONSTRAINT DF_subcust_created DEFAULT (SYSUTCDATETIME()),
+  updated_at      DATETIME2(0) NOT NULL CONSTRAINT DF_subcust_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_sub_customers      PRIMARY KEY (sub_customer_id),
+  CONSTRAINT UQ_sub_customers_name UNIQUE (name)
+);
+CREATE INDEX IX_sub_customers_name ON dbo.sub_customers(name);   -- TASK-06 searchable dropdown
+```
+
+### 5.5 Articles and colour variants
+
+TASK-03's main rows are `articles`; its expandable sub-rows are `article_colors`. Everything that
+moves stock or appears on a bill line points at a **variant**, never at the article.
+
+```sql
+CREATE TABLE dbo.articles (
+  article_id  INT IDENTITY(1,1) NOT NULL,
+  code        VARCHAR(30)   NOT NULL,                         -- TASK-03 "article code (pcode)", e.g. 'P-101'
+  name        NVARCHAR(150) NOT NULL,                         -- common name, colour excluded
+  category_id INT           NOT NULL,
+  vendor_id   INT           NULL,                             -- TASK-02 UPDATE: filter ledger by company/vendor
+  batch_no    VARCHAR(50)   NULL,
+  packing     INT           NOT NULL,                         -- default pairs per carton (usually 12)
+  -- cost breakdown (names kept verbatim from the legacy system)
+  cost_price    DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_cost   DEFAULT (0),
+  labour        DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_lab    DEFAULT (0),
+  proi_cost     DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_proi   DEFAULT (0),
+  sole_stich    DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_solest DEFAULT (0),
+  pasting       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_past   DEFAULT (0),
+  trim          DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_trim   DEFAULT (0),
+  finishing     DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_fin    DEFAULT (0),
+  socks_pasting DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_sockp  DEFAULT (0),
+  dc            DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_dc     DEFAULT (0),
+  sock_stich    DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_sockst DEFAULT (0),
+  sheet         DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_sheet  DEFAULT (0),
+  stubble       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_stub   DEFAULT (0),
+  bottom        DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_bot    DEFAULT (0),
+  p1            DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_p1     DEFAULT (0),
+  p2            DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_p2     DEFAULT (0),
+  na            DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_na     DEFAULT (0),
+  is_active   BIT          NOT NULL CONSTRAINT DF_articles_active  DEFAULT (1),
+  created_at  DATETIME2(0) NOT NULL CONSTRAINT DF_articles_created DEFAULT (SYSUTCDATETIME()),
+  updated_at  DATETIME2(0) NOT NULL CONSTRAINT DF_articles_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_articles          PRIMARY KEY (article_id),
+  CONSTRAINT UQ_articles_code     UNIQUE (code),
+  CONSTRAINT FK_articles_category FOREIGN KEY (category_id) REFERENCES dbo.product_categories(category_id),
+  CONSTRAINT FK_articles_vendor   FOREIGN KEY (vendor_id)   REFERENCES dbo.vendors(vendor_id),
+  CONSTRAINT CK_articles_packing  CHECK (packing > 0)
+);
+CREATE INDEX IX_articles_category ON dbo.articles(category_id);
+CREATE INDEX IX_articles_vendor   ON dbo.articles(vendor_id);
+CREATE INDEX IX_articles_name     ON dbo.articles(name);
+
+CREATE TABLE dbo.article_colors (                             -- TASK-03 sub-rows
+  variant_id INT IDENTITY(1,1) NOT NULL,
+  article_id INT           NOT NULL,
+  color      NVARCHAR(50)  NOT NULL,                          -- TASK-03 "content color"
+  packing    INT           NULL,                              -- optional override of articles.packing
+  is_active  BIT          NOT NULL CONSTRAINT DF_variants_active  DEFAULT (1),
+  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_variants_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_variants_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_article_colors         PRIMARY KEY (variant_id),
+  CONSTRAINT UQ_article_colors_acolor  UNIQUE (article_id, color),
+  CONSTRAINT FK_article_colors_article FOREIGN KEY (article_id) REFERENCES dbo.articles(article_id),
+  CONSTRAINT CK_article_colors_packing CHECK (packing IS NULL OR packing > 0)
+);
+CREATE INDEX IX_article_colors_article ON dbo.article_colors(article_id);
+```
+
+> Effective packing for a variant is `COALESCE(article_colors.packing, articles.packing)`.
+> TASK-03's "Add" dialog creates a new `article_colors` row when an unseen colour is entered,
+> then logs a `PRODUCTION` stock movement against it.
+
+### 5.6 Sales
+
+```sql
+CREATE TABLE dbo.sale_bills (
+  bill_id          INT IDENTITY(1,1) NOT NULL,                -- TASK-16 "Inv #" (system invoice)
+  bill_date        DATE          NOT NULL,
+  store_id         INT           NOT NULL,                    -- source store (FROM)
+  customer_id      INT           NOT NULL,
+  sub_customer_id  INT           NULL,                        -- NULL when delivery_type = 'SAME'
+  main_ac_id       INT           NULL,                        -- TASK-05 snapshot of customer's main A/C
+  delivery_type    VARCHAR(10)   NOT NULL CONSTRAINT DF_sb_deliv    DEFAULT ('SAME'),
+  delivery_address NVARCHAR(300) NULL,
+  bill_no          VARCHAR(30)   NULL,                        -- TASK-16 "Bill #" (manual)
+  gp_no            VARCHAR(30)   NULL,
+  bilty_no         VARCHAR(30)   NULL,                        -- NULL until dispatch assigns it
+  adda_id          INT           NULL,                        -- NULL until dispatch assigns it
+  remarks          NVARCHAR(500) NULL,
+  invoice_discount DECIMAL(12,2) NOT NULL CONSTRAINT DF_sb_invdisc  DEFAULT (0),
+  total_cartons    INT           NOT NULL CONSTRAINT DF_sb_ctn      DEFAULT (0),
+  total_pairs      INT           NOT NULL CONSTRAINT DF_sb_pairs    DEFAULT (0),
+  gross_value      DECIMAL(14,2) NOT NULL CONSTRAINT DF_sb_gross    DEFAULT (0),
+  net_value        DECIMAL(14,2) NOT NULL CONSTRAINT DF_sb_net      DEFAULT (0),
+  due_date         DATE          NULL,                        -- §12: optional; blank = never alerts
+  status           VARCHAR(10)   NOT NULL CONSTRAINT DF_sb_status   DEFAULT ('UNPOSTED'),
+  created_by       INT           NULL,
+  created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sb_created  DEFAULT (SYSUTCDATETIME()),
+  updated_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sb_updated  DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_sale_bills          PRIMARY KEY (bill_id),
+  CONSTRAINT FK_sale_bills_store    FOREIGN KEY (store_id)        REFERENCES dbo.stores(store_id),
+  CONSTRAINT FK_sale_bills_cust     FOREIGN KEY (customer_id)     REFERENCES dbo.customers(customer_id),
+  CONSTRAINT FK_sale_bills_subcust  FOREIGN KEY (sub_customer_id) REFERENCES dbo.sub_customers(sub_customer_id),
+  CONSTRAINT FK_sale_bills_mainac   FOREIGN KEY (main_ac_id)      REFERENCES dbo.chart_of_accounts(ac_id),
+  CONSTRAINT FK_sale_bills_adda     FOREIGN KEY (adda_id)         REFERENCES dbo.addas(adda_id),
+  CONSTRAINT FK_sale_bills_user     FOREIGN KEY (created_by)      REFERENCES dbo.users(user_id),
+  CONSTRAINT CK_sale_bills_deliv    CHECK (delivery_type IN ('SAME','CUSTOM')),
+  CONSTRAINT CK_sale_bills_status   CHECK (status IN ('POSTED','UNPOSTED')),
+  CONSTRAINT CK_sale_bills_custdlv  CHECK (delivery_type = 'SAME' OR sub_customer_id IS NOT NULL)
+);
+CREATE INDEX IX_sale_bills_date     ON dbo.sale_bills(bill_date);
+CREATE INDEX IX_sale_bills_customer ON dbo.sale_bills(customer_id, bill_date);
+CREATE INDEX IX_sale_bills_no_bilty ON dbo.sale_bills(bill_date) WHERE bilty_no IS NULL;   -- "Without Bilty"
+CREATE INDEX IX_sale_bills_no_adda  ON dbo.sale_bills(bill_date) WHERE adda_id  IS NULL;   -- "Without Adda"
+CREATE INDEX IX_sale_bills_due      ON dbo.sale_bills(due_date)  WHERE due_date IS NOT NULL;  -- §12 alerts
+
+CREATE TABLE dbo.sale_bill_items (
+  item_id          INT IDENTITY(1,1) NOT NULL,
+  bill_id          INT           NOT NULL,
+  variant_id       INT           NOT NULL,                    -- article_colors, not article
+  cartons          INT           NOT NULL,
+  pairs            INT           NOT NULL,                    -- cartons x effective packing
+  rate             DECIMAL(12,2) NOT NULL,
+  discount_percent DECIMAL(5,2)  NOT NULL CONSTRAINT DF_sbi_dpct DEFAULT (0),   -- "D%" — sale-time discount
+  discount_value   DECIMAL(12,2) NOT NULL CONSTRAINT DF_sbi_dval DEFAULT (0),
+  value            DECIMAL(14,2) NOT NULL,                    -- net line value
+  line_no          INT           NOT NULL CONSTRAINT DF_sbi_line DEFAULT (1),
+  created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sbi_created DEFAULT (SYSUTCDATETIME()),
+  updated_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sbi_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_sale_bill_items         PRIMARY KEY (item_id),
+  CONSTRAINT FK_sale_bill_items_bill    FOREIGN KEY (bill_id)    REFERENCES dbo.sale_bills(bill_id) ON DELETE CASCADE,
+  CONSTRAINT FK_sale_bill_items_variant FOREIGN KEY (variant_id) REFERENCES dbo.article_colors(variant_id),
+  CONSTRAINT CK_sale_bill_items_ctn     CHECK (cartons >= 0),
+  CONSTRAINT CK_sale_bill_items_pairs   CHECK (pairs > 0)
+);
+CREATE INDEX IX_sale_bill_items_bill    ON dbo.sale_bill_items(bill_id);
+CREATE INDEX IX_sale_bill_items_variant ON dbo.sale_bill_items(variant_id);
+```
+
+`sale_returns` and `sale_return_items` mirror the two tables above exactly, with these differences:
+
+- `return_id` / `return_date`; `store_id` is the **destination** store (TO — where stock comes back).
+- `remarks` holds the return reason.
+- No `due_date` (a return is not a payable).
+- `net_value` is the credit value.
+- TASK-12's "products previously bought by this customer" dropdown is a **read** against
+  `sale_bill_items` joined to `sale_bills` for that customer — it needs no column of its own.
+
+```sql
+CREATE TABLE dbo.sale_returns (
+  return_id        INT IDENTITY(1,1) NOT NULL,
+  return_date      DATE          NOT NULL,
+  store_id         INT           NOT NULL,
+  customer_id      INT           NOT NULL,
+  sub_customer_id  INT           NULL,
+  bill_no          VARCHAR(30)   NULL,
+  gp_no            VARCHAR(30)   NULL,
+  bilty_no         VARCHAR(30)   NULL,
+  adda_id          INT           NULL,
+  remarks          NVARCHAR(500) NULL,                        -- return reason
+  invoice_discount DECIMAL(12,2) NOT NULL CONSTRAINT DF_sr_invdisc DEFAULT (0),
+  total_cartons    INT           NOT NULL CONSTRAINT DF_sr_ctn     DEFAULT (0),
+  total_pairs      INT           NOT NULL CONSTRAINT DF_sr_pairs   DEFAULT (0),
+  gross_value      DECIMAL(14,2) NOT NULL CONSTRAINT DF_sr_gross   DEFAULT (0),
+  net_value        DECIMAL(14,2) NOT NULL CONSTRAINT DF_sr_net     DEFAULT (0),
+  status           VARCHAR(10)   NOT NULL CONSTRAINT DF_sr_status  DEFAULT ('UNPOSTED'),
+  created_by       INT           NULL,
+  created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sr_created DEFAULT (SYSUTCDATETIME()),
+  updated_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sr_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_sale_returns         PRIMARY KEY (return_id),
+  CONSTRAINT FK_sale_returns_store   FOREIGN KEY (store_id)        REFERENCES dbo.stores(store_id),
+  CONSTRAINT FK_sale_returns_cust    FOREIGN KEY (customer_id)     REFERENCES dbo.customers(customer_id),
+  CONSTRAINT FK_sale_returns_subcust FOREIGN KEY (sub_customer_id) REFERENCES dbo.sub_customers(sub_customer_id),
+  CONSTRAINT FK_sale_returns_adda    FOREIGN KEY (adda_id)         REFERENCES dbo.addas(adda_id),
+  CONSTRAINT FK_sale_returns_user    FOREIGN KEY (created_by)      REFERENCES dbo.users(user_id),
+  CONSTRAINT CK_sale_returns_status  CHECK (status IN ('POSTED','UNPOSTED'))
+);
+CREATE INDEX IX_sale_returns_date     ON dbo.sale_returns(return_date);
+CREATE INDEX IX_sale_returns_customer ON dbo.sale_returns(customer_id, return_date);
+
+CREATE TABLE dbo.sale_return_items (
+  item_id          INT IDENTITY(1,1) NOT NULL,
+  return_id        INT           NOT NULL,
+  variant_id       INT           NOT NULL,
+  cartons          INT           NOT NULL,
+  pairs            INT           NOT NULL,
+  rate             DECIMAL(12,2) NOT NULL,
+  discount_percent DECIMAL(5,2)  NOT NULL CONSTRAINT DF_sri_dpct DEFAULT (0),
+  discount_value   DECIMAL(12,2) NOT NULL CONSTRAINT DF_sri_dval DEFAULT (0),
+  value            DECIMAL(14,2) NOT NULL,
+  line_no          INT           NOT NULL CONSTRAINT DF_sri_line DEFAULT (1),
+  created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sri_created DEFAULT (SYSUTCDATETIME()),
+  updated_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sri_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_sale_return_items         PRIMARY KEY (item_id),
+  CONSTRAINT FK_sale_return_items_return  FOREIGN KEY (return_id)  REFERENCES dbo.sale_returns(return_id) ON DELETE CASCADE,
+  CONSTRAINT FK_sale_return_items_variant FOREIGN KEY (variant_id) REFERENCES dbo.article_colors(variant_id),
+  CONSTRAINT CK_sale_return_items_pairs   CHECK (pairs > 0)
+);
+CREATE INDEX IX_sale_return_items_return  ON dbo.sale_return_items(return_id);
+CREATE INDEX IX_sale_return_items_variant ON dbo.sale_return_items(variant_id);
+```
+
+### 5.7 Purchases — raw materials from vendors
+
+Per §2 decisions 1–4. Lines reference `materials` (§4.3) — the user still types any new name, and
+the row is auto-created on save.
+
+```sql
+CREATE TABLE dbo.purchases (                                  -- TASK-01
+  purchase_id   INT IDENTITY(1,1) NOT NULL,
+  purchase_date DATE          NOT NULL,
+  vendor_id     INT           NOT NULL,
+  bill_no       VARCHAR(30)   NULL,                           -- vendor's own invoice number
+  remarks       NVARCHAR(500) NULL,
+  total_value   DECIMAL(14,2) NOT NULL CONSTRAINT DF_pur_total  DEFAULT (0),
+  due_date      DATE          NULL,                           -- §12 vendor payable; optional
+  status        VARCHAR(10)   NOT NULL CONSTRAINT DF_pur_status DEFAULT ('UNPOSTED'),
+  created_by    INT           NULL,
+  created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_pur_created DEFAULT (SYSUTCDATETIME()),
+  updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_pur_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_purchases        PRIMARY KEY (purchase_id),
+  CONSTRAINT FK_purchases_vendor FOREIGN KEY (vendor_id)  REFERENCES dbo.vendors(vendor_id),
+  CONSTRAINT FK_purchases_user   FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT CK_purchases_status CHECK (status IN ('POSTED','UNPOSTED'))
+);
+CREATE INDEX IX_purchases_date   ON dbo.purchases(purchase_date);
+CREATE INDEX IX_purchases_vendor ON dbo.purchases(vendor_id, purchase_date);
+CREATE INDEX IX_purchases_due    ON dbo.purchases(due_date) WHERE due_date IS NOT NULL;
+
+CREATE TABLE dbo.purchase_items (
+  item_id        INT IDENTITY(1,1) NOT NULL,
+  purchase_id    INT           NOT NULL,
+  material_id    INT           NOT NULL,                      -- dropdown from dbo.materials; auto-created if new
+  unit           NVARCHAR(30)  NOT NULL,                      -- self-assigned: Meters, Buckles, KG...
+  quantity       DECIMAL(14,3) NOT NULL,
+  weight         DECIMAL(14,3) NULL,                          -- §2 "weight" field; informational
+  price_per_unit DECIMAL(12,2) NOT NULL,
+  total_price    DECIMAL(14,2) NOT NULL,                      -- auto = quantity x price_per_unit
+  line_no        INT           NOT NULL CONSTRAINT DF_pui_line DEFAULT (1),
+  created_at     DATETIME2(0)  NOT NULL CONSTRAINT DF_pui_created DEFAULT (SYSUTCDATETIME()),
+  updated_at     DATETIME2(0)  NOT NULL CONSTRAINT DF_pui_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_purchase_items          PRIMARY KEY (item_id),
+  CONSTRAINT FK_purchase_items_purchase FOREIGN KEY (purchase_id) REFERENCES dbo.purchases(purchase_id) ON DELETE CASCADE,
+  CONSTRAINT FK_purchase_items_material FOREIGN KEY (material_id) REFERENCES dbo.materials(material_id),
+  CONSTRAINT CK_purchase_items_qty      CHECK (quantity > 0),
+  CONSTRAINT CK_purchase_items_price    CHECK (price_per_unit >= 0)
+);
+CREATE INDEX IX_purchase_items_purchase ON dbo.purchase_items(purchase_id);
+CREATE INDEX IX_purchase_items_material ON dbo.purchase_items(material_id);
+```
+
+`purchase_returns` / `purchase_return_items` mirror the two tables above (§10 gap 1: Purchase
+Return gets its own dedicated page and tables, mirroring Sale Return exactly).
+
+```sql
+CREATE TABLE dbo.purchase_returns (
+  return_id   INT IDENTITY(1,1) NOT NULL,
+  return_date DATE          NOT NULL,
+  vendor_id   INT           NOT NULL,
+  bill_no     VARCHAR(30)   NULL,
+  remarks     NVARCHAR(500) NULL,                             -- return reason
+  total_value DECIMAL(14,2) NOT NULL CONSTRAINT DF_pret_total  DEFAULT (0),
+  status      VARCHAR(10)   NOT NULL CONSTRAINT DF_pret_status DEFAULT ('UNPOSTED'),
+  created_by  INT           NULL,
+  created_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_pret_created DEFAULT (SYSUTCDATETIME()),
+  updated_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_pret_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_purchase_returns        PRIMARY KEY (return_id),
+  CONSTRAINT FK_purchase_returns_vendor FOREIGN KEY (vendor_id)  REFERENCES dbo.vendors(vendor_id),
+  CONSTRAINT FK_purchase_returns_user   FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT CK_purchase_returns_status CHECK (status IN ('POSTED','UNPOSTED'))
+);
+CREATE INDEX IX_purchase_returns_date   ON dbo.purchase_returns(return_date);
+CREATE INDEX IX_purchase_returns_vendor ON dbo.purchase_returns(vendor_id, return_date);
+
+CREATE TABLE dbo.purchase_return_items (
+  item_id        INT IDENTITY(1,1) NOT NULL,
+  return_id      INT           NOT NULL,
+  material_id    INT           NOT NULL,
+  unit           NVARCHAR(30)  NOT NULL,
+  quantity       DECIMAL(14,3) NOT NULL,
+  weight         DECIMAL(14,3) NULL,
+  price_per_unit DECIMAL(12,2) NOT NULL,
+  total_price    DECIMAL(14,2) NOT NULL,
+  line_no        INT           NOT NULL CONSTRAINT DF_pri_line DEFAULT (1),
+  created_at     DATETIME2(0)  NOT NULL CONSTRAINT DF_pri_created DEFAULT (SYSUTCDATETIME()),
+  updated_at     DATETIME2(0)  NOT NULL CONSTRAINT DF_pri_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_purchase_return_items          PRIMARY KEY (item_id),
+  CONSTRAINT FK_purchase_return_items_return   FOREIGN KEY (return_id)   REFERENCES dbo.purchase_returns(return_id) ON DELETE CASCADE,
+  CONSTRAINT FK_purchase_return_items_material FOREIGN KEY (material_id) REFERENCES dbo.materials(material_id),
+  CONSTRAINT CK_purchase_return_items_qty      CHECK (quantity > 0)
+);
+CREATE INDEX IX_purchase_return_items_return   ON dbo.purchase_return_items(return_id);
+CREATE INDEX IX_purchase_return_items_material ON dbo.purchase_return_items(material_id);
+```
+
+### 5.8 Money — receipts and expenses
+
+```sql
+CREATE TABLE dbo.receipts (                                   -- Jamma
+  receipt_id           INT IDENTITY(1,1) NOT NULL,
+  receipt_date         DATE          NOT NULL,
+  customer_id          INT           NOT NULL,
+  amount               DECIMAL(14,2) NOT NULL,
+  commission           DECIMAL(14,2) NOT NULL CONSTRAINT DF_rec_comm DEFAULT (0),  -- §7: payment-time only
+  payment_mode         VARCHAR(10)   NOT NULL,
+  details              NVARCHAR(200) NULL,                    -- bank name / online reference
+  cheque_no            VARCHAR(50)   NULL,                    -- §12 / TASK-16 sub-columns
+  cheque_date          DATE          NULL,                    -- date written on the cheque
+  cheque_received_date DATE          NULL,                    -- date WentoX physically received it
+  cheque_status        VARCHAR(20)   NULL,
+  remarks              NVARCHAR(500) NULL,                    -- narration source for Account Ledger (§5)
+  status               VARCHAR(10)   NOT NULL CONSTRAINT DF_rec_status  DEFAULT ('POSTED'),
+  created_by           INT           NULL,
+  created_at           DATETIME2(0)  NOT NULL CONSTRAINT DF_rec_created DEFAULT (SYSUTCDATETIME()),
+  updated_at           DATETIME2(0)  NOT NULL CONSTRAINT DF_rec_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_receipts        PRIMARY KEY (receipt_id),
+  CONSTRAINT FK_receipts_cust   FOREIGN KEY (customer_id) REFERENCES dbo.customers(customer_id),
+  CONSTRAINT FK_receipts_user   FOREIGN KEY (created_by)  REFERENCES dbo.users(user_id),
+  CONSTRAINT CK_receipts_amount CHECK (amount > 0),
+  CONSTRAINT CK_receipts_comm   CHECK (commission >= 0),
+  CONSTRAINT CK_receipts_mode   CHECK (payment_mode IN ('CASH','CHEQUE','ONLINE')),
+  CONSTRAINT CK_receipts_status CHECK (status IN ('POSTED','UNPOSTED')),
+  CONSTRAINT CK_receipts_chqst  CHECK (cheque_status IS NULL OR cheque_status IN
+        ('PENDING','DEPOSITED','ENDORSED','PARTIALLY_ENDORSED','CLEARED','BOUNCED')),
+  -- a cheque receipt must carry its cheque identity; a non-cheque receipt must not
+  CONSTRAINT CK_receipts_cheque CHECK (
+        (payment_mode =  'CHEQUE' AND cheque_no IS NOT NULL AND cheque_date IS NOT NULL
+                                   AND cheque_status IS NOT NULL)
+     OR (payment_mode <> 'CHEQUE' AND cheque_no IS NULL AND cheque_date IS NULL
+                                   AND cheque_status IS NULL))
+);
+CREATE INDEX IX_receipts_date     ON dbo.receipts(receipt_date);
+CREATE INDEX IX_receipts_customer ON dbo.receipts(customer_id, receipt_date);
+CREATE INDEX IX_receipts_chqdue   ON dbo.receipts(cheque_date)                  -- §12 cheque-due alerts
+       WHERE payment_mode = 'CHEQUE' AND cheque_status IN ('PENDING','PARTIALLY_ENDORSED');
+
+CREATE TABLE dbo.expenses (                                   -- Kharch; also the vendor-payment path (§10 gap 2)
+  expense_id   INT IDENTITY(1,1) NOT NULL,
+  expense_date DATE          NOT NULL,
+  ba_id        INT           NOT NULL,                        -- expense head / vendor account
+  amount       DECIMAL(14,2) NOT NULL,
+  payment_mode VARCHAR(10)   NOT NULL,
+  details      NVARCHAR(200) NULL,
+  cheque_no    VARCHAR(50)   NULL,                            -- Cash Book needs the cheque no on payments too
+  cheque_date  DATE          NULL,
+  remarks      NVARCHAR(500) NULL,
+  status       VARCHAR(10)   NOT NULL CONSTRAINT DF_exp_status  DEFAULT ('POSTED'),
+  created_by   INT           NULL,
+  created_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_exp_created DEFAULT (SYSUTCDATETIME()),
+  updated_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_exp_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_expenses        PRIMARY KEY (expense_id),
+  CONSTRAINT FK_expenses_ba     FOREIGN KEY (ba_id)      REFERENCES dbo.business_accounts(ba_id),
+  CONSTRAINT FK_expenses_user   FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT CK_expenses_amount CHECK (amount > 0),
+  CONSTRAINT CK_expenses_mode   CHECK (payment_mode IN ('CASH','CHEQUE','ONLINE')),
+  CONSTRAINT CK_expenses_status CHECK (status IN ('POSTED','UNPOSTED'))
+);
+CREATE INDEX IX_expenses_date ON dbo.expenses(expense_date);
+CREATE INDEX IX_expenses_ba   ON dbo.expenses(ba_id, expense_date);
+```
+
+### 5.9 Derived-state ledgers
+
+```sql
+CREATE TABLE dbo.stock_movements (                            -- finished goods, in PAIRS
+  movement_id   INT IDENTITY(1,1) NOT NULL,
+  variant_id    INT           NOT NULL,
+  movement_type VARCHAR(15)   NOT NULL,
+  qty_pairs     INT           NOT NULL,                       -- signed: SALE negative, PRODUCTION/SALE_RETURN positive
+  movement_date DATE          NOT NULL,
+  input_qty     INT           NULL,                           -- PRODUCTION only: qty as the user typed it
+  input_unit    VARCHAR(10)   NULL,                           -- PRODUCTION only: CARTONS | PAIRS
+  packing       INT           NULL,                           -- PRODUCTION only: packing snapshot
+  source_type   VARCHAR(20)   NULL,                           -- SALE_BILL | SALE_RETURN | NULL (manual/production)
+  source_id     INT           NULL,
+  remarks       NVARCHAR(500) NULL,
+  created_by    INT           NULL,
+  created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_sm_created DEFAULT (SYSUTCDATETIME()),
+  updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_sm_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_stock_movements         PRIMARY KEY (movement_id),
+  CONSTRAINT FK_stock_movements_variant FOREIGN KEY (variant_id) REFERENCES dbo.article_colors(variant_id),
+  CONSTRAINT FK_stock_movements_user    FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT CK_stock_movements_type    CHECK (movement_type IN
+        ('OPENING','ADJUSTMENT','PRODUCTION','SALE','SALE_RETURN')),   -- deliberately no PURCHASE, see §2.2
+  CONSTRAINT CK_stock_movements_unit    CHECK (input_unit IS NULL OR input_unit IN ('CARTONS','PAIRS')),
+  CONSTRAINT CK_stock_movements_sign    CHECK (
+        (movement_type = 'SALE'                              AND qty_pairs < 0)
+     OR (movement_type IN ('PRODUCTION','SALE_RETURN')       AND qty_pairs > 0)
+     OR (movement_type IN ('OPENING','ADJUSTMENT')))
+);
+CREATE INDEX IX_stock_movements_variant ON dbo.stock_movements(variant_id, movement_date);
+CREATE INDEX IX_stock_movements_date    ON dbo.stock_movements(movement_date);
+CREATE INDEX IX_stock_movements_source  ON dbo.stock_movements(source_type, source_id);
+
+CREATE TABLE dbo.vendor_stock_movements (                     -- raw materials, in MATERIAL UNITS
+  movement_id   INT IDENTITY(1,1) NOT NULL,
+  vendor_id     INT           NOT NULL,
+  material_id   INT           NOT NULL,
+  unit          NVARCHAR(30)  NOT NULL,
+  qty           DECIMAL(14,3) NOT NULL,                       -- signed: PURCHASE +, RETURN/CONSUMPTION -
+  movement_date DATE          NOT NULL,
+  movement_type VARCHAR(20)   NOT NULL,
+  source_type   VARCHAR(20)   NULL,                           -- PURCHASE | PURCHASE_RETURN | NULL (manual)
+  source_id     INT           NULL,
+  remarks       NVARCHAR(500) NULL,
+  created_by    INT           NULL,
+  created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_vsm_created DEFAULT (SYSUTCDATETIME()),
+  updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_vsm_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_vendor_stock_movements          PRIMARY KEY (movement_id),
+  CONSTRAINT FK_vendor_stock_movements_vendor   FOREIGN KEY (vendor_id)   REFERENCES dbo.vendors(vendor_id),
+  CONSTRAINT FK_vendor_stock_movements_material FOREIGN KEY (material_id) REFERENCES dbo.materials(material_id),
+  CONSTRAINT FK_vendor_stock_movements_user     FOREIGN KEY (created_by)  REFERENCES dbo.users(user_id),
+  CONSTRAINT CK_vendor_stock_movements_type   CHECK (movement_type IN
+        ('PURCHASE','PURCHASE_RETURN','CONSUMPTION','ADJUSTMENT')),
+  CONSTRAINT CK_vendor_stock_movements_sign   CHECK (
+        (movement_type = 'PURCHASE'                            AND qty > 0)
+     OR (movement_type IN ('PURCHASE_RETURN','CONSUMPTION')    AND qty < 0)
+     OR (movement_type = 'ADJUSTMENT'))
+);
+CREATE INDEX IX_vendor_stock_vendor   ON dbo.vendor_stock_movements(vendor_id, material_id);
+CREATE INDEX IX_vendor_stock_material ON dbo.vendor_stock_movements(material_id);
+CREATE INDEX IX_vendor_stock_date     ON dbo.vendor_stock_movements(movement_date);
+CREATE INDEX IX_vendor_stock_source   ON dbo.vendor_stock_movements(source_type, source_id);
+```
+
+> **Vendor Stock page (§14)** is exactly:
+> ```sql
+> SELECT v.name AS vendor, m.name AS material, vsm.unit, SUM(vsm.qty) AS on_hand
+> FROM dbo.vendor_stock_movements AS vsm
+> JOIN dbo.vendors   AS v ON v.vendor_id   = vsm.vendor_id
+> JOIN dbo.materials AS m ON m.material_id = vsm.material_id
+> GROUP BY v.name, m.name, vsm.unit
+> HAVING SUM(vsm.qty) <> 0;
+> ```
+> The manual "this much has been used" reduction (§2 decision 5) inserts a single `CONSUMPTION`
+> row with a negative `qty` and `source_type = NULL`.
+
+```sql
+CREATE TABLE dbo.ledger_entries (                             -- double-entry journal
+  entry_id    INT IDENTITY(1,1) NOT NULL,
+  entry_date  DATE          NOT NULL,
+  ac_id       INT           NULL,                             -- exactly one of ac_id / ba_id is set
+  ba_id       INT           NULL,
+  debit       DECIMAL(14,2) NOT NULL CONSTRAINT DF_le_debit  DEFAULT (0),
+  credit      DECIMAL(14,2) NOT NULL CONSTRAINT DF_le_credit DEFAULT (0),
+  source_type VARCHAR(20)   NOT NULL,
+  source_id   INT           NOT NULL,
+  narration   NVARCHAR(500) NULL,
+  pairs       INT           NULL,                             -- TASK-16 Pairs column; NULL on payment rows
+  created_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_le_created DEFAULT (SYSUTCDATETIME()),
+  updated_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_le_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_ledger_entries       PRIMARY KEY (entry_id),
+  CONSTRAINT FK_ledger_entries_chart FOREIGN KEY (ac_id) REFERENCES dbo.chart_of_accounts(ac_id),
+  CONSTRAINT FK_ledger_entries_ba    FOREIGN KEY (ba_id) REFERENCES dbo.business_accounts(ba_id),
+  CONSTRAINT CK_ledger_entries_one   CHECK ((CASE WHEN ac_id IS NULL THEN 0 ELSE 1 END)
+                                          + (CASE WHEN ba_id IS NULL THEN 0 ELSE 1 END) = 1),
+  CONSTRAINT CK_ledger_entries_side  CHECK (debit = 0 OR credit = 0),
+  CONSTRAINT CK_ledger_entries_sign  CHECK (debit >= 0 AND credit >= 0),
+  CONSTRAINT CK_ledger_entries_src   CHECK (source_type IN
+        ('SALE_BILL','SALE_RETURN','RECEIPT','COMMISSION','EXPENSE',
+         'PURCHASE','PURCHASE_RETURN','CHEQUE_ALLOCATION','OPENING'))
+);
+CREATE INDEX IX_ledger_entries_ba     ON dbo.ledger_entries(ba_id, entry_date) WHERE ba_id IS NOT NULL;
+CREATE INDEX IX_ledger_entries_ac     ON dbo.ledger_entries(ac_id, entry_date) WHERE ac_id IS NOT NULL;
+CREATE INDEX IX_ledger_entries_source ON dbo.ledger_entries(source_type, source_id);
+CREATE INDEX IX_ledger_entries_date   ON dbo.ledger_entries(entry_date);
+```
+
+> Opening balances are `source_type = 'OPENING'` rows dated before the first transaction — that is
+> what TASK-16's "Opening Balance" and TASK-15's "Opening Cash" read.
+
+### 5.10 Planned — cheque alerts and endorsement (§12, §13)
+
+These two tables complete the design but back features marked **"planning only — not started"** in
+`architecture-v2.md`. They are included so the schema does not need re-cutting later; they can be
+dropped from the first migration if you would rather ship without them.
+
+```sql
+CREATE TABLE dbo.cheque_allocations (                         -- §13 endorsement / pass-through
+  allocation_id    INT IDENTITY(1,1) NOT NULL,
+  receipt_id       INT           NOT NULL,
+  disposition_type VARCHAR(20)   NOT NULL,                    -- DEPOSIT | VENDOR_PAYMENT | EXPENSE_PAYMENT
+  target_type      VARCHAR(20)   NULL,                        -- VENDOR | BUSINESS_ACCOUNT (NULL for DEPOSIT)
+  target_id        INT           NULL,
+  amount           DECIMAL(14,2) NOT NULL,
+  allocation_date  DATE          NOT NULL,                    -- Cash Book dates the outflow by THIS date
+  remarks          NVARCHAR(500) NULL,
+  status           VARCHAR(10)   NOT NULL CONSTRAINT DF_ca_status  DEFAULT ('ACTIVE'),
+  created_by       INT           NULL,
+  created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_ca_created DEFAULT (SYSUTCDATETIME()),
+  updated_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_ca_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_cheque_allocations         PRIMARY KEY (allocation_id),
+  CONSTRAINT FK_cheque_allocations_receipt FOREIGN KEY (receipt_id) REFERENCES dbo.receipts(receipt_id),
+  CONSTRAINT FK_cheque_allocations_user    FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT CK_cheque_allocations_amount  CHECK (amount > 0),
+  CONSTRAINT CK_cheque_allocations_disp    CHECK (disposition_type IN
+        ('DEPOSIT','VENDOR_PAYMENT','EXPENSE_PAYMENT')),
+  CONSTRAINT CK_cheque_allocations_target  CHECK (
+        (disposition_type =  'DEPOSIT' AND target_type IS NULL     AND target_id IS NULL)
+     OR (disposition_type <> 'DEPOSIT' AND target_type IN ('VENDOR','BUSINESS_ACCOUNT')
+                                       AND target_id IS NOT NULL)),
+  CONSTRAINT CK_cheque_allocations_status  CHECK (status IN ('ACTIVE','REVERSED'))
+);
+CREATE INDEX IX_cheque_allocations_receipt ON dbo.cheque_allocations(receipt_id);
+CREATE INDEX IX_cheque_allocations_date    ON dbo.cheque_allocations(allocation_date);
+CREATE INDEX IX_cheque_allocations_target  ON dbo.cheque_allocations(target_type, target_id);
+
+CREATE TABLE dbo.alert_dismissals (                           -- §12 snooze/dismiss derived alerts
+  dismissal_id    INT IDENTITY(1,1) NOT NULL,
+  alert_key       VARCHAR(100)  NOT NULL,                     -- e.g. 'CHEQUE_DUE:receipt:1423'
+  user_id         INT           NULL,
+  dismissed_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_ad_at    DEFAULT (SYSUTCDATETIME()),
+  dismissed_until DATETIME2(0)  NULL,                          -- NULL = dismissed permanently
+  created_at      DATETIME2(0)  NOT NULL CONSTRAINT DF_ad_created DEFAULT (SYSUTCDATETIME()),
+  updated_at      DATETIME2(0)  NOT NULL CONSTRAINT DF_ad_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_alert_dismissals      PRIMARY KEY (dismissal_id),
+  CONSTRAINT FK_alert_dismissals_user FOREIGN KEY (user_id) REFERENCES dbo.users(user_id)
+);
+CREATE INDEX IX_alert_dismissals_key ON dbo.alert_dismissals(alert_key);
+```
+
+**Bounced-cheque cascade (§13):** setting `receipts.cheque_status = 'BOUNCED'` must, in the same
+transaction, flip every `cheque_allocations` row for that receipt to `REVERSED` and delete/reverse
+the ledger rows on both sides. This is application logic — no constraint can express it — but it is
+the single most important rule attached to these two tables.
+
+---
+
+## 6. Posting matrix
+
+Posting a document writes these rows in **one transaction**; unposting deletes them in one
+transaction. `CUSTOMER BA` / `VENDOR BA` mean the party's `business_accounts` row.
+
+| Document | Debit | Credit | Also writes |
+|---|---|---|---|
+| Sale Bill (`net_value`) | CUSTOMER BA | SALES chart account | negative `SALE` stock movements per line |
+| Sale Return (`net_value`) | SALES chart account | CUSTOMER BA | positive `SALE_RETURN` stock movements |
+| Purchase (`total_value`) | PURCHASES chart account | VENDOR BA | positive `PURCHASE` vendor-stock movements |
+| Purchase Return (`total_value`) | VENDOR BA | PURCHASES chart account | negative `PURCHASE_RETURN` vendor-stock movements |
+| Receipt — amount | CASH or BANK chart account | CUSTOMER BA | — |
+| Receipt — commission (§7) | COMMISSION ALLOWED chart account | CUSTOMER BA | separate ledger row, `source_type='COMMISSION'` |
+| Expense | Expense head BA | CASH or BANK chart account | — |
+| Cheque allocation — VENDOR_PAYMENT | VENDOR BA | CHEQUES IN HAND | `source_type='CHEQUE_ALLOCATION'` |
+| Cheque allocation — EXPENSE_PAYMENT | Target BA | CHEQUES IN HAND | `source_type='CHEQUE_ALLOCATION'` |
+| Production | — | — | positive `PRODUCTION` stock movements only (no ledger effect) |
+
+**Commission worked example (§7)** — the sale bill is never altered:
+
+```
+Sale Bill   Debit  1,020,000     (posted, unchanged)
+Commission  Credit    20,000     (recorded at payment time)
+Payment     Credit 1,000,000
+Balance   = 1,020,000 - (20,000 + 1,000,000) = 0   ✓
+```
+
+Per §10 gap 4, the Receipts screen and the ledger must show **both** figures explicitly — amount
+owed before commission and after — not only the net balance. Both are derivable: the "before"
+figure is the running balance excluding `source_type='COMMISSION'` rows.
+
+---
+
+## 7. Report → source map
+
+Every report in §9 answered from the tables above, with no report-specific storage.
+
+| Report | Reads |
+|---|---|
+| Current Stock (TASK-03) | `stock_movements` grouped by `variant_id`, rolled up to `articles` |
+| Product Ledger (TASK-02) | `stock_movements` filtered by date / vendor / article / category |
+| **Vendor Stock (§14)** | `vendor_stock_movements` grouped by vendor + material + unit |
+| Account Ledger / Khaata (TASK-16) | `ledger_entries` for one `ba_id` + `sale_bills` (Inv#/Bill#) + `receipts` (cheque sub-columns) |
+| Cash Book (TASK-15) | `receipts` + `expenses` + `cheque_allocations`, split by `payment_mode`; opening cash from `OPENING` rows |
+| Business Ledger | `ledger_entries` joined to `business_accounts` |
+| Sale Analysis (TASK-09) | `sale_bills` + `sale_returns` + `receipts`, grouped by customer or by `customers.region_id` |
+| Sale Report (TASK-18) | as above; **Commission column = `SUM(receipts.commission)`**, not sale-time discounts (§7) |
+| Vendor Report (TASK-10) | `purchases` + `purchase_returns` by `vendor_id`, joined to `expenses` via `vendors.ba_id` for Payment Paid |
+| Payment Trail (TASK-17) | `expenses` joined up to `chart_of_accounts`, grouped by chart account |
+| Notifications (§12) | `receipts` (cheque due) + `sale_bills`/`purchases` with `due_date` past, minus `alert_dismissals` |
+
+The two things this map depends on are worth stating plainly: **Vendor Report only reconciles
+because `vendors.ba_id` ties the purchase side to the payment side**, and **Payment Trail's five
+categories are chart accounts**, so they must be seeded (§8) rather than inferred from names.
+
+---
+
+## 8. Required seed data
+
+The schema is not usable until these rows exist — several are referenced by code paths, not just
+by convention.
+
+| Kind | Rows |
+|---|---|
+| User | One `ADMIN` user (bcrypt hash) |
+| Group accounts | `ASSETS` (1000), `LIABILITY` (2000), `INCOME` (3000), `EXPENSES` (4000) |
+| Chart — reserved | **CUSTOMERS ACCOUNTS** (parent of every customer BA), **VENDORS ACCOUNTS** (parent of every vendor BA, §10 gap 2) |
+| Chart — posting targets | **CASH IN HAND**, **SALES**, **PURCHASES**, **COMMISSION ALLOWED**, **CHEQUES IN HAND** |
+| Chart — Payment Trail (TASK-17) | Business Running Expenses, **Cash at Banks**, **Directors Expenses - Drawings**, Employees, Vendors - Suppliers |
+| Restricted flag (§8/TASK-14) | `is_restricted = 1` on **Cash at Banks** and **Directors Expenses - Drawings** |
+| Store | One default store (single-store business) |
+
+The reserved chart accounts must be resolvable from app config by `code`, so the vendor/customer
+auto-create logic and the posting logic never hardcode an `ac_id`.
+
+---
+
+## 9. `updated_at` triggers
+
+MS SQL has no shared trigger function, so each table needs its own. Template:
+
+```sql
+CREATE TRIGGER dbo.TR_articles_updated ON dbo.articles AFTER UPDATE AS
 BEGIN
-  NEW.updated_at = now();
-  RETURN NEW;
+  SET NOCOUNT ON;
+  UPDATE t SET updated_at = SYSUTCDATETIME()
+  FROM dbo.articles AS t
+  INNER JOIN inserted AS i ON t.article_id = i.article_id;
 END;
-$$ LANGUAGE plpgsql;
--- CREATE TRIGGER trg_<table>_updated BEFORE UPDATE ON <table>
---   FOR EACH ROW EXECUTE FUNCTION set_updated_at();   (one per table)
+```
+
+Rather than hand-writing 29 of these, the migration generates them:
+
+```sql
+DECLARE @sql NVARCHAR(MAX) = N'';
+SELECT @sql = @sql + N'
+CREATE TRIGGER dbo.TR_' + t.name + N'_updated ON dbo.' + QUOTENAME(t.name) + N' AFTER UPDATE AS
+BEGIN
+  SET NOCOUNT ON;
+  UPDATE x SET updated_at = SYSUTCDATETIME()
+  FROM dbo.' + QUOTENAME(t.name) + N' AS x
+  INNER JOIN inserted AS i ON x.' + QUOTENAME(pk.name) + N' = i.' + QUOTENAME(pk.name) + N';
+END;'
+FROM sys.tables AS t
+CROSS APPLY (SELECT TOP 1 c.name FROM sys.index_columns ic
+             JOIN sys.indexes  i ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+             JOIN sys.columns  c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+             WHERE i.is_primary_key = 1 AND ic.object_id = t.object_id) AS pk
+WHERE EXISTS (SELECT 1 FROM sys.columns c
+              WHERE c.object_id = t.object_id AND c.name = 'updated_at');
+EXEC sp_executesql @sql;
 ```
 
 ---
 
-## 1. System / Auth
+## 10. Table inventory (30)
 
-### users  *(UC-19, UC-20 — new)*
+| # | Table | Purpose | New |
+|---|---|---|---|
+| 1 | `users` | auth + role (§8) | role is new |
+| 2 | `regions` | §10 gap 6 / TASK-07 | ✅ |
+| 3 | `cities` | city lookup | |
+| 4 | `stores` | bill metadata | |
+| 5 | `addas` | transport terminals | |
+| 6 | `materials` | self-building purchase-material lookup (§4.3) | ✅ |
+| 7 | `product_categories` | TASK-03 category column | |
+| 8 | `articles` | TASK-03 main rows | ✅ (replaces `products`) |
+| 9 | `article_colors` | TASK-03 colour sub-rows | ✅ |
+| 10 | `group_accounts` | class level | |
+| 11 | `chart_of_accounts` | now parented by group (TASK-11) | reshaped |
+| 12 | `business_accounts` | leaf ledger accounts | reshaped |
+| 13 | `vendors` | + `ba_id` link (§10 gap 2) | reshaped |
+| 14 | `customers` | + `ba_id`, `region_id` | reshaped |
+| 15 | `sub_customers` | parent FK removed (TASK-06) | reshaped |
+| 16 | `sale_bills` | + `due_date`, `main_ac_id` | |
+| 17 | `sale_bill_items` | now keyed on `variant_id` | |
+| 18 | `sale_returns` | | |
+| 19 | `sale_return_items` | | |
+| 20 | `purchases` | TASK-01 | ✅ |
+| 21 | `purchase_items` | material lines, `material_id` FK | ✅ |
+| 22 | `purchase_returns` | §10 gap 1 | ✅ |
+| 23 | `purchase_return_items` | | ✅ |
+| 24 | `receipts` | + commission + cheque fields | |
+| 25 | `expenses` | also the vendor-payment path | |
+| 26 | `stock_movements` | pairs ledger, keyed on variant | reshaped |
+| 27 | `vendor_stock_movements` | material ledger (§14) | ✅ |
+| 28 | `ledger_entries` | real FKs instead of polymorphic id | reshaped |
+| 29 | `cheque_allocations` | §13 — planned | ✅ |
+| 30 | `alert_dismissals` | §12 — planned | ✅ |
 
-```sql
-CREATE TABLE users (
-  user_id       INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  username      VARCHAR(50)  NOT NULL UNIQUE,
-  password_hash VARCHAR(100) NOT NULL,           -- bcrypt
-  created_at    TIMESTAMPTZ  NOT NULL DEFAULT now(),
-  updated_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
-);
--- Seed: one admin user.
-```
-
----
-
-## 2. Setup / Lookup Tables
-
-All four share the same shape (UC-14 cities; stores; addas; vendors):
-
-```sql
-CREATE TABLE cities (
-  city_id    INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  name       VARCHAR(100) NOT NULL UNIQUE,
-  is_active  BOOLEAN      NOT NULL DEFAULT true,
-  created_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ  NOT NULL DEFAULT now()
-);
-
-CREATE TABLE stores  (LIKE cities INCLUDING ALL);  -- store_id PK, name UNIQUE  (illustrative; real DDL spells columns out)
-CREATE TABLE addas   (LIKE cities INCLUDING ALL);  -- adda_id  PK, name UNIQUE (UC-21: delete blocked if referenced by sale bills)
-
-CREATE TABLE vendors (
-  vendor_id  INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  name       VARCHAR(100) NOT NULL UNIQUE,
-  phone      VARCHAR(30),
-  city       VARCHAR(100),
-  is_active  BOOLEAN      NOT NULL DEFAULT true,
-  created_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ  NOT NULL DEFAULT now()
-);
-```
-
-> In the actual migration each table is written out explicitly with its own PK column name
-> (`store_id`, `adda_id`) — same columns as `cities` otherwise.
-> UC-21: hard-deleting an adda is blocked when sale bills reference it (FK RESTRICT); use
-> `is_active = false` instead.
+**Removed:** `control_accounts` (TASK-11), `products` (superseded by `articles` + `article_colors`).
 
 ---
 
-## 3. Product Tables
+## 11. Deviations from `architecture-v2.md`
 
-### product_categories  *(UC-12)*
+Called out so the review is against a known baseline rather than a silent reinterpretation.
 
-```sql
-CREATE TABLE product_categories (
-  category_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  name        VARCHAR(100) NOT NULL UNIQUE,
-  is_active   BOOLEAN      NOT NULL DEFAULT true,
-  created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
-  updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
-);
-```
-
-### products  *(UC-11)*
-
-```sql
-CREATE TABLE products (
-  product_id    INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  name          VARCHAR(150) NOT NULL,
-  color         VARCHAR(50),
-  category_id   INT NOT NULL REFERENCES product_categories(category_id),
-  vendor_id     INT REFERENCES vendors(vendor_id),
-  batch_no      VARCHAR(50),
-  packing       INT NOT NULL CHECK (packing > 0),   -- pairs per carton (usually 12)
-  cost_price    NUMERIC(12,2) NOT NULL DEFAULT 0,
-  -- cost breakdown (per wento_docs; names kept as-is from the legacy system)
-  labour        NUMERIC(12,2) NOT NULL DEFAULT 0,
-  proi_cost     NUMERIC(12,2) NOT NULL DEFAULT 0,
-  sole_stich    NUMERIC(12,2) NOT NULL DEFAULT 0,
-  pasting       NUMERIC(12,2) NOT NULL DEFAULT 0,
-  trim          NUMERIC(12,2) NOT NULL DEFAULT 0,
-  finishing     NUMERIC(12,2) NOT NULL DEFAULT 0,
-  socks_pasting NUMERIC(12,2) NOT NULL DEFAULT 0,
-  dc            NUMERIC(12,2) NOT NULL DEFAULT 0,
-  sock_stich    NUMERIC(12,2) NOT NULL DEFAULT 0,
-  sheet         NUMERIC(12,2) NOT NULL DEFAULT 0,
-  stubble       NUMERIC(12,2) NOT NULL DEFAULT 0,
-  bottom        NUMERIC(12,2) NOT NULL DEFAULT 0,
-  p1            NUMERIC(12,2) NOT NULL DEFAULT 0,
-  p2            NUMERIC(12,2) NOT NULL DEFAULT 0,
-  na            NUMERIC(12,2) NOT NULL DEFAULT 0,
-  is_active     BOOLEAN     NOT NULL DEFAULT true,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_products_category ON products(category_id);
-CREATE INDEX idx_products_vendor   ON products(vendor_id);
-CREATE INDEX idx_products_name     ON products(name);
-```
+1. **`stock_movements` gains no `PURCHASE`/`PURCHASE_RETURN` values**, contradicting §6 and §10
+   gap 5. Superseded by the client's decision that purchases are raw materials tracked in a
+   separate vendor stock (§2 decisions 1–3). §14's Vendor Stock is therefore in material units,
+   not pairs.
+2. **§10 gap 2 says the vendor's business account sits "under a 'Vendors' `group_accounts` group".**
+   With Control Accounts removed the hierarchy is Group → Chart → Business, so a business account's
+   parent is a *chart* account. Modelled here as a reserved **VENDORS ACCOUNTS chart account**,
+   under the LIABILITY group. Same intent, one level down.
+3. **`chart_of_accounts.is_restricted`** is an addition — §8 names the two restricted areas but not
+   a mechanism. A flag keeps the rule in data rather than in hardcoded name matching.
+4. **`expenses.cheque_no` / `cheque_date`** are an inference from §4's Cash Book requirement for a
+   per-cheque/online/cash breakdown on the payments side.
+5. **`purchase_items.weight`** is nullable and informational. §2 lists Weight among the Purchase
+   fields, but nothing downstream consumes it, so `quantity` (in `unit`) drives value and stock.
+6. **`ledger_entries` splits the polymorphic `account_id`** into two nullable FK columns, so SQL
+   Server can enforce the reference. Behaviourally identical, strictly safer.
 
 ---
 
-## 4. Accounts Hierarchy (Class → Group → Control → Chart/Business)
+## 12. Open questions
 
-### group_accounts  *(UC-15)*
-
-```sql
-CREATE TABLE group_accounts (
-  group_id   INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  name       VARCHAR(100)  NOT NULL UNIQUE,
-  class      account_class NOT NULL,
-  created_at TIMESTAMPTZ   NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ   NOT NULL DEFAULT now()
-);
-```
-
-### control_accounts  *(UC-16)*
-
-```sql
-CREATE TABLE control_accounts (
-  control_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  name       VARCHAR(100) NOT NULL,
-  group_id   INT NOT NULL REFERENCES group_accounts(group_id),
-  sorting    INT NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (group_id, name)
-);
-CREATE INDEX idx_control_accounts_group ON control_accounts(group_id);
-```
-
-### chart_of_accounts  *(UC-17)*
-
-```sql
-CREATE TABLE chart_of_accounts (
-  ac_id      INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  name       VARCHAR(100)   NOT NULL,
-  control_id INT NOT NULL REFERENCES control_accounts(control_id),
-  link_code  VARCHAR(20),
-  status     account_status NOT NULL DEFAULT 'ACTIVE',
-  created_at TIMESTAMPTZ    NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ    NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_chart_accounts_control ON chart_of_accounts(control_id);
--- Seed: CASH and SALES accounts (codes referenced from app config).
-```
-
-### business_accounts  *(UC-18)*
-
-```sql
-CREATE TABLE business_accounts (
-  ba_id      INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  name       VARCHAR(100)   NOT NULL,
-  control_id INT NOT NULL REFERENCES control_accounts(control_id),
-  link_code  VARCHAR(20),
-  region     VARCHAR(50),
-  status     account_status NOT NULL DEFAULT 'ACTIVE',
-  created_at TIMESTAMPTZ    NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ    NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_business_accounts_control ON business_accounts(control_id);
-```
-
----
-
-## 5. Customer Tables
-
-### customers
-
-```sql
-CREATE TABLE customers (
-  customer_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  name        VARCHAR(150) NOT NULL,
-  ac_id       INT REFERENCES chart_of_accounts(ac_id),  -- main ledger account
-  city_id     INT REFERENCES cities(city_id),
-  is_active   BOOLEAN     NOT NULL DEFAULT true,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_customers_ac   ON customers(ac_id);
-CREATE INDEX idx_customers_city ON customers(city_id);
-```
-
-### sub_customers  *(UC-13 — delivery agents / middlemen)*
-
-```sql
-CREATE TABLE sub_customers (
-  sub_customer_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  name            VARCHAR(150) NOT NULL,
-  customer_id     INT NOT NULL REFERENCES customers(customer_id),
-  is_active       BOOLEAN     NOT NULL DEFAULT true,
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_sub_customers_customer ON sub_customers(customer_id);
-```
-
----
-
-## 6. Sales Tables
-
-### sale_bills  *(UC-01, UC-02, UC-07)*
-
-```sql
-CREATE TABLE sale_bills (
-  bill_id          INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  bill_date        DATE NOT NULL,
-  store_id         INT NOT NULL REFERENCES stores(store_id),
-  customer_id      INT NOT NULL REFERENCES customers(customer_id),
-  sub_customer_id  INT REFERENCES sub_customers(sub_customer_id),  -- NULL for SAME delivery
-  delivery_type    delivery_type NOT NULL DEFAULT 'SAME',
-  delivery_address TEXT,
-  bill_no          VARCHAR(30),
-  gp_no            VARCHAR(30),
-  bilty_no         VARCHAR(30),                     -- NULL until assigned (UC-07)
-  adda_id          INT REFERENCES addas(adda_id),   -- NULL until assigned (UC-07)
-  remarks          TEXT,
-  invoice_discount NUMERIC(12,2) NOT NULL DEFAULT 0,
-  total_cartons    INT           NOT NULL DEFAULT 0,
-  total_pairs      INT           NOT NULL DEFAULT 0,
-  gross_value      NUMERIC(14,2) NOT NULL DEFAULT 0,
-  net_value        NUMERIC(14,2) NOT NULL DEFAULT 0,
-  status           posting_status NOT NULL DEFAULT 'UNPOSTED',
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_sale_bills_date     ON sale_bills(bill_date);
-CREATE INDEX idx_sale_bills_customer ON sale_bills(customer_id);
-CREATE INDEX idx_sale_bills_no_bilty ON sale_bills(bill_date) WHERE bilty_no IS NULL;  -- UC-07 filter
-CREATE INDEX idx_sale_bills_no_adda  ON sale_bills(bill_date) WHERE adda_id  IS NULL;  -- UC-07 filter
-```
-
-### sale_bill_items
-
-```sql
-CREATE TABLE sale_bill_items (
-  item_id          INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  bill_id          INT NOT NULL REFERENCES sale_bills(bill_id) ON DELETE CASCADE,
-  product_id       INT NOT NULL REFERENCES products(product_id),
-  cartons          INT NOT NULL CHECK (cartons > 0),
-  pairs            INT NOT NULL CHECK (pairs > 0),          -- cartons × packing
-  rate             NUMERIC(12,2) NOT NULL,
-  discount_percent NUMERIC(5,2)  NOT NULL DEFAULT 0,
-  discount_value   NUMERIC(12,2) NOT NULL DEFAULT 0,
-  value            NUMERIC(14,2) NOT NULL,                  -- net line value
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_sale_bill_items_bill    ON sale_bill_items(bill_id);
-CREATE INDEX idx_sale_bill_items_product ON sale_bill_items(product_id);
-```
-
-### sale_returns  *(UC-03, UC-04)* — mirrors sale_bills (store = destination "TO" store)
-
-```sql
-CREATE TABLE sale_returns (
-  return_id        INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  return_date      DATE NOT NULL,
-  store_id         INT NOT NULL REFERENCES stores(store_id),
-  customer_id      INT NOT NULL REFERENCES customers(customer_id),
-  sub_customer_id  INT REFERENCES sub_customers(sub_customer_id),
-  bill_no          VARCHAR(30),
-  gp_no            VARCHAR(30),
-  bilty_no         VARCHAR(30),
-  adda_id          INT REFERENCES addas(adda_id),
-  remarks          TEXT,                                     -- return reason
-  invoice_discount NUMERIC(12,2) NOT NULL DEFAULT 0,
-  total_cartons    INT           NOT NULL DEFAULT 0,
-  total_pairs      INT           NOT NULL DEFAULT 0,
-  gross_value      NUMERIC(14,2) NOT NULL DEFAULT 0,
-  net_value        NUMERIC(14,2) NOT NULL DEFAULT 0,        -- credit value
-  status           posting_status NOT NULL DEFAULT 'UNPOSTED',
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_sale_returns_date     ON sale_returns(return_date);
-CREATE INDEX idx_sale_returns_customer ON sale_returns(customer_id);
-```
-
-### sale_return_items — same shape as sale_bill_items, FK `return_id → sale_returns ON DELETE CASCADE`.
-
----
-
-## 7. Money Tables
-
-### receipts (Jamma)  *(UC-05)*
-
-```sql
-CREATE TABLE receipts (
-  receipt_id   INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  receipt_date DATE NOT NULL,
-  customer_id  INT NOT NULL REFERENCES customers(customer_id),
-  amount       NUMERIC(14,2) NOT NULL CHECK (amount > 0),
-  payment_mode payment_mode  NOT NULL,
-  details      VARCHAR(200),                    -- cheque no / transaction ref
-  remarks      TEXT,
-  status       posting_status NOT NULL DEFAULT 'POSTED',
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_receipts_date     ON receipts(receipt_date);
-CREATE INDEX idx_receipts_customer ON receipts(customer_id);
-```
-
-### expenses (Kharch)  *(UC-06 — new)*
-
-```sql
-CREATE TABLE expenses (
-  expense_id   INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  expense_date DATE NOT NULL,
-  ba_id        INT NOT NULL REFERENCES business_accounts(ba_id),  -- expense head
-  amount       NUMERIC(14,2) NOT NULL CHECK (amount > 0),
-  payment_mode payment_mode  NOT NULL,
-  details      VARCHAR(200),
-  remarks      TEXT,
-  status       posting_status NOT NULL DEFAULT 'POSTED',
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_expenses_date ON expenses(expense_date);
-CREATE INDEX idx_expenses_ba   ON expenses(ba_id);
-```
-
----
-
-## 8. Derived-State Tables
-
-### stock_movements  *(UC-08 — new)*
-
-```sql
-CREATE TABLE stock_movements (
-  movement_id   INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  product_id    INT NOT NULL REFERENCES products(product_id),
-  movement_type stock_movement_type NOT NULL,
-  qty_pairs     INT NOT NULL,          -- signed, normalized to pairs: SALE negative; PRODUCTION/SALE_RETURN positive
-  movement_date DATE NOT NULL,         -- production date for PRODUCTION rows (UC-08 logs)
-  input_qty     INT,                   -- PRODUCTION only: quantity as entered by the user
-  input_unit    VARCHAR(10) CHECK (input_unit IN ('CARTONS','PAIRS')),  -- PRODUCTION only
-  packing       INT,                   -- PRODUCTION only: packing snapshot at entry time
-  source_type   VARCHAR(20),           -- 'SALE_BILL' | 'SALE_RETURN' | NULL (manual/production)
-  source_id     INT,                   -- bill_id / return_id
-  remarks       TEXT,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX idx_stock_movements_product ON stock_movements(product_id);
-CREATE INDEX idx_stock_movements_date    ON stock_movements(movement_date);
-CREATE INDEX idx_stock_movements_source  ON stock_movements(source_type, source_id);
-```
-
-### ledger_entries  *(UC-09, UC-10 — new)*
-
-```sql
-CREATE TABLE ledger_entries (
-  entry_id     INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  entry_date   DATE NOT NULL,
-  account_type VARCHAR(20) NOT NULL CHECK (account_type IN ('CHART','BUSINESS')),
-  account_id   INT NOT NULL,          -- ac_id or ba_id depending on account_type
-  debit        NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (debit  >= 0),
-  credit       NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (credit >= 0),
-  source_type  VARCHAR(20) NOT NULL,  -- 'SALE_BILL' | 'SALE_RETURN' | 'RECEIPT' | 'EXPENSE' | 'OPENING'
-  source_id    INT NOT NULL,
-  narration    TEXT,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK (debit = 0 OR credit = 0)     -- each row is one side of an entry
-);
-CREATE INDEX idx_ledger_account ON ledger_entries(account_type, account_id, entry_date);
-CREATE INDEX idx_ledger_source  ON ledger_entries(source_type, source_id);
-CREATE INDEX idx_ledger_date    ON ledger_entries(entry_date);
-```
-
----
-
-## Table Inventory (19)
-
-| # | Table | UC coverage | New in v3 |
-| --- | --- | --- | --- |
-| 1 | users | UC-19, UC-20 | ✅ |
-| 2 | cities | UC-14 | |
-| 3 | stores | UC-01 | |
-| 4 | addas | UC-01, UC-07, UC-21 | |
-| 5 | vendors | UC-11 | |
-| 6 | product_categories | UC-12 | |
-| 7 | products | UC-11 | |
-| 8 | group_accounts | UC-15 | |
-| 9 | control_accounts | UC-16 | |
-| 10 | chart_of_accounts | UC-17 | |
-| 11 | business_accounts | UC-18 | |
-| 12 | customers | UC-01… | |
-| 13 | sub_customers | UC-13 | |
-| 14 | sale_bills | UC-01, UC-02, UC-07 | |
-| 15 | sale_bill_items | UC-01 | |
-| 16 | sale_returns | UC-03, UC-04 | |
-| 17 | sale_return_items | UC-03 | |
-| 18 | receipts | UC-05 | |
-| 19 | expenses | UC-06 | ✅ |
-| — | stock_movements | UC-08 | ✅ |
-| — | ledger_entries | UC-09, UC-10 | ✅ |
-
-*(21 relations total counting the two derived-state tables.)*
-
----
-
-## Open Questions
-
-1. ~~Production entry~~ — resolved in v3.1: UC-08 production logging is covered by `PRODUCTION`
-   stock movements (with `input_qty` / `input_unit` / `packing` snapshot). A separate *purchase*
-   entry, if ever needed, becomes another `stock_movement_type` value.
-2. **CASH / SALES account codes** — which existing chart accounts represent Cash-in-hand and
-   Sales income? They must be seeded/configured before posting works.
-3. **`products.p1`, `p2`, `na`** — legacy column names of unknown meaning; kept verbatim. Rename
-   once clarified.
-4. **Editing posted documents** — recommended policy (adopted above): financial edits require
-   unposting first; bilty/adda updates allowed on posted bills.
+1. ~~**Free-text materials will fragment.**~~ — **RESOLVED**: material entry stays open-ended, but
+   a name typed once is auto-registered in `materials` and comes back as a **dropdown option from
+   the database** on every later purchase, so it is picked rather than retyped (§4.3). Purchase
+   lines store `material_id`, and duplicates that do slip through can be merged after the fact by
+   repointing the FK — which free text could never have supported. *Remaining nicety, not a
+   blocker:* there is no admin screen to rename or merge materials yet, so that repair is a manual
+   SQL statement for now.
+2. **`cheque_allocations.target_id` is polymorphic** and cannot carry a foreign key — it is kept
+   as §13 specifies. It could be split into `target_vendor_id`/`target_ba_id` the same way
+   `ledger_entries` was, if you want the integrity guarantee there too.
+3. **Which chart account is CASH vs BANK for each payment mode?** Posting needs a rule mapping
+   `payment_mode` (CASH/CHEQUE/ONLINE) to a specific chart account before the first receipt can post.
+4. **`articles.p1`, `p2`, `na`** — legacy cost-column names of unknown meaning, carried over
+   verbatim. Worth renaming once someone can say what they hold.
+5. **Sale Return has no `due_date`** on the assumption a return is never a payable. Confirm.
+6. **Multi-user audit:** `created_by` is captured but there is no `updated_by` or change history.
+   Sufficient for a single-site desktop app; say if an audit trail is wanted.
