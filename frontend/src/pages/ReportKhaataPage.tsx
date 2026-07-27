@@ -17,7 +17,7 @@ interface KhaataRow {
   credit: number; // decreases customer receivable
 }
 
-export default function ReportKhaataPage() {
+export function ReportKhaataContent() {
   const { state } = useApp();
 
   const [customerId, setCustomerId] = useState('');
@@ -192,7 +192,6 @@ export default function ReportKhaataPage() {
   }, [khaataEntries, fromDate, toDate]);
 
   return (
-    <AppLayout pageTitle="Accounts Ledger / Khaata">
       <div className="mx-auto" style={{ maxWidth: 1000 }}>
         
         {/* 1. Accounts Directory View (When no customer is selected) */}
@@ -463,6 +462,13 @@ export default function ReportKhaataPage() {
         )}
 
       </div>
+  );
+}
+
+export default function ReportKhaataPage() {
+  return (
+    <AppLayout pageTitle="Accounts Ledger / Khaata">
+      <ReportKhaataContent />
     </AppLayout>
   );
 }

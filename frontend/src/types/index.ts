@@ -254,6 +254,5 @@ export type NavPage =
   | 'setup-region'
   | 'setup-adda'
   | 'report-stock'
-  | 'report-khaata'
-  | 'report-cashbook'
+  | 'reports'
   | 'settings';

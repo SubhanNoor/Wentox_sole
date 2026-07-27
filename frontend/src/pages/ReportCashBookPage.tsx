@@ -3,7 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Printer, Search } from 'lucide-react';
 
-export default function ReportCashBookPage() {
+export function ReportCashBookContent() {
   const { state } = useApp();
 
   const [activeTab, setActiveTab] = useState<'monthly' | 'overall'>('monthly');
@@ -73,7 +73,6 @@ export default function ReportCashBookPage() {
   }, [filteredTransactions]);
 
   return (
-    <AppLayout pageTitle="Cash Book Summary">
       <div className="mx-auto" style={{ maxWidth: 1000 }}>
         
         {/* Tab Selector - data-no-print */}
@@ -273,6 +272,13 @@ export default function ReportCashBookPage() {
         </div>
 
       </div>
+  );
+}
+
+export default function ReportCashBookPage() {
+  return (
+    <AppLayout pageTitle="Cash Book of the Day">
+      <ReportCashBookContent />
     </AppLayout>
   );
 }
