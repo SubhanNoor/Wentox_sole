@@ -4,6 +4,9 @@ import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
 
+// TASK-14: User role cannot see Bank Accounts or Director Expenses - Drawings accounts
+const RESTRICTED_CHART_IDS = ['120002', '440001'];
+
 export default function BusinessAcSetupPage() {
   const { state, dispatch } = useApp();
 
@@ -128,25 +131,35 @@ export default function BusinessAcSetupPage() {
     }
   };
 
+  const visibleChartAccounts = useMemo(() => {
+    if (state.currentUserRole !== 'User') return state.chartAccounts;
+    return state.chartAccounts.filter(c => !RESTRICTED_CHART_IDS.includes(c.id));
+  }, [state.chartAccounts, state.currentUserRole]);
+
   const chartOptions = useMemo(() => {
-    return state.chartAccounts.map(c => ({
+    return visibleChartAccounts.map(c => ({
       value: c.id,
       label: `${c.name} (${c.id})`
     }));
-  }, [state.chartAccounts]);
+  }, [visibleChartAccounts]);
 
   const chartFilterOptions = useMemo(() => {
     return [
       { value: '', label: 'All Accounts' },
-      ...state.chartAccounts.map(c => ({
+      ...visibleChartAccounts.map(c => ({
         value: c.id,
         label: `${c.name} (${c.id})`
       }))
     ];
-  }, [state.chartAccounts]);
+  }, [visibleChartAccounts]);
+
+  const visibleAccounts = useMemo(() => {
+    if (state.currentUserRole !== 'User') return state.businessAccounts;
+    return state.businessAccounts.filter(b => !RESTRICTED_CHART_IDS.includes(b.controlId));
+  }, [state.businessAccounts, state.currentUserRole]);
 
   const filteredAndSortedAccounts = useMemo(() => {
-    let list = state.businessAccounts;
+    let list = visibleAccounts;
     if (selectedChartFilter) {
       list = list.filter(b => b.controlId === selectedChartFilter);
     }
@@ -165,7 +178,7 @@ export default function BusinessAcSetupPage() {
         return a.name.localeCompare(b.name);
       }
     });
-  }, [state.businessAccounts, searchQuery, sortBy, selectedChartFilter]);
+  }, [visibleAccounts, searchQuery, sortBy, selectedChartFilter]);
 
   return (
     <AppLayout pageTitle="Business Accounts Setup">

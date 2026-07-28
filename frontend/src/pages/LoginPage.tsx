@@ -165,7 +165,8 @@ export default function LoginPage() {
             className="mt-5 text-center font-inter"
             style={{ fontSize: '13px', color: 'var(--muted-text)' }}
           >
-            Demo credentials are pre-filled — just press Log In.
+            Demo credentials: <strong>admin/admin</strong> (full access) or{' '}
+            <strong>user/user</strong> (restricted — no Bank Accounts or Director Expenses).
           </p>
         </div>
       </div>

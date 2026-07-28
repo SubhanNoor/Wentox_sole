@@ -205,6 +205,7 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
                 boxShadow: '0 14px 34px rgba(0,0,0,0.35)',
               }}
             >
+              {state.currentUserRole === 'Admin' && (
               <button
                 onClick={() => navigate('settings')}
                 className="flex items-center gap-2 w-full px-3.5 py-3 text-sm transition-colors hover:bg-white/5"
@@ -213,6 +214,7 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
                 <Lock size={14} />
                 <span>Change Password</span>
               </button>
+              )}
               <div style={{ borderTop: '1px solid var(--sidebar-sep)' }} />
               <button
                 onClick={() => dispatch({ type: 'LOGOUT' })}
@@ -233,11 +235,17 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
               className="flex items-center justify-center rounded-full flex-shrink-0"
               style={{ width: 36, height: 36, background: 'var(--brand-gold)' }}
             >
-              <span className="font-inter font-semibold text-xs" style={{ color: 'var(--brand-navy)' }}>WA</span>
+              <span className="font-inter font-semibold text-xs" style={{ color: 'var(--brand-navy)' }}>
+                {state.currentUserRole === 'User' ? 'US' : 'WA'}
+              </span>
             </div>
             <div className="flex-1 text-left">
-              <div className="text-white font-semibold text-sm">Wentox Admin</div>
-              <div style={{ color: 'var(--brand-gold)', fontSize: '11px' }}>Administrator</div>
+              <div className="text-white font-semibold text-sm">
+                {state.currentUserRole === 'User' ? 'Wentox User' : 'Wentox Admin'}
+              </div>
+              <div style={{ color: 'var(--brand-gold)', fontSize: '11px' }}>
+                {state.currentUserRole || 'Administrator'}
+              </div>
             </div>
             <ChevronDown
               size={12}

@@ -4,8 +4,13 @@ import type {
   City, Region, Store, Adda, Vendor, ProductCategory, Product,
   GroupAccount, ChartOfAccount, BusinessAccount,
   Customer, SubCustomer, SaleBill, SaleReturn, Purchase, PurchaseReturn,
-  Receipt, Expense, ProductionLog
+  Receipt, Expense, ProductionLog, UserRole
 } from '@/types';
+
+// TASK-14: fixed second demo account, alongside the editable Admin
+// credential in state.settings. Not stored in state / not editable via
+// Settings — it's a static demo login, same as how Admin worked before.
+const DEMO_USER_ACCOUNT = { username: 'user', password: 'user' };
 
 /* ──────────────────── Demo Data ──────────────────── */
 
@@ -209,6 +214,8 @@ const demoPurchaseReturns: PurchaseReturn[] = [];
 
 interface State {
   isLoggedIn: boolean;
+  currentUserRole: UserRole | null;
+  currentUsername: string | null;
   currentPage: string;
   selectedBillId: string | null;
   selectedReturnId: string | null;
@@ -313,6 +320,8 @@ type Action =
 
 const initialState: State = {
   isLoggedIn: false,
+  currentUserRole: null,
+  currentUsername: null,
   currentPage: 'login',
   selectedBillId: null,
   selectedReturnId: null,
@@ -348,12 +357,15 @@ function reducer(state: State, action: Action): State {
     case 'LOGIN': {
       const { username, password } = action.payload;
       if (username === state.settings.username && password === state.settings.password) {
-        return { ...state, isLoggedIn: true, currentPage: 'home' };
+        return { ...state, isLoggedIn: true, currentUserRole: 'Admin', currentUsername: username, currentPage: 'home' };
+      }
+      if (username === DEMO_USER_ACCOUNT.username && password === DEMO_USER_ACCOUNT.password) {
+        return { ...state, isLoggedIn: true, currentUserRole: 'User', currentUsername: username, currentPage: 'home' };
       }
       return state;
     }
     case 'LOGOUT':
-      return { ...state, isLoggedIn: false, currentPage: 'login' };
+      return { ...state, isLoggedIn: false, currentUserRole: null, currentUsername: null, currentPage: 'login' };
     case 'NAVIGATE':
       return { ...state, currentPage: action.page };
     case 'SELECT_BILL':

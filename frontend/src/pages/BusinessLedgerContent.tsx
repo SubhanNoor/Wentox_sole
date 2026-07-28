@@ -9,6 +9,9 @@ interface ActivityEntry {
   credit: number;
 }
 
+// TASK-14: User role cannot see Bank Accounts or Director Expenses - Drawings accounts
+const RESTRICTED_CHART_IDS = ['120002', '440001'];
+
 // Business Accounts Ledger (TASK-19 item 6) — a general-purpose ledger over
 // ALL business accounts (not just customers), since Account Ledger (Khaata)
 // is scoped to customers only and Vendor Report is scoped to vendors only.
@@ -22,12 +25,17 @@ export default function BusinessLedgerContent() {
 
   const inRange = (date: string) => (!fromDate || date >= fromDate) && (!toDate || date <= toDate);
 
+  const accessibleAccounts = useMemo(() => {
+    if (state.currentUserRole !== 'User') return state.businessAccounts;
+    return state.businessAccounts.filter(b => !RESTRICTED_CHART_IDS.includes(b.controlId));
+  }, [state.businessAccounts, state.currentUserRole]);
+
   const visibleAccounts = useMemo(() => {
     if (viewMode === 'customer') {
-      return state.businessAccounts.filter(b => b.controlId === '110001');
+      return accessibleAccounts.filter(b => b.controlId === '110001');
     }
-    return state.businessAccounts;
-  }, [state.businessAccounts, viewMode]);
+    return accessibleAccounts;
+  }, [accessibleAccounts, viewMode]);
 
   // Net activity (Debit - Credit) for a business account within the range,
   // sourced from whichever ledger applies to that account's type.
@@ -74,7 +82,7 @@ export default function BusinessLedgerContent() {
     });
   }, [visibleAccounts, state.chartAccounts, state.customers, state.vendors, state.saleBills, state.saleReturns, state.receipts, state.purchases, state.purchaseReturns, state.expenses, fromDate, toDate]);
 
-  const selectedAccount = useMemo(() => state.businessAccounts.find(b => b.id === accountFilter), [accountFilter, state.businessAccounts]);
+  const selectedAccount = useMemo(() => accessibleAccounts.find(b => b.id === accountFilter), [accountFilter, accessibleAccounts]);
 
   const detailEntries = useMemo((): ActivityEntry[] => {
     if (!selectedAccount) return [];
@@ -118,7 +126,7 @@ export default function BusinessLedgerContent() {
           {viewMode === 'detail' && (
             <select value={accountFilter} onChange={e => setAccountFilter(e.target.value)} className="soleria-input py-1.5 cursor-pointer text-sm min-w-[220px]">
               <option value="">Select an account...</option>
-              {state.businessAccounts.map(b => (
+              {accessibleAccounts.map(b => (
                 <option key={b.id} value={b.id}>{b.name} ({b.id})</option>
               ))}
             </select>

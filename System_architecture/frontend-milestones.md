@@ -13,60 +13,62 @@
 
 ---
 
-## Milestone 2 — Setup Pages Rework
+## Milestone 2 — Setup Pages Rework ✅ DONE
 
 **Goal:** Bring Setup pages in line with the resolved schema decisions
 before any transaction pages depend on them.
 
-- [ ] Remove Control Accounts page/nav entirely (TASK-11)
-- [ ] Sub Customer: remove `customerId` requirement, flat independent list,
+- [x] Remove Control Accounts page/nav entirely (TASK-11)
+- [x] Sub Customer: remove `customerId` requirement, flat independent list,
       searchable dropdown where sub customer is picked elsewhere (TASK-06)
-- [ ] New **Regions** setup page (new lookup, independent of Cities)
-- [ ] Customer: add Region (required, searched first) + City (secondary)
+- [x] New **Regions** setup page (new lookup, independent of Cities)
+- [x] Customer: add Region (required, searched first) + City (secondary)
       fields; update customer search/filter UI to filter by Region first
-- [ ] Vendor create form: no visible "pick a group account" step — creating
+- [x] Vendor create form: no visible "pick a group account" step — creating
       a Vendor in the reducer auto-creates a matching demo `businessAccount`
       entry under a "Vendors" group and links it, so both demo lists stay in
       sync (single form, per resolved decision; same behavior a real
       backend will need to replicate later)
-- [ ] Customer page redesign — card-based view + per-customer ledger,
+- [x] Customer page redesign — card-based view + per-customer ledger,
       article-wise (TASK-08)
-- [ ] Home/landing page — logo + company name, entry point (TASK-13)
-- [ ] Verify: creating a Vendor, then finding it in an Expense account
+- [x] Home/landing page — logo + company name, entry point (TASK-13)
+- [x] Verify: creating a Vendor, then finding it in an Expense account
       picker under "Vendors" group, resolves to the same vendor
 
 ---
 
-## Milestone 3 — Transactions
+## Milestone 3 — Transactions ✅ DONE
 
 **Goal:** Add the missing transaction types and extend existing ones per
 the resolved decisions.
 
-- [ ] **Purchase page (new)** — vendor, product, unit, weight, price/unit,
-      multi-line entry (TASK-01); posts increase stock (TASK-01 UPDATE)
-- [ ] **Purchase Return page (new)** — mirrors Sale Return exactly
-- [ ] Sale Bill: auto-fill Main A/C from selected customer, warn if missing
+- [x] **Purchase page (new)** — vendor, product, unit, weight, price/unit,
+      multi-line entry (TASK-01); raw-material purchase, does NOT feed
+      `Product.stock` (scope corrected in Milestone 4 below) — includes
+      inline vendor creation with region assignment, added mid-cycle
+- [x] **Purchase Return page (new)** — mirrors Sale Return exactly
+- [x] Sale Bill: auto-fill Main A/C from selected customer, warn if missing
       (TASK-05)
-- [ ] Sale Return: add "products previously bought by this customer"
+- [x] Sale Return: add "products previously bought by this customer"
       dropdown sourced from that customer's sale bills, keep manual entry
       as fallback (TASK-12)
-- [ ] Receipts (Jamma): add **Commission** field — payment-time only,
+- [x] Receipts (Jamma): add **Commission** field — payment-time only,
       shown as "Amount Due" → "After Commission" (not just netted silently)
-- [ ] Receipts (Jamma): add cheque fields — Cheque No, Date on Cheque,
+- [x] Receipts (Jamma): add cheque fields — Cheque No, Date on Cheque,
       Cheque Received Date, status
-- [ ] Sale Bill / vendor payable: add **optional** `due_date` field (no
+- [x] Sale Bill / vendor payable: add **optional** `due_date` field (no
       default/global credit period — blank means no payment-overdue alert
       for that record)
-- [ ] Vendor payment via Expenses: when the selected Expense account's
+- [x] Vendor payment via Expenses: when the selected Expense account's
       parent group is "Vendors", treat it as a vendor payment for Vendor
       Report purposes (UI-level distinction, no new page)
-- [ ] Verify: a full Purchase → Purchase Return → stock reconciliation
+- [x] Verify: a full Purchase → Purchase Return → stock reconciliation
       cycle, and a Receipt with Commission + cheque fields showing correct
       before/after amounts
 
 ---
 
-## Milestone 4 — Stock
+## Milestone 4 — Stock ✅ DONE
 
 **Goal:** Redesign the stock views. **Scope correction (this cycle):**
 Purchase (M3) was clarified to be **raw-material purchasing**, separate
@@ -74,40 +76,74 @@ from `Product.stock` (pairs) — it does NOT feed Current Stock or Product
 Ledger. Production remains the only stock-in source for finished articles.
 The original plan item "Purchase as a stock-in source" is dropped.
 
-- [ ] Current Stock redesign — table + expandable sub-rows, color field in
-      add-stock dialog (TASK-03)
-- [ ] Product Ledger — date range, vendor, article/category filters
-      (TASK-02 UPDATE)
-- [ ] Verify: Current Stock redesign renders correctly against existing
+- [x] Current Stock redesign — table + expandable sub-rows, color field in
+      add-stock dialog (TASK-03) — **corrected during implementation**:
+      products of the same article/style code but different colors group
+      into ONE row with an expandable panel showing color variants as
+      sub-rows (not separate top-level rows per color)
+- [x] Product Ledger — date range, vendor, article/category filters
+      (TASK-02 UPDATE) — **corrected during implementation**: lives as its
+      own top-level tab alongside Weekly/Monthly/Overall Production, not
+      embedded inside the Current Stock expandable panel
+- [x] Verify: Current Stock redesign renders correctly against existing
       Production-only stock-in data; Purchase records remain absent from
       both views (by design)
 
 ---
 
-## Milestone 5 — Reports
+## Milestone 5 — Reports ✅ DONE
 
 **Goal:** Build out the reports layer, most of which doesn't exist yet.
 
-- [ ] Account Ledger (Khaata) redesign — Inv#/Bill# columns, cheque
+- [x] Account Ledger (Khaata) redesign — Inv#/Bill# columns, cheque
       narration sub-columns, Commission row (credit, same side as payment)
-      (TASK-16)
-- [ ] Cash Book of the Day redesign — opening cash, Jamma, Naam
+      (TASK-16); also restored Opening Balance display above the
+      From/To date filters per follow-up correction
+- [x] Cash Book of the Day redesign — opening cash, Jamma, Naam
       (incl. cheque-endorsement in/out), cash-in-hand, per cheque/online/
       cash breakdown (TASK-15) — must read both Receipts and Expenses
-- [ ] Sale Analysis — customer-wise / region-wise (TASK-09)
-- [ ] Sale Report — Total Sales, Cartons, Commission (payment-time only),
+- [x] Sale Analysis — customer-wise / region-wise (TASK-09)
+- [x] Sale Report — Total Sales, Cartons, Commission (payment-time only),
       Sale Return, Net Sales, Payment (TASK-18)
-- [ ] Vendor Report — Total Purchase, Purchase Return, Net Purchase,
+- [x] Vendor Report — Total Purchase, Purchase Return, Net Purchase,
       Payment Paid (joins Purchase-side + Expense-side for the same vendor)
       (TASK-10 / TASK-10 UPDATE)
-- [ ] Payment Trail — grouped by Business Running Expenses, Cash at Banks,
+- [x] Payment Trail — grouped by Business Running Expenses, Cash at Banks,
       Directors Expenses, Employees, Vendors-Suppliers (TASK-17)
-- [ ] Unified tabbed Reports sidebar section (TASK-19)
-- [ ] Wire `BiltyUpdatePage.tsx` into the Reports nav ("Search & Bilty Adda
+- [x] Unified tabbed Reports sidebar section (TASK-19) — built as a single
+      `ReportsHubPage.tsx` using a Content/Page component split so each
+      report renders as a tab without double-nesting the app shell; also
+      added a standalone Business Accounts Ledger tab (general-purpose
+      ledger over all business accounts, not just customers/vendors)
+- [x] Wire `BiltyUpdatePage.tsx` into the Reports nav ("Search & Bilty Adda
       Updation") — page itself needs no changes
-- [ ] PDF + Excel export on every page that has Print (TASK-04)
-- [ ] Verify: every report total cross-checks against Account Ledger for a
+- [x] PDF + Excel export on every page that has Print (TASK-04) — shared
+      `src/lib/export.ts` helpers (`exportToPDF`, `exportRowsToExcel`)
+      applied across ~13 pages/components
+- [x] Verify: every report total cross-checks against Account Ledger for a
       sample date range
+
+---
+
+## TASK-14 — User Roles & Access Control ✅ DONE (uncommitted)
+
+**Goal:** Two-tier demo access — Admin (full access) vs. User (blocked from
+Bank Accounts and Director Expenses - Drawings). Added mid-cycle, not part
+of the original 6-milestone plan; slots in after Milestone 5 since it
+touches Business Accounts setup and several report pages built there.
+
+- [x] `UserRole` type (`'Admin' | 'User'`) added to `src/types/index.ts`
+- [x] Fixed second demo login (`user`/`user`) wired into `AppContext.tsx`
+      (`DEMO_USER_ACCOUNT` constant, `LOGIN`/`LOGOUT` reducer cases)
+- [x] `LoginPage.tsx` — demo credentials hint updated for both accounts
+- [x] `AppLayout.tsx` — sidebar footer reflects current role (avatar
+      initials, name, role text); "Change Password" hidden for User role
+- [x] Access restriction (`RESTRICTED_CHART_IDS = ['120002', '440001']`)
+      applied in `BusinessAcSetupPage.tsx`, `PaymentTrailPage.tsx`
+      (also hides the Cash at Banks row/export), and
+      `BusinessLedgerContent.tsx`
+- [x] Verified via `tsc -b` (clean) and dev server health check
+- [ ] **Not yet committed/pushed** — code complete, pending a push
 
 ---
 

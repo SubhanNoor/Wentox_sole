@@ -23,15 +23,20 @@ export function PaymentTrailContent() {
 
   // "Total amount spent" categories — sum of Expenses against business accounts
   // under that chart account, within the selected date range.
+  // TASK-14: User role never sees Director Expenses - Drawings.
+  const visibleCategories = state.currentUserRole === 'User'
+    ? CATEGORY_CHART_MAP.filter(c => c.chartId !== '440001')
+    : CATEGORY_CHART_MAP;
+
   const spendRows = useMemo(() => {
-    return CATEGORY_CHART_MAP.map(({ label, chartId }) => {
+    return visibleCategories.map(({ label, chartId }) => {
       const bizIds = new Set(state.businessAccounts.filter(b => b.controlId === chartId).map(b => b.id));
       const amount = state.expenses
         .filter(e => bizIds.has(e.businessAccountId) && inRange(e.date))
         .reduce((sum, e) => sum + e.amount, 0);
       return { label, amount };
     });
-  }, [state.businessAccounts, state.expenses, fromDate, toDate]);
+  }, [visibleCategories, state.businessAccounts, state.expenses, fromDate, toDate]);
 
   // "Cash at Banks" — a running balance (deposits via cheque/online minus
   // withdrawals via cheque/online, all-time up to the end of the period),
@@ -49,9 +54,12 @@ export function PaymentTrailContent() {
 
   const grandTotal = useMemo(() => spendRows.reduce((s, r) => s + r.amount, 0), [spendRows]);
 
+  const showCashAtBanks = state.currentUserRole !== 'User';
+
   const handleExportExcel = () => {
     const headers = ['Account Title', 'Amount'];
-    const rows: (string | number)[][] = [...spendRows.map(r => [r.label, r.amount]), ['Cash at Banks', cashAtBanks]];
+    const rows: (string | number)[][] = spendRows.map(r => [r.label, r.amount]);
+    if (showCashAtBanks) rows.push(['Cash at Banks', cashAtBanks]);
     exportRowsToExcel('payment-trail', headers, rows);
   };
 
@@ -113,13 +121,15 @@ export function PaymentTrailContent() {
                     <td className="p-3 text-right font-bold text-rose-700">{row.amount > 0 ? formatCurrency(row.amount) : '-'}</td>
                   </tr>
                 ))}
-                <tr className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                  <td className="p-3 pl-4 font-semibold text-slate-800">
-                    Cash at Banks
-                    <span className="block text-[10px] font-normal text-slate-400">Balance held, not a payment — excluded from Grand Total</span>
-                  </td>
-                  <td className="p-3 text-right font-bold text-emerald-700">{formatCurrency(cashAtBanks)}</td>
-                </tr>
+                {showCashAtBanks && (
+                  <tr className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                    <td className="p-3 pl-4 font-semibold text-slate-800">
+                      Cash at Banks
+                      <span className="block text-[10px] font-normal text-slate-400">Balance held, not a payment — excluded from Grand Total</span>
+                    </td>
+                    <td className="p-3 text-right font-bold text-emerald-700">{formatCurrency(cashAtBanks)}</td>
+                  </tr>
+                )}
               </tbody>
               <tfoot>
                 <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>

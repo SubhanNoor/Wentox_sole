@@ -158,6 +158,10 @@ export interface SaleReturn {
 
 export type ChequeStatus = 'PENDING' | 'DEPOSITED' | 'ENDORSED' | 'PARTIALLY_ENDORSED' | 'CLEARED' | 'BOUNCED';
 
+// TASK-14: Admin = full access. User = everything except Bank Accounts and
+// Director Expenses - Drawings accounts.
+export type UserRole = 'Admin' | 'User';
+
 export interface Receipt {
   id: string; // Auto PK
   date: string;
