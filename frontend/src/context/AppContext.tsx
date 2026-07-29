@@ -4,8 +4,10 @@ import type {
   City, Region, Store, Adda, Vendor, ProductCategory, Product,
   GroupAccount, ChartOfAccount, BusinessAccount,
   Customer, SubCustomer, SaleBill, SaleReturn, Purchase, PurchaseReturn,
-  Receipt, Expense, ProductionLog, UserRole
+  Receipt, Expense, ProductionLog, UserRole,
+  ChequeAllocation, ChequeStatus, AlertDismissal
 } from '@/types';
+import { deriveChequeStatus } from '@/lib/cheques';
 
 // TASK-14: fixed second demo account, alongside the editable Admin
 // credential in state.settings. Not stored in state / not editable via
@@ -163,6 +165,28 @@ const demoSaleBills: SaleBill[] = [
     items: [
       { id: 'sbi2', productId: '1002', productName: 'P-102 Jogger Sole White', packing: 12, cartons: 3, pairs: 36, rate: 500, discountPercent: 5, discountValue: 900, value: 17100 },
     ]
+  },
+  {
+    // Posted, with an explicit due date already in the past and a balance still
+    // outstanding — this is what raises a payment-overdue alert. A bill left
+    // without a due date never alerts, by design.
+    id: 'sb3',
+    date: '2026-06-20',
+    storeId: 'st1',
+    customerId: 'c3',
+    subCustomerId: null,
+    billNo: '10047',
+    gpNo: '2311',
+    biltyNo: '90233',
+    addaId: 'ad4',
+    remarks: 'Bulk order — credit terms agreed',
+    invoiceDiscount: 0,
+    totalValue: 250000,
+    dueDate: '2026-07-10',
+    status: 'Posted',
+    items: [
+      { id: 'sbi3', productId: '2001', productName: 'E-551 Casual Slipper Brown', packing: 12, cartons: 40, pairs: 480, rate: 520, discountPercent: 0, discountValue: 0, value: 249600 },
+    ]
   }
 ];
 
@@ -186,7 +210,20 @@ const demoSaleReturns: SaleReturn[] = [
 
 const demoReceipts: Receipt[] = [
   { id: 'r1', date: '2026-07-02', customerId: 'c1', amount: 15000, paymentMode: 'Cash', details: 'Direct cash deposit', remarks: 'Part payment' },
-  { id: 'r2', date: '2026-07-04', customerId: 'c2', amount: 50000, paymentMode: 'Cheque', details: 'HBL Cheque No. 9812401', remarks: 'Cleared' },
+  // Cheque already past its date — shows as an overdue (red) alert.
+  {
+    id: 'r2', date: '2026-07-04', customerId: 'c2', amount: 50000, paymentMode: 'Cheque',
+    details: 'HBL, Gulberg Branch',
+    chequeNo: '9812401', chequeDate: '2026-07-20', chequeReceivedDate: '2026-07-04',
+    chequeStatus: 'PENDING', remarks: 'CHEQUE 9812401 20-07-2026'
+  },
+  // Cheque falling due shortly — shows as a due-soon (amber) alert.
+  {
+    id: 'r3', date: '2026-07-18', customerId: 'c3', amount: 60000, paymentMode: 'Cheque',
+    details: 'MCB, Hyderabad',
+    chequeNo: '4471902', chequeDate: '2026-08-01', chequeReceivedDate: '2026-07-18',
+    chequeStatus: 'PENDING', remarks: 'CHEQUE 4471902 01-08-2026'
+  },
 ];
 
 const demoExpenses: Expense[] = [
@@ -210,16 +247,19 @@ const demoPurchases: Purchase[] = [
 
 const demoPurchaseReturns: PurchaseReturn[] = [];
 
+const demoChequeAllocations: ChequeAllocation[] = [];
+
 /* ──────────────────── App State ──────────────────── */
 
-interface State {
+export interface State {
   isLoggedIn: boolean;
   currentUserRole: UserRole | null;
   currentUsername: string | null;
   currentPage: string;
+  currentTab: string | null;   // optional deep-link into a page's tab (alert click-through)
   selectedBillId: string | null;
   selectedReturnId: string | null;
-  
+
   cities: City[];
   regions: Region[];
   stores: Store[];
@@ -242,14 +282,16 @@ interface State {
   receipts: Receipt[];
   expenses: Expense[];
   productionLogs: ProductionLog[];
-  
+  chequeAllocations: ChequeAllocation[];
+  alertDismissals: AlertDismissal[];
+
   settings: { username: string; password: string };
 }
 
 type Action =
   | { type: 'LOGIN'; payload: { username: string; password: string } }
   | { type: 'LOGOUT' }
-  | { type: 'NAVIGATE'; page: string }
+  | { type: 'NAVIGATE'; page: string; tab?: string }
   | { type: 'ADD_PRODUCTION_LOG'; log: ProductionLog }
   | { type: 'SELECT_BILL'; billId: string | null }
   | { type: 'SELECT_RETURN'; returnId: string | null }
@@ -313,6 +355,18 @@ type Action =
 
   // Receipt Actions
   | { type: 'ADD_RECEIPT'; receipt: Receipt }
+
+  // Cheque disposition / bounce (§13)
+  // The id is assigned by the reducer, not the caller — mirrors a real API
+  // where the server owns identity, and keeps the page component pure.
+  | { type: 'ADD_CHEQUE_ALLOCATION'; allocation: Omit<ChequeAllocation, 'id'> }
+  | { type: 'MARK_CHEQUE_CLEARED'; receiptId: string }
+  | { type: 'BOUNCE_CHEQUE'; receiptId: string; bouncedDate: string }
+
+  // Alerts (§12)
+  | { type: 'DISMISS_ALERT'; alertKey: string; dismissedAt: string }
+  | { type: 'RESTORE_ALERTS' }
+
   // Expense Actions
   | { type: 'ADD_EXPENSE'; expense: Expense }
   | { type: 'DELETE_EXPENSE'; id: string }
@@ -323,9 +377,10 @@ const initialState: State = {
   currentUserRole: null,
   currentUsername: null,
   currentPage: 'login',
+  currentTab: null,
   selectedBillId: null,
   selectedReturnId: null,
-  
+
   cities: demoCities,
   regions: demoRegions,
   stores: demoStores,
@@ -348,7 +403,9 @@ const initialState: State = {
   receipts: demoReceipts,
   expenses: demoExpenses,
   productionLogs: [],
-  
+  chequeAllocations: demoChequeAllocations,
+  alertDismissals: [],
+
   settings: { username: 'admin', password: 'admin' },
 };
 
@@ -367,7 +424,7 @@ function reducer(state: State, action: Action): State {
     case 'LOGOUT':
       return { ...state, isLoggedIn: false, currentUserRole: null, currentUsername: null, currentPage: 'login' };
     case 'NAVIGATE':
-      return { ...state, currentPage: action.page };
+      return { ...state, currentPage: action.page, currentTab: action.tab ?? null };
     case 'SELECT_BILL':
       return { ...state, selectedBillId: action.billId };
     case 'SELECT_RETURN':
@@ -737,6 +794,66 @@ function reducer(state: State, action: Action): State {
     /* ──── Receipt Handlers ──── */
     case 'ADD_RECEIPT':
       return { ...state, receipts: [action.receipt, ...state.receipts] };
+
+    /* ──── Cheque disposition / bounce (§13) ──── */
+    case 'ADD_CHEQUE_ALLOCATION': {
+      const receipt = state.receipts.find(r => r.id === action.allocation.receiptId);
+      if (!receipt) return state;
+
+      const allocation: ChequeAllocation = {
+        ...action.allocation,
+        id: `ca_${Date.now()}_${state.chequeAllocations.length}`
+      };
+      const allocations = [...state.chequeAllocations, allocation];
+      const nextStatus = deriveChequeStatus(receipt, allocations);
+
+      return {
+        ...state,
+        chequeAllocations: allocations,
+        receipts: state.receipts.map(r =>
+          r.id === receipt.id ? { ...r, chequeStatus: nextStatus } : r
+        )
+      };
+    }
+    case 'MARK_CHEQUE_CLEARED':
+      return {
+        ...state,
+        receipts: state.receipts.map(r =>
+          r.id === action.receiptId && r.chequeStatus === 'DEPOSITED'
+            ? { ...r, chequeStatus: 'CLEARED' as ChequeStatus }
+            : r
+        )
+      };
+    case 'BOUNCE_CHEQUE': {
+      // A bounce reverses BOTH sides together: the customer's receipt (their
+      // due goes back up) and every allocation sourced from that cheque (the
+      // vendor's / expense account's balance goes back up too). Rows are kept
+      // rather than deleted — the counter-entries are dated `bouncedDate`, so
+      // previously printed reports still reconcile.
+      return {
+        ...state,
+        receipts: state.receipts.map(r =>
+          r.id === action.receiptId
+            ? { ...r, chequeStatus: 'BOUNCED' as ChequeStatus, bouncedDate: action.bouncedDate }
+            : r
+        ),
+        chequeAllocations: state.chequeAllocations.map(a =>
+          a.receiptId === action.receiptId ? { ...a, status: 'REVERSED' as const } : a
+        )
+      };
+    }
+
+    /* ──── Alerts (§12) ──── */
+    case 'DISMISS_ALERT':
+      return {
+        ...state,
+        alertDismissals: [
+          ...state.alertDismissals.filter(d => d.alertKey !== action.alertKey),
+          { alertKey: action.alertKey, dismissedAt: action.dismissedAt }
+        ]
+      };
+    case 'RESTORE_ALERTS':
+      return { ...state, alertDismissals: [] };
 
     /* ──── Expense Handlers ──── */
     case 'ADD_EXPENSE':

@@ -6,7 +6,7 @@ import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 
 interface VendorLedgerRow {
   date: string;
-  type: 'Opening Balance' | 'Purchase' | 'Purchase Return' | 'Payment';
+  type: 'Opening Balance' | 'Purchase' | 'Purchase Return' | 'Payment' | 'Cheque Endorsed' | 'Endorsement Reversed';
   ref: string;
   debit: number;  // increases what we owe the vendor
   credit: number; // decreases what we owe the vendor
@@ -34,9 +34,24 @@ export function VendorReportContent() {
         const purchaseReturn = state.purchaseReturns
           .filter(r => r.vendorId === v.id && inRange(r.date))
           .reduce((s, r) => s + r.totalValue, 0);
-        const paymentPaid = state.expenses
+        // Payment Paid = cash/bank expenses against the vendor's linked account,
+        // plus cheques endorsed straight to the vendor (§13), less any of those
+        // endorsements reversed by a bounce (dated the bounce, not the original).
+        const expensePaid = state.expenses
           .filter(e => e.businessAccountId === v.baId && inRange(e.date))
           .reduce((s, e) => s + e.amount, 0);
+        const endorsedPaid = state.chequeAllocations
+          .filter(a => a.dispositionType === 'VENDOR_PAYMENT' && a.targetId === v.id && inRange(a.allocationDate))
+          .reduce((s, a) => s + a.amount, 0);
+        const endorsementsReversed = state.chequeAllocations
+          .filter(a => {
+            if (a.dispositionType !== 'VENDOR_PAYMENT' || a.targetId !== v.id) return false;
+            if (a.status !== 'REVERSED') return false;
+            const src = state.receipts.find(r => r.id === a.receiptId);
+            return !!src?.bouncedDate && inRange(src.bouncedDate);
+          })
+          .reduce((s, a) => s + a.amount, 0);
+        const paymentPaid = expensePaid + endorsedPaid - endorsementsReversed;
         return {
           vendorId: v.id,
           vendorName: v.name,
@@ -46,7 +61,8 @@ export function VendorReportContent() {
           paymentPaid
         };
       });
-  }, [state.vendors, state.purchases, state.purchaseReturns, state.expenses, vendorSearch, fromDate, toDate]);
+  }, [state.vendors, state.purchases, state.purchaseReturns, state.expenses,
+      state.chequeAllocations, state.receipts, vendorSearch, fromDate, toDate]);
 
   const grandTotals = useMemo(() => {
     return vendorGroupRows.reduce((acc, r) => ({
@@ -76,8 +92,34 @@ export function VendorReportContent() {
       .filter(e => e.businessAccountId === selectedVendor.baId)
       .forEach(e => entries.push({ date: e.date, type: 'Payment', ref: e.id, debit: 0, credit: e.amount }));
 
+    // Cheques endorsed directly to this vendor (§13) settle their payable too.
+    state.chequeAllocations
+      .filter(a => a.dispositionType === 'VENDOR_PAYMENT' && a.targetId === selectedVendor.id)
+      .forEach(a => {
+        const src = state.receipts.find(r => r.id === a.receiptId);
+        entries.push({
+          date: a.allocationDate,
+          type: 'Cheque Endorsed',
+          ref: src?.chequeNo || a.id,
+          debit: 0,
+          credit: a.amount
+        });
+        // A bounce puts the payable back up, dated the bounce — the original
+        // credit above is left untouched so prior statements still reconcile.
+        if (a.status === 'REVERSED' && src?.bouncedDate) {
+          entries.push({
+            date: src.bouncedDate,
+            type: 'Endorsement Reversed',
+            ref: src.chequeNo || a.id,
+            debit: a.amount,
+            credit: 0
+          });
+        }
+      });
+
     return entries.sort((a, b) => a.date.localeCompare(b.date));
-  }, [selectedVendor, state.purchases, state.purchaseReturns, state.expenses]);
+  }, [selectedVendor, state.purchases, state.purchaseReturns, state.expenses,
+      state.chequeAllocations, state.receipts]);
 
   const runningVendorLedger = useMemo(() => {
     let beforeEntries = vendorLedgerEntries;

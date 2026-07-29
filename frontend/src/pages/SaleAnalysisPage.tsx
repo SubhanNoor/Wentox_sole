@@ -1,5 +1,6 @@
 import { Fragment, useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
+import { isReceiptLive } from '@/lib/cheques';
 import AppLayout from '@/components/AppLayout';
 import { Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
@@ -56,8 +57,11 @@ export function SaleAnalysisContent() {
         .filter(r => r.customerId === c.id && r.status === 'Posted' && r.date >= periodStart && r.date <= periodEnd)
         .reduce((sum, r) => sum + r.items.reduce((s, it) => s + it.value, 0), 0);
 
+      // A bounced cheque was never really received, so it must not show as
+      // payment here (§13) — same rule the Account Ledger and Receipts use.
       const paymentReceived = state.receipts
         .filter(rec => rec.customerId === c.id && rec.date >= periodStart && rec.date <= periodEnd)
+        .filter(isReceiptLive)
         .reduce((sum, rec) => sum + rec.amount + (rec.commission || 0), 0);
 
       return {

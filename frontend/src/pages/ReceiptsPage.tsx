@@ -1,17 +1,24 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
+import { getCustomerBalance } from '@/lib/cheques';
 import AppLayout from '@/components/AppLayout';
 import type { Receipt } from '@/types';
 import { Save, DollarSign, Search } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
+import ChequesTab from '@/components/ChequesTab';
+
+type ReceiptTab = 'entry' | 'weekly' | 'monthly' | 'overall' | 'cheques';
 
 export default function ReceiptsPage() {
   const { state, dispatch } = useApp();
 
-  // Navigation / Tabs State
-  const [activeTab, setActiveTab] = useState<'entry' | 'weekly' | 'monthly' | 'overall'>('entry');
+  // Navigation / Tabs State — an alert click-through can deep-link straight
+  // to the Cheques tab via NAVIGATE's optional `tab`.
+  const [activeTab, setActiveTab] = useState<ReceiptTab>(
+    state.currentTab === 'cheques' ? 'cheques' : 'entry'
+  );
 
   // Form State
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -61,31 +68,14 @@ export default function ReceiptsPage() {
     });
   }, [customerSearchQuery, state.customers, state.regions, state.cities]);
 
-  // Customer balance calculations
+  // Customer balance calculations. Uses the shared helper so a BOUNCED cheque
+  // stops counting as payment here exactly as it does in the Account Ledger.
   const customerBalanceDetails = useMemo(() => {
     if (!customerId) return null;
 
-    // 1. Posted Sale Bills (Debits)
-    const totalDebit = state.saleBills
-      .filter(bill => bill.customerId === customerId && bill.status === 'Posted')
-      .reduce((sum, bill) => sum + bill.totalValue, 0);
-
-    // 2. Posted Sale Returns (Credits)
-    const totalReturns = state.saleReturns
-      .filter(ret => ret.customerId === customerId && ret.status === 'Posted')
-      .reduce((sum, ret) => sum + ret.items.reduce((s, it) => s + it.value, 0), 0);
-
-    // 3. Receipts (Credits)
-    const totalReceipts = state.receipts
-      .filter(rec => rec.customerId === customerId)
-      .reduce((sum, rec) => sum + rec.amount, 0);
-
-    // 4. Prior Commission (Credits) — payment-time only, never changes the sale bill itself
-    const totalCommission = state.receipts
-      .filter(rec => rec.customerId === customerId)
-      .reduce((sum, rec) => sum + (rec.commission || 0), 0);
-
-    const currentBalance = totalDebit - (totalReturns + totalReceipts + totalCommission);
+    const currentBalance = getCustomerBalance(
+      customerId, state.saleBills, state.saleReturns, state.receipts
+    );
     const afterCommission = currentBalance - commission;
     const remainingBalance = afterCommission - amount;
 
@@ -186,12 +176,23 @@ export default function ReceiptsPage() {
           >
             Overall Records
           </button>
+          <button
+            onClick={() => setActiveTab('cheques')}
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+              activeTab === 'cheques'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Cheques
+          </button>
         </div>
 
         {/* Tab Content */}
         {activeTab === 'weekly' && <WeeklyReceiptsTab />}
         {activeTab === 'monthly' && <MonthlyReceiptsTab />}
         {activeTab === 'overall' && <OverallReceiptsTab />}
+        {activeTab === 'cheques' && <ChequesTab />}
 
         {activeTab === 'entry' && (
           <div className="max-w-2xl mx-auto">

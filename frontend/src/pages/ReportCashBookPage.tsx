@@ -73,8 +73,71 @@ export function ReportCashBookContent() {
         });
       });
 
+    // §13 — an endorsed cheque is real cash flow, not an off-books transfer.
+    // The receipt already counted as Jamma on the day it arrived; the
+    // endorsement counts as Naam on its own allocation date. A plain DEPOSIT
+    // is only moving the cheque to the bank, so it is NOT an outflow.
+    // Reversed allocations stay on their original date — the bounce posts its
+    // counter-entry separately below, so past days never change.
+    state.chequeAllocations
+      .filter(a =>
+        a.dispositionType !== 'DEPOSIT' &&
+        a.allocationDate >= periodStart && a.allocationDate <= periodEnd
+      )
+      .forEach(a => {
+        const sourceReceipt = state.receipts.find(r => r.id === a.receiptId);
+        const name = a.targetType === 'VENDOR'
+          ? state.vendors.find(v => v.id === a.targetId)?.name
+          : state.businessAccounts.find(b => b.id === a.targetId)?.name;
+        rows.push({
+          date: a.allocationDate,
+          accountName: name || 'Cheque endorsement',
+          remarks: a.remarks || `Cheque endorsed — ${a.dispositionType.replace('_', ' ').toLowerCase()}`,
+          mode: 'Cheque',
+          chequeNo: sourceReceipt?.chequeNo || '-',
+          direction: 'Payment',
+          amount: a.amount
+        });
+      });
+
+    // Bounce reversals, dated the day the bounce was recorded.
+    state.receipts
+      .filter(r => r.chequeStatus === 'BOUNCED' && r.bouncedDate &&
+                   r.bouncedDate >= periodStart && r.bouncedDate <= periodEnd)
+      .forEach(r => {
+        const cust = state.customers.find(c => c.id === r.customerId);
+        // Cancels the original Jamma.
+        rows.push({
+          date: r.bouncedDate!,
+          accountName: cust?.name || 'Walk-in Client',
+          remarks: `Cheque ${r.chequeNo || ''} BOUNCED — reverses receipt of ${r.date}`,
+          mode: 'Cheque',
+          chequeNo: r.chequeNo || '-',
+          direction: 'Payment',
+          amount: r.amount
+        });
+        // Cancels each endorsement made from it.
+        state.chequeAllocations
+          .filter(a => a.receiptId === r.id && a.status === 'REVERSED' && a.dispositionType !== 'DEPOSIT')
+          .forEach(a => {
+            const name = a.targetType === 'VENDOR'
+              ? state.vendors.find(v => v.id === a.targetId)?.name
+              : state.businessAccounts.find(b => b.id === a.targetId)?.name;
+            rows.push({
+              date: r.bouncedDate!,
+              accountName: name || 'Cheque endorsement',
+              remarks: `Endorsement reversed — cheque ${r.chequeNo || ''} bounced`,
+              mode: 'Cheque',
+              chequeNo: r.chequeNo || '-',
+              direction: 'Receipt',
+              amount: a.amount
+            });
+          });
+      });
+
     return rows.sort((a, b) => a.date.localeCompare(b.date));
-  }, [state.receipts, state.expenses, state.customers, state.businessAccounts, periodStart, periodEnd]);
+  }, [state.receipts, state.expenses, state.customers, state.businessAccounts,
+      state.chequeAllocations, state.vendors, periodStart, periodEnd]);
 
   const filteredRows = useMemo(() => {
     if (!searchQuery.trim()) return cashBookRows;

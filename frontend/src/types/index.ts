@@ -174,7 +174,47 @@ export interface Receipt {
   chequeDate?: string; // date written on the cheque
   chequeReceivedDate?: string; // date physically received
   chequeStatus?: ChequeStatus;
+  bouncedDate?: string; // date the bounce was recorded — reversing entries are dated here
   remarks: string;
+}
+
+// §13 — a received cheque is a pool of value allocated across one or more
+// destinations until its unallocated balance reaches zero.
+export type ChequeDisposition = 'DEPOSIT' | 'VENDOR_PAYMENT' | 'EXPENSE_PAYMENT';
+
+export interface ChequeAllocation {
+  id: string;
+  receiptId: string;
+  dispositionType: ChequeDisposition;
+  targetType: 'VENDOR' | 'BUSINESS_ACCOUNT' | null; // null for DEPOSIT
+  targetId: string | null;                          // vendorId or businessAccountId
+  amount: number;
+  allocationDate: string;
+  remarks: string;
+  // REVERSED = the sourcing cheque bounced. The row is kept, not deleted:
+  // history stays intact and a counter-entry is posted on the bounce date.
+  status: 'ACTIVE' | 'REVERSED';
+}
+
+// §12 — alerts are derived live from state; only the dismissal is stored.
+export interface AlertDismissal {
+  alertKey: string;
+  dismissedAt: string;
+}
+
+export type AlertKind = 'CHEQUE_DUE' | 'PAYMENT_OVERDUE';
+export type AlertSeverity = 'overdue' | 'due-soon';
+
+export interface AppAlert {
+  key: string;
+  kind: AlertKind;
+  severity: AlertSeverity;
+  title: string;
+  detail: string;
+  date: string;   // the cheque/due date driving the alert
+  amount: number;
+  targetPage: string;
+  targetTab?: string;
 }
 
 export interface Expense {

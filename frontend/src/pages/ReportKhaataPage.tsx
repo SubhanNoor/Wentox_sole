@@ -6,7 +6,7 @@ import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 
 interface KhaataRow {
   date: string;
-  type: 'Opening Balance' | 'Sale Bill' | 'Sale Return' | 'Receipt (Jamma)' | 'Commission';
+  type: 'Opening Balance' | 'Sale Bill' | 'Sale Return' | 'Receipt (Jamma)' | 'Commission' | 'Cheque Bounced';
   invNo: string;    // system-generated id
   billNo: string;   // manual bill number, '-' for non-bill rows
   narration: string; // free text (blank for cheque rows, which use the 3 sub-columns instead)
@@ -131,13 +131,29 @@ export function ReportKhaataContent() {
           credit: rec.commission
         });
       }
+
+      // 5. Bounce (§13) — the credit above stands on its original date; the
+      //    cancellation is a debit dated the bounce, so the customer's due goes
+      //    back up without rewriting a statement that was already printed.
+      if (rec.chequeStatus === 'BOUNCED' && rec.bouncedDate) {
+        entries.push({
+          date: rec.bouncedDate,
+          type: 'Cheque Bounced',
+          invNo: rec.id,
+          billNo: '-',
+          narration: `Cheque ${rec.chequeNo || ''} bounced — reverses receipt of ${rec.date}`,
+          pairs: 0,
+          debit: rec.amount + (rec.commission || 0),
+          credit: 0
+        });
+      }
     });
 
     // Sort by Date
     entries.sort((a, b) => a.date.localeCompare(b.date));
 
     return entries;
-  }, [customerId, state.saleBills, state.saleReturns, state.receipts, state.subCustomers]);
+  }, [customerId, state.saleBills, state.saleReturns, state.receipts, state.subCustomers, state.chequeAllocations]);
 
   // Compute running balance with date filtering
   const runningKhaata = useMemo(() => {
@@ -444,7 +460,7 @@ export function ReportKhaataContent() {
                           >
                             <td className="p-3 pl-4 font-semibold">{row.date}</td>
                             <td className="p-3">
-                              <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${row.type === 'Sale Bill' ? 'bg-rose-50 text-rose-700' : row.type === 'Receipt (Jamma)' ? 'bg-emerald-50 text-emerald-700' : row.type === 'Sale Return' ? 'bg-blue-50 text-blue-700' : row.type === 'Commission' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-700'}`}>
+                              <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${row.type === 'Sale Bill' ? 'bg-rose-50 text-rose-700' : row.type === 'Receipt (Jamma)' ? 'bg-emerald-50 text-emerald-700' : row.type === 'Sale Return' ? 'bg-blue-50 text-blue-700' : row.type === 'Commission' ? 'bg-amber-50 text-amber-700' : row.type === 'Cheque Bounced' ? 'bg-rose-100 text-rose-800' : 'bg-slate-100 text-slate-700'}`}>
                                 {row.type}
                               </span>
                             </td>

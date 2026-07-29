@@ -6,6 +6,7 @@ import {
   Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search
 } from 'lucide-react';
 import type { NavPage } from '@/types';
+import NotificationBell from '@/components/NotificationBell';
 
 interface NavItem {
   page: NavPage;
@@ -311,6 +312,8 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
           {headerAction && (
             <div>{headerAction}</div>
           )}
+          {/* §12 — system-wide alert bell, not tucked inside Reports */}
+          <NotificationBell />
         </header>
 
         {/* Content */}

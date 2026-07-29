@@ -1,5 +1,6 @@
 import { Fragment, useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
+import { isReceiptLive } from '@/lib/cheques';
 import AppLayout from '@/components/AppLayout';
 import { Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
@@ -57,9 +58,11 @@ export function SaleReportContent() {
       (customerId === null || r.customerId === customerId) &&
       r.status === 'Posted' && r.date >= periodStart && r.date <= periodEnd
     );
+    // Bounced cheques are excluded — they were never really received (§13).
     const receipts = state.receipts.filter(rec =>
       (customerId === null || rec.customerId === customerId) &&
-      rec.date >= periodStart && rec.date <= periodEnd
+      rec.date >= periodStart && rec.date <= periodEnd &&
+      isReceiptLive(rec)
     );
 
     const totalSales = bills.reduce((s, b) => s + b.totalValue, 0);
