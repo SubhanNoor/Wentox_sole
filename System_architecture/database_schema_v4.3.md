@@ -12,7 +12,7 @@
 > (only cheque-due survives). Makes `sale_bills`/`sale_returns.bill_no`, `gp_no`, `bilty_no`,
 > `adda_id` `NOT NULL` and `store_id` nullable with `ON DELETE SET NULL` — **this removes the
 > "Without Bilty"/"Without Adda" dispatch-later workflow**, flagged as a real behaviour change, not
-> a formality. Pulls cheque data out of `receipts`/`expenses` into new `banks` and `cheques` tables
+> a formality. Pulls cheque data out of `receipts`/`expenses` into new `bank_accounts` and `cheques` tables
 > (cheque now has one shared lifecycle row, including `bounced_date`, moved off `receipts`), plus
 > `draft_receipts`/`draft_expenses` for the same dummy-record pattern. Removes `remarks` from
 > `stock_movements`/`vendor_stock_movements`.
@@ -52,20 +52,21 @@ were **not** used as inputs — they are known-stale and are being regenerated d
 `architecture-v2.md` §0 states the situation plainly: the old Postgres schema is missing large
 parts of the target system. This version closes those gaps.
 
-| Area | Previous state | This version |
-|---|---|---|
-| Platform | PostgreSQL (native `ENUM`, `TIMESTAMPTZ`, `IDENTITY`) | **MS SQL Server** (`CHECK` constraints, `DATETIME2`, `IDENTITY(1,1)`) |
-| Control Accounts | `control_accounts` table, parent of chart + business accounts | **Dropped entirely** (§9 / TASK-11). Hierarchy is now Group → Chart → Business |
-| Products | One flat `products` table, colour as a loose column | Split into **`articles` + `article_colors`**, so TASK-03's article rows with colour sub-rows are a real relationship, not string-parsing |
-| Regions | Free-text `region` column on `business_accounts` | Real **`regions`** lookup; customer identification is Region first, City second (§10 gap 6, §11) |
-| Sub customers | `customer_id NOT NULL` FK to parent | **Parent FK removed** — independent flat list (§10, TASK-06) |
-| Purchases | Did not exist | **`purchases` + `purchase_items` + returns**, feeding a separate vendor stock (§2 below) |
-| Materials | Did not exist | **`materials`** — self-building lookup, auto-registered the first time a name is typed (§2 below) |
-| Vendor ↔ accounts | No link | **`vendors.ba_id`** → `business_accounts`, so Purchase and Expense-as-vendor-payment resolve to the same real vendor (§10 gap 2) |
-| Commission | Did not exist | **`receipts.commission`**, posted as a credit row on the customer ledger (§7) |
-| Cheques | `details` free text only | **`cheque_no` / `cheque_date` / `cheque_received_date` / `cheque_status` / `bounced_date`** (§12), plus `cheque_allocations` for endorsement and the bounce cascade (§13, §6.1) |
-| Roles | No role column | **`users.role`** + a data-driven restriction flag on accounts (§8 / TASK-14) |
-| Due dates / alerts | Did not exist | Optional `due_date` on sale bills and purchases, plus `alert_dismissals` (§12) |
+
+| Area               | Previous state                                                | This version                                                                                                                                                                       |
+| ------------------ | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Platform           | PostgreSQL (native`ENUM`, `TIMESTAMPTZ`, `IDENTITY`)          | **MS SQL Server** (`CHECK` constraints, `DATETIME2`, `IDENTITY(1,1)`)                                                                                                              |
+| Control Accounts   | `control_accounts` table, parent of chart + business accounts | **Dropped entirely** (§9 / TASK-11). Hierarchy is now Group → Chart → Business                                                                                                  |
+| Products           | One flat`products` table, colour as a loose column            | Split into**`articles` + `article_colors`**, so TASK-03's article rows with colour sub-rows are a real relationship, not string-parsing                                            |
+| Regions            | Free-text`region` column on `business_accounts`               | Real**`regions`** lookup; customer identification is Region first, City second (§10 gap 6, §11)                                                                                  |
+| Sub customers      | `customer_id NOT NULL` FK to parent                           | **Parent FK removed** — independent flat list (§10, TASK-06)                                                                                                                     |
+| Purchases          | Did not exist                                                 | **`purchases` + `purchase_items` + returns**, feeding a separate vendor stock (§2 below)                                                                                          |
+| Materials          | Did not exist                                                 | **`materials`** — self-building lookup, auto-registered the first time a name is typed (§2 below)                                                                                |
+| Vendor ↔ accounts | No link                                                       | **`vendors.ba_id`** → `business_accounts`, so Purchase and Expense-as-vendor-payment resolve to the same real vendor (§10 gap 2)                                                 |
+| Commission         | Did not exist                                                 | **`receipts.commission`**, posted as a credit row on the customer ledger (§7)                                                                                                     |
+| Cheques            | `details` free text only                                      | **`cheque_no` / `cheque_date` / `cheque_received_date` / `cheque_status` / `bounced_date`** (§12), plus `cheque_allocations` for endorsement and the bounce cascade (§13, §6.1) |
+| Roles              | No role column                                                | **`users.role`** + a data-driven restriction flag on accounts (§8 / TASK-14)                                                                                                      |
+| Due dates / alerts | Did not exist                                                 | Optional`due_date` on sale bills and purchases, plus `alert_dismissals` (§12)                                                                                                     |
 
 ---
 
@@ -85,6 +86,7 @@ client's answer wins and the conflict is called out explicitly.
    > `PURCHASE` and `PURCHASE_RETURN` values to `stock_movements.movement_type`. Those values are
    > **not** added here — pairs stock still moves only via Production, Sale and Sale Return.
    > §14's Vendor Stock sub-page is therefore expressed in **material units, not pairs**.
+   >
 3. **Vendor stock is a movement ledger**, not a running-balance column — signed rows, balance is
    `SUM(qty)`. Same auditable pattern as `stock_movements`.
 4. **Purchase is a confirmable document** (Confirmed/Draft, like Sale Bill). Confirming writes ledger
@@ -130,7 +132,10 @@ client's answer wins and the conflict is called out explicitly.
 - **Dates:** `DATE` for business dates (bill date, cheque date). `DATETIME2(0)` for audit stamps.
 - **Audit:** every table has `created_at`/`updated_at DATETIME2(0) NOT NULL DEFAULT SYSUTCDATETIME()`.
   `updated_at` is maintained by a per-table `AFTER UPDATE` trigger (§13 — MS SQL has no shared
-  trigger function, so one trigger per table, generated by script).
+  trigger function, so one trigger per table, generated by script). Document tables (§12 open Q6,
+  answered) also carry `updated_by INT NULL` beside `created_by`, application-set on every update —
+  `created_by`/`updated_by` are single-user-app niceties today, but resolve who changed a row once
+  multiple staff share the system, without a later migration.
 - **Soft delete:** `is_active BIT NOT NULL DEFAULT 1` on lookup/setup tables. Transactions are never
   soft-deleted — they are still in DRAFT or edited.
 - **Document numbers:** `VARCHAR(30)` — real-world bill/GP/bilty numbers are alphanumeric.
@@ -157,16 +162,17 @@ MS SQL has no `CREATE TYPE ... AS ENUM`. Each former enum becomes a `VARCHAR` co
 > is a row insert, not a schema migration. The rest below are genuinely fixed, closed sets baked
 > into app logic, so they stay `CHECK`-constrained.
 
-| Former enum | Column type | Allowed values |
-|---|---|---|
-| `account_status` | `VARCHAR(10)` | `ACTIVE`, `CLOSED` |
-| `payment_mode` | `VARCHAR(10)` | `CASH`, `CHEQUE`, `ONLINE` |
-| `confirm_status` | `VARCHAR(10)` | `CONFIRMED`, `DRAFT` |
-| `delivery_type` | `VARCHAR(10)` | `SAME`, `CUSTOM` |
-| `stock_movement_type` | `VARCHAR(15)` | `OPENING`, `ADJUSTMENT`, `PRODUCTION`, `SALE`, `SALE_RETURN` |
-| `vendor_stock_movement_type` | `VARCHAR(20)` | `PURCHASE`, `PURCHASE_RETURN`, `CONSUMPTION`, `ADJUSTMENT` |
-| `cheque_status` | `VARCHAR(20)` | `PENDING`, `DEPOSITED`, `ENDORSED`, `PARTIALLY_ENDORSED`, `CLEARED`, `BOUNCED` |
-| `user_role` | `VARCHAR(10)` | `ADMIN`, `USER` |
+
+| Former enum                  | Column type   | Allowed values                                                                 |
+| ---------------------------- | ------------- | ------------------------------------------------------------------------------ |
+| `account_status`             | `VARCHAR(10)` | `ACTIVE`, `CLOSED`                                                             |
+| `payment_mode`               | `VARCHAR(10)` | `CASH`, `CHEQUE`, `ONLINE`                                                     |
+| `confirm_status`             | `VARCHAR(10)` | `CONFIRMED`, `DRAFT`                                                           |
+| `delivery_type`              | `VARCHAR(10)` | `SAME`, `CUSTOM`                                                               |
+| `stock_movement_type`        | `VARCHAR(15)` | `OPENING`, `ADJUSTMENT`, `PRODUCTION`, `SALE`, `SALE_RETURN`                   |
+| `vendor_stock_movement_type` | `VARCHAR(20)` | `PURCHASE`, `PURCHASE_RETURN`, `CONSUMPTION`, `ADJUSTMENT`                     |
+| `cheque_status`              | `VARCHAR(20)` | `PENDING`, `DEPOSITED`, `ENDORSED`, `PARTIALLY_ENDORSED`, `CLEARED`, `BOUNCED` |
+| `user_role`                  | `VARCHAR(10)` | `ADMIN`, `USER`                                                                |
 
 ---
 
@@ -559,9 +565,9 @@ CREATE TABLE dbo.products (
   sheet         DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_sheet  DEFAULT (0),
   stubble       DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_stub   DEFAULT (0),
   bottom        DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_bot    DEFAULT (0),
-  p1            DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_p1     DEFAULT (0),
-  p2            DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_p2     DEFAULT (0),
-  na            DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_na     DEFAULT (0),
+  p1            INT           NOT NULL CONSTRAINT DF_products_p1     DEFAULT (0),
+  p2            INT           NOT NULL CONSTRAINT DF_products_p2     DEFAULT (0),
+  na            INT           NOT NULL CONSTRAINT DF_products_na     DEFAULT (0),
   is_active   BIT          NOT NULL CONSTRAINT DF_products_active  DEFAULT (1),
   created_at  DATETIME2(0) NOT NULL CONSTRAINT DF_products_created DEFAULT (SYSUTCDATETIME()),
   updated_at  DATETIME2(0) NOT NULL CONSTRAINT DF_products_updated DEFAULT (SYSUTCDATETIME()),
@@ -626,6 +632,7 @@ CREATE TABLE dbo.sale_bills (
   net_value        DECIMAL(14,2) NOT NULL CONSTRAINT DF_sb_net      DEFAULT (0),
   status           VARCHAR(10)   NOT NULL CONSTRAINT DF_sb_status   DEFAULT ('DRAFT'),
   created_by       INT           NULL,
+  updated_by              INT           NULL,
   created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sb_created  DEFAULT (SYSUTCDATETIME()),
   updated_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sb_updated  DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_sale_bills          PRIMARY KEY (bill_id),
@@ -635,6 +642,7 @@ CREATE TABLE dbo.sale_bills (
   CONSTRAINT FK_sale_bills_mainac   FOREIGN KEY (main_ac_id)      REFERENCES dbo.chart_of_accounts(ac_id),
   CONSTRAINT FK_sale_bills_adda     FOREIGN KEY (adda_id)         REFERENCES dbo.addas(adda_id),
   CONSTRAINT FK_sale_bills_user     FOREIGN KEY (created_by)      REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_sale_bills_upd     FOREIGN KEY (updated_by)      REFERENCES dbo.users(user_id),
   CONSTRAINT CK_sale_bills_deliv    CHECK (delivery_type IN ('SAME','CUSTOM')),
   CONSTRAINT CK_sale_bills_status   CHECK (status IN ('CONFIRMED','DRAFT')),
   CONSTRAINT CK_sale_bills_custdlv  CHECK (delivery_type = 'SAME' OR sub_customer_id IS NOT NULL)
@@ -692,6 +700,7 @@ CREATE TABLE dbo.draft_sale_bills (
   gross_value      DECIMAL(14,2) NOT NULL CONSTRAINT DF_dsb_gross    DEFAULT (0),
   net_value        DECIMAL(14,2) NOT NULL CONSTRAINT DF_dsb_net      DEFAULT (0),
   created_by       INT           NULL,
+  updated_by              INT           NULL,
   created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_dsb_created  DEFAULT (SYSUTCDATETIME()),
   updated_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_dsb_updated  DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_draft_sale_bills          PRIMARY KEY (draft_id),
@@ -701,6 +710,7 @@ CREATE TABLE dbo.draft_sale_bills (
   CONSTRAINT FK_draft_sale_bills_mainac   FOREIGN KEY (main_ac_id)      REFERENCES dbo.chart_of_accounts(ac_id),
   CONSTRAINT FK_draft_sale_bills_adda     FOREIGN KEY (adda_id)         REFERENCES dbo.addas(adda_id),
   CONSTRAINT FK_draft_sale_bills_user     FOREIGN KEY (created_by)      REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_draft_sale_bills_upd     FOREIGN KEY (updated_by)      REFERENCES dbo.users(user_id),
   CONSTRAINT CK_draft_sale_bills_deliv    CHECK (delivery_type IN ('SAME','CUSTOM'))
 );
 CREATE INDEX IX_draft_sale_bills_date     ON dbo.draft_sale_bills(bill_date);
@@ -731,6 +741,7 @@ CREATE INDEX IX_draft_sale_bill_items_variant ON dbo.draft_sale_bill_items(varia
 ```
 
 Flow:
+
 - **Save draft** → insert `draft_sale_bills` + `draft_sale_bill_items`, deduct stock (as a
   `stock_movements` row, e.g. type `ADJUSTMENT` or a new `DRAFT` type — no ledger entry).
 - **Delete draft** → restore stock (reverse the same movement), delete the draft rows. No trace
@@ -768,6 +779,7 @@ CREATE TABLE dbo.sale_returns (
   net_value        DECIMAL(14,2) NOT NULL CONSTRAINT DF_sr_net     DEFAULT (0),
   status           VARCHAR(10)   NOT NULL CONSTRAINT DF_sr_status  DEFAULT ('DRAFT'),
   created_by       INT           NULL,
+  updated_by              INT           NULL,
   created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sr_created DEFAULT (SYSUTCDATETIME()),
   updated_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sr_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_sale_returns         PRIMARY KEY (return_id),
@@ -776,6 +788,7 @@ CREATE TABLE dbo.sale_returns (
   CONSTRAINT FK_sale_returns_subcust FOREIGN KEY (sub_customer_id) REFERENCES dbo.sub_customers(sub_customer_id),
   CONSTRAINT FK_sale_returns_adda    FOREIGN KEY (adda_id)         REFERENCES dbo.addas(adda_id),
   CONSTRAINT FK_sale_returns_user    FOREIGN KEY (created_by)      REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_sale_returns_upd    FOREIGN KEY (updated_by)      REFERENCES dbo.users(user_id),
   CONSTRAINT CK_sale_returns_status  CHECK (status IN ('CONFIRMED','DRAFT'))
 );
 CREATE INDEX IX_sale_returns_date     ON dbo.sale_returns(return_date);
@@ -828,6 +841,7 @@ CREATE TABLE dbo.draft_sale_returns (
   gross_value      DECIMAL(14,2) NOT NULL CONSTRAINT DF_dsr_gross   DEFAULT (0),
   net_value        DECIMAL(14,2) NOT NULL CONSTRAINT DF_dsr_net     DEFAULT (0),
   created_by       INT           NULL,
+  updated_by              INT           NULL,
   created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_dsr_created DEFAULT (SYSUTCDATETIME()),
   updated_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_dsr_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_draft_sale_returns          PRIMARY KEY (draft_id),
@@ -835,7 +849,8 @@ CREATE TABLE dbo.draft_sale_returns (
   CONSTRAINT FK_draft_sale_returns_cust     FOREIGN KEY (customer_id)     REFERENCES dbo.customers(customer_id),
   CONSTRAINT FK_draft_sale_returns_subcust  FOREIGN KEY (sub_customer_id) REFERENCES dbo.sub_customers(sub_customer_id),
   CONSTRAINT FK_draft_sale_returns_adda     FOREIGN KEY (adda_id)         REFERENCES dbo.addas(adda_id),
-  CONSTRAINT FK_draft_sale_returns_user     FOREIGN KEY (created_by)      REFERENCES dbo.users(user_id)
+  CONSTRAINT FK_draft_sale_returns_user     FOREIGN KEY (created_by)      REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_draft_sale_returns_upd     FOREIGN KEY (updated_by)      REFERENCES dbo.users(user_id)
 );
 CREATE INDEX IX_draft_sale_returns_date     ON dbo.draft_sale_returns(return_date);
 CREATE INDEX IX_draft_sale_returns_customer ON dbo.draft_sale_returns(customer_id, return_date);
@@ -881,11 +896,13 @@ CREATE TABLE dbo.purchases (                                  -- TASK-01
   total_value   DECIMAL(14,2) NOT NULL CONSTRAINT DF_pur_total  DEFAULT (0),
   status        VARCHAR(10)   NOT NULL CONSTRAINT DF_pur_status DEFAULT ('DRAFT'),
   created_by    INT           NULL,
+  updated_by        INT           NULL,
   created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_pur_created DEFAULT (SYSUTCDATETIME()),
   updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_pur_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_purchases        PRIMARY KEY (purchase_id),
   CONSTRAINT FK_purchases_vendor FOREIGN KEY (vendor_id)  REFERENCES dbo.vendors(vendor_id),
   CONSTRAINT FK_purchases_user   FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_purchases_upd   FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id),
   CONSTRAINT CK_purchases_status CHECK (status IN ('CONFIRMED','DRAFT'))
 );
 CREATE INDEX IX_purchases_date   ON dbo.purchases(purchase_date);
@@ -926,11 +943,13 @@ CREATE TABLE dbo.purchase_returns (
   total_value DECIMAL(14,2) NOT NULL CONSTRAINT DF_pret_total  DEFAULT (0),
   status      VARCHAR(10)   NOT NULL CONSTRAINT DF_pret_status DEFAULT ('DRAFT'),
   created_by  INT           NULL,
+  updated_by    INT           NULL,
   created_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_pret_created DEFAULT (SYSUTCDATETIME()),
   updated_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_pret_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_purchase_returns        PRIMARY KEY (return_id),
   CONSTRAINT FK_purchase_returns_vendor FOREIGN KEY (vendor_id)  REFERENCES dbo.vendors(vendor_id),
   CONSTRAINT FK_purchase_returns_user   FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_purchase_returns_upd   FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id),
   CONSTRAINT CK_purchase_returns_status CHECK (status IN ('CONFIRMED','DRAFT'))
 );
 CREATE INDEX IX_purchase_returns_date   ON dbo.purchase_returns(return_date);
@@ -960,13 +979,23 @@ CREATE INDEX IX_purchase_return_items_material ON dbo.purchase_return_items(mate
 ### 5.8 Money — receipts, expenses, banks, cheques
 
 > **Actions applied:** cheque data is pulled out of `receipts`/`expenses` into two new tables,
-> `banks` and `cheques`, so a cheque is one row with one lifecycle shared by both sides instead of
+> `bank_accounts` and `cheques`, so a cheque is one row with one lifecycle shared by both sides instead of
 > duplicated columns. `bounced_date` (added in v4.1) and its bounce `CHECK` move from `receipts` to
 > `cheques` along with the rest of the cheque identity.
-> - `banks` — simple lookup (bank name), referenced by `cheques.bank_id`.
+>
+> - `bank_accounts` — a real party table, same pattern as `vendors`/`customers`: own PK
+>   (`bank_id`) plus a unique `ba_id` into `business_accounts`, auto-created under the seeded
+>   **Cash at Banks** chart account (§8) when a bank account is added. This is the §12 Q3/Q9
+>   resolution — posting now has a real chart account to resolve to per bank, not one blended figure.
 > - `cheques` — one row per physical cheque, `receipt_id` FK (the receipt that brought it in),
 >   `cheque_status` defaults to `'PENDING'`. `receipts.cheque_id` and `expenses.cheque_id` both
->   point at the same `cheques` row.
+>   point at the same `cheques` row. `cheques.bank_id` says which bank the cheque was deposited to.
+> - **Which chart account a transaction posts to (§12 Q3, resolved):** `payment_mode = 'CASH'`
+>   always posts to the single seeded `CASH IN HAND` chart account. `'ONLINE'` requires
+>   `receipts.bank_id`/`expenses.bank_id` to be set, and posts to that bank's own chart account via
+>   `bank_accounts.ba_id`. `'CHEQUE'` resolves the bank through the cheque instead
+>   (`cheque_id → cheques.bank_id`), so `receipts.bank_id`/`expenses.bank_id` stay `NULL` for cheque
+>   payments — the bank is on the cheque, not the receipt.
 > - **Endorsement flow:** an expense that pays a vendor with a cheque already on hand sets
 >   `expenses.cheque_id` to that cheque, and application logic flips `cheques.cheque_status` to
 >   `'ENDORSED'` in the same transaction. Only cheques with `cheque_status IN ('PENDING','DEPOSITED')`
@@ -988,19 +1017,23 @@ CREATE INDEX IX_purchase_return_items_material ON dbo.purchase_return_items(mate
 >   from `cheques.cheque_date`/`cheque_status` instead of `receipts`.
 
 ```sql
-CREATE TABLE dbo.banks (
+CREATE TABLE dbo.bank_accounts (                              -- §12 Q3/Q9: real party, mirrors vendors/customers
   bank_id    INT IDENTITY(1,1) NOT NULL,
-  name       NVARCHAR(100) NOT NULL,
-  is_active  BIT          NOT NULL CONSTRAINT DF_banks_active  DEFAULT (1),
-  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_banks_created DEFAULT (SYSUTCDATETIME()),
-  updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_banks_updated DEFAULT (SYSUTCDATETIME()),
-  CONSTRAINT PK_banks      PRIMARY KEY (bank_id),
-  CONSTRAINT UQ_banks_name UNIQUE (name)
+  name       NVARCHAR(100) NOT NULL,                          -- e.g. 'Bank Alfalah A/C - 0124'
+  ba_id      INT           NULL,   -- auto-created under CASH AT BANKS chart account on bank create
+  is_active  BIT          NOT NULL CONSTRAINT DF_bankacc_active  DEFAULT (1),
+  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_bankacc_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_bankacc_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_bank_accounts PRIMARY KEY (bank_id),
+  CONSTRAINT UQ_bank_accounts_name UNIQUE (name),
+  CONSTRAINT FK_bank_accounts_ba   FOREIGN KEY (ba_id) REFERENCES dbo.business_accounts(ba_id)
 );
+-- Filtered unique: one bank account per business account, but many may await backfill (NULL).
+CREATE UNIQUE INDEX UQ_bank_accounts_ba ON dbo.bank_accounts(ba_id) WHERE ba_id IS NOT NULL;
 
 CREATE TABLE dbo.cheques (
   cheque_id            INT IDENTITY(1,1) NOT NULL,
-  bank_id              INT           NULL,
+  bank_id              INT           NULL,                     -- which bank_accounts row the cheque deposits to
   receipt_id           INT           NOT NULL,                 -- the receipt that brought this cheque in
   cheque_no            VARCHAR(50)   NOT NULL,
   cheque_date          DATE          NOT NULL,                  -- date written on the cheque
@@ -1010,7 +1043,7 @@ CREATE TABLE dbo.cheques (
   created_at           DATETIME2(0)  NOT NULL CONSTRAINT DF_cheques_created DEFAULT (SYSUTCDATETIME()),
   updated_at           DATETIME2(0)  NOT NULL CONSTRAINT DF_cheques_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_cheques         PRIMARY KEY (cheque_id),
-  CONSTRAINT FK_cheques_bank    FOREIGN KEY (bank_id)    REFERENCES dbo.banks(bank_id),
+  CONSTRAINT FK_cheques_bank    FOREIGN KEY (bank_id)    REFERENCES dbo.bank_accounts(bank_id),
   CONSTRAINT FK_cheques_receipt FOREIGN KEY (receipt_id) REFERENCES dbo.receipts(receipt_id),
   CONSTRAINT CK_cheques_status  CHECK (cheque_status IN
         ('PENDING','DEPOSITED','ENDORSED','PARTIALLY_ENDORSED','CLEARED','BOUNCED')),
@@ -1032,17 +1065,21 @@ CREATE TABLE dbo.receipts (                                   -- Jamma
   amount       DECIMAL(14,2) NOT NULL,
   commission   DECIMAL(14,2) NOT NULL CONSTRAINT DF_rec_comm DEFAULT (0),  -- §7: payment-time only
   payment_mode VARCHAR(10)   NOT NULL,
-  details      NVARCHAR(200) NULL,                            -- bank name / online reference
+  details      NVARCHAR(200) NULL,                            -- online reference etc.
   cheque_id    INT           NULL,                             -- FK to dbo.cheques; set once the cheque row exists
+  bank_id      INT           NULL,                             -- ONLINE only; CHEQUE's bank lives on cheques.bank_id
   remarks      NVARCHAR(500) NULL,                             -- narration source for Account Ledger (§5)
   status       VARCHAR(10)   NOT NULL CONSTRAINT DF_rec_status  DEFAULT ('CONFIRMED'),
   created_by   INT           NULL,
+  updated_by      INT           NULL,
   created_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_rec_created DEFAULT (SYSUTCDATETIME()),
   updated_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_rec_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_receipts        PRIMARY KEY (receipt_id),
   CONSTRAINT FK_receipts_cust   FOREIGN KEY (customer_id) REFERENCES dbo.customers(customer_id),
   CONSTRAINT FK_receipts_cheque FOREIGN KEY (cheque_id)   REFERENCES dbo.cheques(cheque_id),
+  CONSTRAINT FK_receipts_bank   FOREIGN KEY (bank_id)     REFERENCES dbo.bank_accounts(bank_id),
   CONSTRAINT FK_receipts_user   FOREIGN KEY (created_by)  REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_receipts_upd   FOREIGN KEY (updated_by)  REFERENCES dbo.users(user_id),
   CONSTRAINT CK_receipts_amount CHECK (amount > 0),
   CONSTRAINT CK_receipts_comm   CHECK (commission >= 0),
   CONSTRAINT CK_receipts_mode   CHECK (payment_mode IN ('CASH','CHEQUE','ONLINE')),
@@ -1050,7 +1087,12 @@ CREATE TABLE dbo.receipts (                                   -- Jamma
   -- a cheque receipt must carry its cheque identity; a non-cheque receipt must not
   CONSTRAINT CK_receipts_cheque CHECK (
         (payment_mode =  'CHEQUE' AND cheque_id IS NOT NULL)
-     OR (payment_mode <> 'CHEQUE' AND cheque_id IS NULL))
+     OR (payment_mode <> 'CHEQUE' AND cheque_id IS NULL)),
+  -- §12 Q3: which chart account a receipt posts to. CASH never carries a bank; ONLINE always
+  -- must; CHEQUE resolves its bank through cheques.bank_id instead, so stays NULL here.
+  CONSTRAINT CK_receipts_bank   CHECK (
+        (payment_mode = 'ONLINE' AND bank_id IS NOT NULL)
+     OR (payment_mode <> 'ONLINE' AND bank_id IS NULL))
 );
 CREATE INDEX IX_receipts_date     ON dbo.receipts(receipt_date);
 CREATE INDEX IX_receipts_customer ON dbo.receipts(customer_id, receipt_date);
@@ -1064,14 +1106,18 @@ CREATE TABLE dbo.draft_receipts (
   payment_mode VARCHAR(10)   NOT NULL,
   details      NVARCHAR(200) NULL,
   cheque_id    INT           NULL,
+  bank_id      INT           NULL,
   remarks      NVARCHAR(500) NULL,
   created_by   INT           NULL,
+  updated_by      INT           NULL,
   created_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_drec_created DEFAULT (SYSUTCDATETIME()),
   updated_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_drec_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_draft_receipts        PRIMARY KEY (draft_id),
   CONSTRAINT FK_draft_receipts_cust   FOREIGN KEY (customer_id) REFERENCES dbo.customers(customer_id),
   CONSTRAINT FK_draft_receipts_cheque FOREIGN KEY (cheque_id)   REFERENCES dbo.cheques(cheque_id),
+  CONSTRAINT FK_draft_receipts_bank   FOREIGN KEY (bank_id)     REFERENCES dbo.bank_accounts(bank_id),
   CONSTRAINT FK_draft_receipts_user   FOREIGN KEY (created_by)  REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_draft_receipts_upd   FOREIGN KEY (updated_by)  REFERENCES dbo.users(user_id),
   CONSTRAINT CK_draft_receipts_amount CHECK (amount > 0),
   CONSTRAINT CK_draft_receipts_mode   CHECK (payment_mode IN ('CASH','CHEQUE','ONLINE'))
 );
@@ -1086,18 +1132,25 @@ CREATE TABLE dbo.expenses (                                   -- Kharch; also th
   payment_mode VARCHAR(10)   NOT NULL,
   details      NVARCHAR(200) NULL,
   cheque_id    INT           NULL,                             -- endorsed cheque, from dbo.cheques
+  bank_id      INT           NULL,                             -- ONLINE only; CHEQUE's bank lives on cheques.bank_id
   remarks      NVARCHAR(500) NULL,
   status       VARCHAR(10)   NOT NULL CONSTRAINT DF_exp_status  DEFAULT ('CONFIRMED'),
   created_by   INT           NULL,
+  updated_by      INT           NULL,
   created_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_exp_created DEFAULT (SYSUTCDATETIME()),
   updated_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_exp_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_expenses        PRIMARY KEY (expense_id),
   CONSTRAINT FK_expenses_ba     FOREIGN KEY (ba_id)      REFERENCES dbo.business_accounts(ba_id),
   CONSTRAINT FK_expenses_cheque FOREIGN KEY (cheque_id)  REFERENCES dbo.cheques(cheque_id),
+  CONSTRAINT FK_expenses_bank   FOREIGN KEY (bank_id)    REFERENCES dbo.bank_accounts(bank_id),
   CONSTRAINT FK_expenses_user   FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_expenses_upd   FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id),
   CONSTRAINT CK_expenses_amount CHECK (amount > 0),
   CONSTRAINT CK_expenses_mode   CHECK (payment_mode IN ('CASH','CHEQUE','ONLINE')),
-  CONSTRAINT CK_expenses_status CHECK (status IN ('CONFIRMED','DRAFT'))
+  CONSTRAINT CK_expenses_status CHECK (status IN ('CONFIRMED','DRAFT')),
+  CONSTRAINT CK_expenses_bank   CHECK (
+        (payment_mode = 'ONLINE' AND bank_id IS NOT NULL)
+     OR (payment_mode <> 'ONLINE' AND bank_id IS NULL))
 );
 CREATE INDEX IX_expenses_date ON dbo.expenses(expense_date);
 CREATE INDEX IX_expenses_ba   ON dbo.expenses(ba_id, expense_date);
@@ -1110,14 +1163,18 @@ CREATE TABLE dbo.draft_expenses (
   payment_mode VARCHAR(10)   NOT NULL,
   details      NVARCHAR(200) NULL,
   cheque_id    INT           NULL,
+  bank_id      INT           NULL,
   remarks      NVARCHAR(500) NULL,
   created_by   INT           NULL,
+  updated_by      INT           NULL,
   created_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_dexp_created DEFAULT (SYSUTCDATETIME()),
   updated_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_dexp_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_draft_expenses        PRIMARY KEY (draft_id),
   CONSTRAINT FK_draft_expenses_ba     FOREIGN KEY (ba_id)      REFERENCES dbo.business_accounts(ba_id),
   CONSTRAINT FK_draft_expenses_cheque FOREIGN KEY (cheque_id)  REFERENCES dbo.cheques(cheque_id),
+  CONSTRAINT FK_draft_expenses_bank   FOREIGN KEY (bank_id)    REFERENCES dbo.bank_accounts(bank_id),
   CONSTRAINT FK_draft_expenses_user   FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_draft_expenses_upd   FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id),
   CONSTRAINT CK_draft_expenses_amount CHECK (amount > 0),
   CONSTRAINT CK_draft_expenses_mode   CHECK (payment_mode IN ('CASH','CHEQUE','ONLINE'))
 );
@@ -1140,11 +1197,13 @@ CREATE TABLE dbo.stock_movements (                            -- finished goods,
   source_type   VARCHAR(20)   NULL,                           -- SALE_BILL | SALE_RETURN | NULL (manual/production)
   source_id     INT           NULL,
   created_by    INT           NULL,
+  updated_by        INT           NULL,
   created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_sm_created DEFAULT (SYSUTCDATETIME()),
   updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_sm_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_stock_movements         PRIMARY KEY (movement_id),
   CONSTRAINT FK_stock_movements_variant FOREIGN KEY (variant_id) REFERENCES dbo.article_colors(variant_id),
   CONSTRAINT FK_stock_movements_user    FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_stock_movements_upd    FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id),
   CONSTRAINT CK_stock_movements_type    CHECK (movement_type IN
         ('OPENING','ADJUSTMENT','PRODUCTION','SALE','SALE_RETURN')),   -- deliberately no PURCHASE, see §2.2
   CONSTRAINT CK_stock_movements_unit    CHECK (input_unit IS NULL OR input_unit IN ('CARTONS','PAIRS')),
@@ -1168,12 +1227,14 @@ CREATE TABLE dbo.vendor_stock_movements (                     -- raw materials, 
   source_type   VARCHAR(20)   NULL,                           -- PURCHASE | PURCHASE_RETURN | NULL (manual)
   source_id     INT           NULL,
   created_by    INT           NULL,
+  updated_by        INT           NULL,
   created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_vsm_created DEFAULT (SYSUTCDATETIME()),
   updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_vsm_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_vendor_stock_movements          PRIMARY KEY (movement_id),
   CONSTRAINT FK_vendor_stock_movements_vendor   FOREIGN KEY (vendor_id)   REFERENCES dbo.vendors(vendor_id),
   CONSTRAINT FK_vendor_stock_movements_material FOREIGN KEY (material_id) REFERENCES dbo.materials(material_id),
   CONSTRAINT FK_vendor_stock_movements_user     FOREIGN KEY (created_by)  REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_vendor_stock_movements_upd     FOREIGN KEY (updated_by)  REFERENCES dbo.users(user_id),
   CONSTRAINT CK_vendor_stock_movements_type   CHECK (movement_type IN
         ('PURCHASE','PURCHASE_RETURN','CONSUMPTION','ADJUSTMENT')),
   CONSTRAINT CK_vendor_stock_movements_sign   CHECK (
@@ -1188,6 +1249,7 @@ CREATE INDEX IX_vendor_stock_source   ON dbo.vendor_stock_movements(source_type,
 ```
 
 > **Vendor Stock page (§14)** is exactly:
+>
 > ```sql
 > SELECT v.name AS vendor, m.name AS material, vsm.unit, SUM(vsm.qty) AS on_hand
 > FROM dbo.vendor_stock_movements AS vsm
@@ -1196,6 +1258,7 @@ CREATE INDEX IX_vendor_stock_source   ON dbo.vendor_stock_movements(source_type,
 > GROUP BY v.name, m.name, vsm.unit
 > HAVING SUM(vsm.qty) <> 0;
 > ```
+>
 > The manual "this much has been used" reduction (§2 decision 5) inserts a single `CONSUMPTION`
 > row with a negative `qty` and `source_type = NULL`.
 
@@ -1253,33 +1316,39 @@ Two notes where the frontend is currently narrower than the schema:
 
 ```sql
 CREATE TABLE dbo.cheque_allocations (                         -- §13 endorsement / pass-through
-  allocation_id    INT IDENTITY(1,1) NOT NULL,
-  receipt_id       INT           NOT NULL,
-  disposition_type VARCHAR(20)   NOT NULL,                    -- DEPOSIT | VENDOR_PAYMENT | EXPENSE_PAYMENT
-  target_type      VARCHAR(20)   NULL,                        -- VENDOR | BUSINESS_ACCOUNT (NULL for DEPOSIT)
-  target_id        INT           NULL,
-  amount           DECIMAL(14,2) NOT NULL,
-  allocation_date  DATE          NOT NULL,                    -- Cash Book dates the outflow by THIS date
-  remarks          NVARCHAR(500) NULL,
-  status           VARCHAR(10)   NOT NULL CONSTRAINT DF_ca_status  DEFAULT ('ACTIVE'),
-  created_by       INT           NULL,
-  created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_ca_created DEFAULT (SYSUTCDATETIME()),
-  updated_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_ca_updated DEFAULT (SYSUTCDATETIME()),
+  allocation_id      INT IDENTITY(1,1) NOT NULL,
+  receipt_id         INT           NOT NULL,
+  disposition_type   VARCHAR(20)   NOT NULL,                  -- DEPOSIT | VENDOR_PAYMENT | EXPENSE_PAYMENT
+  target_vendor_id   INT           NULL,                      -- set only for VENDOR_PAYMENT
+  target_ba_id       INT           NULL,                      -- set only for EXPENSE_PAYMENT
+  amount             DECIMAL(14,2) NOT NULL,
+  allocation_date    DATE          NOT NULL,                  -- Cash Book dates the outflow by THIS date
+  remarks            NVARCHAR(500) NULL,
+  status             VARCHAR(10)   NOT NULL CONSTRAINT DF_ca_status  DEFAULT ('ACTIVE'),
+  created_by         INT           NULL,
+  updated_by         INT           NULL,
+  created_at         DATETIME2(0)  NOT NULL CONSTRAINT DF_ca_created DEFAULT (SYSUTCDATETIME()),
+  updated_at         DATETIME2(0)  NOT NULL CONSTRAINT DF_ca_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_cheque_allocations         PRIMARY KEY (allocation_id),
-  CONSTRAINT FK_cheque_allocations_receipt FOREIGN KEY (receipt_id) REFERENCES dbo.receipts(receipt_id),
+  CONSTRAINT FK_cheque_allocations_receipt FOREIGN KEY (receipt_id)       REFERENCES dbo.receipts(receipt_id),
+  CONSTRAINT FK_cheque_allocations_vendor  FOREIGN KEY (target_vendor_id) REFERENCES dbo.vendors(vendor_id),
+  CONSTRAINT FK_cheque_allocations_ba      FOREIGN KEY (target_ba_id)     REFERENCES dbo.business_accounts(ba_id),
   CONSTRAINT FK_cheque_allocations_user    FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_cheque_allocations_upd     FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id),
   CONSTRAINT CK_cheque_allocations_amount  CHECK (amount > 0),
   CONSTRAINT CK_cheque_allocations_disp    CHECK (disposition_type IN
         ('DEPOSIT','VENDOR_PAYMENT','EXPENSE_PAYMENT')),
+  -- exactly one target column set, and only the one matching the disposition
   CONSTRAINT CK_cheque_allocations_target  CHECK (
-        (disposition_type =  'DEPOSIT' AND target_type IS NULL     AND target_id IS NULL)
-     OR (disposition_type <> 'DEPOSIT' AND target_type IN ('VENDOR','BUSINESS_ACCOUNT')
-                                       AND target_id IS NOT NULL)),
+        (disposition_type =  'DEPOSIT'         AND target_vendor_id IS NULL     AND target_ba_id IS NULL)
+     OR (disposition_type =  'VENDOR_PAYMENT'  AND target_vendor_id IS NOT NULL AND target_ba_id IS NULL)
+     OR (disposition_type =  'EXPENSE_PAYMENT' AND target_vendor_id IS NULL     AND target_ba_id IS NOT NULL)),
   CONSTRAINT CK_cheque_allocations_status  CHECK (status IN ('ACTIVE','REVERSED'))
 );
 CREATE INDEX IX_cheque_allocations_receipt ON dbo.cheque_allocations(receipt_id);
 CREATE INDEX IX_cheque_allocations_date    ON dbo.cheque_allocations(allocation_date);
-CREATE INDEX IX_cheque_allocations_target  ON dbo.cheque_allocations(target_type, target_id);
+CREATE INDEX IX_cheque_allocations_vendor  ON dbo.cheque_allocations(target_vendor_id) WHERE target_vendor_id IS NOT NULL;
+CREATE INDEX IX_cheque_allocations_ba      ON dbo.cheque_allocations(target_ba_id)     WHERE target_ba_id     IS NOT NULL;
 
 CREATE TABLE dbo.alert_dismissals (                           -- §12 snooze/dismiss derived alerts
   dismissal_id    INT IDENTITY(1,1) NOT NULL,
@@ -1309,20 +1378,21 @@ attached to these two tables.
 Posting a document writes these rows in **one transaction**; unposting deletes them in one
 transaction. `CUSTOMER BA` / `VENDOR BA` mean the party's `business_accounts` row.
 
-| Document | Debit | Credit | Also writes |
-|---|---|---|---|
-| Sale Bill (`net_value`) | CUSTOMER BA | SALES chart account | negative `SALE` stock movements per line |
-| Sale Return (`net_value`) | SALES chart account | CUSTOMER BA | positive `SALE_RETURN` stock movements |
-| Purchase (`total_value`) | PURCHASES chart account | VENDOR BA | positive `PURCHASE` vendor-stock movements |
-| Purchase Return (`total_value`) | VENDOR BA | PURCHASES chart account | negative `PURCHASE_RETURN` vendor-stock movements |
-| Receipt — amount | CASH or BANK chart account | CUSTOMER BA | — |
-| Receipt — commission (§7) | COMMISSION ALLOWED chart account | CUSTOMER BA | separate ledger row, `source_type='COMMISSION'` |
-| Expense | Expense head BA | CASH or BANK chart account | — |
-| Cheque allocation — VENDOR_PAYMENT | VENDOR BA | CHEQUES IN HAND | `source_type='CHEQUE_ALLOCATION'` |
-| Cheque allocation — EXPENSE_PAYMENT | Target BA | CHEQUES IN HAND | `source_type='CHEQUE_ALLOCATION'` |
-| **Bounce — receipt leg** (`amount` + `commission`) | CUSTOMER BA | CASH/BANK, and COMMISSION ALLOWED for the commission part | dated `cheques.bounced_date` |
-| **Bounce — each allocation leg** | CHEQUES IN HAND | VENDOR BA / Target BA | one per reversed allocation, dated `cheques.bounced_date` |
-| Production | — | — | positive `PRODUCTION` stock movements only (no ledger effect) |
+
+| Document                                            | Debit                            | Credit                                                    | Also writes                                                  |
+| --------------------------------------------------- | -------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------ |
+| Sale Bill (`net_value`)                             | CUSTOMER BA                      | SALES chart account                                       | negative`SALE` stock movements per line                      |
+| Sale Return (`net_value`)                           | SALES chart account              | CUSTOMER BA                                               | positive`SALE_RETURN` stock movements                        |
+| Purchase (`total_value`)                            | PURCHASES chart account          | VENDOR BA                                                 | positive`PURCHASE` vendor-stock movements                    |
+| Purchase Return (`total_value`)                     | VENDOR BA                        | PURCHASES chart account                                   | negative`PURCHASE_RETURN` vendor-stock movements             |
+| Receipt — amount                                   | CASH or BANK chart account       | CUSTOMER BA                                               | —                                                           |
+| Receipt — commission (§7)                         | COMMISSION ALLOWED chart account | CUSTOMER BA                                               | separate ledger row,`source_type='COMMISSION'`               |
+| Expense                                             | Expense head BA                  | CASH or BANK chart account                                | —                                                           |
+| Cheque allocation — VENDOR_PAYMENT                 | VENDOR BA                        | CHEQUES IN HAND                                           | `source_type='CHEQUE_ALLOCATION'`                            |
+| Cheque allocation — EXPENSE_PAYMENT                | Target BA                        | CHEQUES IN HAND                                           | `source_type='CHEQUE_ALLOCATION'`                            |
+| **Bounce — receipt leg** (`amount` + `commission`) | CUSTOMER BA                      | CASH/BANK, and COMMISSION ALLOWED for the commission part | dated`cheques.bounced_date`                                  |
+| **Bounce — each allocation leg**                   | CHEQUES IN HAND                  | VENDOR BA / Target BA                                     | one per reversed allocation, dated`cheques.bounced_date`     |
+| Production                                          | —                               | —                                                        | positive`PRODUCTION` stock movements only (no ledger effect) |
 
 **Commission worked example (§7)** — the sale bill is never altered:
 
@@ -1373,19 +1443,20 @@ Sale Analysis, Sale Report, customer balance) — the money never arrived.
 
 Every report in §9 answered from the tables above, with no report-specific storage.
 
-| Report | Reads |
-|---|---|
-| Current Stock (TASK-03) | `stock_movements` grouped by `variant_id`, rolled up to `products` |
-| Product Ledger (TASK-02) | `stock_movements` filtered by date / vendor / article / category |
-| **Vendor Stock (§14)** | `vendor_stock_movements` grouped by vendor + material + unit |
-| Account Ledger / Khaata (TASK-16) | `ledger_entries` for one `ba_id` + `sale_bills` (Inv#/Bill#) + `receipts` joined to `cheques` (cheque sub-columns) |
-| Cash Book (TASK-15) | `receipts` + `expenses` + `cheque_allocations`, split by `payment_mode`; opening cash from `OPENING` rows |
-| Business Ledger (UC-36) | `ledger_entries` joined to `business_accounts`; the Code / Description / Main Account / City columns are `code` / `name` / the parent `chart_of_accounts.name` / `city_id` — **City comes from the account itself**, since employee and director accounts have no customer to inherit it from |
-| Sale Analysis (TASK-09) | `sale_bills` + `sale_returns` + `receipts`, grouped by customer or by `customers.region_id` |
-| Sale Report (TASK-18) | as above; **Commission column = `SUM(receipts.commission)`**, not sale-time discounts (§7) |
-| Vendor Report (TASK-10) | `purchases` + `purchase_returns` by `vendor_id`, joined to `expenses` via `vendors.ba_id` for Payment Paid |
-| Payment Trail (TASK-17) | `expenses` joined up to `chart_of_accounts`, grouped by chart account |
-| Notifications (§12) | `cheques` (cheque due) only — `due_date` removed from `sale_bills`/`purchases`, minus `alert_dismissals` |
+
+| Report                            | Reads                                                                                                                                                                                                                                                                                          |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Current Stock (TASK-03)           | `stock_movements` grouped by `variant_id`, rolled up to `products`                                                                                                                                                                                                                             |
+| Product Ledger (TASK-02)          | `stock_movements` filtered by date / vendor / article / category                                                                                                                                                                                                                               |
+| **Vendor Stock (§14)**           | `vendor_stock_movements` grouped by vendor + material + unit                                                                                                                                                                                                                                   |
+| Account Ledger / Khaata (TASK-16) | `ledger_entries` for one `ba_id` + `sale_bills` (Inv#/Bill#) + `receipts` joined to `cheques` (cheque sub-columns)                                                                                                                                                                             |
+| Cash Book (TASK-15)               | `receipts` + `expenses` + `cheque_allocations`, split by `payment_mode`; opening cash from `OPENING` rows                                                                                                                                                                                      |
+| Business Ledger (UC-36)           | `ledger_entries` joined to `business_accounts`; the Code / Description / Main Account / City columns are `code` / `name` / the parent `chart_of_accounts.name` / `city_id` — **City comes from the account itself**, since employee and director accounts have no customer to inherit it from |
+| Sale Analysis (TASK-09)           | `sale_bills` + `sale_returns` + `receipts`, grouped by customer or by `customers.region_id`                                                                                                                                                                                                    |
+| Sale Report (TASK-18)             | as above;**Commission column = `SUM(receipts.commission)`**, not sale-time discounts (§7)                                                                                                                                                                                                     |
+| Vendor Report (TASK-10)           | `purchases` + `purchase_returns` by `vendor_id`, joined to `expenses` via `vendors.ba_id` for Payment Paid                                                                                                                                                                                     |
+| Payment Trail (TASK-17)           | `expenses` joined up to `chart_of_accounts`, grouped by chart account                                                                                                                                                                                                                          |
+| Notifications (§12)              | `cheques` (cheque due) only — `due_date` removed from `sale_bills`/`purchases`, minus `alert_dismissals`                                                                                                                                                                                      |
 
 The two things this map depends on are worth stating plainly: **Vendor Report only reconciles
 because `vendors.ba_id` ties the purchase side to the payment side**, and **Payment Trail's five
@@ -1398,15 +1469,16 @@ categories are chart accounts**, so they must be seeded (§8) rather than inferr
 The schema is not usable until these rows exist — several are referenced by code paths, not just
 by convention.
 
-| Kind | Rows |
-|---|---|
-| User | One `ADMIN` user (bcrypt hash) |
-| Group accounts | `ASSETS` (1000), `LIABILITY` (2000), `INCOME` (3000), `EXPENSES` (4000) |
-| Chart — reserved | **CUSTOMERS ACCOUNTS** (parent of every customer BA), **VENDORS ACCOUNTS** (parent of every vendor BA, §10 gap 2) |
-| Chart — posting targets | **CASH IN HAND**, **SALES**, **PURCHASES**, **COMMISSION ALLOWED**, **CHEQUES IN HAND** |
-| Chart — Payment Trail (TASK-17) | Business Running Expenses, **Cash at Banks**, **Directors Expenses - Drawings**, Employees, Vendors - Suppliers |
-| Restricted flag (§8/TASK-14) | `is_restricted = 1` on **Cash at Banks** and **Directors Expenses - Drawings** |
-| Store | One default store (single-store business) |
+
+| Kind                             | Rows                                                                                                               |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| User                             | One`ADMIN` user (bcrypt hash)                                                                                      |
+| Group accounts                   | `ASSETS` (1000), `LIABILITY` (2000), `INCOME` (3000), `EXPENSES` (4000)                                            |
+| Chart — reserved                | **CUSTOMERS ACCOUNTS** (parent of every customer BA), **VENDORS ACCOUNTS** (parent of every vendor BA, §10 gap 2), **Cash at Banks** also doubles as parent of every `bank_accounts` BA (§12 Q3/Q9) |
+| Chart — posting targets         | **CASH IN HAND**, **SALES**, **PURCHASES**, **COMMISSION ALLOWED**, **CHEQUES IN HAND**                            |
+| Chart — Payment Trail (TASK-17) | Business Running Expenses,**Cash at Banks**, **Directors Expenses - Drawings**, Employees, Vendors - Suppliers     |
+| Restricted flag (§8/TASK-14)    | `is_restricted = 1` on **Cash at Banks** and **Directors Expenses - Drawings**                                     |
+| Store                            | One default store (single-store business)                                                                          |
 
 All seeded accounts are numbered per §3.2 — groups 4 digits, chart accounts 6. Where a seeded
 account corresponds to one in the client's existing system, its `legacy_code` is populated during
@@ -1457,45 +1529,46 @@ EXEC sp_executesql @sql;
 
 ## 10. Table inventory (30)
 
-| # | Table | Purpose | New |
-|---|---|---|---|
-| 1 | `users` | auth + role (§8) | role is new |
-| 2 | `regions` | §10 gap 6 / TASK-07 | ✅ |
-| 3 | `cities` | city lookup | |
-| 4 | `stores` | bill metadata | |
-| 5 | `addas` | transport terminals | |
-| 6 | `materials` | self-building purchase-material lookup (§4.3) | ✅ |
-| 7 | `product_categories` | TASK-03 category column | |
-| 8 | `products` | TASK-03 main rows (renamed from `articles`) | ✅ (replaces old flat `products`) |
-| 9 | `article_colors` | TASK-03 colour sub-rows | ✅ |
-| 10 | `group_accounts` | class level | |
-| 11 | `chart_of_accounts` | now parented by group (TASK-11) | reshaped |
-| 12 | `business_accounts` | leaf ledger accounts | reshaped |
-| 13 | `vendors` | + `ba_id` link (§10 gap 2) | reshaped |
-| 14 | `customers` | + `ba_id`, `region_id` | reshaped |
-| 15 | `sub_customers` | parent FK removed (TASK-06) | reshaped |
-| 16 | `sale_bills` | + `main_ac_id`; `due_date` removed | |
-| 17 | `sale_bill_items` | now keyed on `variant_id` | |
-| 18 | `sale_returns` | | |
-| 19 | `sale_return_items` | | |
-| 20 | `purchases` | TASK-01 | ✅ |
-| 21 | `purchase_items` | material lines, `material_id` FK | ✅ |
-| 22 | `purchase_returns` | §10 gap 1 | ✅ |
-| 23 | `purchase_return_items` | | ✅ |
-| 24 | `receipts` | + commission; cheque fields moved to `cheques` | |
-| 25 | `expenses` | also the vendor-payment path | |
-| 26 | `stock_movements` | pairs ledger, keyed on variant | reshaped |
-| 27 | `vendor_stock_movements` | material ledger (§14) | ✅ |
-| 28 | `ledger_entries` | real FKs instead of polymorphic id | reshaped |
-| 29 | `cheque_allocations` | §13 — cheque endorsement (built in frontend M6) | ✅ |
-| 30 | `alert_dismissals` | §12 — alert dismissals (built in frontend M6) | ✅ |
+
+| #  | Table                    | Purpose                                           | New                              |
+| -- | ------------------------ | ------------------------------------------------- | -------------------------------- |
+| 1  | `users`                  | auth + role (§8)                                 | role is new                      |
+| 2  | `regions`                | §10 gap 6 / TASK-07                              | ✅                               |
+| 3  | `cities`                 | city lookup                                       |                                  |
+| 4  | `stores`                 | bill metadata                                     |                                  |
+| 5  | `addas`                  | transport terminals                               |                                  |
+| 6  | `materials`              | self-building purchase-material lookup (§4.3)    | ✅                               |
+| 7  | `product_categories`     | TASK-03 category column                           |                                  |
+| 8  | `products`               | TASK-03 main rows (renamed from`articles`)        | ✅ (replaces old flat`products`) |
+| 9  | `article_colors`         | TASK-03 colour sub-rows                           | ✅                               |
+| 10 | `group_accounts`         | class level                                       |                                  |
+| 11 | `chart_of_accounts`      | now parented by group (TASK-11)                   | reshaped                         |
+| 12 | `business_accounts`      | leaf ledger accounts                              | reshaped                         |
+| 13 | `vendors`                | +`ba_id` link (§10 gap 2)                        | reshaped                         |
+| 14 | `customers`              | +`ba_id`, `region_id`                             | reshaped                         |
+| 15 | `sub_customers`          | parent FK removed (TASK-06)                       | reshaped                         |
+| 16 | `sale_bills`             | +`main_ac_id`; `due_date` removed                 |                                  |
+| 17 | `sale_bill_items`        | now keyed on`variant_id`                          |                                  |
+| 18 | `sale_returns`           |                                                   |                                  |
+| 19 | `sale_return_items`      |                                                   |                                  |
+| 20 | `purchases`              | TASK-01                                           | ✅                               |
+| 21 | `purchase_items`         | material lines,`material_id` FK                   | ✅                               |
+| 22 | `purchase_returns`       | §10 gap 1                                        | ✅                               |
+| 23 | `purchase_return_items`  |                                                   | ✅                               |
+| 24 | `receipts`               | + commission; cheque fields moved to`cheques`     |                                  |
+| 25 | `expenses`               | also the vendor-payment path                      |                                  |
+| 26 | `stock_movements`        | pairs ledger, keyed on variant                    | reshaped                         |
+| 27 | `vendor_stock_movements` | material ledger (§14)                            | ✅                               |
+| 28 | `ledger_entries`         | real FKs instead of polymorphic id                | reshaped                         |
+| 29 | `cheque_allocations`     | §13 — cheque endorsement (built in frontend M6) | ✅                               |
+| 30 | `alert_dismissals`       | §12 — alert dismissals (built in frontend M6)   | ✅                               |
 
 **Removed:** `control_accounts` (TASK-11), old flat `products` (superseded by `products` [renamed
 from `articles`] + `article_colors`).
 
 > This inventory predates the draft-bill/cheque-redesign/account-class work and is stale on count.
 > Nine tables were added since: `account_classes` (§5.3), `draft_sale_bills`, `draft_sale_bill_items`
-> (§5.6.1), `draft_sale_returns`, `draft_sale_return_items` (§5.6.2), `banks`, `cheques`,
+> (§5.6.1), `draft_sale_returns`, `draft_sale_return_items` (§5.6.2), `bank_accounts`, `cheques`,
 > `draft_receipts`, `draft_expenses` (§5.8) — real total 39, not 30. `cheque_allocations` (row 29)
 > still keys off `receipts.receipt_id`, not `cheques.cheque_id` — noted as intentional in §5.10.
 
@@ -1533,17 +1606,27 @@ Called out so the review is against a known baseline rather than a silent reinte
    repointing the FK — which free text could never have supported. *Remaining nicety, not a
    blocker:* there is no admin screen to rename or merge materials yet, so that repair is a manual
    SQL statement for now.
-2. **`cheque_allocations.target_id` is polymorphic** and cannot carry a foreign key — it is kept
-   as §13 specifies. It could be split into `target_vendor_id`/`target_ba_id` the same way
-   `ledger_entries` was, if you want the integrity guarantee there too.
-3. **Which chart account is CASH vs BANK for each payment mode?** Posting needs a rule mapping
-   `payment_mode` (CASH/CHEQUE/ONLINE) to a specific chart account before the first receipt can post.
-4. **`products.p1`, `p2`, `na`** — legacy cost-column names of unknown meaning, carried over
-   verbatim. Worth renaming once someone can say what they hold.
+2. ~~**`cheque_allocations.target_id` is polymorphic**~~ — **RESOLVED (Yes)**: split into
+   `target_vendor_id` / `target_ba_id`, same pattern as `ledger_entries`. Real FKs to `vendors` and
+   `business_accounts`, `CK_cheque_allocations_target` enforces exactly the one matching
+   `disposition_type` is set.
+3. ~~**Which chart account is CASH vs BANK for each payment mode?**~~ — **RESOLVED (Option B —
+   picked per transaction):** `CASH` always posts to the single seeded `CASH IN HAND` chart account.
+   `ONLINE` requires `receipts.bank_id`/`expenses.bank_id` (§5.8), resolving through the new
+   `bank_accounts.ba_id` to that specific bank's own chart account (e.g. `Bank Alfalah A/C - 0124`).
+   `CHEQUE` resolves its bank through the cheque instead (`cheque_id → cheques.bank_id`), so the
+   receipt/expense's own `bank_id` stays `NULL` for cheque payments. Same fix as Q9 below — they
+   were always the same gap.
+4. ~~**`products.p1`, `p2`, `na`**~~ — **RESOLVED**: these are owner-supplied fields, kept exactly
+   as named — no renaming, no other table references them. **Action applied:** column type changed
+   `DECIMAL(12,2)` → `INT`; nothing else touched.
 5. ~~**Sale Return has no `due_date`**~~ — **MOOT**: `due_date` was removed from `sale_bills` and
    `purchases` entirely (§5.6/§5.7 actions), so the asymmetry this question raised no longer exists.
-6. **Multi-user audit:** `created_by` is captured but there is no `updated_by` or change history.
-   Sufficient for a single-site desktop app; say if an audit trail is wanted.
+6. ~~**Multi-user audit**~~ — **RESOLVED (add for future safety):** `updated_by INT NULL` added
+   beside `created_by` on every document table (§3 Audit convention, above). It stays unused today
+   (single system, single session) but is there the moment multiple staff or a network deployment
+   shows up — no migration needed later. Still no full change-history/versioning table; that's a
+   bigger step, only worth it if you need to see *what* changed, not just *who* touched it last.
 7. ~~**Account numbering**~~ — **RESOLVED**: codes are internal identifiers that staff never
    memorise, so the scheme is ours (§3.2): parent code + zero-padded serial, 4 / 6 / 10 digits.
    Legacy 12-digit codes are preserved in `legacy_code` for import reconciliation only.
@@ -1551,11 +1634,9 @@ Called out so the review is against a known baseline rather than a silent reinte
    filter, nothing more. No fiscal-year table, no closing, no carry-forward, no year in document
    numbers. *Frontend follow-up, not schema:* reports offer Overall / By Month / Between Two Dates
    but no **annual** option, which the client expects — a filter to add in a later milestone.
-9. **Bank accounts are still only partly modelled.** The §5.8 redesign added `dbo.banks` and a
-   `cheques.bank_id` link, but that's a bare name lookup for *cheques* only — there is still no
-   `bank_ac_id` on `receipts`/`expenses` themselves (cash/online payments carry no bank at all), and
-   `banks` has no `ba_id`/balance concept mirroring `vendors`/`customers`. "Cash at Banks" therefore
-   still can't be reconciled against a statement for anything except cheque activity. Closing this
-   fully would mean promoting `banks` into a proper `bank_accounts` profile table (own `ba_id`) and
-   adding `bank_id` to `receipts`/`expenses` directly. **Not yet agreed**, and it is the other half
-   of open question 3.
+9. ~~**Bank accounts are still only partly modelled.**~~ — **RESOLVED (Option B):** `dbo.banks` is
+   promoted to `dbo.bank_accounts` — a real party table with its own `ba_id` into
+   `business_accounts`, auto-created under the reserved **Cash at Banks** chart account, exactly the
+   `vendors`/`customers` pattern. `receipts.bank_id`/`expenses.bank_id` let a specific bank be picked
+   per transaction (required for `ONLINE`, `NULL` for `CASH`/`CHEQUE` — see Q3). "Cash at Banks" can
+   now be broken down and reconciled per bank, not just for cheque activity.
