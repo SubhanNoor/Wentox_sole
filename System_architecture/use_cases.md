@@ -289,9 +289,9 @@ every expense head is one. Most are created automatically by UC-08 and UC-09 rat
 # TRANSACTIONS
 
 > **Posting semantics.** Sale Bills, Sale Returns, Purchases and Purchase Returns are
-> Posted/Unposted documents. **Posting** writes the ledger rows and stock rows in one database
-> transaction; **unposting** deletes them in one transaction. Financial fields may only be edited
-> while a document is UNPOSTED — except bilty no. and adda, which may be updated on posted bills
+> Confirmed/Draft documents. **Confirming** writes the ledger rows and stock rows in one database
+> transaction; **un-confirming (back to Draft)** deletes them in one transaction. Financial fields may only be edited
+> while a document is DRAFT — except bilty no. and adda, which may be updated on confirmed bills
 > because they are dispatch metadata, not money (UC-20).
 
 ## UC-18: Create a sale bill — ✅
@@ -339,7 +339,7 @@ reads `customers`, `sub_customers`, `stores`, `addas`, `articles`, `article_colo
 
 **Steps:** open a record tab (Weekly, Monthly, Overall) or **Find & Update** for advanced filtering
 by date range, customer, bilty status and article → each row offers **Edit** and **Print** →
-Edit loads the bill back into the Billing tab. Financial edits require the bill to be unposted first.
+Edit loads the bill back into the Billing tab. Financial edits require the bill to be reverted to DRAFT first.
 
 **Data:** reads/writes `sale_bills`, `sale_bill_items`.
 
@@ -357,7 +357,7 @@ Edit loads the bill back into the Billing tab. Financial edits require the bill 
 4. **Select** a row to load it into the Bilty Info Update panel.
 5. Enter the bilty number, select the transport adda, and click **Update Bilty & Adda**.
 
-**This works on posted bills** — bilty and adda are non-financial.
+**This works on confirmed bills** — bilty and adda are non-financial.
 
 **Data:** writes `sale_bills.bilty_no`, `sale_bills.adda_id`.
 
