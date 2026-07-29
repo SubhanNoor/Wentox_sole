@@ -147,33 +147,50 @@ touches Business Accounts setup and several report pages built there.
 
 ---
 
-## Milestone 6 — Alerts & Cheque Endorsement
+## Milestone 6 — Alerts & Cheque Endorsement ✅ DONE
 
 **Goal:** The two new features designed this cycle (`architecture-v2.md`
 §12/§13). Depends on Milestones 3 and 5 (cheque fields, Cash Book) being in
 place first.
 
-- [ ] Bell icon + badge in `AppLayout` header, alerts computed client-side
-      from `AppContext` state on each render/interval (no backend endpoint
-      yet — same derivation logic a future `GET /api/notifications` will
-      replicate server-side)
-- [ ] Alerts dropdown: cheque due/overdue (always shown, unconditional) +
-      payment overdue (only for records with an explicit `due_date` set),
-      grouped by severity, click-through to source record, dismiss action
-      (dismissal state kept in `AppContext`/local storage for now, not a
-      persisted `alert_dismissals` table)
-- [ ] "Dispose of Cheque" workflow from Receipts (Jamma) — pick disposition
-      (Deposit / Vendor Payment / Expense Payment), target, amount
-      (defaults to remaining unallocated balance), running balance display
-- [ ] Endorsed cheque allocations post as real Cash Book in/out entries on
-      their allocation date (not excluded from totals, per resolved
-      decision)
-- [ ] Bounced-cheque UI: marking a cheque bounced reverses both the
-      customer receipt and any downstream allocations, reflected
-      immediately in Cash Book / Vendor Report / Account Ledger views
-- [ ] Verify: exact-match, over-match (remainder must be explicitly
-      assigned, never silently orphaned), and under-match endorsement
-      scenarios, plus a full bounce-after-endorsement reversal
+- [x] Bell icon + badge in `AppLayout` header (`NotificationBell.tsx`), alerts
+      computed client-side from `AppContext` state on each render plus a 60s
+      interval so a cheque crossing its date lights up without a reload — the
+      same derivation a future `GET /api/notifications` runs server-side
+- [x] Alerts dropdown: cheque due/overdue (unconditional) + payment overdue
+      (only for bills with an explicit `dueDate` **and** a positive balance),
+      grouped by severity, sorted nearest-date first, click-through to the
+      source record, dismiss + "Restore" action (dismissals held in
+      `AppContext`, not a persisted table)
+- [x] **Amber window = 7 days** before the date on the cheque; red once passed
+- [x] "Dispose of Cheque" workflow — new **Cheques tab** on Receipts (Jamma)
+      listing every cheque with its unallocated balance; dialog picks
+      disposition / target / amount (defaults to the remaining balance) and
+      **stays open while a remainder is outstanding**, so it can never be
+      silently orphaned
+- [x] Full `ChequeStatus` lifecycle wired: Pending → Deposited → Cleared,
+      Pending → (Partially) Endorsed, and Bounced from any state
+- [x] Endorsed allocations post as real Cash Book outflows on their allocation
+      date (a plain `DEPOSIT` is *not* an outflow — it only moves the cheque
+      to the bank), and feed Vendor Report's "Payment Paid"
+- [x] Bounced-cheque cascade: reverses the customer receipt **and** every
+      allocation sourced from it. **Reversal is posted as counter-entries
+      dated the bounce**, not by erasing history — a Cash Book printed before
+      the bounce still reconciles with the same report printed after it
+- [x] Bounced receipts also excluded from Sale Analysis / Sale Report payment
+      totals (they were previously counted as received)
+- [x] Verified end-to-end in the browser: partial (under-match) allocation with
+      enforced remainder, endorsement reaching Cash Book, bounce-after-
+      endorsement reversing customer + vendor + cash book together, alert
+      click-through and dismissal
+
+**Files:** `lib/cheques.ts` (new — pure derivations, kept out of `AppContext`
+so Fast Refresh still works), `components/NotificationBell.tsx` (new),
+`components/ChequesTab.tsx` (new), `context/AppContext.tsx`, `types/index.ts`,
+`components/AppLayout.tsx`, `pages/ReceiptsPage.tsx`,
+`pages/ReportCashBookPage.tsx`, `pages/ReportKhaataPage.tsx`,
+`pages/VendorReportPage.tsx`, `pages/SaleAnalysisPage.tsx`,
+`pages/SaleReportPage.tsx`
 
 ### YBD (client still deciding) — Cheque Register / Section
 - [ ] **YBD**: a dedicated Cheque section/page listing every cheque received

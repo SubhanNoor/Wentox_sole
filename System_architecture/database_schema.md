@@ -1,6 +1,20 @@
 # WentoX — Database Schema (Microsoft SQL Server)
 
-**Version 4.0 — tentative, for review before the migration script is written.**
+**Version 4.2 — tentative, for review before the migration script is written.**
+
+> **v4.2 changes:** reconciled against a screenshot of the client's **legacy** Business Accounts
+> Ledger. Adds §3.2, the account-code composition rule that was missing entirely — and widens the
+> business-account serial to 4 digits, because the frontend's 2 digits cap a chart account at 99
+> children while the legacy data already holds 218 under one. Adds `legacy_code` to the three
+> account tables (import reconciliation only) and `city_id` to `business_accounts`, which UC-36
+> displays for accounts that have no customer to inherit a city from. Records the financial year as
+> a filter with no structural effect, and logs bank accounts as a genuine remaining gap.
+>
+> **v4.1 changes:** reconciled against Milestone 6, which built the §12/§13 cheque features in the
+> frontend. Adds the missing `receipts.bounced_date` column (the whole reversal model is dated by
+> it), its `CHECK`, the two bounce rows in the posting matrix, and a new §6.1 spelling out
+> reverse-never-erase. §5.10's "planning only" framing is gone — those tables now match a working
+> implementation.
 
 Derived **solely** from `architecture-v2.md` (the single source of truth for this project) plus the
 client decisions recorded in §2 below. The previous v3 schema, `use_cases.md`, `architecture.md`,
@@ -9,7 +23,10 @@ were **not** used as inputs — they are known-stale and are being regenerated d
 
 30 tables. Normalised to 3NF. Every money column is `DECIMAL`, never `FLOAT`/`REAL`.
 
-> **Status of this document:** nothing here is built yet. This is the design to review. Once
+> **Status of this document:** no database exists yet — nothing here has been created in SQL. The
+> frontend has, however, already built against this shape (Milestones 2–6) using in-memory demo
+> data, so the table shapes are validated by a working UI rather than by inspection alone. This is
+> the design to review. Once
 > approved it becomes the migration script verbatim — the DDL below is real, runnable T-SQL, not
 > pseudo-code, so there is no translation step in which errors can creep in.
 
@@ -31,7 +48,7 @@ parts of the target system. This version closes those gaps.
 | Materials | Did not exist | **`materials`** — self-building lookup, auto-registered the first time a name is typed (§2 below) |
 | Vendor ↔ accounts | No link | **`vendors.ba_id`** → `business_accounts`, so Purchase and Expense-as-vendor-payment resolve to the same real vendor (§10 gap 2) |
 | Commission | Did not exist | **`receipts.commission`**, posted as a credit row on the customer ledger (§7) |
-| Cheques | `details` free text only | **`cheque_no` / `cheque_date` / `cheque_received_date` / `cheque_status`** (§12), plus `cheque_allocations` for endorsement (§13) |
+| Cheques | `details` free text only | **`cheque_no` / `cheque_date` / `cheque_received_date` / `cheque_status` / `bounced_date`** (§12), plus `cheque_allocations` for endorsement and the bounce cascade (§13, §6.1) |
 | Roles | No role column | **`users.role`** + a data-driven restriction flag on accounts (§8 / TASK-14) |
 | Due dates / alerts | Did not exist | Optional `due_date` on sale bills and purchases, plus `alert_dismissals` (§12) |
 
@@ -62,6 +79,26 @@ client's answer wins and the conflict is called out explicitly.
 6. **Articles split into `articles` + `article_colors`** — cost breakdown on the article, colour
    and an optional packing override on the variant.
 7. **Customers mirror vendors** — own PK plus a unique `ba_id` into `business_accounts`.
+8. **A bounce reverses, it never erases** — the correction is posted as counter-entries dated
+   `receipts.bounced_date`; original rows and `allocation_date`s are left untouched, so a report
+   printed before the bounce still reconciles after it. See §6.1.
+9. **Cheque-due alerts turn amber 7 days before the date on the cheque**, red once it has passed.
+   Payment-overdue alerts fire only where an explicit `due_date` was entered *and* a balance is
+   still outstanding — there is deliberately no fallback credit period.
+10. **The full cheque lifecycle is in use** — `PENDING → DEPOSITED → CLEARED`,
+    `PENDING → PARTIALLY_ENDORSED → ENDORSED`, and `BOUNCED` reachable from any state. No value in
+    `cheque_status` is unreachable.
+11. **Account codes are internal identifiers, not something users memorise.** The client confirmed
+    staff look accounts up by name, never by number, so the legacy 12-digit codes carry no meaning
+    worth preserving in the UI and the numbering scheme is ours to design (§3.2).
+12. **The legacy codes are still stored, for import reconciliation only.** A nullable `legacy_code`
+    on the three account tables ties each new account back to its old one, so opening balances can
+    be checked account-for-account after migration. Never shown to users, and impossible to
+    reconstruct later if skipped.
+13. **The financial year is a filter, not a structure.** The legacy ledger defaults to 01/07–30/06,
+    but reports simply select monthly / annually / between two dates. There is deliberately **no**
+    fiscal-year table, no year-end closing, no carry-forward balances, and no year component in any
+    document number — dates stay plain dates.
 
 ---
 
@@ -110,6 +147,51 @@ MS SQL has no `CREATE TYPE ... AS ENUM`. Each former enum becomes a `VARCHAR` co
 | `vendor_stock_movement_type` | `VARCHAR(20)` | `PURCHASE`, `PURCHASE_RETURN`, `CONSUMPTION`, `ADJUSTMENT` |
 | `cheque_status` | `VARCHAR(20)` | `PENDING`, `DEPOSITED`, `ENDORSED`, `PARTIALLY_ENDORSED`, `CLEARED`, `BOUNCED` |
 | `user_role` | `VARCHAR(10)` | `ADMIN`, `USER` |
+
+---
+
+### 3.2 Account code composition
+
+Group, chart and business accounts each carry a human-readable `code`. **A child's code is its
+parent's code with a zero-padded serial appended**, so the hierarchy is visible in the number
+itself:
+
+```
+GROUP     4 digits    1000 ASSETS   2000 LIABILITY   3000 INCOME   4000 EXPENSES
+
+CHART     6 digits    CC + SSSS
+                      ││   └── 4-digit serial within that class/sub-group
+                      └┴────── class + sub-group
+                      110001  CUSTOMERS ACCOUNTS            (1 = asset, 1 = receivables)
+                      120002  BANK ALFALAH A/C - 0124       (1 = asset, 2 = cash & bank)
+                      440001  DIRECTORS EXPENSES - DRAWINGS (4 = expense, 4 = drawings)
+
+BUSINESS  10 digits   <parent chart code> + SSSS
+                      1100010001  Ahmed Footwear (LHR)   under 110001
+                      4400010017  BORROWINGS             under 440001
+```
+
+**Allocation rule:** `serial = MAX(existing serial under that parent) + 1`, zero-padded to width.
+Serials are **never reused** after a delete — a gap is correct and expected.
+
+The code is **stored, not derived**. It is written once at creation and never recomputed, so
+reorganising the hierarchy later cannot silently renumber existing accounts or invalidate documents
+that reference them.
+
+> **Why the business serial is 4 digits.** The frontend currently generates 2 (`210001` + `01`),
+> which caps a chart account at 99 children. The client's legacy data already holds **at least 218**
+> accounts under a single Main Account (`841000002218`), so an import would have hit that ceiling
+> immediately. Four digits allows 9,999.
+
+`code` is `VARCHAR(20)` on all three tables — comfortably wider than the 10 digits this needs, with
+room to widen a level later without a migration.
+
+**Legacy codes.** The client's existing system numbers accounts differently (12 digits, e.g.
+`841000004017`). Those numbers are **not** carried into `code`, because staff look accounts up by
+name and never by number (§2 decision 11). They are preserved in a separate nullable `legacy_code`
+purely so the migration can be proved correct — join old to new on it and confirm every opening
+balance matches. It is never displayed, and deliberately **not** unique, since two legacy accounts
+may legitimately be merged into one.
 
 ---
 
@@ -297,14 +379,15 @@ CREATE TABLE dbo.product_categories (
 
 ```sql
 CREATE TABLE dbo.group_accounts (
-  group_id   INT IDENTITY(1,1) NOT NULL,
-  code       VARCHAR(20)   NOT NULL,                          -- e.g. '1000'
-  name       NVARCHAR(100) NOT NULL,
-  class      VARCHAR(10)   NOT NULL,
-  sorting    INT          NOT NULL CONSTRAINT DF_groups_sort    DEFAULT (0),
-  is_active  BIT          NOT NULL CONSTRAINT DF_groups_active  DEFAULT (1),
-  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_groups_created DEFAULT (SYSUTCDATETIME()),
-  updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_groups_updated DEFAULT (SYSUTCDATETIME()),
+  group_id    INT IDENTITY(1,1) NOT NULL,
+  code        VARCHAR(20)   NOT NULL,                         -- 4 digits, e.g. '1000' (§3.2)
+  legacy_code VARCHAR(20)   NULL,                             -- old system's number; import only
+  name        NVARCHAR(100) NOT NULL,
+  class       VARCHAR(10)   NOT NULL,
+  sorting     INT          NOT NULL CONSTRAINT DF_groups_sort    DEFAULT (0),
+  is_active   BIT          NOT NULL CONSTRAINT DF_groups_active  DEFAULT (1),
+  created_at  DATETIME2(0) NOT NULL CONSTRAINT DF_groups_created DEFAULT (SYSUTCDATETIME()),
+  updated_at  DATETIME2(0) NOT NULL CONSTRAINT DF_groups_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_group_accounts       PRIMARY KEY (group_id),
   CONSTRAINT UQ_group_accounts_code  UNIQUE (code),
   CONSTRAINT UQ_group_accounts_name  UNIQUE (name),
@@ -313,7 +396,8 @@ CREATE TABLE dbo.group_accounts (
 
 CREATE TABLE dbo.chart_of_accounts (
   ac_id         INT IDENTITY(1,1) NOT NULL,
-  code          VARCHAR(20)   NOT NULL,                       -- e.g. '110001'
+  code          VARCHAR(20)   NOT NULL,                       -- 6 digits, e.g. '110001' (§3.2)
+  legacy_code   VARCHAR(20)   NULL,                           -- old system's number; import only
   name          NVARCHAR(100) NOT NULL,
   group_id      INT           NOT NULL,                       -- was control_id (control accounts removed)
   link_code     VARCHAR(20)   NULL,
@@ -331,23 +415,29 @@ CREATE TABLE dbo.chart_of_accounts (
 CREATE INDEX IX_chart_of_accounts_group ON dbo.chart_of_accounts(group_id);
 
 CREATE TABLE dbo.business_accounts (
-  ba_id      INT IDENTITY(1,1) NOT NULL,
-  code       VARCHAR(20)   NOT NULL,                          -- e.g. '11000101'
-  name       NVARCHAR(100) NOT NULL,
-  ac_id      INT           NOT NULL,                          -- was control_id; parent chart account
-  link_code  VARCHAR(20)   NULL,
-  region_id  INT           NULL,
-  status     VARCHAR(10)   NOT NULL CONSTRAINT DF_ba_status  DEFAULT ('ACTIVE'),
-  created_at DATETIME2(0)  NOT NULL CONSTRAINT DF_ba_created DEFAULT (SYSUTCDATETIME()),
-  updated_at DATETIME2(0)  NOT NULL CONSTRAINT DF_ba_updated DEFAULT (SYSUTCDATETIME()),
+  ba_id       INT IDENTITY(1,1) NOT NULL,
+  code        VARCHAR(20)   NOT NULL,                         -- 10 digits, e.g. '1100010001' (§3.2)
+  legacy_code VARCHAR(20)   NULL,                             -- old system's number; import only
+  name        NVARCHAR(100) NOT NULL,
+  ac_id       INT           NOT NULL,                         -- was control_id; parent chart account
+  link_code   VARCHAR(20)   NULL,
+  region_id   INT           NULL,
+  -- UC-36's City column. Held here, not inherited from a customer: employee and
+  -- director accounts are business accounts with no customer behind them.
+  city_id     INT           NULL,
+  status      VARCHAR(10)   NOT NULL CONSTRAINT DF_ba_status  DEFAULT ('ACTIVE'),
+  created_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_ba_created DEFAULT (SYSUTCDATETIME()),
+  updated_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_ba_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_business_accounts        PRIMARY KEY (ba_id),
   CONSTRAINT UQ_business_accounts_code   UNIQUE (code),
   CONSTRAINT FK_business_accounts_chart  FOREIGN KEY (ac_id)     REFERENCES dbo.chart_of_accounts(ac_id),
   CONSTRAINT FK_business_accounts_region FOREIGN KEY (region_id) REFERENCES dbo.regions(region_id),
+  CONSTRAINT FK_business_accounts_city   FOREIGN KEY (city_id)   REFERENCES dbo.cities(city_id),
   CONSTRAINT CK_business_accounts_status CHECK (status IN ('ACTIVE','CLOSED'))
 );
 CREATE INDEX IX_business_accounts_chart  ON dbo.business_accounts(ac_id);
 CREATE INDEX IX_business_accounts_region ON dbo.business_accounts(region_id);
+CREATE INDEX IX_business_accounts_city   ON dbo.business_accounts(city_id);
 ```
 
 ### 5.4 Parties — vendors, customers, sub customers
@@ -709,6 +799,7 @@ CREATE TABLE dbo.receipts (                                   -- Jamma
   cheque_date          DATE          NULL,                    -- date written on the cheque
   cheque_received_date DATE          NULL,                    -- date WentoX physically received it
   cheque_status        VARCHAR(20)   NULL,
+  bounced_date         DATE          NULL,                    -- §13: the date every reversal is posted on
   remarks              NVARCHAR(500) NULL,                    -- narration source for Account Ledger (§5)
   status               VARCHAR(10)   NOT NULL CONSTRAINT DF_rec_status  DEFAULT ('POSTED'),
   created_by           INT           NULL,
@@ -728,7 +819,15 @@ CREATE TABLE dbo.receipts (                                   -- Jamma
         (payment_mode =  'CHEQUE' AND cheque_no IS NOT NULL AND cheque_date IS NOT NULL
                                    AND cheque_status IS NOT NULL)
      OR (payment_mode <> 'CHEQUE' AND cheque_no IS NULL AND cheque_date IS NULL
-                                   AND cheque_status IS NULL))
+                                   AND cheque_status IS NULL)),
+  -- bounced_date exists if and only if the cheque actually bounced, so a
+  -- reversal always has a date and a non-bounced receipt can never carry one.
+  -- COALESCE, not a bare comparison: `cheque_status <> 'BOUNCED'` is UNKNOWN
+  -- when the status is NULL, and a CHECK passes on UNKNOWN — which would let a
+  -- non-cheque receipt keep a stray bounced_date.
+  CONSTRAINT CK_receipts_bounced CHECK (
+        (bounced_date IS NULL     AND COALESCE(cheque_status,'') <> 'BOUNCED')
+     OR (bounced_date IS NOT NULL AND COALESCE(cheque_status,'') =  'BOUNCED'))
 );
 CREATE INDEX IX_receipts_date     ON dbo.receipts(receipt_date);
 CREATE INDEX IX_receipts_customer ON dbo.receipts(customer_id, receipt_date);
@@ -870,11 +969,20 @@ CREATE INDEX IX_ledger_entries_date   ON dbo.ledger_entries(entry_date);
 > Opening balances are `source_type = 'OPENING'` rows dated before the first transaction — that is
 > what TASK-16's "Opening Balance" and TASK-15's "Opening Cash" read.
 
-### 5.10 Planned — cheque alerts and endorsement (§12, §13)
+### 5.10 Cheque alerts and endorsement (§12, §13)
 
-These two tables complete the design but back features marked **"planning only — not started"** in
-`architecture-v2.md`. They are included so the schema does not need re-cutting later; they can be
-dropped from the first migration if you would rather ship without them.
+**These are no longer speculative.** `architecture-v2.md` still marks §12/§13 "planning only", but
+both are now **built in the frontend** (Milestone 6) against `AppContext`, so these two tables have
+a working implementation to match rather than a guess — the column shapes below were reconciled
+against `frontend/src/types/index.ts` (`ChequeAllocation`, `AlertDismissal`). They are required,
+not optional.
+
+Two notes where the frontend is currently narrower than the schema:
+
+- `alert_dismissals.dismissed_until` — the UI dismisses permanently and offers a "Restore" action
+  instead of a snooze. The column is kept for the eventual snooze, and simply stays `NULL`.
+- `alert_dismissals.user_id` — dismissals are global in the demo build. The FK is kept so
+  dismissals can become per-user once real auth lands, without a migration.
 
 ```sql
 CREATE TABLE dbo.cheque_allocations (                         -- §13 endorsement / pass-through
@@ -908,7 +1016,7 @@ CREATE INDEX IX_cheque_allocations_target  ON dbo.cheque_allocations(target_type
 
 CREATE TABLE dbo.alert_dismissals (                           -- §12 snooze/dismiss derived alerts
   dismissal_id    INT IDENTITY(1,1) NOT NULL,
-  alert_key       VARCHAR(100)  NOT NULL,                     -- e.g. 'CHEQUE_DUE:receipt:1423'
+  alert_key       VARCHAR(100)  NOT NULL,                     -- 'CHEQUE_DUE:<receipt_id>' | 'PAYMENT_OVERDUE:<bill_id>'
   user_id         INT           NULL,
   dismissed_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_ad_at    DEFAULT (SYSUTCDATETIME()),
   dismissed_until DATETIME2(0)  NULL,                          -- NULL = dismissed permanently
@@ -921,9 +1029,11 @@ CREATE INDEX IX_alert_dismissals_key ON dbo.alert_dismissals(alert_key);
 ```
 
 **Bounced-cheque cascade (§13):** setting `receipts.cheque_status = 'BOUNCED'` must, in the same
-transaction, flip every `cheque_allocations` row for that receipt to `REVERSED` and delete/reverse
-the ledger rows on both sides. This is application logic — no constraint can express it — but it is
-the single most important rule attached to these two tables.
+transaction, also set `receipts.bounced_date`, flip every `cheque_allocations` row for that receipt
+to `REVERSED`, and write the counter-entries on **both** sides per §6.1. Nothing is deleted — the
+reversal is posted as opposite ledger rows dated `bounced_date`, so historic reports stay intact.
+This is application logic; no constraint can express it, and it is the single most important rule
+attached to these two tables.
 
 ---
 
@@ -943,6 +1053,8 @@ transaction. `CUSTOMER BA` / `VENDOR BA` mean the party's `business_accounts` ro
 | Expense | Expense head BA | CASH or BANK chart account | — |
 | Cheque allocation — VENDOR_PAYMENT | VENDOR BA | CHEQUES IN HAND | `source_type='CHEQUE_ALLOCATION'` |
 | Cheque allocation — EXPENSE_PAYMENT | Target BA | CHEQUES IN HAND | `source_type='CHEQUE_ALLOCATION'` |
+| **Bounce — receipt leg** (`amount` + `commission`) | CUSTOMER BA | CASH/BANK, and COMMISSION ALLOWED for the commission part | dated `receipts.bounced_date` |
+| **Bounce — each allocation leg** | CHEQUES IN HAND | VENDOR BA / Target BA | one per reversed allocation, dated `receipts.bounced_date` |
 | Production | — | — | positive `PRODUCTION` stock movements only (no ledger effect) |
 
 **Commission worked example (§7)** — the sale bill is never altered:
@@ -958,6 +1070,36 @@ Per §10 gap 4, the Receipts screen and the ledger must show **both** figures ex
 owed before commission and after — not only the net balance. Both are derivable: the "before"
 figure is the running balance excluding `source_type='COMMISSION'` rows.
 
+### 6.1 A bounce reverses; it never erases
+
+**Client-confirmed.** When a cheque bounces, the original ledger rows are **left exactly where they
+are** and the correction is posted as opposite entries dated `receipts.bounced_date`. Rows are never
+deleted and `allocation_date` is never rewritten.
+
+```
+10 Oct   Jamma  +1,000,000    cheque received from customer
+15 Oct   Naam   -1,000,000    endorsed to vendor
+22 Oct   Naam   -1,000,000    BOUNCE: reverses the 10 Oct receipt
+22 Oct   Jamma  +1,000,000    BOUNCE: reverses the 15 Oct endorsement
+
+10 Oct and 15 Oct totals: unchanged forever
+22 Oct: absorbs the whole correction
+```
+
+This is what makes a Cash Book printed before the bounce still reconcile with the same report
+printed after it. Deleting the rows instead would silently change historic days.
+
+Two consequences the backend must honour:
+
+- `cheque_allocations` rows flip to `status='REVERSED'` but **stay in the table**, and still count
+  as an outflow on their own `allocation_date`. `REVERSED` excludes them from *current* balances
+  (Vendor Report's Payment Paid), not from history.
+- The receipt's **commission reverses with it** — a bounce cancels the whole receipt, so both
+  `amount` and `commission` legs are undone.
+
+A bounced receipt must also be excluded from every "payment received" total (Account Ledger,
+Sale Analysis, Sale Report, customer balance) — the money never arrived.
+
 ---
 
 ## 7. Report → source map
@@ -971,7 +1113,7 @@ Every report in §9 answered from the tables above, with no report-specific stor
 | **Vendor Stock (§14)** | `vendor_stock_movements` grouped by vendor + material + unit |
 | Account Ledger / Khaata (TASK-16) | `ledger_entries` for one `ba_id` + `sale_bills` (Inv#/Bill#) + `receipts` (cheque sub-columns) |
 | Cash Book (TASK-15) | `receipts` + `expenses` + `cheque_allocations`, split by `payment_mode`; opening cash from `OPENING` rows |
-| Business Ledger | `ledger_entries` joined to `business_accounts` |
+| Business Ledger (UC-36) | `ledger_entries` joined to `business_accounts`; the Code / Description / Main Account / City columns are `code` / `name` / the parent `chart_of_accounts.name` / `city_id` — **City comes from the account itself**, since employee and director accounts have no customer to inherit it from |
 | Sale Analysis (TASK-09) | `sale_bills` + `sale_returns` + `receipts`, grouped by customer or by `customers.region_id` |
 | Sale Report (TASK-18) | as above; **Commission column = `SUM(receipts.commission)`**, not sale-time discounts (§7) |
 | Vendor Report (TASK-10) | `purchases` + `purchase_returns` by `vendor_id`, joined to `expenses` via `vendors.ba_id` for Payment Paid |
@@ -998,6 +1140,10 @@ by convention.
 | Chart — Payment Trail (TASK-17) | Business Running Expenses, **Cash at Banks**, **Directors Expenses - Drawings**, Employees, Vendors - Suppliers |
 | Restricted flag (§8/TASK-14) | `is_restricted = 1` on **Cash at Banks** and **Directors Expenses - Drawings** |
 | Store | One default store (single-store business) |
+
+All seeded accounts are numbered per §3.2 — groups 4 digits, chart accounts 6. Where a seeded
+account corresponds to one in the client's existing system, its `legacy_code` is populated during
+the import so opening balances can be reconciled against the old ledger.
 
 The reserved chart accounts must be resolvable from app config by `code`, so the vendor/customer
 auto-create logic and the posting logic never hardcode an `ac_id`.
@@ -1074,8 +1220,8 @@ EXEC sp_executesql @sql;
 | 26 | `stock_movements` | pairs ledger, keyed on variant | reshaped |
 | 27 | `vendor_stock_movements` | material ledger (§14) | ✅ |
 | 28 | `ledger_entries` | real FKs instead of polymorphic id | reshaped |
-| 29 | `cheque_allocations` | §13 — planned | ✅ |
-| 30 | `alert_dismissals` | §12 — planned | ✅ |
+| 29 | `cheque_allocations` | §13 — cheque endorsement (built in frontend M6) | ✅ |
+| 30 | `alert_dismissals` | §12 — alert dismissals (built in frontend M6) | ✅ |
 
 **Removed:** `control_accounts` (TASK-11), `products` (superseded by `articles` + `article_colors`).
 
@@ -1123,3 +1269,16 @@ Called out so the review is against a known baseline rather than a silent reinte
 5. **Sale Return has no `due_date`** on the assumption a return is never a payable. Confirm.
 6. **Multi-user audit:** `created_by` is captured but there is no `updated_by` or change history.
    Sufficient for a single-site desktop app; say if an audit trail is wanted.
+7. ~~**Account numbering**~~ — **RESOLVED**: codes are internal identifiers that staff never
+   memorise, so the scheme is ours (§3.2): parent code + zero-padded serial, 4 / 6 / 10 digits.
+   Legacy 12-digit codes are preserved in `legacy_code` for import reconciliation only.
+8. ~~**Financial year**~~ — **RESOLVED**: the July–June year on the legacy ledger is a reporting
+   filter, nothing more. No fiscal-year table, no closing, no carry-forward, no year in document
+   numbers. *Frontend follow-up, not schema:* reports offer Overall / By Month / Between Two Dates
+   but no **annual** option, which the client expects — a filter to add in a later milestone.
+9. **Bank accounts are still unmodelled.** There is no list of the business's own bank accounts and
+   nothing ties a receipt, expense or cheque deposit to a specific bank, so "Cash at Banks" can only
+   ever be one blended figure that cannot be reconciled against a statement. The proposal is a
+   `bank_accounts` profile table plus `ba_id` into `business_accounts` — mirroring `vendors` and
+   `customers` — with `bank_ac_id` on `receipts`/`expenses`. **Not yet agreed**, and it is the other
+   half of open question 3.

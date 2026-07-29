@@ -32,7 +32,7 @@ frontend↔backend integration is at 0%).
 
 # HOME & SYSTEM
 
-## UC-01: Open the app on the Home page — ❌
+## UC-01: Open the app on the Home page — ⚠️
 
 **Actor:** All users · **Goal:** Land on a clean home screen and see what is most urgent
 **Screen:** Home
@@ -68,7 +68,7 @@ frontend↔backend integration is at 0%).
 
 ---
 
-## UC-03: Role-based access control — ❌
+## UC-03: Role-based access control — ⚠️
 
 **Actor:** Administrator · **Goal:** Restrict sensitive accounts to admins
 
@@ -85,6 +85,12 @@ frontend↔backend integration is at 0%).
 4. A `USER` who requests a restricted account directly receives a 403.
 
 **Data:** reads `users.role`, `chart_of_accounts.is_restricted`.
+**Rework:** the frontend enforces this, but from a **hardcoded list of chart-account ids**
+(`RESTRICTED_CHART_IDS = ['120002','440001']`) duplicated across `BusinessAcSetupPage`,
+`BusinessLedgerContent` and `PaymentTrailPage`, and the `User` role comes from a static
+`user`/`user` demo login rather than a `users` row. Moving to `users.role` +
+`chart_of_accounts.is_restricted` removes the duplication and lets a new restricted account be
+added as data. Server-side enforcement does not exist at all yet.
 
 ---
 
@@ -100,7 +106,7 @@ as a bcrypt hash, never in plain text.
 
 ---
 
-## UC-05: Review and dismiss alerts — ❌
+## UC-05: Review and dismiss alerts — ✅
 
 **Actor:** Accountant / Management · **Goal:** Be warned about cheques and overdue payments
 **Screen:** Bell icon + badge in the app header (system-wide, not inside Reports)
@@ -185,7 +191,7 @@ Vendor Report cannot put purchases and payments on the same line.
 
 ---
 
-## UC-09: Manage customers — ❌
+## UC-09: Manage customers — ✅
 
 **Actor:** Admin / Sales staff · **Goal:** Register a customer and view their history
 **Screen:** Customers (card view)
@@ -387,7 +393,7 @@ Same structure as UC-19, over the Sale Return record tabs. **Data:** reads/write
 
 ---
 
-## UC-23: Record a purchase — ❌
+## UC-23: Record a purchase — ⚠️
 
 **Actor:** Purchase staff / Accountant · **Goal:** Record raw materials bought from a vendor
 **Screen:** Purchase
@@ -426,7 +432,7 @@ Same structure as UC-19, over the Sale Return record tabs. **Data:** reads/write
 
 ---
 
-## UC-24: Record a purchase return — ❌
+## UC-24: Record a purchase return — ⚠️
 
 **Actor:** Purchase staff · **Goal:** Record materials sent back to a vendor
 **Screen:** Purchase Return
@@ -441,7 +447,7 @@ reducing what is owed. This feeds Vendor Report's Purchase Return column.
 
 ---
 
-## UC-25: Record a receipt (Jamma) — ⚠️
+## UC-25: Record a receipt (Jamma) — ✅
 
 **Actor:** Accountant / Sales staff · **Goal:** Record a payment received from a customer
 **Screen:** Receipts (Jamma) → Entry tab
@@ -507,7 +513,7 @@ dropdown for `USER`-role sessions (UC-03).
 
 ---
 
-## UC-27: Dispose of a received cheque — ❌
+## UC-27: Dispose of a received cheque — ✅
 
 **Actor:** Accountant · **Goal:** Deposit a cheque, or hand it on to a vendor or expense instead
 **Screen:** Receipts (Jamma) → "Dispose of Cheque"
@@ -579,7 +585,7 @@ stock from movements rather than a stored column.
 
 ---
 
-## UC-29: View the product ledger — ⚠️
+## UC-29: View the product ledger — ✅
 
 **Actor:** Warehouse staff / Management · **Goal:** See the full IN/OUT history of an article in pairs
 **Screen:** Stock → Product Ledger (also a Reports tab, UC-38)
@@ -592,7 +598,8 @@ stock from movements rather than a stored column.
 Selecting an article shows its full details alongside the ledger.
 
 **Data:** reads `stock_movements`, `articles`, `article_colors`, `product_categories`, `vendors`.
-**Rework:** exists as tabs inside the Stock page with no filters.
+**Note:** built as a shared `ProductLedgerContent` component with all TASK-02 UPDATE filters, used
+by both the Stock page and the Reports hub (UC-38).
 
 ---
 
@@ -624,7 +631,7 @@ in **pairs**, with no vendor breakdown. Vendor Report (UC-33) is purchase and pa
 > with its default filter. **Every report offers Print, Export as PDF and Export as Excel.**
 > All reports are read-only.
 
-## UC-31: Sale Analysis — ❌
+## UC-31: Sale Analysis — ✅
 
 **Filters:** Group by **Customer Wise** / **Region Wise** · Time: **Overall** / **By Month** /
 **Between Two Dates**
@@ -637,7 +644,7 @@ Region Wise groups by region first, then breaks each region down by customer.
 
 ---
 
-## UC-32: Sale Report — ❌
+## UC-32: Sale Report — ✅
 
 **Filters:** Time: Overall / By Month / Between Two Dates · Group by: Customer Wise / Region Wise
 
@@ -658,7 +665,7 @@ Region Wise groups by region first, then breaks each region down by customer.
 
 ---
 
-## UC-33: Vendor Report — ❌
+## UC-33: Vendor Report — ✅
 
 **Filters:** Vendor (dropdown) · Between two dates
 
@@ -681,7 +688,7 @@ A standard ledger view (opening balance, debit, credit, running balance) is also
 
 ---
 
-## UC-34: Payment Trail — ❌
+## UC-34: Payment Trail — ✅
 
 **Filters:** From date → To date
 
@@ -701,7 +708,7 @@ total they see excludes them.
 
 ---
 
-## UC-35: Account Ledger (Khaata) — ⚠️
+## UC-35: Account Ledger (Khaata) — ✅
 
 **Actor:** Accountant / Management · **Goal:** Full transaction history for one customer account
 **Filters:** Account (searchable) · Between two dates, or overall
@@ -732,8 +739,9 @@ the first transaction)
 Only payment rows are red. Footer shows Total Debit, Total Credit and Closing Balance.
 
 **Data:** reads `ledger_entries`, `sale_bills`, `sale_returns`, `receipts`, `business_accounts`.
-**Rework:** currently computed client-side by filtering arrays, with no Inv#/Bill# columns, no
-cheque sub-columns and no commission row.
+**Note:** built — Inv#/Bill# columns, cheque sub-columns and the separate commission row are all
+present. Still computed client-side by filtering arrays; it moves to `ledger_entries` when the
+backend lands.
 
 ---
 
@@ -745,7 +753,7 @@ cheque sub-columns and no commission row.
 
 ---
 
-## UC-37: Cash Book of the Day — ⚠️
+## UC-37: Cash Book of the Day — ✅
 
 **Actor:** Accountant · **Goal:** See all cash in and out for a day or month
 **Filters:** a specific **date** or a **month**
@@ -771,11 +779,13 @@ A totals row sums all four amount columns.
 cheque posts as an outflow on its allocation date (UC-27).
 
 **Data:** reads `receipts`, `expenses`, `cheque_allocations`, `ledger_entries`.
-**Rework:** currently reads receipts only and never expenses, so it is not actually a cash book yet.
+**Note:** built — receipts and expenses both feed it, and opening cash / Jamma / Naam / Cash In
+Hand are all computed. Cheque allocations (UC-27) are the one outflow source still missing, since
+that feature does not exist yet.
 
 ---
 
-## UC-38: Product Ledger (Reports tab) — ⚠️
+## UC-38: Product Ledger (Reports tab) — ✅
 
 The same report as UC-29, reachable as the eighth Reports tab.
 **Filters:** Category / Company (Vendor) / Article · Between two dates, overall, by month, or by day.
@@ -791,7 +801,7 @@ The same report as UC-29, reachable as the eighth Reports tab.
 | **Searchable dropdowns** | Customer, sub-customer, article, business account and vendor dropdowns all have built-in search. |
 | **Record tabs** | Sale Bill, Sale Return, Receipts and Expenses each have Weekly / Monthly / Overall tabs with Edit and Print icons. |
 | **A4 print layout** | Every printout uses the same Excel-style A4 layout: black-bordered cells, grid metadata header, double-underlined totals, and three signature lines (Prepared By / Checked By / Authorized Signature). |
-| **Export (❌)** | Every screen with a Print button also gets **Export as PDF** and **Export as Excel**. Not implemented anywhere yet. |
+| **Export (✅)** | Every screen with a Print button also has **Export as PDF** and **Export as Excel**, via the shared `lib/export.ts`. No PDF/Excel dependency was added: PDF reuses the browser print dialog's "Save as PDF", and Excel emits CSV. Worth knowing if a client ever asks for real `.xlsx` with formatting — that would need a library. |
 | **Posting** | Ledger rows and stock rows are written on post and deleted on unpost, always inside one database transaction. |
 | **Soft delete** | Setup records referenced by transactions are deactivated, never hard-deleted. |
 | **Theme** | Dark navy `#111c2a` with gold `#B08D57` throughout. |
@@ -802,13 +812,13 @@ The same report as UC-29, reachable as the eighth Reports tab.
 
 | Group | Total | ✅ | ⚠️ | ❌ |
 |---|---|---|---|---|
-| Home & System | 5 | 1 | 1 | 3 |
-| Setup | 9 | 4 | 4 | 1 |
+| Home & System | 5 | 2 | 3 | 0 |
+| Setup | 9 | 5 | 4 | 0 |
 | Accounting Setup | 3 | 1 | 2 | 0 |
-| Transactions | 10 | 6 | 1 | 3 |
-| Stock | 3 | 0 | 2 | 1 |
-| Reports | 8 | 1 | 3 | 4 |
-| **Total** | **38** | **13** | **13** | **12** |
+| Transactions | 10 | 8 | 2 | 0 |
+| Stock | 3 | 1 | 1 | 1 |
+| Reports | 8 | 8 | 0 | 0 |
+| **Total** | **38** | **25** | **12** | **1** |
 
 > **Document version:** 3.0 · **System:** WentoX ERP — Footwear Wholesale Distribution
 > **Source:** `architecture-v2.md` · **Data model:** `database_schema.md` v4.0
