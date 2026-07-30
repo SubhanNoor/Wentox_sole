@@ -1,9 +1,6 @@
 const path = require('path');
 const { app, BrowserWindow } = require('electron');
-const { start } = require('../src/server');
-const config = require('../src/config');
-
-let server;
+const registerIpcHandlers = require('../src/ipc');
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -12,6 +9,7 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
+      nodeIntegration: false,
     },
   });
 
@@ -23,11 +21,14 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  server = start(config.port); // local Express API on 127.0.0.1
+  registerIpcHandlers(); // every ipcMain.handle channel must exist before the renderer can call one
   createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
 });
 
 app.on('window-all-closed', () => {
-  if (server) server.close();
-  app.quit();
+  if (process.platform !== 'darwin') app.quit();
 });

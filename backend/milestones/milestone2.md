@@ -15,15 +15,15 @@ post/unpost) run inside a single DB transaction (`withTransaction`).
 - Unpost: delete the document's ledger + stock rows (same transaction). Financial edits only while UNPOSTED.
 
 ## Module 2.1 — Sale Bill (UC-18, UC-19)
-- [ ] `saleBills` (routes/controller/service/repository) — create with items (one transaction), server-side totals (pairs = cartons × packing, line/invoice discounts, net value); `bilty_no`/`adda_id` required at creation (no dispatch-later path)
+- [ ] `saleBills` (ipc handler/service/repository) — create with items (one transaction), server-side totals (pairs = cartons × packing, line/invoice discounts, net value); `bilty_no`/`adda_id` required at creation (no dispatch-later path)
 - [ ] `draftSaleBills`/`draftSaleBillItems` — dummy/unconfirmed bills that deduct stock on save and restore it on delete, no ledger entry until confirmed into a real sale bill (schema §5.6.1)
-- [ ] `GET` list with weekly/monthly/overall/date-range + customer/sub-customer/bill-no filters
-- [ ] `GET /:id` with items (for edit + print)
+- [ ] `sale-bills:list` with weekly/monthly/overall/date-range + customer/sub-customer/bill-no filters
+- [ ] `sale-bills:get` with items (for edit + print)
 - [ ] Update (UNPOSTED only) — replace items, recompute totals
-- [ ] `POST /:id/post` and `POST /:id/unpost` — ledger + stock writes in one transaction
+- [ ] `sale-bills:post` and `sale-bills:unpost` — ledger + stock writes in one transaction
 - [ ] Verify: create → post → check `ledger_entries` + `stock_movements` rows; unpost removes them
 
 ## Module 2.2 — Sale Return (UC-21, UC-22)
-- [ ] `saleReturns` (routes/controller/service/repository) — mirror of sale bills (create/list/get/update/post/unpost)
+- [ ] `saleReturns` (ipc handler/service/repository) — mirror of sale bills (create/list/get/update/post/unpost)
 - [ ] `draftSaleReturns`/`draftSaleReturnItems` — mirrored draft pattern (schema §5.6.2)
 - [ ] Verify: create → post a return against an existing bill's customer; confirm reversing stock/ledger direction vs. Module 2.1

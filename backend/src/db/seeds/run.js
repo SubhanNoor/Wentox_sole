@@ -1,0 +1,122 @@
+// Idempotent seed script (npm run seed). Inserts only what's missing per schema v4.3 §8 —
+// safe to re-run against a database that already has some/all of this data.
+const bcrypt = require('bcrypt');
+const sql = require('mssql');
+const config = require('../../config');
+
+async function ensureGroupAccount(pool, { code, name, classCode }) {
+  const existing = await pool.request()
+    .input('code', sql.VarChar, code)
+    .query('SELECT group_id FROM dbo.group_accounts WHERE code = @code');
+  if (existing.recordset.length) return existing.recordset[0].group_id;
+
+  const cls = await pool.request()
+    .input('code', sql.VarChar, classCode)
+    .query('SELECT class_id FROM dbo.account_classes WHERE code = @code');
+  const classId = cls.recordset[0].class_id;
+
+  const inserted = await pool.request()
+    .input('code', sql.VarChar, code)
+    .input('name', sql.NVarChar, name)
+    .input('classId', sql.Int, classId)
+    .query(`INSERT INTO dbo.group_accounts (code, name, class_id)
+            OUTPUT inserted.group_id VALUES (@code, @name, @classId)`);
+  return inserted.recordset[0].group_id;
+}
+
+async function ensureChartAccount(pool, { code, name, groupId, isRestricted = false }) {
+  const existing = await pool.request()
+    .input('code', sql.VarChar, code)
+    .query('SELECT ac_id FROM dbo.chart_of_accounts WHERE code = @code');
+  if (existing.recordset.length) return existing.recordset[0].ac_id;
+
+  const inserted = await pool.request()
+    .input('code', sql.VarChar, code)
+    .input('name', sql.NVarChar, name)
+    .input('groupId', sql.Int, groupId)
+    .input('isRestricted', sql.Bit, isRestricted)
+    .query(`INSERT INTO dbo.chart_of_accounts (code, name, group_id, is_restricted)
+            OUTPUT inserted.ac_id VALUES (@code, @name, @groupId, @isRestricted)`);
+  return inserted.recordset[0].ac_id;
+}
+
+async function seed() {
+  const pool = await new sql.ConnectionPool(config.db).connect();
+
+  // --- Admin user ---
+  const adminExists = await pool.request()
+    .input('username', sql.VarChar, 'admin')
+    .query('SELECT 1 FROM dbo.users WHERE username = @username');
+  if (!adminExists.recordset.length) {
+    const passwordHash = await bcrypt.hash('admin123', 10);
+    await pool.request()
+      .input('username', sql.VarChar, 'admin')
+      .input('passwordHash', sql.VarChar, passwordHash)
+      .input('role', sql.VarChar, 'ADMIN')
+      .query(`INSERT INTO dbo.users (username, password_hash, role)
+              VALUES (@username, @passwordHash, @role)`);
+    console.log('seeded admin user (username: admin, password: admin123 — change immediately)');
+  }
+
+  // --- Account classes (§8) ---
+  const classes = [
+    { code: 'ASSETS', name: 'Assets' },
+    { code: 'LIABILITY', name: 'Liability' },
+    { code: 'INCOME', name: 'Income' },
+    { code: 'EXPENSES', name: 'Expenses' },
+  ];
+  for (const c of classes) {
+    const exists = await pool.request()
+      .input('code', sql.VarChar, c.code)
+      .query('SELECT 1 FROM dbo.account_classes WHERE code = @code');
+    if (!exists.recordset.length) {
+      await pool.request()
+        .input('code', sql.VarChar, c.code)
+        .input('name', sql.NVarChar, c.name)
+        .query('INSERT INTO dbo.account_classes (code, name) VALUES (@code, @name)');
+    }
+  }
+
+  // --- Group accounts (§8: one group per class, 4-digit codes) ---
+  const assetsGroup = await ensureGroupAccount(pool, { code: '1000', name: 'Assets', classCode: 'ASSETS' });
+  const liabilityGroup = await ensureGroupAccount(pool, { code: '2000', name: 'Liability', classCode: 'LIABILITY' });
+  const incomeGroup = await ensureGroupAccount(pool, { code: '3000', name: 'Income', classCode: 'INCOME' });
+  const expensesGroup = await ensureGroupAccount(pool, { code: '4000', name: 'Expenses', classCode: 'EXPENSES' });
+
+  // --- Reserved chart accounts (§8) ---
+  await ensureChartAccount(pool, { code: '100001', name: 'CUSTOMERS ACCOUNTS', groupId: assetsGroup });
+  await ensureChartAccount(pool, { code: '200001', name: 'VENDORS ACCOUNTS', groupId: liabilityGroup });
+  await ensureChartAccount(pool, { code: '100002', name: 'CASH IN HAND', groupId: assetsGroup });
+  await ensureChartAccount(pool, { code: '100003', name: 'Cash at Banks', groupId: assetsGroup, isRestricted: true });
+  await ensureChartAccount(pool, { code: '300001', name: 'SALES', groupId: incomeGroup });
+  await ensureChartAccount(pool, { code: '400001', name: 'PURCHASES', groupId: expensesGroup });
+  await ensureChartAccount(pool, { code: '400002', name: 'COMMISSION ALLOWED', groupId: expensesGroup });
+  await ensureChartAccount(pool, { code: '100004', name: 'CHEQUES IN HAND', groupId: assetsGroup });
+
+  // --- Payment Trail chart accounts (TASK-17) ---
+  await ensureChartAccount(pool, { code: '400003', name: 'Business Running Expenses', groupId: expensesGroup });
+  await ensureChartAccount(pool, {
+    code: '400004', name: 'Directors Expenses - Drawings', groupId: expensesGroup, isRestricted: true,
+  });
+  await ensureChartAccount(pool, { code: '400005', name: 'Employees', groupId: expensesGroup });
+  await ensureChartAccount(pool, { code: '200002', name: 'Vendors - Suppliers', groupId: liabilityGroup });
+
+  // --- Default store ---
+  const storeExists = await pool.request()
+    .input('name', sql.NVarChar, 'Main Store')
+    .query('SELECT 1 FROM dbo.stores WHERE name = @name');
+  if (!storeExists.recordset.length) {
+    await pool.request()
+      .input('name', sql.NVarChar, 'Main Store')
+      .query('INSERT INTO dbo.stores (name) VALUES (@name)');
+    console.log('seeded default store: Main Store');
+  }
+
+  await pool.close();
+  console.log('seed complete');
+}
+
+seed().catch((err) => {
+  console.error('seed failed:', err.message);
+  process.exitCode = 1;
+});

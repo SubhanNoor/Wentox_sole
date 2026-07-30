@@ -1,38 +1,59 @@
 const fs = require('fs');
 const path = require('path');
-const { pool } = require('./pool');
+const sql = require('mssql');
+const config = require('../config');
 
 async function migrate() {
-  await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
-    filename TEXT PRIMARY KEY,
-    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-  )`);
+  const pool = await new sql.ConnectionPool(config.db).connect();
 
+  await pool.request().query(`
+    IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'schema_migrations')
+    CREATE TABLE dbo.schema_migrations (
+      filename   VARCHAR(255) NOT NULL CONSTRAINT PK_schema_migrations PRIMARY KEY,
+      applied_at DATETIME2(0) NOT NULL CONSTRAINT DF_schema_migrations_applied DEFAULT (SYSUTCDATETIME())
+    )
+  `);
+
+  // Schema source of truth lives at repo root, not in this folder — see database/schema.sql
+  // (generated from System_architecture/database_schema_v4.3.md). Tracked as one migration file
+  // named by its basename, same as anything under migrations/.
+  const schemaFile = path.join(__dirname, '..', '..', '..', 'database', 'schema.sql');
   const dir = path.join(__dirname, 'migrations');
-  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).sort();
+  const laterMigrations = fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).map((f) => path.join(dir, f))
+    : [];
+  const files = [schemaFile, ...laterMigrations]
+    .sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
 
-  for (const file of files) {
-    const { rowCount } = await pool.query('SELECT 1 FROM schema_migrations WHERE filename = $1', [file]);
-    if (rowCount > 0) continue;
+  for (const filePath of files) {
+    const file = path.basename(filePath);
+    const already = await pool.request()
+      .input('filename', sql.VarChar, file)
+      .query('SELECT 1 FROM dbo.schema_migrations WHERE filename = @filename');
+    if (already.recordset.length > 0) continue;
 
-    const sql = fs.readFileSync(path.join(dir, file), 'utf8');
-    const client = await pool.connect();
+    const script = fs.readFileSync(filePath, 'utf8');
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
     try {
-      await client.query('BEGIN');
-      await client.query(sql);
-      await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [file]);
-      await client.query('COMMIT');
+      // Split on GO batch separators (own line, case-insensitive) — mssql runs one batch per request.
+      const batches = script.split(/^\s*GO\s*$/im).map((b) => b.trim()).filter(Boolean);
+      for (const batch of batches) {
+        await new sql.Request(transaction).query(batch);
+      }
+      await new sql.Request(transaction)
+        .input('filename', sql.VarChar, file)
+        .query('INSERT INTO dbo.schema_migrations (filename) VALUES (@filename)');
+      await transaction.commit();
       console.log(`applied ${file}`);
     } catch (err) {
-      await client.query('ROLLBACK');
+      await transaction.rollback();
       console.error(`failed ${file}:`, err.message);
       process.exitCode = 1;
       break;
-    } finally {
-      client.release();
     }
   }
-  await pool.end();
+  await pool.close();
 }
 
 migrate();
