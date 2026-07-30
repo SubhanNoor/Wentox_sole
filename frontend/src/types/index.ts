@@ -27,16 +27,36 @@ export interface Vendor {
   baId: string; // linked Business Account under the "Vendors" chart account
 }
 
-// A worker is the same shape as a Vendor: a real-world party that also needs a
-// ledger account. Wages will be piece-rate — an article's stage cost (Cutting,
-// Edging, …) times the quantity a worker completed — so a worker needs its own
-// id for future work rows to reference, not just an anonymous account.
-export interface Worker {
+export type EmployeeType = 'WORKER' | 'SALARIED';
+
+/**
+ * A member of staff, of one of two kinds — the same shape as a Vendor: a
+ * real-world party that also needs a ledger account.
+ *
+ *   WORKER    paid per piece, via a WageRun. Has `stages` (his trades), no salary.
+ *   SALARIED  paid a fixed amount monthly, via a SalaryRun. Has `monthlySalary`,
+ *             no trades.
+ *
+ * One person is ONE kind. Someone who genuinely does both is entered twice, so
+ * no screen has to show one person in two sections.
+ *
+ * The account a `baId` hangs under is the only thing the type changes at
+ * creation: WORKER WAGES (220001) for a worker, SALARIES PAYABLE (220002) for a
+ * salaried employee. Both are LIABILITY heads — staff can be owed money between
+ * doing the work and being paid, and an EXPENSES account can only accumulate
+ * what was paid out, never a balance due.
+ */
+export interface Employee {
   id: string;
   name: string;
   phone?: string;
   cityId?: string;  // the legacy ledger shows City for employee accounts
-  baId: string;     // linked Business Account under WORKER WAGES (220001), a LIABILITY
+  baId: string;     // linked Business Account under the head the type implies
+  employeeType: EmployeeType;
+  /** WORKER only — the stages he may be paid for. At least one; never empty. */
+  stages?: CostFieldKey[];
+  /** SALARIED only — the fixed monthly figure, typed when the employee is created. */
+  monthlySalary?: number;
 }
 
 export interface ProductCategory {
@@ -45,21 +65,27 @@ export interface ProductCategory {
 }
 
 // The 12 manufacturing stages, in the order they appear on the form.
-// Single source of truth: the form, the demo data and the Product type all
-// derive from this, so adding or renaming a stage is a one-line change.
+// Single source of truth: the product form, the demo data, the Product type,
+// an employee's trades and the wage screen all derive from this, so adding or
+// renaming a stage is a one-line change.
+//
+// TWO label sets, one list. On the product form a stage is the COST OF THE WORK
+// ("Cutting"); on the wage screen it is THE MAN WHO DOES IT ("Cutter Man").
+// Both live here so one definition drives both — the schema does the same thing
+// with dbo.stages.form_label / worker_label.
 export const COST_FIELDS = [
-  { key: 'cutting',     label: 'Cutting' },
-  { key: 'edging',      label: 'Edging' },
-  { key: 'upStitch',    label: 'Up Stitch' },
-  { key: 'bending',     label: 'Bending' },
-  { key: 'stubbleDori', label: 'Stubble / Dori' },
-  { key: 'shapeForm',   label: 'Shape Form' },
-  { key: 'chipkai',     label: 'Chipkai' },
-  { key: 'bottom',      label: 'Bottom' },
-  { key: 'machine',     label: 'Machine' },
-  { key: 'trimming',    label: 'Trimming' },
-  { key: 'sockStitch',  label: 'Sock Stitch' },
-  { key: 'finish',      label: 'Finish' },
+  { key: 'cutting',     label: 'Cutting',        workerLabel: 'Cutter Man' },
+  { key: 'edging',      label: 'Edging',         workerLabel: 'Edge Painting' },
+  { key: 'upStitch',    label: 'Up Stitch',      workerLabel: 'Upper Man' },
+  { key: 'bending',     label: 'Bending',        workerLabel: 'Bending' },
+  { key: 'stubbleDori', label: 'Stubble / Dori', workerLabel: 'Stubble Man' },
+  { key: 'shapeForm',   label: 'Shape Form',     workerLabel: 'Shape Form' },
+  { key: 'chipkai',     label: 'Chipkai',        workerLabel: 'Chipkai Man' },
+  { key: 'bottom',      label: 'Bottom',         workerLabel: 'Bottom Man' },
+  { key: 'machine',     label: 'Machine',        workerLabel: 'Machine Man' },
+  { key: 'trimming',    label: 'Trimming',       workerLabel: 'Trimming' },
+  { key: 'sockStitch',  label: 'Sock Stitch',    workerLabel: 'Socks Stitch' },
+  { key: 'finish',      label: 'Finish',         workerLabel: 'Finish' },
 ] as const;
 
 export type CostFieldKey = typeof COST_FIELDS[number]['key'];
@@ -295,6 +321,78 @@ export interface ProductionLog {
   packing: number;
 }
 
+/* ─────────────────────────── Payroll ───────────────────────────
+ * Two accrual documents, one per kind of staff. Both behave like a sale bill:
+ * Posted counts toward a balance, Unposted counts toward nothing, and the way
+ * back from a mistake is unpost → edit → post rather than a reversing entry.
+ * See System_architecture/payroll.md.
+ */
+
+/**
+ * One article on a wage run. `amount` = rate × cartons × packing — the rate is
+ * PER PAIR and the quantity is in CARTONS, so the article's own packing is the
+ * multiplier (a 24-pair article multiplies by 24, not 12).
+ *
+ * `rate` and `packing` are SNAPSHOTS, deliberately duplicating the product.
+ * The whole point is that they STOP matching when the product is edited —
+ * without them, changing one stage cost would rewrite every wage ever paid at
+ * that rate, with no record of what the worker actually received.
+ */
+export interface WageRunItem {
+  id: string;
+  productId: string;
+  productName: string;
+  rate: number;     // SNAPSHOT of the product's cost for this run's stage
+  cartons: number;  // QUANTITY as entered
+  packing: number;  // SNAPSHOT of the product's packing
+  amount: number;   // rate × cartons × packing
+}
+
+/** One piece-rate settlement: one worker, one stage, many article lines. */
+export interface WageRun {
+  id: string;
+  employeeId: string;
+  stage: CostFieldKey;
+  /** The SETTLEMENT date, not a work date — a run may cover a week or a fortnight. */
+  date: string;
+  totalAmount: number;
+  status: 'Posted' | 'Unposted';
+  unpostedAt?: string;    // last time it went Posted → Unposted
+  amountBefore?: number;  // totalAmount at that moment
+  items: WageRunItem[];
+}
+
+/**
+ * One salaried employee's line on a month's salary run.
+ *
+ * TWO amounts, and the difference is the point: `salaryAmount` is the snapshot
+ * of what their salary was, `amount` is what was actually credited. Equal in a
+ * normal month. When they differ the deduction is visible AND explicable
+ * (`remarks`), instead of the ledger quietly disagreeing with the employee's
+ * stated salary. One column could not tell you whether 35,000 was a deduction
+ * or simply their salary at the time.
+ */
+export interface SalaryRunItem {
+  id: string;
+  employeeId: string;
+  salaryAmount: number;  // SNAPSHOT of employee.monthlySalary
+  amount: number;        // what was credited — editable, pre-filled from salaryAmount
+  remarks?: string;
+}
+
+/** One month's salary accrual, covering every active salaried employee. */
+export interface SalaryRun {
+  id: string;
+  /** 'YYYY-MM' — the month being paid for. One Posted run per month. */
+  periodMonth: string;
+  date: string;          // when it was posted
+  totalAmount: number;
+  status: 'Posted' | 'Unposted';
+  unpostedAt?: string;
+  amountBefore?: number;
+  items: SalaryRunItem[];
+}
+
 export type NavPage =
   | 'login'
   | 'home'
@@ -308,10 +406,12 @@ export type NavPage =
   | 'overall-records'
   | 'receipts-jamma'
   | 'expenses-entry'
+  | 'wage-run'
+  | 'salary-run'
   | 'setup-product'
   | 'setup-category'
   | 'setup-vendor'
-  | 'setup-worker'
+  | 'setup-employee'
   | 'setup-customer'
   | 'setup-group-ac'
   | 'setup-chart-ac'

@@ -7,12 +7,14 @@ import PurchasePage from '@/pages/PurchasePage';
 import PurchaseReturnPage from '@/pages/PurchaseReturnPage';
 import ReceiptsPage from '@/pages/ReceiptsPage';
 import ExpensesPage from '@/pages/ExpensesPage';
+import WageRunPage from '@/pages/WageRunPage';
+import SalaryRunPage from '@/pages/SalaryRunPage';
 
 // Setups
 import ProductSetupPage from '@/pages/ProductSetupPage';
 import CategorySetupPage from '@/pages/CategorySetupPage';
 import VendorSetupPage from '@/pages/VendorSetupPage';
-import WorkerSetupPage from '@/pages/WorkerSetupPage';
+import EmployeeSetupPage from '@/pages/EmployeeSetupPage';
 import CustomerSetupPage from '@/pages/CustomerSetupPage';
 import SubCustomerSetupPage from '@/pages/SubCustomerSetupPage';
 import CitySetupPage from '@/pages/CitySetupPage';
@@ -65,6 +67,10 @@ export default function App() {
       return <ReceiptsPage />;
     case 'expenses-entry':
       return <ExpensesPage />;
+    case 'wage-run':
+      return <WageRunPage />;
+    case 'salary-run':
+      return <SalaryRunPage />;
 
     // System Setup
     case 'setup-product':
@@ -73,8 +79,8 @@ export default function App() {
       return <CategorySetupPage />;
     case 'setup-vendor':
       return <VendorSetupPage />;
-    case 'setup-worker':
-      return <WorkerSetupPage />;
+    case 'setup-employee':
+      return <EmployeeSetupPage />;
     case 'setup-customer':
       return <CustomerSetupPage />;
     case 'setup-sub-cust':

@@ -1,11 +1,12 @@
 import React, { createContext, useContext, useReducer } from 'react';
 import type { ReactNode } from 'react';
 import type {
-  City, Region, Store, Adda, Vendor, Worker, ProductCategory, Product,
+  City, Region, Store, Adda, Vendor, Employee, ProductCategory, Product,
   GroupAccount, ChartOfAccount, BusinessAccount,
   Customer, SubCustomer, SaleBill, SaleReturn, Purchase, PurchaseReturn,
   Receipt, Expense, ProductionLog, UserRole,
-  ChequeAllocation, ChequeStatus, AlertDismissal
+  ChequeAllocation, ChequeStatus, AlertDismissal,
+  WageRun, SalaryRun
 } from '@/types';
 import { deriveChequeStatus } from '@/lib/cheques';
 
@@ -54,10 +55,34 @@ const demoVendors: Vendor[] = [
 // under WORKER WAGES (220001) — a LIABILITY, like vendors, because a worker can
 // be owed money between doing the work and being paid. Payment Trail's
 // "Employees" row sums payments made against these accounts.
-const demoWorkers: Worker[] = [
-  { id: 'w1', name: 'Noman Butt', phone: '0301-4455661', cityId: 'ct1', baId: '2200010001' },
-  { id: 'w2', name: 'Zafar Hussain', phone: '0333-7788992', cityId: 'ct1', baId: '2200010002' },
-  { id: 'w3', name: 'Imran Amir', cityId: 'ct1', baId: '2200010003' },
+// Twelve workers, ONE PER STAGE, so every trade is testable end to end without
+// setup. Named in the client's own style ("Amir Bottom Man") — which is both
+// realistic and makes it obvious which worker exercises which stage.
+//
+// w1–w3 are the original three, kept rather than replaced: their baIds
+// 2200010001–0003 are referenced by demoExpenses. They just gained trades.
+const demoEmployees: Employee[] = [
+  { id: 'w1',  name: 'Noman Butt',        phone: '0301-4455661', cityId: 'ct1', baId: '2200010001', employeeType: 'WORKER', stages: ['cutting'] },
+  { id: 'w2',  name: 'Zafar Hussain',     phone: '0333-7788992', cityId: 'ct1', baId: '2200010002', employeeType: 'WORKER', stages: ['edging'] },
+  { id: 'w3',  name: 'Imran Amir',                               cityId: 'ct1', baId: '2200010003', employeeType: 'WORKER', stages: ['upStitch'] },
+  { id: 'w4',  name: 'Rashid Bending Man', phone: '0300-2211334', cityId: 'ct1', baId: '2200010004', employeeType: 'WORKER', stages: ['bending'] },
+  { id: 'w5',  name: 'Akram Stubble Man',  phone: '0345-8877221', cityId: 'ct1', baId: '2200010005', employeeType: 'WORKER', stages: ['stubbleDori'] },
+  { id: 'w6',  name: 'Waseem Shape Man',                          cityId: 'ct5', baId: '2200010006', employeeType: 'WORKER', stages: ['shapeForm'] },
+  { id: 'w7',  name: 'Bilal Chipkai Man',  phone: '0321-4455998', cityId: 'ct1', baId: '2200010007', employeeType: 'WORKER', stages: ['chipkai'] },
+  { id: 'w8',  name: 'Amir Bottom Man',    phone: '0302-9988776', cityId: 'ct1', baId: '2200010008', employeeType: 'WORKER', stages: ['bottom'] },
+  { id: 'w9',  name: 'Shahid Machine Man', phone: '0333-1122443', cityId: 'ct5', baId: '2200010009', employeeType: 'WORKER', stages: ['machine'] },
+  { id: 'w10', name: 'Kashif Trimming Man',                       cityId: 'ct1', baId: '2200010010', employeeType: 'WORKER', stages: ['trimming'] },
+  { id: 'w11', name: 'Nadeem Socks Man',   phone: '0301-6677889', cityId: 'ct1', baId: '2200010011', employeeType: 'WORKER', stages: ['sockStitch'] },
+  { id: 'w12', name: 'Tariq Finish Man',   phone: '0345-3344556', cityId: 'ct1', baId: '2200010012', employeeType: 'WORKER', stages: ['finish'] },
+
+  // Salaried staff — the roles that actually draw a fixed monthly figure in a
+  // sole factory. Their accounts hang under SALARIES PAYABLE (220002), not
+  // WORKER WAGES, so a report can separate piece-rate labour (a product cost)
+  // from salary (overhead).
+  { id: 's1', name: 'Jawad Iqbal (Manager)',     phone: '0300-1010101', cityId: 'ct1', baId: '2200020001', employeeType: 'SALARIED', monthlySalary: 85000 },
+  { id: 's2', name: 'Farhan Sheikh (Accountant)', phone: '0321-2020202', cityId: 'ct1', baId: '2200020002', employeeType: 'SALARIED', monthlySalary: 60000 },
+  { id: 's3', name: 'Saeed Anwar (Storekeeper)',                         cityId: 'ct1', baId: '2200020003', employeeType: 'SALARIED', monthlySalary: 42000 },
+  { id: 's4', name: 'Ilyas Khan (Driver)',        phone: '0333-4040404', cityId: 'ct1', baId: '2200020004', employeeType: 'SALARIED', monthlySalary: 35000 },
 ];
 
 const demoCategories: ProductCategory[] = [
@@ -111,12 +136,19 @@ const demoChartAccounts: ChartOfAccount[] = [
   { id: '120003', name: 'CHEQUES IN HAND', groupId: '1000', linkCode: 'A', status: 'Active' },
   { id: '210001', name: 'VENDORS ACCOUNTS', groupId: '2000', linkCode: 'A', status: 'Active' },
   { id: '220001', name: 'WORKER WAGES', groupId: '2000', linkCode: 'A', status: 'Active' },
+  // What we OWE salaried staff, kept apart from WORKER WAGES so piece-rate
+  // labour (a product cost) can be read separately from salary (overhead).
+  // Blended, you cannot see what a pair actually costs in direct labour.
+  { id: '220002', name: 'SALARIES PAYABLE', groupId: '2000', linkCode: 'A', status: 'Active' },
   { id: '310001', name: 'WHOLESALE SHOE SALES', groupId: '3000', linkCode: 'A', status: 'Active' },
   // The cost side of wages. WORKER WAGES (220001) is what we OWE a worker;
   // this is what the labour COSTS us. A wage earned debits here and credits the
   // worker's account — the same shape as Purchase debiting PURCHASES and
   // crediting the vendor. Nothing posts to it until wage accrual is built.
   { id: '410001', name: 'WAGES EXPENSE', groupId: '4000', linkCode: 'A', status: 'Active' },
+  // The cost side of salaries, mirroring WAGES EXPENSE. A posted salary run
+  // debits here and credits each salaried employee's account.
+  { id: '410002', name: 'SALARIES EXPENSE', groupId: '4000', linkCode: 'A', status: 'Active' },
   { id: '420001', name: 'UTILITIES & BILLS EXPENSE', groupId: '4000', linkCode: 'A', status: 'Active' },
   // Cost of raw material bought from vendors. A Purchase debits here and credits
   // the vendor's account — the same two-sided shape wages now have.
@@ -141,6 +173,21 @@ const demoBusinessAccounts: BusinessAccount[] = [
   { id: '2200010001', name: 'Noman Butt A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '2200010002', name: 'Zafar Hussain A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '2200010003', name: 'Imran Amir A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200010004', name: 'Rashid Bending Man A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200010005', name: 'Akram Stubble Man A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200010006', name: 'Waseem Shape Man A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200010007', name: 'Bilal Chipkai Man A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200010008', name: 'Amir Bottom Man A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200010009', name: 'Shahid Machine Man A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200010010', name: 'Kashif Trimming Man A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200010011', name: 'Nadeem Socks Man A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200010012', name: 'Tariq Finish Man A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  // Salaried staff sit under SALARIES PAYABLE (220002), so their codes run
+  // 2200020001+ while workers keep 2200010001+.
+  { id: '2200020001', name: 'Jawad Iqbal (Manager) A/C', controlId: '220002', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200020002', name: 'Farhan Sheikh (Accountant) A/C', controlId: '220002', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200020003', name: 'Saeed Anwar (Storekeeper) A/C', controlId: '220002', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200020004', name: 'Ilyas Khan (Driver) A/C', controlId: '220002', linkCode: 'A', region: 'LOCAL', status: 'Active' },
 ];
 
 const demoCustomers: Customer[] = [
@@ -293,7 +340,7 @@ export interface State {
   stores: Store[];
   addas: Adda[];
   vendors: Vendor[];
-  workers: Worker[];
+  employees: Employee[];
   categories: ProductCategory[];
   products: Product[];
   
@@ -313,6 +360,8 @@ export interface State {
   productionLogs: ProductionLog[];
   chequeAllocations: ChequeAllocation[];
   alertDismissals: AlertDismissal[];
+  wageRuns: WageRun[];
+  salaryRuns: SalaryRun[];
 
   settings: { username: string; password: string };
 }
@@ -335,9 +384,9 @@ type Action =
   | { type: 'ADD_VENDOR'; vendor: Vendor }
   | { type: 'UPDATE_VENDOR'; vendor: Vendor }
   | { type: 'DELETE_VENDOR'; id: string }
-  | { type: 'ADD_WORKER'; worker: Worker }
-  | { type: 'UPDATE_WORKER'; worker: Worker }
-  | { type: 'DELETE_WORKER'; id: string }
+  | { type: 'ADD_EMPLOYEE'; employee: Employee }
+  | { type: 'UPDATE_EMPLOYEE'; employee: Employee }
+  | { type: 'DELETE_EMPLOYEE'; id: string }
   | { type: 'ADD_CITY'; city: City }
   | { type: 'UPDATE_CITY'; city: City }
   | { type: 'DELETE_CITY'; id: string }
@@ -402,6 +451,22 @@ type Action =
   // Expense Actions
   | { type: 'ADD_EXPENSE'; expense: Expense }
   | { type: 'DELETE_EXPENSE'; id: string }
+
+  // Payroll (payroll.md §8). Both run types share one mutation path:
+  // Posted → unpost → Unposted → edit → post → Posted. A Posted run is never
+  // edited in place, and deleting is permitted only while Unposted — deleting
+  // a Posted one would silently move an employee's balance.
+  | { type: 'ADD_WAGE_RUN'; run: WageRun }
+  | { type: 'UPDATE_WAGE_RUN'; runId: string; run: WageRun }
+  | { type: 'DELETE_WAGE_RUN'; runId: string }
+  | { type: 'POST_WAGE_RUN'; runId: string }
+  | { type: 'UNPOST_WAGE_RUN'; runId: string; unpostedAt: string }
+  | { type: 'ADD_SALARY_RUN'; run: SalaryRun }
+  | { type: 'UPDATE_SALARY_RUN'; runId: string; run: SalaryRun }
+  | { type: 'DELETE_SALARY_RUN'; runId: string }
+  | { type: 'POST_SALARY_RUN'; runId: string }
+  | { type: 'UNPOST_SALARY_RUN'; runId: string; unpostedAt: string }
+
   | { type: 'UPDATE_SETTINGS'; settings: { username: string; password: string } };
 
 const initialState: State = {
@@ -418,7 +483,7 @@ const initialState: State = {
   stores: demoStores,
   addas: demoAddas,
   vendors: demoVendors,
-  workers: demoWorkers,
+  employees: demoEmployees,
   categories: demoCategories,
   products: demoProducts,
   
@@ -438,6 +503,8 @@ const initialState: State = {
   productionLogs: [],
   chequeAllocations: demoChequeAllocations,
   alertDismissals: [],
+  wageRuns: [],
+  salaryRuns: [],
 
   settings: { username: 'admin', password: 'admin' },
 };
@@ -507,23 +574,23 @@ function reducer(state: State, action: Action): State {
           : state.businessAccounts
       };
     }
-    case 'ADD_WORKER':
-      return { ...state, workers: [...state.workers, action.worker] };
-    case 'UPDATE_WORKER':
+    case 'ADD_EMPLOYEE':
+      return { ...state, employees: [...state.employees, action.employee] };
+    case 'UPDATE_EMPLOYEE':
       return {
         ...state,
-        workers: state.workers.map(w => w.id === action.worker.id ? action.worker : w),
+        employees: state.employees.map(e => e.id === action.employee.id ? action.employee : e),
         businessAccounts: state.businessAccounts.map(b =>
-          b.id === action.worker.baId ? { ...b, name: `${action.worker.name} A/C` } : b
+          b.id === action.employee.baId ? { ...b, name: `${action.employee.name} A/C` } : b
         )
       };
-    case 'DELETE_WORKER': {
-      const deletedWorker = state.workers.find(w => w.id === action.id);
+    case 'DELETE_EMPLOYEE': {
+      const deleted = state.employees.find(e => e.id === action.id);
       return {
         ...state,
-        workers: state.workers.filter(w => w.id !== action.id),
-        businessAccounts: deletedWorker
-          ? state.businessAccounts.filter(b => b.id !== deletedWorker.baId)
+        employees: state.employees.filter(e => e.id !== action.id),
+        businessAccounts: deleted
+          ? state.businessAccounts.filter(b => b.id !== deleted.baId)
           : state.businessAccounts
       };
     }
@@ -913,6 +980,70 @@ function reducer(state: State, action: Action): State {
       return { ...state, expenses: [action.expense, ...state.expenses] };
     case 'DELETE_EXPENSE':
       return { ...state, expenses: state.expenses.filter(e => e.id !== action.id) };
+
+    /* ──── Payroll Handlers (payroll.md §8) ────
+     * Unlike sale bills, posting a payroll run has no stock side effect to
+     * reverse — a run's only effect is on a balance, and getEmployeeBalance
+     * counts Posted runs only. So posting and unposting are pure status flips.
+     * Unposting stamps unpostedAt and copies the outgoing total to
+     * amountBefore: a labourer holds no paperwork of his own, so without that
+     * record a silent edit to what he is owed leaves no trace anywhere.
+     */
+    case 'ADD_WAGE_RUN':
+      return { ...state, wageRuns: [action.run, ...state.wageRuns] };
+    case 'UPDATE_WAGE_RUN':
+      return {
+        ...state,
+        wageRuns: state.wageRuns.map(r => r.id === action.runId ? action.run : r)
+      };
+    case 'DELETE_WAGE_RUN':
+      // Guarded here as well as in the UI: deleting a Posted run would move an
+      // employee's balance with nothing recording that it happened.
+      return {
+        ...state,
+        wageRuns: state.wageRuns.filter(r => r.id !== action.runId || r.status === 'Posted')
+      };
+    case 'POST_WAGE_RUN':
+      return {
+        ...state,
+        wageRuns: state.wageRuns.map(r => r.id === action.runId ? { ...r, status: 'Posted' } : r)
+      };
+    case 'UNPOST_WAGE_RUN':
+      return {
+        ...state,
+        wageRuns: state.wageRuns.map(r =>
+          r.id === action.runId && r.status === 'Posted'
+            ? { ...r, status: 'Unposted', unpostedAt: action.unpostedAt, amountBefore: r.totalAmount }
+            : r
+        )
+      };
+
+    case 'ADD_SALARY_RUN':
+      return { ...state, salaryRuns: [action.run, ...state.salaryRuns] };
+    case 'UPDATE_SALARY_RUN':
+      return {
+        ...state,
+        salaryRuns: state.salaryRuns.map(r => r.id === action.runId ? action.run : r)
+      };
+    case 'DELETE_SALARY_RUN':
+      return {
+        ...state,
+        salaryRuns: state.salaryRuns.filter(r => r.id !== action.runId || r.status === 'Posted')
+      };
+    case 'POST_SALARY_RUN':
+      return {
+        ...state,
+        salaryRuns: state.salaryRuns.map(r => r.id === action.runId ? { ...r, status: 'Posted' } : r)
+      };
+    case 'UNPOST_SALARY_RUN':
+      return {
+        ...state,
+        salaryRuns: state.salaryRuns.map(r =>
+          r.id === action.runId && r.status === 'Posted'
+            ? { ...r, status: 'Unposted', unpostedAt: action.unpostedAt, amountBefore: r.totalAmount }
+            : r
+        )
+      };
 
     case 'UPDATE_SETTINGS':
       return { ...state, settings: action.settings };

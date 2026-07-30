@@ -3,7 +3,8 @@ import { useApp } from '@/context/AppContext';
 import {
   ShoppingCart, Receipt, Package, FileText, Layers,
   Settings, LogOut, Lock, Menu, X, ChevronDown, MapPin, Home,
-  Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search, HardHat
+  Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search, HardHat,
+  BadgeDollarSign
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
@@ -29,6 +30,10 @@ const navSections: NavSection[] = [
       { page: 'purchase-return', label: 'Purchase Return', icon: Undo2 },
       { page: 'receipts-jamma', label: 'Receipts (Jamma)', icon: DollarSign },
       { page: 'expenses-entry', label: 'Expenses (Kharch)', icon: Wallet },
+      // Payroll accrual — under Transactions, not Setup, because these post
+      // financial entries. Paying staff is still an Expense above.
+      { page: 'wage-run', label: 'Wage Run (Piece Rate)', icon: HardHat },
+      { page: 'salary-run', label: 'Salary Run (Monthly)', icon: BadgeDollarSign },
     ]
   },
   {
@@ -45,7 +50,7 @@ const navSections: NavSection[] = [
       { page: 'setup-product', label: 'Product Details', icon: Folder },
       { page: 'setup-category', label: 'Categories', icon: Layers },
       { page: 'setup-vendor', label: 'Vendors', icon: Truck },
-      { page: 'setup-worker', label: 'Workers', icon: HardHat },
+      { page: 'setup-employee', label: 'Employees', icon: HardHat },
       { page: 'setup-customer', label: 'Customers', icon: Users },
       { page: 'setup-sub-cust', label: 'Sub Customers', icon: Users },
       { page: 'setup-city', label: 'City Creation', icon: MapPin },
