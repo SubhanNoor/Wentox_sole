@@ -411,42 +411,83 @@ GO
 -- filter by company/vendor).
 
 /* ----------------------------------------------------------------------------
-   dbo.workers
-   WHAT:  A piece-rate worker. The third instance of the §4.5 pattern —
-          own PK plus a unique ba_id into business_accounts.
-   WHY:   ba_id is auto-created under WORKER WAGES, which is a **LIABILITY**,
-          not an expense head. That distinction is load-bearing: a worker can
-          be owed money between doing the work and being paid, and an account
-          under EXPENSES can only accumulate what was paid out, never a
-          balance due. Vendors already work this way.
-   NOTE:  Workers get their own id rather than being anonymous accounts
-          because wages are piece-rate: an article's stage cost (cutting,
-          edging, ...) times the quantity that worker completed. The work rows
-          that calculation needs will reference worker_id — those rows are NOT
-          designed yet.
+   dbo.employees                                   (was dbo.workers)
+   WHAT:  A member of staff, of one of TWO kinds. The third instance of the
+          §4.5 pattern — own PK plus a unique ba_id into business_accounts.
+
+            WORKER    paid per piece, via dbo.wage_runs. Has trades
+                      (dbo.worker_stages). No salary.
+            SALARIED  paid a fixed amount monthly, via dbo.salary_runs.
+                      Has monthly_salary. No trades.
+
+   WHY:   ba_id is auto-created under a **LIABILITY** head, not an expense
+          head. That distinction is load-bearing: staff can be owed money
+          between doing the work and being paid, and an account under EXPENSES
+          can only accumulate what was paid out, never a balance due. Vendors
+          already work this way.
+
+          The two kinds hang under DIFFERENT heads, which is the only thing
+          employee_type changes at creation time:
+            WORKER    -> WORKER WAGES     220001  ->  ba codes 2200010001+
+            SALARIED  -> SALARIES PAYABLE 220002  ->  ba codes 2200020001+
+          Keeping them apart lets a report separate piece-rate labour (a
+          product cost) from salary (overhead) -- blended, you cannot see what
+          a pair actually costs in direct labour.
+
+   NOTE:  ONE TABLE, not two. Both kinds share the party pattern, the list
+          page, the balance helper and the payment path; splitting them would
+          duplicate all four to express one VARCHAR(10) difference, and would
+          leave expenses.ba_id with two profile tables to join back to.
+          A person is one kind or the other -- someone who genuinely does both
+          is entered twice, on purpose, so no screen has to show one person in
+          two sections.
+
+   INTEGRITY: UQ_employees_id_type looks redundant next to the PK. It is not
+          decoration -- it is the FK target that lets worker_stages, wage_runs
+          and salary_run_items each carry employee_type and pin it to a
+          literal, so the DATABASE (not just screen code) refuses to give a
+          salaried employee a trade, put one on a wage run, or put a worker on
+          a salary run. Costs one column on three child tables.
+
    NUMBERING: this is the head that grows into the hundreds (the client's
           legacy data holds 218+ under Employees), which is why §3.2's
           4-digit serial matters here more than anywhere: 2200010001.
 ---------------------------------------------------------------------------- */
-CREATE TABLE dbo.workers (
-  worker_id  INT IDENTITY(1,1) NOT NULL,
-  name       NVARCHAR(100) NOT NULL,
-  phone      VARCHAR(30)   NULL,
-  city_id    INT           NULL,   -- the legacy Employees ledger displays City
-  ba_id      INT           NULL,   -- auto-created under WORKER WAGES on worker create
-  is_active  BIT          NOT NULL CONSTRAINT DF_workers_active  DEFAULT (1),
-  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_workers_created DEFAULT (SYSUTCDATETIME()),
-  updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_workers_updated DEFAULT (SYSUTCDATETIME()),
-  CONSTRAINT PK_workers      PRIMARY KEY (worker_id),
-  CONSTRAINT FK_workers_ba   FOREIGN KEY (ba_id)   REFERENCES dbo.business_accounts(ba_id),
-  CONSTRAINT FK_workers_city FOREIGN KEY (city_id) REFERENCES dbo.cities(city_id)
+CREATE TABLE dbo.employees (
+  employee_id    INT IDENTITY(1,1) NOT NULL,
+  name           NVARCHAR(100) NOT NULL,
+  phone          VARCHAR(30)   NULL,
+  city_id        INT           NULL,   -- the legacy Employees ledger displays City
+  employee_type  VARCHAR(10)   NOT NULL CONSTRAINT DF_emp_type DEFAULT ('WORKER'),
+  monthly_salary DECIMAL(12,2) NULL,   -- SALARIED only; NULL for a WORKER
+  ba_id          INT           NULL,   -- auto-created on save, under the head the type implies
+  is_active      BIT          NOT NULL CONSTRAINT DF_emp_active  DEFAULT (1),
+  created_at     DATETIME2(0) NOT NULL CONSTRAINT DF_emp_created DEFAULT (SYSUTCDATETIME()),
+  updated_at     DATETIME2(0) NOT NULL CONSTRAINT DF_emp_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_employees      PRIMARY KEY (employee_id),
+  CONSTRAINT FK_employees_ba   FOREIGN KEY (ba_id)   REFERENCES dbo.business_accounts(ba_id),
+  CONSTRAINT FK_employees_city FOREIGN KEY (city_id) REFERENCES dbo.cities(city_id),
+  CONSTRAINT CK_employees_type CHECK (employee_type IN ('WORKER','SALARIED')),
+  -- A salary is exactly as meaningful as the type says it is. Without this,
+  -- a worker can carry a stray salary nothing will ever pay, and a salaried
+  -- employee can carry NULL and post a run of zero.
+  CONSTRAINT CK_employees_salary CHECK (
+        (employee_type = 'WORKER'   AND monthly_salary IS NULL)
+     OR (employee_type = 'SALARIED' AND monthly_salary IS NOT NULL AND monthly_salary >= 0)),
+  CONSTRAINT UQ_employees_id_type UNIQUE (employee_id, employee_type)
 );
-CREATE UNIQUE INDEX UQ_workers_ba   ON dbo.workers(ba_id) WHERE ba_id IS NOT NULL;
-CREATE INDEX        IX_workers_name ON dbo.workers(name);
+CREATE UNIQUE INDEX UQ_employees_ba   ON dbo.employees(ba_id) WHERE ba_id IS NOT NULL;
+CREATE INDEX        IX_employees_name ON dbo.employees(name);
+CREATE INDEX        IX_employees_type ON dbo.employees(employee_type, is_active);
 GO
--- USED BY: Workers setup page; Expense screen (paying a worker is an Expense
--- against workers.ba_id); Payment Trail's "Employees" row. The wage-accrual
--- side (Dr WAGES EXPENSE / Cr worker) is not built yet.
+-- USED BY: Employees setup page (two sections, Workers / Salaried Employees);
+-- Expense screen (paying anyone is an Expense against employees.ba_id);
+-- Payment Trail's "Employees" row -- which already called them employees long
+-- before the table did. Accrual is dbo.wage_runs (piece rate) and
+-- dbo.salary_runs (monthly), both at the end of this file.
+-- CHANGING employee_type after creation is NOT supported: it would strand the
+-- ba_id under the wrong account head and orphan either the trades or the
+-- salary history. Deactivate and re-create instead.
 
 /* ----------------------------------------------------------------------------
    dbo.customers
@@ -523,7 +564,8 @@ GO
    NOTE:  The stage costs are entered by hand and NEVER summed. There is no
           total-cost column and no total shown anywhere in the UI: they are
           piece rates, read individually to calculate a worker's wage
-          (stage rate x quantity completed). sale_price is separate and also
+          (stage rate x cartons x packing -- the rate is PER PAIR, so the
+          article's own packing is the multiplier). sale_price is separate and also
           typed in — never derived from the stages — and is the number a sale
           line defaults its rate from.
 ---------------------------------------------------------------------------- */
@@ -542,7 +584,10 @@ CREATE TABLE dbo.articles (
   -- replace the legacy set (which included p1/p2/na, meaning unknown). They are
   -- entered by hand and deliberately NEVER aggregated -- no total-cost column
   -- anywhere -- because they are piece rates, consumed individually when a
-  -- worker's wage is calculated (stage rate x quantity completed).
+  -- worker's wage is calculated. The rate is PER PAIR and wage quantity is in
+  -- CARTONS, so a wage line is rate x cartons x packing -- see dbo.wage_run_items,
+  -- which snapshots both the rate and the packing so editing an article later
+  -- cannot rewrite a wage already paid.
   cutting       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_cut    DEFAULT (0),
   edging        DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_edge   DEFAULT (0),
   up_stitch     DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_upst   DEFAULT (0),
@@ -1429,7 +1474,12 @@ CREATE TABLE dbo.ledger_entries (
   CONSTRAINT CK_ledger_entries_sign  CHECK (debit >= 0 AND credit >= 0),
   CONSTRAINT CK_ledger_entries_src   CHECK (source_type IN
         ('SALE_BILL','SALE_RETURN','RECEIPT','COMMISSION','EXPENSE',
-         'PURCHASE','PURCHASE_RETURN','CHEQUE_ALLOCATION','OPENING'))
+         'PURCHASE','PURCHASE_RETURN','CHEQUE_ALLOCATION','OPENING',
+         -- Payroll accrual (payroll doc SS5-6). WAGE_RUN is the piece-rate
+         -- side (Dr WAGES EXPENSE / Cr worker BA); SALARY_RUN is the monthly
+         -- salary side (Dr SALARIES EXPENSE / Cr each salaried employee BA).
+         -- Paying either is still an EXPENSE row, not a new type.
+         'WAGE_RUN','SALARY_RUN'))
 );
 CREATE INDEX IX_ledger_entries_ba     ON dbo.ledger_entries(ba_id, entry_date) WHERE ba_id IS NOT NULL;
 CREATE INDEX IX_ledger_entries_ac     ON dbo.ledger_entries(ac_id, entry_date) WHERE ac_id IS NOT NULL;
@@ -1536,6 +1586,286 @@ GO
 -- for a cheque due within 7 days / already past due
 -- (sourced from dbo.cheques.cheque_date / cheque_status, not receipts).
 
+/* ############################################################################
+   PAYROLL — piece-rate wages and monthly salaries.
+   Design doc: System_architecture/payroll.md
+   ############################################################################ */
+
+/* ----------------------------------------------------------------------------
+   dbo.stages
+   WHAT:  The 12 manufacturing stages, as data. Reference table, 12 rows.
+   WHY:   Before this table the list was spelled out in FOUR places -- 12
+          columns on dbo.articles, a CHECK on wage_runs, a CHECK on
+          worker_stages, and COST_FIELDS in the frontend. Adding or renaming a
+          stage meant four coordinated edits, and the two CHECK lists could
+          drift apart with nothing to catch it. Now the two CHECKs are FKs and
+          the labels are rows.
+   NOTE:  TWO label sets, one list. On the article form a stage is the COST OF
+          THE WORK ("Cutting"); on the wage screen it is THE MAN WHO DOES IT
+          ("Cutter Man"). Both live here so one definition drives both.
+   NOTE:  cost_column names which dbo.articles column holds that stage's rate.
+          It exists because article costs are 12 COLUMNS rather than rows --
+          the one bridge between the normalised list and the denormalised
+          article. If articles is ever normalised into article_stage_costs,
+          this column disappears with it.
+   SEED:  12 rows, in form order. This file is DDL only (no INSERTs anywhere),
+          so seeding lives with the app:
+            cutting/Cutting/Cutter Man        edging/Edging/Edge Painting
+            upStitch/Up Stitch/Upper Man      bending/Bending/Bending
+            stubbleDori/Stubble-Dori/Stubble Man
+            shapeForm/Shape Form/Shape Form   chipkai/Chipkai/Chipkai Man
+            bottom/Bottom/Bottom Man          machine/Machine/Machine Man
+            trimming/Trimming/Trimming        sockStitch/Sock Stitch/Socks Stitch
+            finish/Finish/Finish
+---------------------------------------------------------------------------- */
+CREATE TABLE dbo.stages (
+  stage_key    VARCHAR(20)  NOT NULL,               -- 'cutting', 'upStitch', ...
+  form_label   NVARCHAR(40) NOT NULL,               -- article form:  'Cutting'
+  worker_label NVARCHAR(40) NOT NULL,               -- wage screen:   'Cutter Man'
+  cost_column  VARCHAR(30)  NOT NULL,               -- dbo.articles column holding the rate
+  sort_order   INT          NOT NULL,
+  is_active    BIT          NOT NULL CONSTRAINT DF_stages_active DEFAULT (1),
+  CONSTRAINT PK_stages          PRIMARY KEY (stage_key),
+  CONSTRAINT UQ_stages_col      UNIQUE (cost_column),   -- two stages cannot read one column
+  CONSTRAINT UQ_stages_sort     UNIQUE (sort_order)
+);
+GO
+-- USED BY: article setup form (form_label, ordering); wage run screen
+-- (worker_label, and cost_column to find the rate); employee setup form's
+-- trades multi-select.
+
+/* ----------------------------------------------------------------------------
+   dbo.worker_stages
+   WHAT:  Which trades a WORKER may be paid for. Link table.
+   WHY:   Client-confirmed a worker is restricted to his own trade -- the wage
+          screen's stage list filters to these rows. A worker with none cannot
+          be paid at all, which is why the create form requires at least one.
+   NOTE:  employee_type is carried and pinned to 'WORKER' so the composite FK
+          makes it IMPOSSIBLE to give a salaried employee a trade. It is never
+          typed by the app; the default supplies it.
+   NOTE:  Removing a trade does NOT touch history. wage_runs.stage_key is
+          stored on the run, so runs already posted under a dropped trade
+          still read correctly. Removal is deliberately not blocked.
+---------------------------------------------------------------------------- */
+CREATE TABLE dbo.worker_stages (
+  employee_id   INT         NOT NULL,
+  employee_type VARCHAR(10) NOT NULL CONSTRAINT DF_ws_type DEFAULT ('WORKER'),
+  stage_key     VARCHAR(20) NOT NULL,
+  CONSTRAINT PK_worker_stages    PRIMARY KEY (employee_id, stage_key),
+  CONSTRAINT FK_worker_stages_emp FOREIGN KEY (employee_id, employee_type)
+        REFERENCES dbo.employees(employee_id, employee_type) ON DELETE CASCADE,
+  CONSTRAINT FK_worker_stages_stg FOREIGN KEY (stage_key) REFERENCES dbo.stages(stage_key),
+  CONSTRAINT CK_worker_stages_type CHECK (employee_type = 'WORKER')
+);
+CREATE INDEX IX_worker_stages_stage ON dbo.worker_stages(stage_key);
+GO
+-- USED BY: employee setup form (trades multi-select); wage run screen (filters
+-- the stage list once a worker is chosen).
+
+/* ----------------------------------------------------------------------------
+   dbo.wage_runs
+   WHAT:  One piece-rate settlement: one worker, one stage, many article lines.
+          Header/items shape copied from sale_bills / sale_bill_items.
+   WHY:   This is what finally READS the 12 stage costs on dbo.articles, which
+          were write-only until now, and what credits a worker so his balance
+          can be something other than "what we paid him".
+   NOTE:  run_date is the SETTLEMENT date, NOT a work date. A run may cover a
+          week or a fortnight of work. The period itself is deliberately NOT
+          recorded -- the client's sheet has no such columns and it would mean
+          typing dates they never type. Consequence, stated rather than
+          hidden: NOTHING HERE CAN DETECT THE SAME WEEK BEING PAID TWICE. The
+          screen mitigates by listing the worker's last three runs for the
+          chosen stage. There is deliberately no unique constraint: a man can
+          genuinely settle twice in a day.
+   NOTE:  total_amount duplicates SUM(wage_run_items.amount). That is the
+          house pattern (sale_bills.net_value does the same) and a computed
+          column cannot aggregate over a child table -- so it MUST be
+          rewritten in the SAME transaction as any line change. Real
+          invariant, no constraint can hold it.
+   NOTE:  Only CONFIRMED runs count toward a balance. DRAFT contributes
+          nothing, which is what makes unpost meaningful rather than cosmetic.
+---------------------------------------------------------------------------- */
+CREATE TABLE dbo.wage_runs (
+  wage_run_id    INT IDENTITY(1,1) NOT NULL,
+  employee_id    INT           NOT NULL,
+  employee_type  VARCHAR(10)   NOT NULL CONSTRAINT DF_wr_type DEFAULT ('WORKER'),
+  stage_key      VARCHAR(20)   NOT NULL,
+  run_date       DATE          NOT NULL,
+  total_amount   DECIMAL(14,2) NOT NULL CONSTRAINT DF_wr_total  DEFAULT (0),
+  status         VARCHAR(10)   NOT NULL CONSTRAINT DF_wr_status DEFAULT ('DRAFT'),
+  -- Unpost audit. A labourer holds no paperwork of his own, so unlike a sale
+  -- bill there is nothing on the other side of the transaction to check a
+  -- silent edit against. These three are the symmetric partner of
+  -- created_by/updated_by, not a full edit history.
+  unposted_at    DATETIME2(0)  NULL,
+  unposted_by    INT           NULL,
+  amount_before  DECIMAL(14,2) NULL,   -- total_amount at the moment it was unposted
+  created_at     DATETIME2(0)  NOT NULL CONSTRAINT DF_wr_created DEFAULT (SYSUTCDATETIME()),
+  created_by     INT           NULL,
+  updated_at     DATETIME2(0)  NOT NULL CONSTRAINT DF_wr_updated DEFAULT (SYSUTCDATETIME()),
+  updated_by     INT           NULL,
+  CONSTRAINT PK_wage_runs       PRIMARY KEY (wage_run_id),
+  CONSTRAINT FK_wage_runs_emp   FOREIGN KEY (employee_id, employee_type)
+        REFERENCES dbo.employees(employee_id, employee_type),
+  CONSTRAINT FK_wage_runs_stage FOREIGN KEY (stage_key)   REFERENCES dbo.stages(stage_key),
+  CONSTRAINT FK_wage_runs_cby   FOREIGN KEY (created_by)  REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_wage_runs_uby   FOREIGN KEY (updated_by)  REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_wage_runs_nby   FOREIGN KEY (unposted_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT CK_wage_runs_type   CHECK (employee_type = 'WORKER'),
+  CONSTRAINT CK_wage_runs_status CHECK (status IN ('CONFIRMED','DRAFT')),
+  CONSTRAINT CK_wage_runs_total  CHECK (total_amount >= 0),
+  CONSTRAINT CK_wage_runs_unpost CHECK (
+        (unposted_at IS NULL AND unposted_by IS NULL AND amount_before IS NULL)
+     OR (unposted_at IS NOT NULL))
+);
+CREATE INDEX IX_wage_runs_emp    ON dbo.wage_runs(employee_id, run_date);
+CREATE INDEX IX_wage_runs_stage  ON dbo.wage_runs(stage_key, run_date);
+CREATE INDEX IX_wage_runs_status ON dbo.wage_runs(status);
+GO
+-- USED BY: Wage Run page (Transactions); employee balance helper
+-- (SUM of CONFIRMED runs minus payments); Employees list "balance" column.
+-- LEDGERS AS: Dr WAGES EXPENSE 410001 / Cr worker BA, source_type 'WAGE_RUN'.
+
+/* ----------------------------------------------------------------------------
+   dbo.wage_run_items
+   WHAT:  One article on a wage run: rate x cartons x packing.
+   WHY:   The client's sheet reads RATE x QUANTITY = TOTAL, which does not
+          compute -- RATE x QUANTITY x 12 does, on every row. QUANTITY is
+          CARTONS, RATE is PER PAIR, and 12 is the ARTICLE'S OWN PACKING (a
+          24-pair article multiplies by 24).
+   NOTE:  rate and packing are SNAPSHOTS, deliberately duplicating
+          dbo.articles. The whole point is that they STOP matching when the
+          article is edited -- without them, changing one stage cost would
+          rewrite every wage ever paid at that rate, with no record of what
+          the worker actually received.
+   NOTE:  amount is a PERSISTED COMPUTED column -- the first in this schema.
+          Everywhere else (sale_bill_items.value, purchase_items.total_price)
+          the extension is a plain column that CAN silently disagree with its
+          own inputs. Here it arithmetically cannot.
+   NOTE:  Lines point at article_id, NOT variant_id. The sheet's column is
+          ARTICLE, the stage costs live on dbo.articles, and colour is
+          irrelevant to a piece rate. This is the one place in the system that
+          deliberately targets the article rather than the colour variant.
+---------------------------------------------------------------------------- */
+CREATE TABLE dbo.wage_run_items (
+  item_id     INT IDENTITY(1,1) NOT NULL,
+  wage_run_id INT           NOT NULL,
+  article_id  INT           NOT NULL,
+  rate        DECIMAL(12,2) NOT NULL,               -- SNAPSHOT of the article's stage cost
+  cartons     INT           NOT NULL,               -- QUANTITY as entered on the sheet
+  packing     INT           NOT NULL,               -- SNAPSHOT of dbo.articles.packing
+  amount      AS (rate * cartons * packing) PERSISTED NOT NULL,
+  line_no     INT           NOT NULL CONSTRAINT DF_wri_line    DEFAULT (1),
+  created_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_wri_created DEFAULT (SYSUTCDATETIME()),
+  updated_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_wri_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_wage_run_items      PRIMARY KEY (item_id),
+  CONSTRAINT FK_wage_run_items_run  FOREIGN KEY (wage_run_id) REFERENCES dbo.wage_runs(wage_run_id) ON DELETE CASCADE,
+  CONSTRAINT FK_wage_run_items_art  FOREIGN KEY (article_id)  REFERENCES dbo.articles(article_id),
+  CONSTRAINT CK_wage_run_items_ctn  CHECK (cartons > 0),
+  CONSTRAINT CK_wage_run_items_rate CHECK (rate >= 0),
+  CONSTRAINT CK_wage_run_items_pack CHECK (packing > 0)
+);
+CREATE INDEX IX_wage_run_items_run ON dbo.wage_run_items(wage_run_id);
+CREATE INDEX IX_wage_run_items_art ON dbo.wage_run_items(article_id);
+GO
+-- USED BY: Wage Run page line grid. A rate of 0 is allowed but flagged on
+-- screen -- it almost always means the article's stage costs were never
+-- filled in, not that the work is free.
+
+/* ----------------------------------------------------------------------------
+   dbo.salary_runs
+   WHAT:  One month's salary accrual, covering every active salaried employee.
+   WHY:   SALARIES PAYABLE is a LIABILITY, and a liability nothing ever credits
+          sits at zero forever. This run is what puts "we owe the staff 340,000
+          for July" on the books BEFORE anyone is paid -- which is the whole
+          reason staff accounts are a liability rather than an expense head.
+   NOTE:  UNLIKE wage_runs, this DOES get a uniqueness rule: one CONFIRMED run
+          per period_month. A month is unambiguous, so a second one is always a
+          mistake -- whereas a piece-work settlement period is not, which is
+          why wage_runs has no equivalent. Unposting releases the month.
+   NOTE:  period_month is the FIRST of the month it pays for; run_date is when
+          it was actually posted. They are different questions.
+---------------------------------------------------------------------------- */
+CREATE TABLE dbo.salary_runs (
+  salary_run_id INT IDENTITY(1,1) NOT NULL,
+  period_month  DATE          NOT NULL,             -- first day of the month being paid for
+  run_date      DATE          NOT NULL,             -- when it was posted
+  total_amount  DECIMAL(14,2) NOT NULL CONSTRAINT DF_salrun_total  DEFAULT (0),
+  status        VARCHAR(10)   NOT NULL CONSTRAINT DF_salrun_status DEFAULT ('DRAFT'),
+  unposted_at   DATETIME2(0)  NULL,
+  unposted_by   INT           NULL,
+  amount_before DECIMAL(14,2) NULL,
+  created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_salrun_created DEFAULT (SYSUTCDATETIME()),
+  created_by    INT           NULL,
+  updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_salrun_updated DEFAULT (SYSUTCDATETIME()),
+  updated_by    INT           NULL,
+  CONSTRAINT PK_salary_runs        PRIMARY KEY (salary_run_id),
+  CONSTRAINT FK_salary_runs_cby    FOREIGN KEY (created_by)  REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_salary_runs_uby    FOREIGN KEY (updated_by)  REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_salary_runs_nby    FOREIGN KEY (unposted_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT CK_salary_runs_status CHECK (status IN ('CONFIRMED','DRAFT')),
+  CONSTRAINT CK_salary_runs_total  CHECK (total_amount >= 0),
+  CONSTRAINT CK_salary_runs_month  CHECK (DAY(period_month) = 1),
+  CONSTRAINT CK_salary_runs_unpost CHECK (
+        (unposted_at IS NULL AND unposted_by IS NULL AND amount_before IS NULL)
+     OR (unposted_at IS NOT NULL))
+);
+-- One CONFIRMED run per month; DRAFTs are unconstrained so a correction can be
+-- built alongside. This is the constraint wage_runs deliberately does NOT have.
+CREATE UNIQUE INDEX UQ_salary_runs_month ON dbo.salary_runs(period_month) WHERE status = 'CONFIRMED';
+CREATE INDEX        IX_salary_runs_date  ON dbo.salary_runs(run_date);
+GO
+-- USED BY: Salary Run page (Transactions).
+-- LEDGERS AS: Dr SALARIES EXPENSE 410002 / Cr each salaried employee BA,
+-- one credit per line, source_type 'SALARY_RUN'.
+
+/* ----------------------------------------------------------------------------
+   dbo.salary_run_items
+   WHAT:  One salaried employee's line on a month's salary run.
+   WHY:   Two amounts, not one, and the difference is the point:
+            salary_amount  SNAPSHOT of employees.monthly_salary at post time
+            amount         what was ACTUALLY credited -- editable
+          They are equal in a normal month. When they differ, the deduction is
+          visible AND explicable, instead of the ledger quietly disagreeing
+          with the employee's stated salary.
+   WHY TWO: without the snapshot, a line reading 35,000 against a man whose
+          salary later becomes 60,000 is unreadable -- was it a deduction, or
+          was 35,000 his salary back then? Same reasoning as wage_run_items
+          snapshotting rate and packing.
+   NOTE:  amount is NOT a computed column (unlike wage_run_items.amount). It is
+          an operator input defaulting to salary_amount, not an arithmetic
+          result -- so there is nothing to compute and nothing that can drift.
+   NOTE:  employee_type pinned to 'SALARIED' so the composite FK makes it
+          impossible to put a piece-rate worker on a salary run.
+---------------------------------------------------------------------------- */
+CREATE TABLE dbo.salary_run_items (
+  item_id       INT IDENTITY(1,1) NOT NULL,
+  salary_run_id INT           NOT NULL,
+  employee_id   INT           NOT NULL,
+  employee_type VARCHAR(10)   NOT NULL CONSTRAINT DF_salri_type DEFAULT ('SALARIED'),
+  salary_amount DECIMAL(12,2) NOT NULL,             -- SNAPSHOT of monthly_salary
+  amount        DECIMAL(12,2) NOT NULL,             -- what was credited; defaults to salary_amount
+  remarks       NVARCHAR(200) NULL,                 -- why it differs, when it differs
+  line_no       INT           NOT NULL CONSTRAINT DF_salri_line    DEFAULT (1),
+  created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_salri_created DEFAULT (SYSUTCDATETIME()),
+  updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_salri_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_salary_run_items      PRIMARY KEY (item_id),
+  CONSTRAINT FK_salary_run_items_run  FOREIGN KEY (salary_run_id)
+        REFERENCES dbo.salary_runs(salary_run_id) ON DELETE CASCADE,
+  CONSTRAINT FK_salary_run_items_emp  FOREIGN KEY (employee_id, employee_type)
+        REFERENCES dbo.employees(employee_id, employee_type),
+  CONSTRAINT UQ_salary_run_items_once UNIQUE (salary_run_id, employee_id),  -- nobody paid twice in a month
+  CONSTRAINT CK_salary_run_items_type CHECK (employee_type = 'SALARIED'),
+  CONSTRAINT CK_salary_run_items_amt  CHECK (amount >= 0),
+  CONSTRAINT CK_salary_run_items_snap CHECK (salary_amount >= 0)
+);
+CREATE INDEX IX_salary_run_items_run ON dbo.salary_run_items(salary_run_id);
+CREATE INDEX IX_salary_run_items_emp ON dbo.salary_run_items(employee_id);
+GO
+-- USED BY: Salary Run page. The grid pre-fills amount from salary_amount; the
+-- operator overrides it for a short month, an absence or a deduction, and
+-- says why in remarks.
+
 /* ============================================================================
    END OF SCHEMA — Bounced-cheque cascade (application logic, not a
    constraint, doc §5.10): setting dbo.cheques.cheque_status = 'BOUNCED'
@@ -1547,4 +1877,16 @@ GO
         each reversed allocation's target side), dated bounced_date.
    Nothing is ever deleted — this is the single most important rule
    attached to the money tables in this schema.
+
+   Payroll header totals (application logic, no constraint can hold it):
+   wage_runs.total_amount and salary_runs.total_amount duplicate the SUM of
+   their child rows. A computed column cannot aggregate over a child table, so
+   BOTH must be rewritten in the SAME transaction as any line insert, update or
+   delete. wage_run_items.amount needs no such care -- it is PERSISTED computed
+   and recalculates itself.
+
+   Unpost (payroll doc §8): CONFIRMED -> DRAFT -> edit -> CONFIRMED. Flipping a
+   run to DRAFT must stamp unposted_at/unposted_by and copy the outgoing
+   total into amount_before. Only CONFIRMED runs count toward any balance;
+   deleting is permitted ONLY while DRAFT.
    ============================================================================ */
