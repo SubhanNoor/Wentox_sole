@@ -1317,8 +1317,8 @@ by convention.
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | User                             | One`ADMIN` user (bcrypt hash)                                                                                      |
 | Group accounts                   | `ASSETS` (1000), `LIABILITY` (2000), `INCOME` (3000), `EXPENSES` (4000)                                            |
-| Chart — reserved                | **CUSTOMERS ACCOUNTS** (parent of every customer BA), **VENDORS ACCOUNTS** (parent of every vendor BA, §10 gap 2) |
-| Chart — posting targets         | **CASH IN HAND**, **SALES**, **PURCHASES**, **COMMISSION ALLOWED**, **CHEQUES IN HAND**                            |
+| Chart — reserved                | **CUSTOMERS ACCOUNTS** `110001`, **VENDORS ACCOUNTS** `210001` (§10 gap 2), **WORKER WAGES** `220001` — a LIABILITY, parent of every worker BA (§4.5) |
+| Chart — posting targets         | **CASH IN HAND** `120001`, **CHEQUES IN HAND** `120003`, **SALES** `310001`, **WAGES EXPENSE** `410001` (the Dr side of a wage earned), **PURCHASES** `430001`, **COMMISSION ALLOWED** `450001` |
 | Chart — Payment Trail (TASK-17) | Business Running Expenses,**Cash at Banks**, **Directors Expenses - Drawings**, Employees, Vendors - Suppliers     |
 | Restricted flag (§8/TASK-14)    | `is_restricted = 1` on **Cash at Banks** and **Directors Expenses - Drawings**                                     |
 | Store                            | One default store (single-store business)                                                                          |

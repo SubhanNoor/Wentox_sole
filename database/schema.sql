@@ -15,7 +15,7 @@
      4. Accounts hierarchy          -> account_classes, group_accounts,
                                         chart_of_accounts, business_accounts
      5. Parties                     -> vendors, customers, sub_customers
-     6. Products                    -> products, article_colors
+     6. Products                    -> articles, article_colors
      7. Sales                       -> sale_bills(+items), draft_sale_bills(+items),
                                         sale_returns(+items), draft_sale_returns(+items)
      8. Purchases                   -> purchases(+items), purchase_returns(+items)
@@ -223,7 +223,7 @@ GO
 
 /* ----------------------------------------------------------------------------
    dbo.product_categories
-   WHAT:  Category lookup for finished-goods products (e.g. "Slippers",
+   WHAT:  Category lookup for finished-goods articles (e.g. "Slippers",
           "School Shoes").
 ---------------------------------------------------------------------------- */
 CREATE TABLE dbo.product_categories (
@@ -237,7 +237,7 @@ CREATE TABLE dbo.product_categories (
 );
 GO
 -- USED BY: Category dropdown/filter on the Products (TASK-03) page
--- (dbo.products.category_id).
+-- (dbo.articles.category_id).
 
 /* ============================================================================
    3. ACCOUNTS HIERARCHY — Group -> Chart -> Business
@@ -407,8 +407,46 @@ GO
 -- USED BY: Vendor dropdown on Purchase / Purchase Return (purchases.vendor_id,
 -- purchase_return_items via purchase_returns.vendor_id); Vendor Stock page
 -- (vendor_stock_movements.vendor_id); Expense screen's vendor-payment path
--- via vendors.ba_id -> expenses.ba_id; dbo.products.vendor_id (TASK-02 ledger
+-- via vendors.ba_id -> expenses.ba_id; dbo.articles.vendor_id (TASK-02 ledger
 -- filter by company/vendor).
+
+/* ----------------------------------------------------------------------------
+   dbo.workers
+   WHAT:  A piece-rate worker. The third instance of the §4.5 pattern —
+          own PK plus a unique ba_id into business_accounts.
+   WHY:   ba_id is auto-created under WORKER WAGES, which is a **LIABILITY**,
+          not an expense head. That distinction is load-bearing: a worker can
+          be owed money between doing the work and being paid, and an account
+          under EXPENSES can only accumulate what was paid out, never a
+          balance due. Vendors already work this way.
+   NOTE:  Workers get their own id rather than being anonymous accounts
+          because wages are piece-rate: an article's stage cost (cutting,
+          edging, ...) times the quantity that worker completed. The work rows
+          that calculation needs will reference worker_id — those rows are NOT
+          designed yet.
+   NUMBERING: this is the head that grows into the hundreds (the client's
+          legacy data holds 218+ under Employees), which is why §3.2's
+          4-digit serial matters here more than anywhere: 2200010001.
+---------------------------------------------------------------------------- */
+CREATE TABLE dbo.workers (
+  worker_id  INT IDENTITY(1,1) NOT NULL,
+  name       NVARCHAR(100) NOT NULL,
+  phone      VARCHAR(30)   NULL,
+  city_id    INT           NULL,   -- the legacy Employees ledger displays City
+  ba_id      INT           NULL,   -- auto-created under WORKER WAGES on worker create
+  is_active  BIT          NOT NULL CONSTRAINT DF_workers_active  DEFAULT (1),
+  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_workers_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_workers_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_workers      PRIMARY KEY (worker_id),
+  CONSTRAINT FK_workers_ba   FOREIGN KEY (ba_id)   REFERENCES dbo.business_accounts(ba_id),
+  CONSTRAINT FK_workers_city FOREIGN KEY (city_id) REFERENCES dbo.cities(city_id)
+);
+CREATE UNIQUE INDEX UQ_workers_ba   ON dbo.workers(ba_id) WHERE ba_id IS NOT NULL;
+CREATE INDEX        IX_workers_name ON dbo.workers(name);
+GO
+-- USED BY: Workers setup page; Expense screen (paying a worker is an Expense
+-- against workers.ba_id); Payment Trail's "Employees" row. The wage-accrual
+-- side (Dr WAGES EXPENSE / Cr worker) is not built yet.
 
 /* ----------------------------------------------------------------------------
    dbo.customers
@@ -469,86 +507,94 @@ GO
 -- sale_returns.sub_customer_id, and their draft mirrors).
 
 /* ============================================================================
-   5. PRODUCTS AND COLOUR VARIANTS
-   TASK-03's main rows are `products`; its expandable sub-rows are
+   5. ARTICLES AND COLOUR VARIANTS
+   TASK-03's main rows are `articles`; its expandable sub-rows are
    `article_colors`. Everything that moves stock or appears on a bill line
-   points at a VARIANT (article_colors), never at the product directly.
+   points at a VARIANT (article_colors), never at the article directly.
    ============================================================================ */
 
 /* ----------------------------------------------------------------------------
-   dbo.products
-   WHAT:  Finished-goods master (renamed from `articles`). One row per
-          article code; colour lives one level down in article_colors.
-   WHY:   Full manufacturing cost breakdown is kept here (cost_price, labour,
-          proi_cost, sole_stich, pasting, trim, finishing, socks_pasting, dc,
-          sock_stich, sheet, stubble, bottom, p1, p2, na) — column names kept
-          verbatim from the legacy system for reconciliation.
+   dbo.articles
+   WHAT:  Finished-goods master. One row per article code; colour lives one
+          level down in article_colors.
+   WHY:   Carries the 12 manufacturing stage costs (cutting .. finish) plus
+          sale_price. The stages replace the legacy 15-field breakdown, which
+          included p1/p2/na — columns nobody could explain.
+   NOTE:  The stage costs are entered by hand and NEVER summed. There is no
+          total-cost column and no total shown anywhere in the UI: they are
+          piece rates, read individually to calculate a worker's wage
+          (stage rate x quantity completed). sale_price is separate and also
+          typed in — never derived from the stages — and is the number a sale
+          line defaults its rate from.
 ---------------------------------------------------------------------------- */
-CREATE TABLE dbo.products (
-  product_id  INT IDENTITY(1,1) NOT NULL,
+CREATE TABLE dbo.articles (
+  article_id  INT IDENTITY(1,1) NOT NULL,
   code        VARCHAR(30)   NOT NULL,                         -- TASK-03 "article code (pcode)", e.g. 'P-101'
   name        NVARCHAR(150) NOT NULL,                         -- common name, colour excluded
   category_id INT           NOT NULL,
   vendor_id   INT           NULL,                             -- TASK-02: filter ledger by company/vendor
   batch_no    VARCHAR(50)   NULL,
   packing     INT           NOT NULL,                         -- default pairs per carton (usually 12)
-  -- cost breakdown (names kept verbatim from the legacy system)
-  cost_price    DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_cost   DEFAULT (0),
-  labour        DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_lab    DEFAULT (0),
-  proi_cost     DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_proi   DEFAULT (0),
-  sole_stich    DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_solest DEFAULT (0),
-  pasting       DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_past   DEFAULT (0),
-  trim          DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_trim   DEFAULT (0),
-  finishing     DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_fin    DEFAULT (0),
-  socks_pasting DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_sockp  DEFAULT (0),
-  dc            DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_dc     DEFAULT (0),
-  sock_stich    DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_sockst DEFAULT (0),
-  sheet         DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_sheet  DEFAULT (0),
-  stubble       DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_stub   DEFAULT (0),
-  bottom        DECIMAL(12,2) NOT NULL CONSTRAINT DF_products_bot    DEFAULT (0),
-  p1            INT           NOT NULL CONSTRAINT DF_products_p1     DEFAULT (0),
-  p2            INT           NOT NULL CONSTRAINT DF_products_p2     DEFAULT (0),
-  na            INT           NOT NULL CONSTRAINT DF_products_na     DEFAULT (0),
-  is_active   BIT          NOT NULL CONSTRAINT DF_products_active  DEFAULT (1),
-  created_at  DATETIME2(0) NOT NULL CONSTRAINT DF_products_created DEFAULT (SYSUTCDATETIME()),
-  updated_at  DATETIME2(0) NOT NULL CONSTRAINT DF_products_updated DEFAULT (SYSUTCDATETIME()),
-  CONSTRAINT PK_products          PRIMARY KEY (product_id),
-  CONSTRAINT UQ_products_code     UNIQUE (code),
-  CONSTRAINT FK_products_category FOREIGN KEY (category_id) REFERENCES dbo.product_categories(category_id),
-  CONSTRAINT FK_products_vendor   FOREIGN KEY (vendor_id)   REFERENCES dbo.vendors(vendor_id),
-  CONSTRAINT CK_products_packing  CHECK (packing > 0)
+  -- The one price on an article: typed in by hand, never computed from the stage
+  -- costs below. Every sale line defaults its rate from this.
+  sale_price    DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_sale   DEFAULT (0),
+  -- Manufacturing cost per stage, in the order they appear on the form. These
+  -- replace the legacy set (which included p1/p2/na, meaning unknown). They are
+  -- entered by hand and deliberately NEVER aggregated -- no total-cost column
+  -- anywhere -- because they are piece rates, consumed individually when a
+  -- worker's wage is calculated (stage rate x quantity completed).
+  cutting       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_cut    DEFAULT (0),
+  edging        DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_edge   DEFAULT (0),
+  up_stitch     DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_upst   DEFAULT (0),
+  bending       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_bend   DEFAULT (0),
+  stubble_dori  DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_stub   DEFAULT (0),
+  shape_form    DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_shape  DEFAULT (0),
+  chipkai       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_chip   DEFAULT (0),
+  bottom        DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_bot    DEFAULT (0),
+  machine       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_mach   DEFAULT (0),
+  trimming      DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_trim   DEFAULT (0),
+  sock_stitch   DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_sockst DEFAULT (0),
+  finish        DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_fin    DEFAULT (0),
+  is_active   BIT          NOT NULL CONSTRAINT DF_articles_active  DEFAULT (1),
+  created_at  DATETIME2(0) NOT NULL CONSTRAINT DF_articles_created DEFAULT (SYSUTCDATETIME()),
+  updated_at  DATETIME2(0) NOT NULL CONSTRAINT DF_articles_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_articles          PRIMARY KEY (article_id),
+  CONSTRAINT UQ_articles_code     UNIQUE (code),
+  CONSTRAINT FK_articles_category FOREIGN KEY (category_id) REFERENCES dbo.product_categories(category_id),
+  CONSTRAINT FK_articles_vendor   FOREIGN KEY (vendor_id)   REFERENCES dbo.vendors(vendor_id),
+  CONSTRAINT CK_articles_packing  CHECK (packing > 0)
 );
-CREATE INDEX IX_products_category ON dbo.products(category_id);
-CREATE INDEX IX_products_vendor   ON dbo.products(vendor_id);
-CREATE INDEX IX_products_name     ON dbo.products(name);
+CREATE INDEX IX_articles_category ON dbo.articles(category_id);
+CREATE INDEX IX_articles_vendor   ON dbo.articles(vendor_id);
+CREATE INDEX IX_articles_name     ON dbo.articles(name);
 GO
 -- USED BY: Products page (TASK-03) main rows; Product Ledger (TASK-02),
--- filterable by vendor/company via products.vendor_id; parent of
+-- filterable by vendor/company via articles.vendor_id; parent of
 -- article_colors (its expandable colour sub-rows).
 
 /* ----------------------------------------------------------------------------
    dbo.article_colors
    WHAT:  Colour variant of a product (TASK-03 sub-rows). This is the row
           every bill line and every stock movement actually points at.
-   WHY:   packing is an OPTIONAL override of products.packing — effective
+   WHY:   packing is an OPTIONAL override of articles.packing — effective
           packing for a variant is COALESCE(article_colors.packing,
-          products.packing). Carton/extra-pair display is then derived:
+          articles.packing). Carton/extra-pair display is then derived:
           cartons = total_pairs / packing, extra = total_pairs % packing.
 ---------------------------------------------------------------------------- */
 CREATE TABLE dbo.article_colors (
   variant_id INT IDENTITY(1,1) NOT NULL,
-  product_id INT           NOT NULL,
+  article_id INT           NOT NULL,
   color      NVARCHAR(50)  NOT NULL,                          -- TASK-03 "content color"
-  packing    INT           NULL,                              -- optional override of products.packing
+  packing    INT           NULL,                              -- optional override of articles.packing
   is_active  BIT          NOT NULL CONSTRAINT DF_variants_active  DEFAULT (1),
   created_at DATETIME2(0) NOT NULL CONSTRAINT DF_variants_created DEFAULT (SYSUTCDATETIME()),
   updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_variants_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_article_colors         PRIMARY KEY (variant_id),
-  CONSTRAINT UQ_product_colors_acolor  UNIQUE (product_id, color),
-  CONSTRAINT FK_product_colors_product FOREIGN KEY (product_id) REFERENCES dbo.products(product_id),
-  CONSTRAINT CK_product_colors_packing CHECK (packing IS NULL OR packing > 0)
+  CONSTRAINT UQ_article_colors_acolor  UNIQUE (article_id, color),
+  CONSTRAINT FK_article_colors_product FOREIGN KEY (article_id) REFERENCES dbo.articles(article_id),
+  CONSTRAINT CK_article_colors_packing CHECK (packing IS NULL OR packing > 0)
 );
-CREATE INDEX IX_product_colors_product ON dbo.article_colors(product_id);
+CREATE INDEX IX_article_colors_product ON dbo.article_colors(article_id);
 GO
 -- USED BY: TASK-03 "Add" dialog (new colour -> new row here, then logs a
 -- PRODUCTION stock movement against it); every sale/return line item
@@ -642,8 +688,8 @@ CREATE TABLE dbo.sale_bill_items (
 CREATE INDEX IX_sale_bill_items_bill    ON dbo.sale_bill_items(bill_id);
 CREATE INDEX IX_sale_bill_items_variant ON dbo.sale_bill_items(variant_id);
 GO
--- USED BY: Sale Bill line-item grid (JOIN back to article_colors + products
--- for display); TASK-12's "products previously bought by this customer"
+-- USED BY: Sale Bill line-item grid (JOIN back to article_colors + articles
+-- for display); TASK-12's "articles previously bought by this customer"
 -- dropdown reads this JOIN dbo.sale_bills for a given customer_id; on
 -- confirm, each row writes one negative SALE dbo.stock_movements row.
 -- ON DELETE CASCADE: deleting the parent bill deletes its lines with it.
@@ -790,7 +836,7 @@ CREATE TABLE dbo.sale_return_items (
 CREATE INDEX IX_sale_return_items_return  ON dbo.sale_return_items(return_id);
 CREATE INDEX IX_sale_return_items_variant ON dbo.sale_return_items(variant_id);
 GO
--- USED BY: Sale Return screen; TASK-12's "products previously bought"
+-- USED BY: Sale Return screen; TASK-12's "articles previously bought"
 -- dropdown reads sale_bill_items JOIN sale_bills for the chosen customer
 -- (no column of its own needed here); on confirm, posts Debit SALES /
 -- Credit CUSTOMER BA and writes positive SALE_RETURN stock_movements rows.
@@ -1035,7 +1081,7 @@ CREATE TABLE dbo.cheques (
   updated_at           DATETIME2(0)  NOT NULL CONSTRAINT DF_cheques_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_cheques         PRIMARY KEY (cheque_id),
   CONSTRAINT FK_cheques_bank    FOREIGN KEY (bank_id)    REFERENCES dbo.bank_accounts(bank_id),
-  CONSTRAINT FK_cheques_receipt FOREIGN KEY (receipt_id) REFERENCES dbo.receipts(receipt_id),
+  -- FK to receipts is added by ALTER after dbo.receipts exists (circular pair)
   CONSTRAINT CK_cheques_status  CHECK (cheque_status IN
         ('PENDING','DEPOSITED','ENDORSED','PARTIALLY_ENDORSED','CLEARED','BOUNCED')),
   -- bounced_date exists if and only if the cheque actually bounced (moved here from `receipts`, v4.1)
@@ -1106,6 +1152,19 @@ CREATE TABLE dbo.receipts (
 );
 CREATE INDEX IX_receipts_date     ON dbo.receipts(receipt_date);
 CREATE INDEX IX_receipts_customer ON dbo.receipts(customer_id, receipt_date);
+GO
+
+/* --------------------------------------------------------------------------
+   Deferred FK: dbo.cheques.receipt_id -> dbo.receipts.receipt_id
+
+   cheques and receipts reference each other (cheques.receipt_id and
+   receipts.cheque_id), so one side cannot be declared inline — whichever
+   table is created first would reference a table that does not exist yet and
+   the script would abort. Added here, once both exist.
+-------------------------------------------------------------------------- */
+ALTER TABLE dbo.cheques
+  ADD CONSTRAINT FK_cheques_receipt FOREIGN KEY (receipt_id)
+      REFERENCES dbo.receipts(receipt_id);
 GO
 -- USED BY: Receipt (Jamma) entry screen; Customer Account Ledger (JOIN back
 -- to dbo.customers via customer_id); on confirm posts two ledger rows —
