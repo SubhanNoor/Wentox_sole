@@ -1,7 +1,29 @@
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
-// The renderer talks to the backend over HTTP (http://127.0.0.1:<port>/api).
-// Expose only the API base URL; no Node APIs cross the bridge.
-contextBridge.exposeInMainWorld('wentox', {
-  apiBaseUrl: `http://127.0.0.1:${process.env.PORT || 4000}`,
-});
+// The renderer never talks HTTP — every backend feature is an IPC channel named
+// '<feature>:<action>' (see src/ipc/*.ipc.js). This exposes window.api.<feature>.<action>(payload)
+// as a thin wrapper over ipcRenderer.invoke, without hand-listing every action for every feature.
+const FEATURES = [
+  'auth', 'addas', 'businessAccounts', 'categories', 'chartAccounts', 'cities', 'customers',
+  'draftSaleBills', 'expenses', 'groupAccounts', 'products', 'receipts', 'reports', 'saleBills',
+  'saleReturns', 'stock', 'stores', 'subCustomers', 'vendors',
+];
+
+// window.api.<feature> stays camelCase (normal JS property access); the wire channel name is
+// kebab-case (sale-bills:list, not saleBills:list) to match every ipc/*.ipc.js registration.
+function camelToKebab(name) {
+  return name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+}
+
+const api = {};
+for (const feature of FEATURES) {
+  const channelPrefix = camelToKebab(feature);
+  api[feature] = new Proxy(
+    {},
+    {
+      get: (_target, action) => (payload) => ipcRenderer.invoke(`${channelPrefix}:${String(action)}`, payload),
+    },
+  );
+}
+
+contextBridge.exposeInMainWorld('api', api);

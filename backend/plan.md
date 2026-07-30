@@ -37,18 +37,43 @@ Action: once you supply the use case you said was missing, do one pass adding/an
 above (and the two removed workflows) directly in `use_cases.md`. This is a delta note, not a
 rewrite — 25 of 38 use cases are already ✅ and unaffected.
 
-## Step 2 — Engine switch (Postgres → MS SQL Server)
+## Step 2 — Engine switch (Postgres → MS SQL Server) — done
 
-1. `package.json`: remove `pg`, add `mssql` (Tedious driver).
-2. `src/config`: replace Postgres connection env vars with SQL Server ones (server, database,
-   user/password or Windows auth, port, encrypt/trustServerCertificate options).
-3. `src/db/pool.js`: rewrite `withTransaction()` around an `mssql` `ConnectionPool` +
+1. `package.json`: `pg` removed, `mssql` (Tedious driver) added.
+2. `src/config`: Postgres connection env vars replaced with SQL Server ones (server, database,
+   user/password, port, encrypt/trustServerCertificate options).
+3. `src/db/pool.js`: `withTransaction()` rewritten around an `mssql` `ConnectionPool` +
    `Transaction`/`Request`, matching the shape services already expect (open transaction, hand
    back a request-like object, commit/rollback on error).
-4. Archive `src/db/migrations/001_init.sql` (old Postgres schema — do not edit or apply it).
-5. Generate the new migration T-SQL directly from `database_schema_v4.3.md`'s DDL (30 tables,
-   meant to be used verbatim per that document) as the new `001_init.sql` (or `002_...` if the old
-   one is kept for reference instead of deleted — confirm with user which).
+4. The old Postgres `001_init.sql` and the once-planned `src/db/migrations/001_init.sql` T-SQL copy
+   are both gone — the schema source of truth is `database/schema.sql` at the repo root (T-SQL
+   generated from `database_schema_v4.3.md`, 39 tables), which the user maintains directly.
+   `src/db/migrate.js` applies it first, then any later numbered files under `src/db/migrations/`.
+
+## Step 5 — Transport switch (Express/HTTP → Electron IPC) — done
+
+The client wants a real desktop app, not something that looks like a local website — decided after
+Step 4 was already underway, so this step landed alongside early Milestone 1 work rather than
+before it.
+
+1. `package.json`: `express`, `cors`, `jsonwebtoken` removed — no HTTP server, no bearer token.
+2. `src/routes/` + `src/controllers/` deleted, replaced by `src/ipc/<feature>.ipc.js` (one file per
+   feature, registers `ipcMain.handle('<feature>:<action>', ...)` channels, calls the service layer
+   — same job `routes.js`+`controller.js` did, collapsed into one file since there's no URL routing
+   or req/res object to separate).
+3. `src/middleware/auth.js` (JWT verification) replaced by `src/ipc/session.js` — an in-memory
+   `{ userId, username, role }` set by `auth:login`, checked via `requireSession()`/`requireRole()`
+   in any handler that needs a logged-in user. `src/middleware/errorHandler.js` replaced by
+   `src/ipc/wrap.js`, which **resolves** `{ ok: true, data }` or `{ ok: false, error: { message,
+   code } }` — never throws across IPC, since Electron drops custom error properties (like
+   `ApiError`'s `.code`) off anything thrown through `ipcMain.handle`; found and fixed during the
+   Module 1.3 debug pass (see `PROGRESS.md`).
+4. `electron/main.js` now calls `src/ipc/index.js`'s registrar before opening the `BrowserWindow`
+   (previously it started the Express server); `electron/preload.js` exposes
+   `window.api.<feature>.<action>(payload)` via `contextBridge` instead of just an API base URL.
+5. JWT storage question (localStorage vs. `safeStorage`) is moot now — there's no token to store.
+   The renderer just calls `window.api.auth.login(...)` and holds the returned `{ role }` in memory/
+   React state for UI purposes (e.g. hiding admin-only nav items per UC-03).
 
 ## Step 3 — Re-check milestones against v4.3
 
@@ -61,14 +86,18 @@ backend layer — see `milestones/README.md`.
 
 ## Step 4 — Resume at Milestone 1 (Foundation & Auth)
 
-The actual next coding task: `users` table (with a `role` column — currently missing per
-architecture-v2 §0), JWT login/logout, seed script. Gated as always by the pre-edit-approval hook
+Modules 1.1 (bootstrap) and 1.2 (database: pool, migrate, seed) are done. Remaining: Module 1.3 —
+`auth:login`/`auth:logout`/`auth:update-credentials` over IPC, backed by `src/ipc/session.js`
+(no JWT — see Step 5). Gated as always by the pre-edit-approval hook
 (`.claude/hooks/pre-edit-approval.sh`) — plan the task, get approval, then implement; the Stop hook
 runs the `debugger` subagent afterward.
 
 ## Verification per step
 
-- Step 2: `npm run migrate` applies cleanly against a local SQL Server instance; `npm run seed`
-  inserts the admin user + CASH/SALES accounts + default store without error.
-- Step 4: `POST /api/auth/login` returns a JWT for the seeded admin; a protected route rejects
-  requests without a valid token.
+- Step 2: `npm run migrate` applies `database/schema.sql` cleanly against a local SQL Server
+  instance; `npm run seed` inserts the admin user + account classes/chart accounts + default store
+  without error.
+- Step 4: `auth:login` resolves with a session for the seeded admin; a channel guarded by
+  `requireSession()` rejects when called with no prior login.
+- Step 5: the app launches via `npm run dev`/`npm start` with no Express server involved; a call
+  from the renderer console (`window.api.cities.list()` once implemented) resolves via IPC.

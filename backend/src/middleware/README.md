@@ -1,7 +1,11 @@
-# middleware/ — Cross-cutting Express Middleware
+# middleware/ — Shared Helpers
+
+There's no Express middleware chain in this app (no HTTP layer at all) — this folder just holds
+small helpers shared across ipc handlers/services.
 
 | File | Purpose |
 | --- | --- |
-| `auth.js` | JWT guard. Reads `Authorization: Bearer <token>`, verifies with `JWT_SECRET`, puts the payload on `req.user`, 401s otherwise. Mounted in `routes/index.js` after the public `/auth` routes so everything else requires login. |
-| `errorHandler.js` | Central error formatter, attached **last** in `app.js`. Turns thrown errors (ideally `ApiError`) into `{ error: { message, code } }` with the right status; logs 500s. Controllers just `next(err)`. |
-| `validate.js` | Small helper: `validate(checkFn)` returns middleware that runs `checkFn(req.body)` and 400s if it throws. For quick shape checks on a route; full business validation lives in services. |
+| `validate.js` | `validate(payload, checkFn)` — runs `checkFn(payload)` and returns the cleaned payload, or lets `checkFn` throw `ApiError.badRequest(...)`. For quick shape checks in an ipc handler; full business validation lives in services. |
+
+Session/auth guards (`requireSession`, `requireRole`) live in `../ipc/session.js`, not here — they're
+specific to the IPC transport, unlike this folder's generic helpers.

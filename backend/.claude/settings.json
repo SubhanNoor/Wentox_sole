@@ -11,12 +11,29 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "agent",
+            "model": "sonnet",
+            "prompt": "The file just changed by this Write/Edit tool call is given in the tool input. If its path contains '/.claude/' or ends in '.md', do nothing and say nothing (tooling/docs, no debugger needed). Otherwise, first read backend/.claude/agents/debugger.md in full — that is your persona and workflow (senior SQL/Node.js/Electron debugging specialist); do not paraphrase from memory. Then act as it and review just this changed file for bugs, missing transactions on multi-write SQL, N+1 queries, missing indexes, missing `await`/blocking sync calls, IPC-serialization mistakes. Reproduce problems where possible, fix the root cause, and verify the fix. Report findings concisely per the debugger agent's 'Explain in plain language' step.",
+            "timeout": 120,
+            "statusMessage": "Running debugger review on the file just changed..."
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "agent",
-            "prompt": "Act as the `debugger` subagent defined in .claude/agents/debugger.md (senior SQL/Node.js debugging specialist). Review the code changes made during this session (check `git diff` / recently modified files) for bugs, root causes, missing transactions on multi-write SQL, N+1 queries, missing indexes, missing `await`/blocking sync calls, and any other issues per that agent's workflow. Reproduce problems where possible, fix the root cause (not just the symptom), and verify the fix. If no application code was changed this session (e.g. docs/planning only), say so and do nothing else. If a bug is found, report it to the user under short headings (What's wrong / Why it happens / Fix proposed) in plain language a non-coder can follow, then stop and wait for the user to say approved, not approved, or approved with changes before applying further fixes. If no bug is found, say so briefly in the same plain style."
+            "model": "sonnet",
+            "timeout": 300,
+            "prompt": "First, read the file backend/.claude/agents/debugger.md in full — that is your persona and workflow for this review (senior SQL/Node.js/Electron debugging specialist); do not paraphrase from memory, read it fresh each time in case it has changed. Then apply it: review the code changes made during this session (check `git diff` / recently modified files) for bugs, root causes, missing transactions on multi-write SQL, N+1 queries, missing indexes, missing `await`/blocking sync calls, IPC-serialization mistakes, and any other issue per that file's checklist. Only review actual application code (.js, .sql, config with logic) — never .md/docs, never .claude/ tooling. Reproduce problems where possible, fix the root cause (not just the symptom), and verify the fix. If no application code was changed this session, say so and do nothing else. If a bug is found, report it to the user under short headings (What's wrong / Why it happens / Fix proposed) in plain language a non-coder can follow, then stop and wait for the user to say approved, not approved, or approved with changes before applying further fixes. If no bug is found, say so briefly in the same plain style.",
+            "statusMessage": "Running debugger review on session changes..."
           }
         ]
       }
