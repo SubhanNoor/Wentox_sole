@@ -209,7 +209,7 @@ RECEIPTS (JAMMA)
         ──► sale bill amount stays unchanged
         ──► only reduces what the customer still needs to pay (payable amount)
         └── Worked example (new_features.md):
-            Sale Bill  = 1,020,000   (unchanged, already posted)
+            Sale Bill  = 1,020,000   (unchanged, already confirmed)
             Commission =    20,000   (recorded at payment time only)
             Customer pays =  1,000,000
             Balance = 0
