@@ -3,7 +3,7 @@ import { useApp } from '@/context/AppContext';
 import {
   ShoppingCart, Receipt, Package, FileText, Layers,
   Settings, LogOut, Lock, Menu, X, ChevronDown, MapPin, Home,
-  Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search
+  Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search, HardHat
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
@@ -45,6 +45,7 @@ const navSections: NavSection[] = [
       { page: 'setup-product', label: 'Product Details', icon: Folder },
       { page: 'setup-category', label: 'Categories', icon: Layers },
       { page: 'setup-vendor', label: 'Vendors', icon: Truck },
+      { page: 'setup-worker', label: 'Workers', icon: HardHat },
       { page: 'setup-customer', label: 'Customers', icon: Users },
       { page: 'setup-sub-cust', label: 'Sub Customers', icon: Users },
       { page: 'setup-city', label: 'City Creation', icon: MapPin },

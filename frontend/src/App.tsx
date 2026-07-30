@@ -12,6 +12,7 @@ import ExpensesPage from '@/pages/ExpensesPage';
 import ProductSetupPage from '@/pages/ProductSetupPage';
 import CategorySetupPage from '@/pages/CategorySetupPage';
 import VendorSetupPage from '@/pages/VendorSetupPage';
+import WorkerSetupPage from '@/pages/WorkerSetupPage';
 import CustomerSetupPage from '@/pages/CustomerSetupPage';
 import SubCustomerSetupPage from '@/pages/SubCustomerSetupPage';
 import CitySetupPage from '@/pages/CitySetupPage';
@@ -72,6 +73,8 @@ export default function App() {
       return <CategorySetupPage />;
     case 'setup-vendor':
       return <VendorSetupPage />;
+    case 'setup-worker':
+      return <WorkerSetupPage />;
     case 'setup-customer':
       return <CustomerSetupPage />;
     case 'setup-sub-cust':

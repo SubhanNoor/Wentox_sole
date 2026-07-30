@@ -337,7 +337,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       packing: product.packing,
       cartons: 0,
       pairs: 0,
-      rate: product.costPrice + 50,
+      rate: product.salePrice,
       discountPercent: 0,
       discountValue: 0,
       value: 0
@@ -364,7 +364,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
         if (product) {
           newItem.productName = product.name;
           newItem.packing = product.packing;
-          newItem.rate = product.costPrice + 50; // Set a default markup rate
+          newItem.rate = product.salePrice;
           newItem.pairs = newItem.cartons * product.packing;
         } else {
           newItem.productName = '';

@@ -455,7 +455,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         if (product) {
           newItem.productName = product.name;
           newItem.packing = product.packing;
-          newItem.rate = product.costPrice + 50; // Set a default markup rate
+          newItem.rate = product.salePrice;
           newItem.pairs = newItem.cartons * product.packing;
         } else {
           newItem.productName = '';

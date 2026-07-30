@@ -1132,7 +1132,7 @@ export default function ReportStockPage() {
                       const nextId = String(Math.max(0, ...state.products.map(p => parseInt(p.id, 10) || 0)) + 1);
                       const newProduct = sibling
                         ? { ...sibling, id: nextId, name: `${selectedGroup.code} ${selectedGroup.commonName} ${addColor.trim()}`.trim(), color: addColor.trim(), stock: increment }
-                        : { id: nextId, name: `${selectedGroup.code} ${selectedGroup.commonName} ${addColor.trim()}`.trim(), categoryId: selectedGroup.categoryId, vendorId: selectedGroup.vendorId, batchNo: 0, packing: selectedGroup.packing || 12, costPrice: 0, labour: 0, proiCost: 0, soleStich: 0, pasting: 0, trim: 0, finishing: 0, socksPasting: 0, dc: 0, sockStich: 0, sheet: 0, stubble: 0, bottom: 0, p1: 0, p2: 0, na: 0, color: addColor.trim(), stock: increment };
+                        : { id: nextId, name: `${selectedGroup.code} ${selectedGroup.commonName} ${addColor.trim()}`.trim(), categoryId: selectedGroup.categoryId, vendorId: selectedGroup.vendorId, batchNo: 0, packing: selectedGroup.packing || 12, salePrice: 0, cutting: 0, edging: 0, upStitch: 0, bending: 0, stubbleDori: 0, shapeForm: 0, chipkai: 0, bottom: 0, machine: 0, trimming: 0, sockStitch: 0, finish: 0, color: addColor.trim(), stock: increment };
 
                       dispatch({ type: 'ADD_PRODUCT', product: newProduct });
                       dispatch({

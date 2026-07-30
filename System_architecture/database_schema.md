@@ -1,7 +1,25 @@
 # WentoX — Database Schema (Microsoft SQL Server)
 
-**Version 4.2 — tentative, for review before the migration script is written.**
+**Version 4.4 — tentative, for review before the migration script is written.**
 
+> **v4.4 changes:** adds **`workers`** — the third instance of the vendor/customer pattern, a profile
+> plus a `ba_id` under a new **WORKER WAGES** chart account (§4.5). Payment Trail's "Employees" row
+> previously summed an empty set and always read `-`. WORKER WAGES is a **LIABILITY**, like
+> VENDORS ACCOUNTS and unlike the old LABOUR WAGES CHARGES expense head it replaces, because a
+> worker can be owed money between doing the work and being paid — an expense account cannot carry
+> that balance. Workers get their own id because wages will be piece-rate off the article stage
+> costs, and the work rows that calculation needs must reference a worker (open question 9). This is
+> also the head that grows into the hundreds, so §3.2's 4-digit serial is what keeps it viable.
+> Adds **WAGES EXPENSE** as the matching cost head, so a wage has both sides to post against.
+> 31 tables.
+>
+> **v4.3 changes:** replaces the `articles` cost breakdown. The 15 legacy columns — including
+> `p1`/`p2`/`na`, which nobody could explain — become the twelve manufacturing stages the client
+> actually runs (§4.8). Crucially these are **never aggregated**: no total-cost column, and the two
+> hand-written summations the form carried are deleted, not updated. `cost_price` is replaced by
+> **`sale_price`**, typed in rather than derived, and now the single price a sale line defaults
+> from — removing a hardcoded `cost_price + 50` markup from three call sites. Closes open question 4.
+>
 > **v4.2 changes:** reconciled against a screenshot of the client's **legacy** Business Accounts
 > Ledger. Adds §3.2, the account-code composition rule that was missing entirely — and widens the
 > business-account serial to 4 digits, because the frontend's 2 digits cap a chart account at 99
@@ -21,7 +39,7 @@ client decisions recorded in §2 below. The previous v3 schema, `use_cases.md`, 
 `new_features-v1.0.md` and the applied PostgreSQL migration `backend/src/db/migrations/001_init.sql`
 were **not** used as inputs — they are known-stale and are being regenerated downstream of this file.
 
-30 tables. Normalised to 3NF. Every money column is `DECIMAL`, never `FLOAT`/`REAL`.
+31 tables. Normalised to 3NF. Every money column is `DECIMAL`, never `FLOAT`/`REAL`.
 
 > **Status of this document:** no database exists yet — nothing here has been created in SQL. The
 > frontend has, however, already built against this shape (Milestones 2–6) using in-memory demo
@@ -254,7 +272,7 @@ enforce with a foreign key — a typo could point a ledger row at a nonexistent 
 would object. This version uses **two nullable FK columns, `ac_id` and `ba_id`, with a `CHECK` that
 exactly one is populated**. Same flexibility, real referential integrity.
 
-### 4.5 A Vendor and a Customer are both a `business_accounts` row plus a profile
+### 4.5 Vendors, customers and workers are each a `business_accounts` row plus a profile
 
 Resolving §10 gap 2: a vendor must be a single source of truth shared by Purchase (which needs
 `vendor_id`) and Expense-as-vendor-payment (which needs `ba_id`). So `vendors` carries a unique
@@ -264,6 +282,27 @@ created — one form, no separate account-setup step exposed to the user.
 `customers` follows the identical pattern under the reserved **CUSTOMERS ACCOUNTS** chart account.
 `customers.ba_id` is **nullable**, and that is precisely what drives TASK-05: when a customer is
 selected on a Sale Bill and `ba_id IS NULL`, the UI shows *"Please add customer account first"*.
+
+**`workers` is the third instance**, under **WORKER WAGES** — and, like vendors, that container is
+a **LIABILITY**, not an expense head. The distinction is load-bearing: a worker can be owed money
+between doing the work and being paid, and an account under EXPENSES can only accumulate what was
+paid out, never a balance due. Payment Trail's "Employees" row sums payments made against these
+accounts, and read zero until workers existed. A worker carries
+`worker_id`, `name`, `phone`, `city_id` and a unique `ba_id`; paying one is an ordinary Expense
+against that account, exactly as vendor payments are.
+
+The cost side lives separately in **WAGES EXPENSE** (an EXPENSES chart account): WORKER WAGES is
+what you *owe* a worker, WAGES EXPENSE is what the labour *cost* you. That is the same split
+vendors have between their payable and PURCHASES.
+
+Workers get their own id rather than being anonymous accounts because wages are **piece-rate**: an
+article's stage cost (Cutting, Edging, Up Stitch, …) times the quantity that worker completed. The
+work rows that calculation needs will reference `worker_id`. Those rows are **not yet designed** —
+see §12 open question 10.
+
+> **Numbering matters more here than anywhere else.** Worker accounts are the one head that grows
+> into the hundreds — the client's legacy data holds 218+ under Employees. §3.2's 4-digit serial
+> (`2200010001`) is what makes that possible; a 2-digit serial would cap the head at 99.
 
 ### 4.6 Role restriction is data-driven, not hardcoded
 
@@ -275,6 +314,26 @@ the middleware filters on the flag. Adding a future restricted account is then a
 
 Financial fields are editable only while `UNPOSTED`. `bilty_no` and `adda_id` may be updated on
 posted bills, since they are non-financial dispatch metadata (§9's Search & Bilty Adda Updation).
+
+### 4.8 Article costs are per-stage and never aggregated
+
+`articles` carries twelve manufacturing-stage costs — Cutting, Edging, Up Stitch, Bending,
+Stubble/Dori, Shape Form, Chipkai, Bottom, Machine, Trimming, Sock Stitch, Finish. These replace the
+legacy set, which included three columns (`p1`, `p2`, `na`) nobody could explain.
+
+**Client-confirmed: nothing sums them.** They are entered by hand and consumed individually
+downstream. There is deliberately no total-cost column, no computed column, and no "total cost"
+figure in the UI — the two hand-written summations the form used to carry were removed rather than
+updated.
+
+Selling price is entirely separate: **`sale_price`** is typed in, never derived from the stage
+costs, and is the single price on an article. Sale Bill and Sale Return default a line's rate from
+it, replacing an arbitrary hardcoded `cost_price + 50` markup. The old `cost_price` column is gone —
+`sale_price` supersedes it.
+
+Practical consequence: a stage cost and the sale price are unrelated numbers. Nothing validates that
+the price covers the costs, and no margin is computed anywhere. If margin reporting is wanted later,
+that is a new requirement, not something the schema quietly already supports.
 
 ---
 
@@ -463,6 +522,22 @@ CREATE TABLE dbo.vendors (
 -- Filtered unique: one vendor per business account, but many vendors may await backfill (NULL).
 CREATE UNIQUE INDEX UQ_vendors_ba ON dbo.vendors(ba_id) WHERE ba_id IS NOT NULL;
 
+CREATE TABLE dbo.workers (                                    -- §4.5, third instance of the pattern
+  worker_id  INT IDENTITY(1,1) NOT NULL,
+  name       NVARCHAR(100) NOT NULL,
+  phone      VARCHAR(30)   NULL,
+  city_id    INT           NULL,   -- the legacy Employees ledger displays City
+  ba_id      INT           NULL,   -- auto-created under WORKER WAGES (a liability) on worker create
+  is_active  BIT          NOT NULL CONSTRAINT DF_workers_active  DEFAULT (1),
+  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_workers_created DEFAULT (SYSUTCDATETIME()),
+  updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_workers_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_workers      PRIMARY KEY (worker_id),
+  CONSTRAINT FK_workers_ba   FOREIGN KEY (ba_id)   REFERENCES dbo.business_accounts(ba_id),
+  CONSTRAINT FK_workers_city FOREIGN KEY (city_id) REFERENCES dbo.cities(city_id)
+);
+CREATE UNIQUE INDEX UQ_workers_ba  ON dbo.workers(ba_id) WHERE ba_id IS NOT NULL;
+CREATE INDEX        IX_workers_name ON dbo.workers(name);
+
 CREATE TABLE dbo.customers (
   customer_id INT IDENTITY(1,1) NOT NULL,
   name        NVARCHAR(150) NOT NULL,
@@ -511,23 +586,23 @@ CREATE TABLE dbo.articles (
   vendor_id   INT           NULL,                             -- TASK-02 UPDATE: filter ledger by company/vendor
   batch_no    VARCHAR(50)   NULL,
   packing     INT           NOT NULL,                         -- default pairs per carton (usually 12)
-  -- cost breakdown (names kept verbatim from the legacy system)
-  cost_price    DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_cost   DEFAULT (0),
-  labour        DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_lab    DEFAULT (0),
-  proi_cost     DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_proi   DEFAULT (0),
-  sole_stich    DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_solest DEFAULT (0),
-  pasting       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_past   DEFAULT (0),
-  trim          DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_trim   DEFAULT (0),
-  finishing     DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_fin    DEFAULT (0),
-  socks_pasting DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_sockp  DEFAULT (0),
-  dc            DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_dc     DEFAULT (0),
-  sock_stich    DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_sockst DEFAULT (0),
-  sheet         DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_sheet  DEFAULT (0),
-  stubble       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_stub   DEFAULT (0),
+  -- The one price on an article: typed in by hand, never computed from the
+  -- stage costs below. Every sale line defaults its rate from this.
+  sale_price    DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_sale   DEFAULT (0),
+  -- Manufacturing cost per stage, in the order they appear on the form.
+  -- Recorded individually and deliberately NEVER aggregated — see §4.8.
+  cutting       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_cut    DEFAULT (0),
+  edging        DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_edge   DEFAULT (0),
+  up_stitch     DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_upst   DEFAULT (0),
+  bending       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_bend   DEFAULT (0),
+  stubble_dori  DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_stub   DEFAULT (0),
+  shape_form    DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_shape  DEFAULT (0),
+  chipkai       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_chip   DEFAULT (0),
   bottom        DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_bot    DEFAULT (0),
-  p1            DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_p1     DEFAULT (0),
-  p2            DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_p2     DEFAULT (0),
-  na            DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_na     DEFAULT (0),
+  machine       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_mach   DEFAULT (0),
+  trimming      DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_trim   DEFAULT (0),
+  sock_stitch   DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_sockst DEFAULT (0),
+  finish        DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_fin    DEFAULT (0),
   is_active   BIT          NOT NULL CONSTRAINT DF_articles_active  DEFAULT (1),
   created_at  DATETIME2(0) NOT NULL CONSTRAINT DF_articles_created DEFAULT (SYSUTCDATETIME()),
   updated_at  DATETIME2(0) NOT NULL CONSTRAINT DF_articles_updated DEFAULT (SYSUTCDATETIME()),
@@ -1050,6 +1125,8 @@ transaction. `CUSTOMER BA` / `VENDOR BA` mean the party's `business_accounts` ro
 | Purchase Return (`total_value`) | VENDOR BA | PURCHASES chart account | negative `PURCHASE_RETURN` vendor-stock movements |
 | Receipt — amount | CASH or BANK chart account | CUSTOMER BA | — |
 | Receipt — commission (§7) | COMMISSION ALLOWED chart account | CUSTOMER BA | separate ledger row, `source_type='COMMISSION'` |
+| **Wage earned** (piece-rate) | WAGES EXPENSE chart account | WORKER BA | mirrors Purchase; not built yet, see open q.9 |
+| **Wage paid** | WORKER BA | CASH or BANK chart account | an Expense against the worker's account |
 | Expense | Expense head BA | CASH or BANK chart account | — |
 | Cheque allocation — VENDOR_PAYMENT | VENDOR BA | CHEQUES IN HAND | `source_type='CHEQUE_ALLOCATION'` |
 | Cheque allocation — EXPENSE_PAYMENT | Target BA | CHEQUES IN HAND | `source_type='CHEQUE_ALLOCATION'` |
@@ -1135,8 +1212,8 @@ by convention.
 |---|---|
 | User | One `ADMIN` user (bcrypt hash) |
 | Group accounts | `ASSETS` (1000), `LIABILITY` (2000), `INCOME` (3000), `EXPENSES` (4000) |
-| Chart — reserved | **CUSTOMERS ACCOUNTS** (parent of every customer BA), **VENDORS ACCOUNTS** (parent of every vendor BA, §10 gap 2) |
-| Chart — posting targets | **CASH IN HAND**, **SALES**, **PURCHASES**, **COMMISSION ALLOWED**, **CHEQUES IN HAND** |
+| Chart — reserved (parents) | **CUSTOMERS ACCOUNTS** `110001`, **VENDORS ACCOUNTS** `210001` (§10 gap 2), **WORKER WAGES** `220001` — a LIABILITY (§4.5). Every customer/vendor/worker BA hangs off one of these. |
+| Chart — posting targets | **CASH IN HAND** `120001`, **CHEQUES IN HAND** `120003`, **SALES** `310001`, **WAGES EXPENSE** `410001`, **PURCHASES** `430001`, **COMMISSION ALLOWED** `450001`. Ledger entries post to these directly (`ledger_entries.ac_id`); they carry no business accounts. |
 | Chart — Payment Trail (TASK-17) | Business Running Expenses, **Cash at Banks**, **Directors Expenses - Drawings**, Employees, Vendors - Suppliers |
 | Restricted flag (§8/TASK-14) | `is_restricted = 1` on **Cash at Banks** and **Directors Expenses - Drawings** |
 | Store | One default store (single-store business) |
@@ -1188,7 +1265,7 @@ EXEC sp_executesql @sql;
 
 ---
 
-## 10. Table inventory (30)
+## 10. Table inventory (31)
 
 | # | Table | Purpose | New |
 |---|---|---|---|
@@ -1205,23 +1282,24 @@ EXEC sp_executesql @sql;
 | 11 | `chart_of_accounts` | now parented by group (TASK-11) | reshaped |
 | 12 | `business_accounts` | leaf ledger accounts | reshaped |
 | 13 | `vendors` | + `ba_id` link (§10 gap 2) | reshaped |
-| 14 | `customers` | + `ba_id`, `region_id` | reshaped |
-| 15 | `sub_customers` | parent FK removed (TASK-06) | reshaped |
-| 16 | `sale_bills` | + `due_date`, `main_ac_id` | |
-| 17 | `sale_bill_items` | now keyed on `variant_id` | |
-| 18 | `sale_returns` | | |
-| 19 | `sale_return_items` | | |
-| 20 | `purchases` | TASK-01 | ✅ |
-| 21 | `purchase_items` | material lines, `material_id` FK | ✅ |
-| 22 | `purchase_returns` | §10 gap 1 | ✅ |
-| 23 | `purchase_return_items` | | ✅ |
-| 24 | `receipts` | + commission + cheque fields | |
-| 25 | `expenses` | also the vendor-payment path | |
-| 26 | `stock_movements` | pairs ledger, keyed on variant | reshaped |
-| 27 | `vendor_stock_movements` | material ledger (§14) | ✅ |
-| 28 | `ledger_entries` | real FKs instead of polymorphic id | reshaped |
-| 29 | `cheque_allocations` | §13 — cheque endorsement (built in frontend M6) | ✅ |
-| 30 | `alert_dismissals` | §12 — alert dismissals (built in frontend M6) | ✅ |
+| 14 | `workers` | piece-rate workers under WORKER WAGES, a liability (§4.5) | ✅ |
+| 15 | `customers` | + `ba_id`, `region_id` | reshaped |
+| 16 | `sub_customers` | parent FK removed (TASK-06) | reshaped |
+| 17 | `sale_bills` | + `due_date`, `main_ac_id` | |
+| 18 | `sale_bill_items` | now keyed on `variant_id` | |
+| 19 | `sale_returns` | | |
+| 20 | `sale_return_items` | | |
+| 21 | `purchases` | TASK-01 | ✅ |
+| 22 | `purchase_items` | material lines, `material_id` FK | ✅ |
+| 23 | `purchase_returns` | §10 gap 1 | ✅ |
+| 24 | `purchase_return_items` | | ✅ |
+| 25 | `receipts` | + commission + cheque fields | |
+| 26 | `expenses` | also the vendor-payment path | |
+| 27 | `stock_movements` | pairs ledger, keyed on variant | reshaped |
+| 28 | `vendor_stock_movements` | material ledger (§14) | ✅ |
+| 29 | `ledger_entries` | real FKs instead of polymorphic id | reshaped |
+| 30 | `cheque_allocations` | §13 — cheque endorsement (built in frontend M6) | ✅ |
+| 31 | `alert_dismissals` | §12 — alert dismissals (built in frontend M6) | ✅ |
 
 **Removed:** `control_accounts` (TASK-11), `products` (superseded by `articles` + `article_colors`).
 
@@ -1264,8 +1342,10 @@ Called out so the review is against a known baseline rather than a silent reinte
    `ledger_entries` was, if you want the integrity guarantee there too.
 3. **Which chart account is CASH vs BANK for each payment mode?** Posting needs a rule mapping
    `payment_mode` (CASH/CHEQUE/ONLINE) to a specific chart account before the first receipt can post.
-4. **`articles.p1`, `p2`, `na`** — legacy cost-column names of unknown meaning, carried over
-   verbatim. Worth renaming once someone can say what they hold.
+4. ~~**`articles.p1`, `p2`, `na`**~~ — **RESOLVED**: the client replaced the whole legacy cost set
+   with the twelve stages their process actually has (§4.8), so the three unexplained columns are
+   simply deleted rather than renamed. *Still open:* what consumes the individual stage costs — they
+   are captured but nothing reads them yet.
 5. **Sale Return has no `due_date`** on the assumption a return is never a payable. Confirm.
 6. **Multi-user audit:** `created_by` is captured but there is no `updated_by` or change history.
    Sufficient for a single-site desktop app; say if an audit trail is wanted.
@@ -1276,7 +1356,18 @@ Called out so the review is against a known baseline rather than a silent reinte
    filter, nothing more. No fiscal-year table, no closing, no carry-forward, no year in document
    numbers. *Frontend follow-up, not schema:* reports offer Overall / By Month / Between Two Dates
    but no **annual** option, which the client expects — a filter to add in a later milestone.
-9. **Bank accounts are still unmodelled.** There is no list of the business's own bank accounts and
+9. **How are piece-rate wages recorded?** Workers exist and the article stage costs exist, but
+   nothing joins them. A wage run needs work rows — *worker × article × stage × quantity × date* —
+   which are **not designed yet**: open questions include whether a row is per worker per day or per
+   production batch, whether the rate is snapshotted at entry (so later rate changes don't rewrite
+   past wages — it should be), and whether the resulting payment posts automatically as an Expense
+   or is entered by hand.
+   ~~*Forced decision: no expense account to debit when a wage is earned.*~~ — **RESOLVED**:
+   **WAGES EXPENSE** (§8) is the cost head, giving wages the same two-sided shape vendors already
+   have — `Dr WAGES EXPENSE / Cr worker payable` on earning, `Dr worker payable / Cr cash` on
+   payment. What remains open is the work-row design itself, above. This is the next real piece of
+   work.
+10. **Bank accounts are still unmodelled.** There is no list of the business's own bank accounts and
    nothing ties a receipt, expense or cheque deposit to a specific bank, so "Cash at Banks" can only
    ever be one blended figure that cannot be reconciled against a statement. The proposal is a
    `bank_accounts` profile table plus `ba_id` into `business_accounts` — mirroring `vendors` and

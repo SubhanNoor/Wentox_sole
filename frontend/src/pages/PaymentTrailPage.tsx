@@ -9,7 +9,7 @@ import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 const CATEGORY_CHART_MAP: { label: string; chartId: string }[] = [
   { label: 'Business Running Expenses', chartId: '420001' },
   { label: 'Directors Expenses - Drawings', chartId: '440001' },
-  { label: 'Employees', chartId: '410001' },
+  { label: 'Employees', chartId: '220001' },
   { label: 'Vendors - Suppliers', chartId: '210001' }
 ];
 

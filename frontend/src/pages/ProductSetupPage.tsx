@@ -1,8 +1,16 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import type { Product } from '@/types';
+import type { Product, ProductCosts, CostFieldKey } from '@/types';
+import { COST_FIELDS } from '@/types';
 import { Plus, Trash2, Edit2, Hammer, Settings, Search, ArrowLeft } from 'lucide-react';
+
+/** All twelve stage costs at zero — used to reset the form and to read a product in. */
+const emptyCosts = (): ProductCosts =>
+  Object.fromEntries(COST_FIELDS.map(f => [f.key, 0])) as ProductCosts;
+
+const costsFromProduct = (prod: Product): ProductCosts =>
+  Object.fromEntries(COST_FIELDS.map(f => [f.key, prod[f.key] || 0])) as ProductCosts;
 
 export default function ProductSetupPage() {
   const { state, dispatch } = useApp();
@@ -22,49 +30,15 @@ export default function ProductSetupPage() {
   const [vendorId, setVendorId] = useState('');
   const [batchNo, setBatchNo] = useState(0);
   const [packing, setPacking] = useState(12); // default 12 pairs per carton
-  const [costPrice, setCostPrice] = useState(0);
-  
-  // Cost breakdown
-  const [labour, setLabour] = useState(0);
-  const [proiCost, setProiCost] = useState(0);
-  const [soleStich, setSoleStich] = useState(0);
-  const [pasting, setPasting] = useState(0);
-  const [trim, setTrim] = useState(0);
-  const [finishing, setFinishing] = useState(0);
-  const [socksPasting, setSocksPasting] = useState(0);
-  const [dc, setDc] = useState(0);
-  const [sockStich, setSockStich] = useState(0);
-  const [sheet, setSheet] = useState(0);
-  const [stubble, setStubble] = useState(0);
-  const [bottom, setBottom] = useState(0);
-  const [p1, setP1] = useState(0);
-  const [p2, setP2] = useState(0);
-  const [na, setNa] = useState(0);
+  const [salePrice, setSalePrice] = useState(0);
 
-  // Live calculated total cost for the form
-  const calculatedTotalCost = useMemo(() => {
-    return (
-      (costPrice || 0) +
-      (labour || 0) +
-      (proiCost || 0) +
-      (soleStich || 0) +
-      (pasting || 0) +
-      (trim || 0) +
-      (finishing || 0) +
-      (socksPasting || 0) +
-      (dc || 0) +
-      (sockStich || 0) +
-      (sheet || 0) +
-      (stubble || 0) +
-      (bottom || 0) +
-      (p1 || 0) +
-      (p2 || 0) +
-      (na || 0)
-    );
-  }, [
-    costPrice, labour, proiCost, soleStich, pasting, trim, finishing, 
-    socksPasting, dc, sockStich, sheet, stubble, bottom, p1, p2, na
-  ]);
+  // The twelve stage costs, held as one object rather than twelve useStates so
+  // the field list lives only in COST_FIELDS. They are recorded per stage and
+  // deliberately never summed — each is consumed on its own elsewhere.
+  const [costs, setCosts] = useState<ProductCosts>(emptyCosts);
+
+  const setCost = (key: CostFieldKey, value: number) =>
+    setCosts(prev => ({ ...prev, [key]: value }));
 
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -79,14 +53,8 @@ export default function ProductSetupPage() {
     setVendorId(state.vendors[0]?.id || '');
     setBatchNo(100);
     setPacking(12);
-    setCostPrice(0);
-    
-    // reset breakdown
-    setLabour(0); setProiCost(0); setSoleStich(0); setPasting(0);
-    setTrim(0); setFinishing(0); setSocksPasting(0); setDc(0);
-    setSockStich(0); setSheet(0); setStubble(0); setBottom(0);
-    setP1(0); setP2(0); setNa(0);
-    
+    setSalePrice(0);
+    setCosts(emptyCosts());
     setErrorMsg('');
     setActiveTab('form');
   };
@@ -101,24 +69,8 @@ export default function ProductSetupPage() {
     setVendorId(prod.vendorId);
     setBatchNo(prod.batchNo || 0);
     setPacking(prod.packing || 12);
-    setCostPrice(prod.costPrice || 0);
-    
-    setLabour(prod.labour || 0);
-    setProiCost(prod.proiCost || 0);
-    setSoleStich(prod.soleStich || 0);
-    setPasting(prod.pasting || 0);
-    setTrim(prod.trim || 0);
-    setFinishing(prod.finishing || 0);
-    setSocksPasting(prod.socksPasting || 0);
-    setDc(prod.dc || 0);
-    setSockStich(prod.sockStich || 0);
-    setSheet(prod.sheet || 0);
-    setStubble(prod.stubble || 0);
-    setBottom(prod.bottom || 0);
-    setP1(prod.p1 || 0);
-    setP2(prod.p2 || 0);
-    setNa(prod.na || 0);
-    
+    setSalePrice(prod.salePrice || 0);
+    setCosts(costsFromProduct(prod));
     setErrorMsg('');
     setActiveTab('form');
   };
@@ -139,22 +91,8 @@ export default function ProductSetupPage() {
       vendorId,
       batchNo,
       packing,
-      costPrice,
-      labour,
-      proiCost,
-      soleStich,
-      pasting,
-      trim,
-      finishing,
-      socksPasting,
-      dc,
-      sockStich,
-      sheet,
-      stubble,
-      bottom,
-      p1,
-      p2,
-      na,
+      salePrice,
+      ...costs,
       stock: selectedProductId ? state.products.find(p => p.id === id)?.stock || 0 : 0
     };
 
@@ -283,15 +221,14 @@ export default function ProductSetupPage() {
                     <th className="p-3">Category</th>
                     <th className="p-3">Vendor</th>
                     <th className="p-3 text-center">Packing (Pairs)</th>
-                    <th className="p-3 text-right">Basic Cost</th>
-                    <th className="p-3 text-right">Total Cost</th>
+                    <th className="p-3 text-right">Sale Price</th>
                     <th className="p-3 text-center" style={{ width: '80px' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredProducts.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="text-center p-8 text-slate-400">
+                      <td colSpan={7} className="text-center p-8 text-slate-400">
                         No registered products found.
                       </td>
                     </tr>
@@ -299,25 +236,6 @@ export default function ProductSetupPage() {
                     filteredProducts.map(prod => {
                       const catName = state.categories.find(c => c.id === prod.categoryId)?.name || 'General';
                       const vendorName = state.vendors.find(v => v.id === prod.vendorId)?.name || 'N/A';
-                      const totalCost = (
-                        (prod.costPrice || 0) +
-                        (prod.labour || 0) +
-                        (prod.proiCost || 0) +
-                        (prod.soleStich || 0) +
-                        (prod.pasting || 0) +
-                        (prod.trim || 0) +
-                        (prod.finishing || 0) +
-                        (prod.socksPasting || 0) +
-                        (prod.dc || 0) +
-                        (prod.sockStich || 0) +
-                        (prod.sheet || 0) +
-                        (prod.stubble || 0) +
-                        (prod.bottom || 0) +
-                        (prod.p1 || 0) +
-                        (prod.p2 || 0) +
-                        (prod.na || 0)
-                      );
-
                       return (
                         <tr
                           key={prod.id}
@@ -344,8 +262,7 @@ export default function ProductSetupPage() {
                           <td className="p-3 text-slate-500 font-medium">{catName}</td>
                           <td className="p-3 text-slate-600 font-semibold">{vendorName}</td>
                           <td className="p-3 text-center font-semibold text-slate-700">{prod.packing}</td>
-                          <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(prod.costPrice)}</td>
-                          <td className="p-3 text-right font-bold text-amber-800">{formatCurrency(totalCost)}</td>
+                          <td className="p-3 text-right font-bold text-amber-800">{formatCurrency(prod.salePrice)}</td>
                           <td className="p-3 text-center">
                             <div className="flex items-center justify-center gap-2">
                               <button
@@ -395,18 +312,6 @@ export default function ProductSetupPage() {
 
             <form onSubmit={handleSaveProduct} className="flex flex-col gap-6">
               
-              {/* Calculated Total Cost Summary Widget */}
-              <div className="p-4 rounded-xl border bg-[#111c2a] text-white flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-sm">
-                <div>
-                  <span className="block text-xs uppercase tracking-wider text-slate-300 font-semibold mb-0.5">Live Calculated Total Cost:</span>
-                  <span className="text-2xl font-bold text-[#B08D57]">{formatCurrency(calculatedTotalCost)}</span>
-                </div>
-                <div className="text-left sm:text-right text-xs text-slate-400">
-                  <div>Basic Material Cost: <span className="text-white font-semibold">{formatCurrency(costPrice)}</span></div>
-                  <div>Manufacturing Breakdown: <span className="text-white font-semibold">{formatCurrency(calculatedTotalCost - costPrice)}</span></div>
-                </div>
-              </div>
-
               {/* Basic Details */}
               <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-4" style={{ borderColor: 'var(--border-color)' }}>
                 <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
@@ -489,13 +394,14 @@ export default function ProductSetupPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Basic Cost Price (Rs)</label>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Sale Price (Rs)</label>
                     <input
                       type="number"
-                      value={costPrice || ''}
-                      onChange={e => setCostPrice(parseInt(e.target.value) || 0)}
+                      value={salePrice || ''}
+                      onChange={e => setSalePrice(parseInt(e.target.value) || 0)}
                       className="soleria-input font-semibold text-slate-800"
                     />
+                    <p className="text-[10px] text-slate-400 mt-0.5">Used as the default rate when this article is sold</p>
                   </div>
                 </div>
               </div>
@@ -507,66 +413,17 @@ export default function ProductSetupPage() {
                 </div>
                 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">Labour Cost</label>
-                    <input type="number" value={labour || ''} onChange={e => setLabour(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">Proi Cost</label>
-                    <input type="number" value={proiCost || ''} onChange={e => setProiCost(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">Sole Stitch</label>
-                    <input type="number" value={soleStich || ''} onChange={e => setSoleStich(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">Pasting</label>
-                    <input type="number" value={pasting || ''} onChange={e => setPasting(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">Trim Process</label>
-                    <input type="number" value={trim || ''} onChange={e => setTrim(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">Finishing</label>
-                    <input type="number" value={finishing || ''} onChange={e => setFinishing(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">Socks Pasting</label>
-                    <input type="number" value={socksPasting || ''} onChange={e => setSocksPasting(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">DC Charges</label>
-                    <input type="number" value={dc || ''} onChange={e => setDc(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">Sock Stitch</label>
-                    <input type="number" value={sockStich || ''} onChange={e => setSockStich(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">Sheet Material</label>
-                    <input type="number" value={sheet || ''} onChange={e => setSheet(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">Stubble Cost</label>
-                    <input type="number" value={stubble || ''} onChange={e => setStubble(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">Bottom Cost</label>
-                    <input type="number" value={bottom || ''} onChange={e => setBottom(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">P1 Cost</label>
-                    <input type="number" value={p1 || ''} onChange={e => setP1(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">P2 Cost</label>
-                    <input type="number" value={p2 || ''} onChange={e => setP2(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-600 mb-0.5">NA Cost</label>
-                    <input type="number" value={na || ''} onChange={e => setNa(parseInt(e.target.value) || 0)} className="soleria-input text-xs font-semibold" />
-                  </div>
+                  {COST_FIELDS.map(field => (
+                    <div key={field.key}>
+                      <label className="block text-xs text-slate-600 mb-0.5">{field.label}</label>
+                      <input
+                        type="number"
+                        value={costs[field.key] || ''}
+                        onChange={e => setCost(field.key, parseInt(e.target.value) || 0)}
+                        className="soleria-input text-xs font-semibold"
+                      />
+                    </div>
+                  ))}
                 </div>
               </div>
 

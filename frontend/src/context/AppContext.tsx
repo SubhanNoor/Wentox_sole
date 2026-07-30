@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useReducer } from 'react';
 import type { ReactNode } from 'react';
 import type {
-  City, Region, Store, Adda, Vendor, ProductCategory, Product,
+  City, Region, Store, Adda, Vendor, Worker, ProductCategory, Product,
   GroupAccount, ChartOfAccount, BusinessAccount,
   Customer, SubCustomer, SaleBill, SaleReturn, Purchase, PurchaseReturn,
   Receipt, Expense, ProductionLog, UserRole,
@@ -50,6 +50,16 @@ const demoVendors: Vendor[] = [
   { id: 'v3', name: 'Star Sole Materials', phone: '0321-7654321', city: 'Karachi', regionId: 'rg3', baId: '21000103' },
 ];
 
+// Workers are paid piece-rate per manufacturing stage. Their ledger accounts sit
+// under WORKER WAGES (220001) — a LIABILITY, like vendors, because a worker can
+// be owed money between doing the work and being paid. Payment Trail's
+// "Employees" row sums payments made against these accounts.
+const demoWorkers: Worker[] = [
+  { id: 'w1', name: 'Noman Butt', phone: '0301-4455661', cityId: 'ct1', baId: '2200010001' },
+  { id: 'w2', name: 'Zafar Hussain', phone: '0333-7788992', cityId: 'ct1', baId: '2200010002' },
+  { id: 'w3', name: 'Imran Amir', cityId: 'ct1', baId: '2200010003' },
+];
+
 const demoCategories: ProductCategory[] = [
   { id: 'cat1', name: 'Jogger Sole (PU)' },
   { id: 'cat2', name: 'Slipper Sole (EVA)' },
@@ -60,28 +70,28 @@ const demoCategories: ProductCategory[] = [
 const demoProducts: Product[] = [
   {
     id: '1001', name: 'P-101 Jogger Sole Black', categoryId: 'cat1', vendorId: 'v1', batchNo: 405, packing: 12,
-    costPrice: 420, labour: 15, proiCost: 5, soleStich: 20, pasting: 10, trim: 5, finishing: 8, socksPasting: 4,
-    dc: 12, sockStich: 6, sheet: 25, stubble: 10, bottom: 40, p1: 10, p2: 5, na: 0, stock: 150
+    salePrice: 470, cutting: 18, edging: 6, upStitch: 22, bending: 9, stubbleDori: 10, shapeForm: 14,
+    chipkai: 7, bottom: 40, machine: 12, trimming: 5, sockStitch: 6, finish: 8, stock: 150
   },
   {
     id: '1002', name: 'P-102 Jogger Sole White', categoryId: 'cat1', vendorId: 'v1', batchNo: 405, packing: 12,
-    costPrice: 430, labour: 15, proiCost: 5, soleStich: 20, pasting: 10, trim: 5, finishing: 8, socksPasting: 4,
-    dc: 12, sockStich: 6, sheet: 25, stubble: 10, bottom: 40, p1: 10, p2: 5, na: 0, stock: 95
+    salePrice: 480, cutting: 18, edging: 6, upStitch: 22, bending: 9, stubbleDori: 10, shapeForm: 14,
+    chipkai: 7, bottom: 40, machine: 12, trimming: 5, sockStitch: 6, finish: 8, stock: 95
   },
   {
     id: '1004', name: 'P-101 Jogger Sole White', categoryId: 'cat1', vendorId: 'v1', batchNo: 405, packing: 12,
-    costPrice: 420, labour: 15, proiCost: 5, soleStich: 20, pasting: 10, trim: 5, finishing: 8, socksPasting: 4,
-    dc: 12, sockStich: 6, sheet: 25, stubble: 10, bottom: 40, p1: 10, p2: 5, na: 0, stock: 60
+    salePrice: 470, cutting: 18, edging: 6, upStitch: 22, bending: 9, stubbleDori: 10, shapeForm: 14,
+    chipkai: 7, bottom: 40, machine: 12, trimming: 5, sockStitch: 6, finish: 8, stock: 60
   },
   {
     id: '2001', name: 'E-551 Casual Slipper Brown', categoryId: 'cat2', vendorId: 'v2', batchNo: 120, packing: 12,
-    costPrice: 220, labour: 10, proiCost: 2, soleStich: 0, pasting: 8, trim: 4, finishing: 5, socksPasting: 3,
-    dc: 8, sockStich: 0, sheet: 15, stubble: 5, bottom: 20, p1: 5, p2: 2, na: 0, stock: 320
+    salePrice: 260, cutting: 10, edging: 4, upStitch: 0, bending: 5, stubbleDori: 5, shapeForm: 8,
+    chipkai: 4, bottom: 20, machine: 8, trimming: 4, sockStitch: 0, finish: 5, stock: 320
   },
   {
     id: '3001', name: 'F-909 Formal Oxford Sole Black', categoryId: 'cat3', vendorId: 'v3', batchNo: 789, packing: 12,
-    costPrice: 580, labour: 25, proiCost: 10, soleStich: 35, pasting: 15, trim: 8, finishing: 12, socksPasting: 6,
-    dc: 15, sockStich: 10, sheet: 35, stubble: 15, bottom: 60, p1: 15, p2: 8, na: 0, stock: 80
+    salePrice: 640, cutting: 28, edging: 11, upStitch: 35, bending: 14, stubbleDori: 15, shapeForm: 20,
+    chipkai: 9, bottom: 60, machine: 15, trimming: 8, sockStitch: 10, finish: 12, stock: 80
   },
 ];
 
@@ -96,11 +106,25 @@ const demoChartAccounts: ChartOfAccount[] = [
   { id: '110001', name: 'CUSTOMERS ACCOUNTS', groupId: '1000', linkCode: 'A', status: 'Active' },
   { id: '120001', name: 'CASH IN HAND', groupId: '1000', linkCode: 'A', status: 'Active' },
   { id: '120002', name: 'BANK ALFALAH AC - 0124', groupId: '1000', linkCode: 'A', status: 'Active' },
+  // Cheques received but not yet deposited or endorsed (§13). Near-cash, so it
+  // sits with cash & bank. An endorsement credits it; a deposit moves it to bank.
+  { id: '120003', name: 'CHEQUES IN HAND', groupId: '1000', linkCode: 'A', status: 'Active' },
   { id: '210001', name: 'VENDORS ACCOUNTS', groupId: '2000', linkCode: 'A', status: 'Active' },
+  { id: '220001', name: 'WORKER WAGES', groupId: '2000', linkCode: 'A', status: 'Active' },
   { id: '310001', name: 'WHOLESALE SHOE SALES', groupId: '3000', linkCode: 'A', status: 'Active' },
-  { id: '410001', name: 'LABOUR WAGES CHARGES', groupId: '4000', linkCode: 'A', status: 'Active' },
+  // The cost side of wages. WORKER WAGES (220001) is what we OWE a worker;
+  // this is what the labour COSTS us. A wage earned debits here and credits the
+  // worker's account — the same shape as Purchase debiting PURCHASES and
+  // crediting the vendor. Nothing posts to it until wage accrual is built.
+  { id: '410001', name: 'WAGES EXPENSE', groupId: '4000', linkCode: 'A', status: 'Active' },
   { id: '420001', name: 'UTILITIES & BILLS EXPENSE', groupId: '4000', linkCode: 'A', status: 'Active' },
+  // Cost of raw material bought from vendors. A Purchase debits here and credits
+  // the vendor's account — the same two-sided shape wages now have.
+  { id: '430001', name: 'PURCHASES', groupId: '4000', linkCode: 'A', status: 'Active' },
   { id: '440001', name: 'DIRECTORS EXPENSES - DRAWINGS', groupId: '4000', linkCode: 'A', status: 'Active' },
+  // Commission given at payment time (§7) — a cost, never a sale-time discount.
+  // A Receipt's commission debits here and credits the customer.
+  { id: '450001', name: 'COMMISSION ALLOWED', groupId: '4000', linkCode: 'A', status: 'Active' },
 ];
 
 const demoBusinessAccounts: BusinessAccount[] = [
@@ -109,10 +133,14 @@ const demoBusinessAccounts: BusinessAccount[] = [
   { id: '11000103', name: 'Malik Traders (HYD)', controlId: '110001', linkCode: 'A', region: 'SOUTH', status: 'Active' },
   { id: '11000104', name: 'Mardan Shoe Mart (MRD)', controlId: '110001', linkCode: 'A', region: 'NORTH', status: 'Active' },
   { id: '12000101', name: 'Lahore Cash Vault', controlId: '120001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '42000101', name: 'Office Utilities A/C', controlId: '420001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '21000101', name: 'Decent Polyurethane A/C', controlId: '210001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '21000102', name: 'Lahore Chemical Industries A/C', controlId: '210001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '21000103', name: 'Star Sole Materials A/C', controlId: '210001', linkCode: 'A', region: 'SOUTH', status: 'Active' },
   { id: '44000101', name: "Director's Drawings A/C", controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200010001', name: 'Noman Butt A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200010002', name: 'Zafar Hussain A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '2200010003', name: 'Imran Amir A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
 ];
 
 const demoCustomers: Customer[] = [
@@ -227,7 +255,7 @@ const demoReceipts: Receipt[] = [
 ];
 
 const demoExpenses: Expense[] = [
-  { id: 'exp1', date: '2026-07-02', businessAccountId: '12000101', amount: 3500, paymentMode: 'Cash', details: 'Office utilities bill payment', remarks: 'Paid via Cash Vault' },
+  { id: 'exp1', date: '2026-07-02', businessAccountId: '42000101', amount: 3500, paymentMode: 'Cash', details: 'Office utilities bill payment', remarks: 'Paid via Cash Vault' },
   { id: 'exp2', date: '2026-07-05', businessAccountId: '21000101', amount: 15000, paymentMode: 'Cheque', details: 'Cheque No. 441098 HBL', remarks: 'Paid to Decent PU' }
 ];
 
@@ -265,6 +293,7 @@ export interface State {
   stores: Store[];
   addas: Adda[];
   vendors: Vendor[];
+  workers: Worker[];
   categories: ProductCategory[];
   products: Product[];
   
@@ -306,6 +335,9 @@ type Action =
   | { type: 'ADD_VENDOR'; vendor: Vendor }
   | { type: 'UPDATE_VENDOR'; vendor: Vendor }
   | { type: 'DELETE_VENDOR'; id: string }
+  | { type: 'ADD_WORKER'; worker: Worker }
+  | { type: 'UPDATE_WORKER'; worker: Worker }
+  | { type: 'DELETE_WORKER'; id: string }
   | { type: 'ADD_CITY'; city: City }
   | { type: 'UPDATE_CITY'; city: City }
   | { type: 'DELETE_CITY'; id: string }
@@ -386,6 +418,7 @@ const initialState: State = {
   stores: demoStores,
   addas: demoAddas,
   vendors: demoVendors,
+  workers: demoWorkers,
   categories: demoCategories,
   products: demoProducts,
   
@@ -471,6 +504,26 @@ function reducer(state: State, action: Action): State {
         vendors: state.vendors.filter(v => v.id !== action.id),
         businessAccounts: deletedVendor
           ? state.businessAccounts.filter(b => b.id !== deletedVendor.baId)
+          : state.businessAccounts
+      };
+    }
+    case 'ADD_WORKER':
+      return { ...state, workers: [...state.workers, action.worker] };
+    case 'UPDATE_WORKER':
+      return {
+        ...state,
+        workers: state.workers.map(w => w.id === action.worker.id ? action.worker : w),
+        businessAccounts: state.businessAccounts.map(b =>
+          b.id === action.worker.baId ? { ...b, name: `${action.worker.name} A/C` } : b
+        )
+      };
+    case 'DELETE_WORKER': {
+      const deletedWorker = state.workers.find(w => w.id === action.id);
+      return {
+        ...state,
+        workers: state.workers.filter(w => w.id !== action.id),
+        businessAccounts: deletedWorker
+          ? state.businessAccounts.filter(b => b.id !== deletedWorker.baId)
           : state.businessAccounts
       };
     }
