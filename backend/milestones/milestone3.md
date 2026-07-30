@@ -1,25 +1,19 @@
-# Milestone 3 — Accounts Hierarchy
+# Milestone 3 — Purchase & Purchase Return
 
-**Goal:** The 4-level accounting setup (Class → Group → Control → Chart/Business) fully served by
-the API, with hierarchy queries powering the frontend's cascading dropdowns and guards preventing
-misuse of CLOSED accounts.
+**Goal:** The next two sidebar TRANSACTIONS entries: Purchase and Purchase Return. Same
+create/list/get/update/post/unpost shape as Milestone 2, against vendors instead of customers.
 
-## Module 3.1 — Group Accounts (UC-15)
-- [ ] `groupAccounts` files CRUD (name + class enum)
-- [ ] Prevent delete when control accounts reference the group
+**v4.3 note:** no `due_date`/payment-overdue tracking (removed in v4.3) — only cheque-due alerts
+remain (Milestone 9).
 
-## Module 3.2 — Control Accounts (UC-16)
-- [ ] `controlAccounts` files CRUD (parent group, sorting)
-- [ ] `GET` list joined with group name + class; ordered by sorting
+## Module 3.1 — Purchase (UC-23)
+- [ ] `purchases` (routes/controller/service/repository) — create with material lines (one transaction), server-side totals
+- [ ] `GET` list with weekly/monthly/overall/date-range + vendor filters
+- [ ] `GET /:id` with lines (for edit + print)
+- [ ] Update (UNPOSTED only)
+- [ ] `POST /:id/post` and `POST /:id/unpost` — credit vendor, debit per schema; adds quantities to Vendor Stock (UC-30); ledger + stock writes in one transaction
+- [ ] Vendor stock movement rows written alongside product stock movements
 
-## Module 3.3 — Chart of Accounts (UC-17)
-- [ ] `chartAccounts` files CRUD (control parent, link_code, status ACTIVE/CLOSED)
-- [ ] Guard: CLOSED accounts excluded from selection lists (customers, posting)
-
-## Module 3.4 — Business Accounts (UC-18)
-- [ ] `businessAccounts` files CRUD (control parent, link_code, region, status)
-- [ ] Guard: CLOSED accounts excluded from expense-head selection
-
-## Module 3.5 — Hierarchy Queries
-- [ ] `GET /api/accounts/tree` — full Class→Group→Control→Chart/Business tree for setup screens
-- [ ] Auto-fill lookups: given chart account → its control/group/class (Sale Bill & Receipt auto-fill)
+## Module 3.2 — Purchase Return (UC-24)
+- [ ] `purchaseReturns` (routes/controller/service/repository) — mirror of purchases (create/list/get/update/post/unpost)
+- [ ] Verify: create → post a return against an existing purchase's vendor; confirm reversing stock/ledger direction vs. Module 3.1

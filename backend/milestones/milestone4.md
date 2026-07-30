@@ -1,38 +1,21 @@
-# Milestone 4 — Transactions & Posting
+# Milestone 4 — Receipts (Jamma) & Expenses (Kharch)
 
-**Goal:** The heart of the system: sale bills, returns, receipts, expenses, and the posting engine
-that writes `ledger_entries` + `stock_movements` atomically. All multi-write operations run inside
-a single DB transaction (`withTransaction`).
+**Goal:** The last two sidebar TRANSACTIONS entries: Receipts and Expenses, plus the cheque
+lifecycle both screens can produce. Ledger-only postings (no stock movements).
 
-**Posting rules** (see database_schema.md → Design Decisions):
-- Post sale bill: debit customer chart account / credit SALES; negative SALE stock movements per item.
-- Post sale return: reverse of bill; positive SALE_RETURN movements.
-- Post receipt: debit CASH / credit customer. Post expense: debit expense head / credit CASH.
-- Unpost: delete the document's ledger + stock rows (same transaction). Financial edits only while UNPOSTED.
+**Posting rules:** Post receipt: debit CASH / credit customer. Post expense: debit expense head
+(business account) / credit CASH. **Reverse-never-erase:** bounced cheques/receipts get a
+reversing entry, not a deleted row (schema §6.1).
 
-## Module 4.1 — Sale Bills (UC-01, UC-02)
-- [ ] `saleBills` (routes/controller/service/repository) — create with items (one transaction), server-side totals (pairs = cartons × packing, line/invoice discounts, net value)
-- [ ] `GET` list with weekly/monthly/overall/date-range + customer/sub-customer/bill-no filters
-- [ ] `GET /:id` with items (for edit + print)
-- [ ] Update (UNPOSTED only) — replace items, recompute totals
-- [ ] `POST /:id/post` and `POST /:id/unpost` — ledger + stock writes in one transaction
-
-## Module 4.2 — Sale Returns (UC-03, UC-04)
-- [ ] `saleReturns` (routes/controller/service/repository) — mirror of sale bills (create/list/get/update/post/unpost)
-
-## Module 4.3 — Receipts / Jamma (UC-05)
+## Module 4.1 — Receipts / Jamma & Cheque Disposal (UC-25, UC-27)
 - [ ] `receipts` (routes/controller/service/repository) CRUD + post/unpost (ledger only)
+- [ ] `draftReceipts` — dummy/unconfirmed receipts (same draft pattern)
+- [ ] `bankAccounts`/`cheques` (routes/controller/service/repository) — shared cheque lifecycle row (received → deposited/bounced/cleared), `bounced_date` drives the reversal; bounce writes a reversing ledger entry, never deletes the original (reverse-never-erase, schema §6.1)
 - [ ] Weekly/Monthly/Overall list filters
+- [ ] Verify: record a cheque receipt → mark bounced → confirm a reversing ledger entry exists and the original row is untouched
 
-## Module 4.4 — Expenses / Kharch (UC-06)
+## Module 4.2 — Expenses / Kharch (UC-26)
 - [ ] `expenses` (routes/controller/service/repository) CRUD + post/unpost (ledger only), expense head = business account
+- [ ] `draftExpenses` — dummy/unconfirmed expenses (same draft pattern)
 - [ ] Weekly/Monthly/Overall list filters
-
-## Module 4.5 — Bilty/Adda Update (UC-07)
-- [ ] `GET /api/sale-bills/bilty-search` — filters: date range, customer, sub-customer, bill no, radio All / Without Bilty / Without Adda / With Bilty (uses partial indexes)
-- [ ] `PATCH /api/sale-bills/:id/bilty` — update bilty_no + adda_id (allowed on POSTED bills; non-financial)
-
-## Module 4.6 — Stock & Production Entry (UC-08)
-- [ ] `stock` (routes/controller/service/repository) — `POST /api/stock/production` (PRODUCTION movement: input_qty + input_unit CARTONS/PAIRS, packing snapshot, qty_pairs normalized server-side)
-- [ ] `POST /api/stock/adjustments` — OPENING/ADJUSTMENT movements, signed qty
-- [ ] `GET /api/stock/movements?product_id=` — movement history
+- [ ] Note: payment-overdue alert is dropped in v4.3 — only cheque-due alerts remain (Milestone 9)

@@ -8,6 +8,6 @@ jq -n '{
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
     permissionDecision: "ask",
-    permissionDecisionReason: "Workflow rule (CLAUDE.md): state the task + plan and get explicit approval before this change. If not yet approved, stop and confirm with the user; if they request edits, revise the plan first."
+    permissionDecisionReason: "Workflow rule (CLAUDE.md): before this change, present a short plan under headings (Goal / Approach / Benefit), in plain language a non-coder can follow. Get one of three explicit outcomes from the user: approved, not approved, or approved with changes. If not yet approved, stop and confirm; if changes are requested, revise the plan and re-confirm before touching code."
   }
 }'

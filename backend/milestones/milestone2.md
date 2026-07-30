@@ -1,36 +1,29 @@
-# Milestone 2 — Setup & Lookup CRUD
+# Milestone 2 — Sale Bill & Sale Return
 
-**Goal:** All setup screens (System Setup section of the frontend) backed by real API endpoints.
-Each module follows the layered pattern: `routes → controller → service → repository`, parameterized
-SQL only, input validation, soft-delete via `is_active`.
+**Goal:** The first two entries under the sidebar's TRANSACTIONS section: Sale Bill and Sale Return,
+fully working end to end (create, list, edit, post/unpost, drafts). This is the core revenue flow
+and the template every later transaction screen (Purchase, Receipts, Expenses) follows.
 
-Standard endpoints per module: `GET /` (list, active by default), `GET /:id`, `POST /`, `PUT /:id`, `DELETE /:id` (soft).
+**v4.3 note:** `store_id` is nullable but `bill_no`/`gp_no`/`bilty_no`/`adda_id` are `NOT NULL` on
+sale bills and returns — the old "Without Bilty"/"Without Adda" dispatch-later workflow no longer
+exists; every document has a bilty and adda from creation. All multi-write operations (bill + items,
+post/unpost) run inside a single DB transaction (`withTransaction`).
 
-## Module 2.1 — Cities (UC-14)
-- [ ] `cities` (routes/controller/service/repository) CRUD + unique-name validation
+**Posting rules** (see `database_schema_v4.3.md` → Design Decisions):
+- Post sale bill: debit customer chart account / credit SALES; negative SALE stock movements per item.
+- Post sale return: reverse of bill; positive SALE_RETURN movements.
+- Unpost: delete the document's ledger + stock rows (same transaction). Financial edits only while UNPOSTED.
 
-## Module 2.2 — Stores
-- [ ] `stores` (routes/controller/service/repository) CRUD
+## Module 2.1 — Sale Bill (UC-18, UC-19)
+- [ ] `saleBills` (routes/controller/service/repository) — create with items (one transaction), server-side totals (pairs = cartons × packing, line/invoice discounts, net value); `bilty_no`/`adda_id` required at creation (no dispatch-later path)
+- [ ] `draftSaleBills`/`draftSaleBillItems` — dummy/unconfirmed bills that deduct stock on save and restore it on delete, no ledger entry until confirmed into a real sale bill (schema §5.6.1)
+- [ ] `GET` list with weekly/monthly/overall/date-range + customer/sub-customer/bill-no filters
+- [ ] `GET /:id` with items (for edit + print)
+- [ ] Update (UNPOSTED only) — replace items, recompute totals
+- [ ] `POST /:id/post` and `POST /:id/unpost` — ledger + stock writes in one transaction
+- [ ] Verify: create → post → check `ledger_entries` + `stock_movements` rows; unpost removes them
 
-## Module 2.3 — Addas (UC-21)
-- [ ] `addas` (routes/controller/service/repository) CRUD
-- [ ] Delete guard: block deletion when the adda is referenced by any sale bill (return 409)
-
-## Module 2.4 — Vendors
-- [ ] `vendors` (routes/controller/service/repository) CRUD (name, phone, city)
-
-## Module 2.5 — Product Categories (UC-12)
-- [ ] `categories` (routes/controller/service/repository) CRUD
-
-## Module 2.6 — Products (UC-11)
-- [ ] `products` (routes/controller/service/repository) CRUD with full cost-breakdown fields + optional color
-- [ ] Validation: packing > 0, category required, money fields numeric
-- [ ] List endpoint joins category + vendor names (for searchable dropdowns)
-
-## Module 2.7 — Customers
-- [ ] `customers` (routes/controller/service/repository) CRUD (links to chart account `ac_id` + city)
-- [ ] List endpoint returns linked account + city names
-
-## Module 2.8 — Sub-Customers (UC-13)
-- [ ] `subCustomers` (routes/controller/service/repository) CRUD (must belong to a customer)
-- [ ] `GET /api/customers/:id/sub-customers` for the Sale Bill inline "+ Add Sub-Customer" flow
+## Module 2.2 — Sale Return (UC-21, UC-22)
+- [ ] `saleReturns` (routes/controller/service/repository) — mirror of sale bills (create/list/get/update/post/unpost)
+- [ ] `draftSaleReturns`/`draftSaleReturnItems` — mirrored draft pattern (schema §5.6.2)
+- [ ] Verify: create → post a return against an existing bill's customer; confirm reversing stock/ledger direction vs. Module 2.1
