@@ -3,14 +3,30 @@
 const { ipcMain } = require('electron');
 const service = require('../services/auth.service');
 const { wrap } = require('./wrap');
-const { requireSession } = require('./session');
+const session = require('./session');
 
 module.exports = function register() {
-  // TODO(Module 1.3): register channels, e.g.:
-  // ipcMain.handle('auth:login', wrap((payload) => service.login(payload.username, payload.password)));
-  // ipcMain.handle('auth:logout', wrap(() => service.logout()));
-  // ipcMain.handle('auth:update-credentials', wrap((payload) => {
-  //   const session = requireSession();
-  //   return service.updateCredentials(session.userId, payload);
-  // }));
+  ipcMain.handle(
+    'auth:login',
+    wrap(async (payload) => {
+      const user = await service.login(payload.username, payload.password);
+      return session.login(user); // { userId, username, role }
+    }),
+  );
+
+  ipcMain.handle(
+    'auth:logout',
+    wrap(() => {
+      session.logout();
+      return { ok: true };
+    }),
+  );
+
+  ipcMain.handle(
+    'auth:update-credentials',
+    wrap(async (payload) => {
+      const current = session.requireSession();
+      return service.updateCredentials(current.userId, payload);
+    }),
+  );
 };

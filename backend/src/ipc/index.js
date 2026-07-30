@@ -8,6 +8,7 @@ const registerCategories = require('./categories.ipc');
 const registerChartAccounts = require('./chartAccounts.ipc');
 const registerCities = require('./cities.ipc');
 const registerCustomers = require('./customers.ipc');
+const registerDraftSaleBills = require('./draftSaleBills.ipc');
 const registerExpenses = require('./expenses.ipc');
 const registerGroupAccounts = require('./groupAccounts.ipc');
 const registerProducts = require('./products.ipc');
@@ -28,6 +29,7 @@ module.exports = function registerIpcHandlers() {
   registerChartAccounts();
   registerCities();
   registerCustomers();
+  registerDraftSaleBills();
   registerExpenses();
   registerGroupAccounts();
   registerProducts();

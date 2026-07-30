@@ -3,6 +3,7 @@
 const bcrypt = require('bcrypt');
 const sql = require('mssql');
 const config = require('../../config');
+const CODES = require('../../constants/reservedAccounts');
 
 async function ensureGroupAccount(pool, { code, name, classCode }) {
   const existing = await pool.request()
@@ -84,22 +85,26 @@ async function seed() {
   const expensesGroup = await ensureGroupAccount(pool, { code: '4000', name: 'Expenses', classCode: 'EXPENSES' });
 
   // --- Reserved chart accounts (§8) ---
-  await ensureChartAccount(pool, { code: '100001', name: 'CUSTOMERS ACCOUNTS', groupId: assetsGroup });
-  await ensureChartAccount(pool, { code: '200001', name: 'VENDORS ACCOUNTS', groupId: liabilityGroup });
-  await ensureChartAccount(pool, { code: '100002', name: 'CASH IN HAND', groupId: assetsGroup });
-  await ensureChartAccount(pool, { code: '100003', name: 'Cash at Banks', groupId: assetsGroup, isRestricted: true });
-  await ensureChartAccount(pool, { code: '300001', name: 'SALES', groupId: incomeGroup });
-  await ensureChartAccount(pool, { code: '400001', name: 'PURCHASES', groupId: expensesGroup });
-  await ensureChartAccount(pool, { code: '400002', name: 'COMMISSION ALLOWED', groupId: expensesGroup });
-  await ensureChartAccount(pool, { code: '100004', name: 'CHEQUES IN HAND', groupId: assetsGroup });
+  await ensureChartAccount(pool, { code: CODES.CUSTOMERS_ACCOUNTS, name: 'CUSTOMERS ACCOUNTS', groupId: assetsGroup });
+  await ensureChartAccount(pool, { code: CODES.VENDORS_ACCOUNTS, name: 'VENDORS ACCOUNTS', groupId: liabilityGroup });
+  await ensureChartAccount(pool, { code: CODES.CASH_IN_HAND, name: 'CASH IN HAND', groupId: assetsGroup });
+  await ensureChartAccount(pool, {
+    code: CODES.CASH_AT_BANKS, name: 'Cash at Banks', groupId: assetsGroup, isRestricted: true,
+  });
+  await ensureChartAccount(pool, { code: CODES.SALES, name: 'SALES', groupId: incomeGroup });
+  await ensureChartAccount(pool, { code: CODES.PURCHASES, name: 'PURCHASES', groupId: expensesGroup });
+  await ensureChartAccount(pool, { code: CODES.COMMISSION_ALLOWED, name: 'COMMISSION ALLOWED', groupId: expensesGroup });
+  await ensureChartAccount(pool, { code: CODES.CHEQUES_IN_HAND, name: 'CHEQUES IN HAND', groupId: assetsGroup });
 
   // --- Payment Trail chart accounts (TASK-17) ---
-  await ensureChartAccount(pool, { code: '400003', name: 'Business Running Expenses', groupId: expensesGroup });
   await ensureChartAccount(pool, {
-    code: '400004', name: 'Directors Expenses - Drawings', groupId: expensesGroup, isRestricted: true,
+    code: CODES.BUSINESS_RUNNING_EXPENSES, name: 'Business Running Expenses', groupId: expensesGroup,
   });
-  await ensureChartAccount(pool, { code: '400005', name: 'Employees', groupId: expensesGroup });
-  await ensureChartAccount(pool, { code: '200002', name: 'Vendors - Suppliers', groupId: liabilityGroup });
+  await ensureChartAccount(pool, {
+    code: CODES.DIRECTORS_DRAWINGS, name: 'Directors Expenses - Drawings', groupId: expensesGroup, isRestricted: true,
+  });
+  await ensureChartAccount(pool, { code: CODES.EMPLOYEES, name: 'Employees', groupId: expensesGroup });
+  await ensureChartAccount(pool, { code: CODES.VENDORS_SUPPLIERS, name: 'Vendors - Suppliers', groupId: liabilityGroup });
 
   // --- Default store ---
   const storeExists = await pool.request()

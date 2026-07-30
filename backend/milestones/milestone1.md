@@ -13,7 +13,7 @@ this skeleton.
 - [x] `electron/preload.js` — `contextBridge` exposing `window.api.<feature>.<action>(payload)`, each a thin wrapper over `ipcRenderer.invoke('<feature>:<action>', payload)`
 - [x] `src/ipc/index.js` — central registrar (mirrors the old `routes/index.js`): imports every `<feature>.ipc.js` and registers its channels
 - [x] Central error handling: each ipc handler's errors are caught in `src/ipc/wrap.js` and re-thrown as a plain `{ message, code }` shape so `ipcRenderer.invoke`'s rejection is predictable in the renderer (an `ApiError` serializes cleanly; anything else becomes `INTERNAL`)
-- [x] `.env.example` and `.gitignore`
+- [x] `.env` and `.gitignore`
 
 ## Module 1.2 — Database
 - [x] `src/db/pool.js` — `mssql` `ConnectionPool` singleton + `query()` helper + `withTransaction()` helper (wraps an `mssql` `Transaction`/`Request` pair)
@@ -28,9 +28,9 @@ and main process to protect (they're one OS process tree), so "session" is just 
 the main process, set on login and cleared on logout/app quit. `requireSession()` is the IPC
 equivalent of the old JWT middleware: any handler that needs a logged-in user calls it first.
 
-- [ ] `src/ipc/session.js` — module-level `{ userId, username, role } | null`, `login()`, `logout()`, `requireSession()` (throws `ApiError.unauthorized` if null), `requireRole(role)` (UC-03)
-- [ ] `auth` files — login + credentials logic across `ipc handler/service/repository`
-- [ ] `auth:login` — verify bcrypt hash, call `session.login(user)` (include `role` per UC-03)
-- [ ] `auth:logout` — call `session.logout()`
-- [ ] `auth:update-credentials` — requires session; supports changing **username and/or password** — verify `currentPassword`, check new username isn't taken (`UQ_users_name`) before updating, re-hash new password with bcrypt if provided (UC-04)
-- [ ] Verify: `auth:login` with seeded admin returns a session; a protected channel called with no prior login rejects via `requireSession()`
+- [x] `src/ipc/session.js` — module-level `{ userId, username, role } | null`, `login()`, `logout()`, `requireSession()` (throws `ApiError.unauthorized` if null), `requireRole(role)` (UC-03)
+- [x] `auth` files — login + credentials logic across `ipc handler/service/repository`
+- [x] `auth:login` — verify bcrypt hash, call `session.login(user)` (include `role` per UC-03)
+- [x] `auth:logout` — call `session.logout()`
+- [x] `auth:update-credentials` — requires session; supports changing **username and/or password** — verify `currentPassword`, check new username isn't taken (`UQ_users_name`) before updating, re-hash new password with bcrypt if provided (UC-04)
+- [ ] Verify: `auth:login` with seeded admin returns a session; a protected channel called with no prior login rejects via `requireSession()` — **pending**: no SQL Server instance / `npm install` (mssql) yet to run end-to-end

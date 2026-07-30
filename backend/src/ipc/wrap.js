@@ -1,14 +1,27 @@
-// Wraps an ipc handler's (event, payload) signature down to (payload), and turns thrown errors
-// into a plain { message, code } shape so ipcRenderer.invoke's rejection is predictable in the
-// renderer — the IPC equivalent of Express's errorHandler middleware.
+// Wraps an ipc handler's (event, payload) signature down to (payload), and normalizes its outcome
+// into a resolve-always { ok: true, data } | { ok: false, error: { message, code } } shape.
+//
+// This never throws back to ipcRenderer.invoke on purpose: Electron only preserves a thrown
+// Error's `.message` when it crosses from ipcMain.handle into the renderer's rejected promise —
+// custom properties like ApiError's `.code` are silently dropped. Resolving instead of throwing
+// sidesteps that: the full { message, code } shape survives because it's plain serializable data,
+// not an Error instance.
+const ApiError = require('../errors/ApiError');
+
 function wrap(handler) {
   return async (event, payload) => {
     try {
-      return await handler(payload, event);
+      const data = await handler(payload, event);
+      return { ok: true, data };
     } catch (err) {
-      const error = new Error(err.message || 'Internal error');
-      error.code = err.code || 'INTERNAL';
-      throw error;
+      if (err instanceof ApiError) {
+        return { ok: false, error: { message: err.message, code: err.code } };
+      }
+      // Not a business error we threw on purpose (e.g. a raw mssql/Tedious driver error) — log the
+      // full detail here, but never let it reach the renderer: driver errors carry their own .code
+      // (ESOCKET, ETIMEOUT, ELOGIN...) and messages with host/port/driver internals in them.
+      console.error(err);
+      return { ok: false, error: { message: 'Internal error', code: 'INTERNAL' } };
     }
   };
 }

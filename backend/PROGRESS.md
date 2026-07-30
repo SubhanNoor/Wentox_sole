@@ -1,7 +1,7 @@
 # Wentox Backend — Progress Log
 
-**Current milestone:** Milestone 1 — Foundation & Auth
-**Status:** Modules 1.1 & 1.2 done; Module 1.3 (Auth) in progress
+**Current milestone:** Milestone 2 — Sale Bill & Sale Return
+**Status:** Milestone 1 code-complete (Modules 1.1–1.3, verification pending SQL Server + `npm install`). Milestone 2 in progress: Module 2.1 create-with-items and draftSaleBills (create/list/get/remove/confirm) done and debugged; sale-bills:list/get/update/post/unpost and Module 2.2 still pending.
 
 Log every completed task here (newest first within its milestone). Format:
 
@@ -13,6 +13,120 @@ Log every completed task here (newest first within its milestone). Format:
 ```
 
 ---
+
+## Milestone 2 — Sale Bill & Sale Return
+
+### 2026-07-30 — Module 2.1 (partial): sale-bills:create + debug pass
+- **What:** Implemented the first `milestone2.md` checklist item: `saleBills.repository.js`
+  (`getVariantPackings`, `insert`, `insertItems`, `findById`), `saleBills.service.js` (`create` —
+  validation, server-computed pairs/discounts/totals, one `withTransaction`), `saleBills.ipc.js`
+  (`sale-bills:create` behind `requireSession()`).
+- **How:** A separate subagent review (briefed from `.claude/agents/debugger.md`, not done inline)
+  found and I fixed 4 real bugs: (1) **critical** — the repository joined against `dbo.products`/
+  `product_id`, which doesn't exist; `database/schema.sql` (the real, authoritative schema — more
+  current than `System_architecture/database_schema_v4.3.md`, which still describes the old
+  `products` shape) actually has `dbo.articles`/`article_id`, with a completely different cost
+  breakdown (12 real manufacturing-stage columns + `sale_price`, not `cost_price`/`labour`/etc.) —
+  every `sale-bills:create` call would have failed at the first query; (2) `discount_percent`
+  defaulted to `0` one line too late in `buildLine`, so omitting it produced `NaN` through the whole
+  totals chain; (3) missing validation for the schema's `CK_sale_bills_custdlv` (sub_customer_id
+  required unless `delivery_type = 'SAME'`); (4) missing validation that `cartons > 0` per line
+  (schema's `CK_sale_bill_items_pairs` requires `pairs > 0`, and `pairs = cartons × packing`).
+  Verified all 4 fixes with stubbed-dependency `node -e` tests (module-cache injection to avoid
+  needing `mssql`/a live DB) — confirmed correct totals math and that all three validation cases now
+  throw before reaching the transaction.
+- **Files:** `backend/src/repositories/saleBills.repository.js`, `backend/src/services/saleBills.service.js`,
+  `backend/src/ipc/saleBills.ipc.js`, `backend/electron/preload.js` (kebab-case channel name fix —
+  `window.api.saleBills.list()` now correctly calls `sale-bills:list`, not `saleBills:list`)
+- **Resolved:** `products` vs `articles` naming — decided to keep the feature/screen name
+  `products` (matches the frontend sidebar and `use_cases.md`), with its SQL querying the real
+  `dbo.articles` table underneath, same pattern as `saleBills.repository.js`. No renaming needed;
+  noted in `milestone6.md`'s Module 6.1.
+- **Pending:** `sale-bills:list`, `sale-bills:get`, update, post/unpost, and Module 2.2 (Sale
+  Return) are not started. No live SQL Server yet — everything here is logic-verified, not
+  DB-verified.
+
+### 2026-07-30 — Module 2.1: draftSaleBills (create/list/get/remove/confirm) + shared posting logic
+- **What:** Implemented the second `milestone2.md` checklist item (schema §5.6.1). New:
+  `draftSaleBills.repository.js` (own `getVariantPackings`/`insertStockMovements` copies, plus
+  `insertDraft`/`insertDraftItems`/`findById`/`list`/`deleteDraft`), `draftSaleBills.service.js`
+  (`create` — deducts stock via a negative `ADJUSTMENT` movement on save; `remove` — restores via a
+  positive one, never deleting the original per the schema's reverse-never-erase pattern; `confirm`
+  — per the user's actual workflow (draft now, finish and confirm later that same session), this
+  behaves as **create + post in one step**, not a separate later post), `draftSaleBills.ipc.js`
+  (`draft-sale-bills:create/list/get/remove/confirm`). Extracted shared pairs/discount/totals math
+  and item/header validation out of `saleBills.service.js` into a new `saleBillMath.js` (both
+  features need the identical formula). Added minimal `chartAccounts.repository.js` (`findByCode`)
+  and `customers.repository.js`/`service.js` (`findById`/`getById`) — just enough for posting to
+  resolve the `SALES` account and a customer's `ba_id`, full CRUD for both is Milestone 7/8. Added
+  `src/constants/reservedAccounts.js` (shared codes between `seeds/run.js` and posting logic).
+  `saleBills.service.js` gained `postLedgerAndStock`/`insertConfirmed`/`getById` exports so
+  `draftSaleBills.confirm()` reuses the exact same posting path a normal bill uses.
+- **How:** Confirming a draft first inserts a *positive* reversing `ADJUSTMENT` stock movement
+  (canceling the draft's original deduction), then inserts the real `sale_bills` row with
+  `status = 'CONFIRMED'` directly, then runs the normal post (ledger entries + negative `SALE`
+  stock movement), then deletes the draft — net stock effect over the full lifecycle is exactly one
+  deduction, same as a bill that was never a draft. Verified this arithmetic directly with stubbed
+  `node -e` tests tracing every stock-movement row's sign and source. A separate subagent debug
+  review (briefed from `.claude/agents/debugger.md`) found one real bug: `confirm()` checked
+  `bill_no`/`gp_no`/`bilty_no`/`adda_id` but not the schema's `CK_sale_bills_custdlv` rule
+  (`sub_customer_id` required unless `delivery_type = 'SAME'`) — `draft_sale_bills` has no such
+  constraint so a draft could reach `confirm()` in a state the real `sale_bills` table would reject,
+  surfacing as an opaque `INTERNAL` error. Fixed by extracting `validateDeliveryCustomer()` into
+  `saleBillMath.js` and calling it from both `saleBills.service.js` and `draftSaleBills.confirm()`.
+  A second, lower-severity finding (inconsistent `Error` vs `ApiError` for the "SALES account
+  missing" case) was deliberately left as-is: that case is a setup/seed problem, not a normal-user
+  error, and `wrap.js` only `console.error`s non-`ApiError` throws — converting it would have
+  silenced a real misconfiguration instead of surfacing it. Verified the fix with three cases
+  (`SAME` delivery, `CUSTOM` with no sub-customer, `CUSTOM` with one) — all behave correctly.
+- **Files:** `backend/src/repositories/draftSaleBills.repository.js`,
+  `backend/src/services/draftSaleBills.service.js`, `backend/src/ipc/draftSaleBills.ipc.js`,
+  `backend/src/services/saleBillMath.js` (new), `backend/src/services/saleBills.service.js`,
+  `backend/src/repositories/saleBills.repository.js`, `backend/src/repositories/chartAccounts.repository.js` (new),
+  `backend/src/repositories/customers.repository.js`, `backend/src/services/customers.service.js`,
+  `backend/src/constants/reservedAccounts.js` (new), `backend/src/db/seeds/run.js`,
+  `backend/src/ipc/index.js`, `backend/electron/preload.js`
+
+### 2026-07-30 — Second debug pass on wrap.js: unexpected errors weren't actually sanitized
+- **What:** A follow-up review (run as a genuinely separate subagent this time, briefed with
+  `.claude/agents/debugger.md`, not done inline) found that the previous `wrap.js` fix only *logged*
+  non-`ApiError` failures — it didn't actually replace their `message`/`code` before returning. A
+  raw `mssql`/Tedious driver error (e.g. connection failure) would still leak its real `.code`
+  (`ESOCKET`, `ETIMEOUT`, `ELOGIN`, ...) and message (which can contain host/port/driver internals)
+  straight to the renderer, contradicting the documented "sanitized to `INTERNAL`" contract.
+- **How:** Restructured the `catch` block to branch explicitly: `ApiError` → pass through its real
+  `message`/`code`; anything else → `console.error` the full error, then always return the fixed
+  `{ message: 'Internal error', code: 'INTERNAL' }` pair, no fallback to `err.message`/`err.code`.
+  Verified with a `node -e` harness simulating a real driver error shape (`ESOCKET` + a message
+  containing an IP and port): confirmed it now returns the sanitized shape while still logging the
+  real error to console.
+- **Files:** `backend/src/ipc/wrap.js`
+- **Also this session:** updated `.claude/settings.json` to add a `PostToolUse` hook (fires the
+  debugger review after every `Write`/`Edit`, not just once at `Stop`) matching the pattern from
+  another project, and pointed both hooks at reading `.claude/agents/debugger.md` fresh each run
+  instead of a hardcoded paraphrase of it.
+
+### 2026-07-30 — Debug pass on Module 1.3: wrap.js error-serialization bug
+- **What:** Debugger-persona review (`.claude/agents/debugger.md`, run inline since the Stop hook's
+  `agent`-type mechanism means acting as that persona directly on the diff, not invoking a separate
+  subagent) of the Module 1.3 auth code found two real bugs, both in `src/ipc/wrap.js`, not in the
+  auth logic itself: (1) `wrap.js` was throwing a `new Error()` with `.code` attached back across
+  `ipcMain.handle` — but Electron only preserves a thrown error's `.message` crossing into the
+  renderer's rejected promise, silently dropping custom properties, so every `ApiError`'s `.code`
+  (`UNAUTHORIZED`, `USERNAME_TAKEN`, etc.) was being lost in transit, contradicting the documented
+  `{ message, code }` contract. (2) unexpected non-`ApiError` failures (real bugs, not business
+  errors) were sanitized to `code: 'INTERNAL'` with no logging anywhere, making them undebuggable.
+- **How:** Rewrote `wrap.js` to **resolve always** instead of throwing — `{ ok: true, data }` on
+  success, `{ ok: false, error: { message, code } }` on failure — which sidesteps Electron's
+  property-stripping entirely rather than working around it, and added `console.error(err)` for any
+  caught error that isn't an `ApiError` instance. Verified both paths directly (a plain `node -e`
+  harness calling `wrap()` with a success case, a thrown `ApiError.unauthorized`, and a thrown
+  `TypeError`): the `ApiError` case now correctly surfaces `code: 'UNAUTHORIZED'`, and the
+  `TypeError` case printed to console before resolving as `code: 'INTERNAL'`.
+- **Files:** `backend/src/ipc/wrap.js`, `backend/CLAUDE.md`, `backend/plan.md`,
+  `backend/src/ipc/README.md`, `backend/src/errors/README.md`
+- **Note for Milestone 9:** `frontend/src/lib/api.ts` must check `.ok` on every `window.api.x.y()`
+  call — it never rejects/throws anymore, it always resolves.
 
 ### 2026-07-30 — Transport switch: Express/HTTP → Electron IPC
 - **What:** Client wants a real desktop app, not something reachable like a local website, so the
@@ -43,6 +157,22 @@ Log every completed task here (newest first within its milestone). Format:
   not yet implemented.
 
 ## Milestone 1 — Foundation & Auth
+
+### 2026-07-30 — Module 1.3: Auth over IPC (login/logout/update-credentials)
+- **What:** Implemented `auth.repository.js` (`findByUsername`, `findById`, `usernameTaken`,
+  `updateCredentials`), `auth.service.js` (`login` — bcrypt compare, returns `{user_id, username,
+  role}`; `updateCredentials` — verifies `currentPassword`, allows changing username and/or
+  password together, checks the new username isn't taken via `UQ_users_name` before writing, hashes
+  a new password with bcrypt if provided), and `auth.ipc.js` (`auth:login` calls the service then
+  `session.login(user)`; `auth:logout` calls `session.logout()`; `auth:update-credentials` calls
+  `session.requireSession()` first, then the service).
+- **How:** Kept `auth.service.js` free of any IPC/session import — it just verifies credentials and
+  returns data, so it stays testable without Electron; `session.login()`/`session.requireSession()`
+  are only ever called from the `ipc` layer, matching the layering rule in `CLAUDE.md`.
+- **Files:** `backend/src/repositories/auth.repository.js`, `backend/src/services/auth.service.js`,
+  `backend/src/ipc/auth.ipc.js`, `backend/milestones/milestone1.md`
+- **Pending:** end-to-end verification blocked on `npm install` (package.json's `mssql` swap isn't
+  installed yet) and a live SQL Server instance to seed against.
 
 ### 2026-07-11 — Backend scaffolding & planning docs
 - **What:** Rewrote `System_architecture/database_schema.md` (v3: 21 relations, enums, ledger +

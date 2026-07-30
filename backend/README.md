@@ -18,12 +18,11 @@ Layered architecture: **ipc handler → service → repository → db**.
 | `CLAUDE.md` | Working instructions: workflow rules, architecture, conventions |
 | `PROGRESS.md` | Log of every completed task (what/how/files) |
 | `package.json` | Dependencies and scripts (`dev`, `migrate`, `seed`, `electron:dev`) |
-| `.env.example` | Template for `.env` (MS SQL Server connection: `DB_SERVER`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_ENCRYPT`, `DB_TRUST_SERVER_CERT`) |
+| `.env` | MS SQL Server connection (`DB_SERVER`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_ENCRYPT`, `DB_TRUST_SERVER_CERT`) |
 | `../database/schema.sql` | Schema source of truth — full T-SQL DDL, applied first by `migrate.js` |
 
 ## Quick start
 ```bash
-cp .env.example .env    # fill in your MS SQL Server credentials
 npm install
 npm run migrate         # apply database/schema.sql to local SQL Server
 npm run seed            # admin user + account classes/chart accounts + default store

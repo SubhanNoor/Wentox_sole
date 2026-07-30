@@ -6,15 +6,16 @@ object here, so the two collapse into one file per feature. A file (`<feature>.i
 - registers `ipcMain.handle('<feature>:<action>', wrap((payload) => ...))` channels
 - calls `requireSession()` (or `requireRole('ADMIN')`) from `session.js` first, for anything that
   needs a logged-in user — `auth:login` is the only channel that doesn't
-- calls the matching **service** function and returns its result (the resolved value becomes the
-  renderer's `await window.api.<feature>.<action>(payload)` result)
+- calls the matching **service** function and returns its result — `wrap()` turns that into
+  `{ ok: true, data }`, or `{ ok: false, error }` if the service threw, which is what the renderer's
+  `await window.api.<feature>.<action>(payload)` resolves with (it never rejects; check `.ok`)
 - never contains business logic or SQL
 
 | File | Purpose |
 | --- | --- |
 | `index.js` | Central registrar — calls every feature's `register()` once, from `electron/main.js`, before the `BrowserWindow` loads |
 | `session.js` | In-memory `{ userId, username, role }` session (no JWT/bearer token — renderer and main process share a process tree). `login()`/`logout()`/`current()`/`requireSession()`/`requireRole()` |
-| `wrap.js` | Normalizes an ipc handler's errors into a plain `{ message, code }` shape so `ipcRenderer.invoke` rejects predictably |
+| `wrap.js` | Resolve-always wrapper: success → `{ ok: true, data }`, failure → `{ ok: false, error: { message, code } }` — never throws across IPC, since Electron drops custom properties (like `ApiError`'s `.code`) off anything thrown through `ipcMain.handle`. Logs non-`ApiError` failures via `console.error` before sanitizing them. |
 | `auth.ipc.js` | Login (no session required) + update credentials (UC-02/03/04) |
 | `cities.ipc.js` | City setup CRUD (UC-11) |
 | `regions.ipc.js` (Milestone 8) | Region setup CRUD (UC-12) |

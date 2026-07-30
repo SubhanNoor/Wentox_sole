@@ -58,8 +58,11 @@ electron/          → main.js (registers IPC, opens BrowserWindow), preload.js 
 - **Auth:** no JWT/bearer token — `src/ipc/session.js` holds an in-memory `{ userId, username, role }`
   set by `auth:login`. Every ipc handler that needs a logged-in user calls `requireSession()` (or
   `requireRole('ADMIN')`) first; `auth:login` is the only channel that doesn't.
-- **Errors:** throw `ApiError` from services; `src/ipc/wrap.js` catches it and re-throws a plain
-  `{ message, code }` so the renderer's `await window.api.x.y()` rejects predictably. Never format
+- **Errors:** throw `ApiError` from services; `src/ipc/wrap.js` catches it and **resolves** (never
+  throws back across IPC) `{ ok: false, error: { message, code } }` — Electron strips custom
+  properties like `.code` off anything thrown through `ipcMain.handle`, so `wrap.js` sidesteps that
+  by never throwing across the boundary. Success resolves `{ ok: true, data }`. Non-`ApiError`
+  failures are logged via `console.error` before being sanitized to `code: 'INTERNAL'`. Never format
   errors inside an `ipc` handler itself.
 - **Migrations:** the schema source of truth is `../database/schema.sql` (T-SQL, generated from
   `database_schema_v4.3.md`, applied first by `migrate.js`) — never edit it once applied; any

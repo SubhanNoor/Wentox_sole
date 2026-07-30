@@ -64,8 +64,10 @@ before it.
 3. `src/middleware/auth.js` (JWT verification) replaced by `src/ipc/session.js` — an in-memory
    `{ userId, username, role }` set by `auth:login`, checked via `requireSession()`/`requireRole()`
    in any handler that needs a logged-in user. `src/middleware/errorHandler.js` replaced by
-   `src/ipc/wrap.js`, which normalizes a thrown `ApiError` into a plain `{ message, code }` so
-   `ipcRenderer.invoke` rejects predictably.
+   `src/ipc/wrap.js`, which **resolves** `{ ok: true, data }` or `{ ok: false, error: { message,
+   code } }` — never throws across IPC, since Electron drops custom error properties (like
+   `ApiError`'s `.code`) off anything thrown through `ipcMain.handle`; found and fixed during the
+   Module 1.3 debug pass (see `PROGRESS.md`).
 4. `electron/main.js` now calls `src/ipc/index.js`'s registrar before opening the `BrowserWindow`
    (previously it started the Express server); `electron/preload.js` exposes
    `window.api.<feature>.<action>(payload)` via `contextBridge` instead of just an API base URL.
