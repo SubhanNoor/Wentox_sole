@@ -1,8 +1,9 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import type { Expense } from '@/types';
+import type { Expense, ExpenseMode } from '@/types';
 import { Save, Wallet } from 'lucide-react';
+import { getUnallocatedCheque } from '@/lib/cashbank';
 import SearchableSelect from '@/components/SearchableSelect';
 import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
 import MonthlyExpensesTab from '@/components/MonthlyExpensesTab';
@@ -18,9 +19,40 @@ export default function ExpensesPage() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [businessAccountId, setBusinessAccountId] = useState('');
   const [amount, setAmount] = useState<number>(0);
-  const [paymentMode, setPaymentMode] = useState<'Cash' | 'Cheque' | 'Online'>('Cash');
+  const [paymentMode, setPaymentMode] = useState<ExpenseMode>('Cash');
+  const [bankId, setBankId] = useState('');
+  const [chequeId, setChequeId] = useState('');
+  const [issuedChequeNo, setIssuedChequeNo] = useState('');
+  const [issuedChequeDate, setIssuedChequeDate] = useState('');
   const [details, setDetails] = useState('');
   const [remarks, setRemarks] = useState('');
+
+  const bankOptions = useMemo(
+    () => state.bankAccounts.map(b => ({ value: b.id, label: b.name })),
+    [state.bankAccounts]
+  );
+
+  // Cheques still in the drawer with value left — the only ones that can be
+  // handed on. A fully-endorsed or bounced cheque must not appear here.
+  const endorsableCheques = useMemo(() => {
+    return state.receipts
+      .filter(r => r.paymentMode === 'Cheque' && r.chequeStatus !== 'BOUNCED')
+      .map(r => ({ receipt: r, left: getUnallocatedCheque(state, r.id) }))
+      .filter(x => x.left > 0)
+      .map(x => ({
+        value: x.receipt.id,
+        label: `${x.receipt.chequeNo || 'Cheque'} — ${formatCurrency(x.left)} left`
+      }));
+  }, [state]);
+
+  const resetModeFields = (mode: ExpenseMode) => {
+    setPaymentMode(mode);
+    setBankId('');
+    setChequeId('');
+    setIssuedChequeNo('');
+    setIssuedChequeDate('');
+    if (mode === 'Cash') setDetails('');
+  };
 
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
@@ -51,12 +83,33 @@ export default function ExpensesPage() {
     if (!businessAccountId) return setErrorMsg('Please select a business account.');
     if (amount <= 0) return setErrorMsg('Amount must be greater than 0.');
 
+    // Every mode except cash has to say WHICH account the money left, or the
+    // entry is one-sided and no bank balance can ever be trusted.
+    if ((paymentMode === 'Online' || paymentMode === 'ChequeIssued') && !bankId) {
+      return setErrorMsg('Select which bank account this payment leaves.');
+    }
+    if (paymentMode === 'ChequeIssued') {
+      if (!issuedChequeNo.trim()) return setErrorMsg('Enter the cheque number.');
+      if (!issuedChequeDate) return setErrorMsg('Enter the date on the cheque.');
+    }
+    if (paymentMode === 'ChequeEndorsed') {
+      if (!chequeId) return setErrorMsg('Pick which received cheque is being handed over.');
+      const left = getUnallocatedCheque(state, chequeId);
+      if (amount > left) {
+        return setErrorMsg(`That cheque only has ${formatCurrency(left)} left unallocated.`);
+      }
+    }
+
     const newExpense: Expense = {
       id: 'exp_' + Date.now(),
       date,
       businessAccountId,
       amount,
       paymentMode,
+      bankId: (paymentMode === 'Online' || paymentMode === 'ChequeIssued') ? bankId : undefined,
+      chequeId: paymentMode === 'ChequeEndorsed' ? chequeId : undefined,
+      issuedChequeNo: paymentMode === 'ChequeIssued' ? issuedChequeNo.trim() : undefined,
+      issuedChequeDate: paymentMode === 'ChequeIssued' ? issuedChequeDate : undefined,
       details,
       remarks
     };
@@ -75,6 +128,7 @@ export default function ExpensesPage() {
     setAmount(0);
     setDetails('');
     setRemarks('');
+    resetModeFields('Cash');
     setErrorMsg('');
   };
 
@@ -211,41 +265,114 @@ export default function ExpensesPage() {
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Payment Mode</label>
-                  <div className="grid grid-cols-3 gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
-                    <button
-                      type="button"
-                      onClick={() => { setPaymentMode('Cash'); setDetails(''); }}
-                      className={`py-2 rounded-md transition-colors ${paymentMode === 'Cash' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-                    >
-                      Cash
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPaymentMode('Cheque')}
-                      className={`py-2 rounded-md transition-colors ${paymentMode === 'Cheque' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-                    >
-                      Cheque
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPaymentMode('Online')}
-                      className={`py-2 rounded-md transition-colors ${paymentMode === 'Online' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-                    >
-                      Online
-                    </button>
+                  {/*
+                    Four modes, not three. "Cheque" split in two because they
+                    take money from DIFFERENT places: endorsing hands on a
+                    customer's cheque out of Cheques in Hand, while issuing
+                    writes our own and draws on a bank.
+                  */}
+                  <div className="grid grid-cols-2 gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
+                    {([
+                      { m: 'Cash' as ExpenseMode, label: 'Cash', hint: 'from Petty Cash' },
+                      { m: 'Online' as ExpenseMode, label: 'Online', hint: 'from a bank' },
+                      { m: 'ChequeIssued' as ExpenseMode, label: 'Cheque — Issue', hint: 'we write it' },
+                      { m: 'ChequeEndorsed' as ExpenseMode, label: 'Cheque — Endorse', hint: 'hand on a received one' },
+                    ]).map(opt => (
+                      <button
+                        key={opt.m}
+                        type="button"
+                        onClick={() => resetModeFields(opt.m)}
+                        className={`py-2 px-1 rounded-md transition-colors leading-tight ${paymentMode === opt.m ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                      >
+                        <span className="block">{opt.label}</span>
+                        <span className="block text-[10px] font-medium text-slate-400">{opt.hint}</span>
+                      </button>
+                    ))}
                   </div>
                 </div>
+
+                {(paymentMode === 'Online' || paymentMode === 'ChequeIssued') && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      Paid From <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    {state.bankAccounts.length === 0 ? (
+                      <div className="soleria-input text-rose-600 text-sm flex items-center font-semibold">
+                        Add a bank account first
+                      </div>
+                    ) : (
+                      <SearchableSelect
+                        options={bankOptions}
+                        value={bankId}
+                        onChange={setBankId}
+                        placeholder="Select bank account..."
+                      />
+                    )}
+                  </div>
+                )}
+
+                {paymentMode === 'ChequeIssued' && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        Cheque No. <span className="text-red-500 font-bold">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={issuedChequeNo}
+                        onChange={e => setIssuedChequeNo(e.target.value)}
+                        placeholder="e.g. 441098"
+                        className="soleria-input font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        Cheque Date <span className="text-red-500 font-bold">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        value={issuedChequeDate}
+                        onChange={e => setIssuedChequeDate(e.target.value)}
+                        className="soleria-input"
+                      />
+                    </div>
+                    <p className="col-span-2 text-[10px] text-slate-400 -mt-1">
+                      The bank is reduced on the date the cheque is written, not when it clears —
+                      so this balance shows what you have committed, not what the bank would say today.
+                    </p>
+                  </div>
+                )}
+
+                {paymentMode === 'ChequeEndorsed' && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      Which Received Cheque <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    {endorsableCheques.length === 0 ? (
+                      <div className="soleria-input text-slate-400 text-sm flex items-center">
+                        No cheques in hand with value left
+                      </div>
+                    ) : (
+                      <SearchableSelect
+                        options={endorsableCheques}
+                        value={chequeId}
+                        onChange={setChequeId}
+                        placeholder="Select cheque to endorse..."
+                      />
+                    )}
+                  </div>
+                )}
 
                 {paymentMode !== 'Cash' && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      {paymentMode === 'Cheque' ? 'Cheque No. & Bank Name' : 'Online Reference Code / Details'}
+                      {paymentMode === 'Online' ? 'Online Reference Code / Details' : 'Details'}
                     </label>
                     <input
                       type="text"
                       value={details}
                       onChange={e => setDetails(e.target.value)}
-                      placeholder={paymentMode === 'Cheque' ? 'e.g. MCB Cheque No. 982341' : 'e.g. Alfa ref 980124'}
+                      placeholder={paymentMode === 'Online' ? 'e.g. Alfa ref 980124' : 'Optional notes'}
                       className="soleria-input"
                     />
                   </div>

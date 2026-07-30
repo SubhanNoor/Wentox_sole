@@ -128,6 +128,47 @@ export interface BusinessAccount {
   linkCode: string;
   region: string; // LOCAL etc.
   status: 'Active' | 'Closed';
+  /**
+   * What the account already held before WentoX started recording it.
+   * A stored INPUT, not a stored balance — the running balance is still
+   * derived, it just starts here instead of at zero. Lives on the business
+   * account rather than on `BankAccount` because cash needs one, every bank
+   * needs one, and so will every customer and vendor at legacy import.
+   */
+  openingBalance?: number;
+  openingDate?: string;
+}
+
+/**
+ * One of WentoX's own bank accounts. Same party pattern as Vendor and Employee:
+ * a profile row plus a unique `baId` — here under BANK ACCOUNTS (120002), a
+ * chart account naming the KIND, with banks as the instances beneath it.
+ */
+export interface BankAccount {
+  id: string;
+  name: string;       // 'Bank Alfalah A/C - 0124'
+  accountNo?: string;
+  branch?: string;
+  baId: string;       // linked Business Account under BANK ACCOUNTS (120002)
+}
+
+/**
+ * Money moved between WentoX's OWN accounts — cash banked, bank to bank, or a
+ * withdrawal to pay wages in cash.
+ *
+ * Neither a receipt nor an expense: nobody paid us and we paid nobody.
+ * Recording it as an expense-plus-receipt pair would inflate both income and
+ * expenditure with money that never left the business, so every report built on
+ * those totals would read wrong. Hence its own document — and it must be
+ * excluded from every income and expense total.
+ */
+export interface Transfer {
+  id: string;
+  date: string;
+  fromBaId: string;
+  toBaId: string;
+  amount: number;
+  remarks?: string;
 }
 
 export interface Customer {
@@ -210,18 +251,29 @@ export type ChequeStatus = 'PENDING' | 'DEPOSITED' | 'ENDORSED' | 'PARTIALLY_END
 // Director Expenses - Drawings accounts.
 export type UserRole = 'Admin' | 'User';
 
+/** You can only ever RECEIVE someone else's cheque, so no split is needed here. */
+export type ReceiptMode = 'Cash' | 'Cheque' | 'Online';
+
 export interface Receipt {
   id: string; // Auto PK
   date: string;
   customerId: string;
   amount: number;
   commission?: number; // payment-time only, reduces payable — never changes the sale bill
-  paymentMode: 'Cash' | 'Cheque' | 'Online';
+  paymentMode: ReceiptMode;
+  /** ONLINE only — which of our bank accounts the money landed in. */
+  bankId?: string;
   details: string; // bank details, online ref, etc.
   chequeNo?: string;
   chequeDate?: string; // date written on the cheque
   chequeReceivedDate?: string; // date physically received
   chequeStatus?: ChequeStatus;
+  /**
+   * CHEQUE only — which bank it was deposited into. Held on the cheque (here,
+   * the receipt) rather than on the allocation, because one cheque is never
+   * split across two banks. Set when the DEPOSIT disposition is recorded.
+   */
+  depositBankId?: string;
   bouncedDate?: string; // date the bounce was recorded — reversing entries are dated here
   remarks: string;
 }
@@ -265,12 +317,32 @@ export interface AppAlert {
   targetTab?: string;
 }
 
+/**
+ * "Cheque" means two different things when money goes OUT, and they credit
+ * different accounts — so they are different modes, not one:
+ *
+ *   ChequeEndorsed  hand on a cheque a customer gave us  → Cr CHEQUES IN HAND
+ *   ChequeIssued    write our own cheque on our bank     → Cr the selected bank
+ */
+export type ExpenseMode = 'Cash' | 'ChequeEndorsed' | 'ChequeIssued' | 'Online';
+
 export interface Expense {
   id: string; // Auto PK
   date: string;
-  businessAccountId: string;
+  businessAccountId: string;   // WHO was paid
   amount: number;
-  paymentMode: 'Cash' | 'Cheque' | 'Online';
+  paymentMode: ExpenseMode;
+  /** Online and ChequeIssued — which of our accounts the money left. */
+  bankId?: string;
+  /** ChequeEndorsed — the receipt holding the cheque being handed on. */
+  chequeId?: string;
+  /**
+   * ChequeIssued — the cheque we wrote. Deliberately not a cheque record of its
+   * own: the bank is deducted the day it is written, so there is no pending
+   * state to model — only the number and date, for tracing it on a statement.
+   */
+  issuedChequeNo?: string;
+  issuedChequeDate?: string;
   details: string;
   remarks: string;
 }
@@ -408,6 +480,8 @@ export type NavPage =
   | 'expenses-entry'
   | 'wage-run'
   | 'salary-run'
+  | 'transfer'
+  | 'setup-bank'
   | 'setup-product'
   | 'setup-category'
   | 'setup-vendor'

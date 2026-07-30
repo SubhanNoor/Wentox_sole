@@ -3,12 +3,17 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Printer, Search, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { expenseModeLabel, getAccountBalance, getCashAccount } from '@/lib/cashbank';
+import type { ReceiptMode, ExpenseMode } from '@/types';
 
 interface CashBookRow {
   date: string;
   accountName: string;
   remarks: string;
-  mode: 'Cash' | 'Cheque' | 'Online';
+  // Widened for the two outgoing cheque modes. Rendered through
+  // expenseModeLabel so the column still reads "Cheque (Issued)" rather than
+  // exposing the internal spelling.
+  mode: ReceiptMode | ExpenseMode;
   chequeNo: string;
   direction: 'Receipt' | 'Payment';
   amount: number;
@@ -145,7 +150,7 @@ export function ReportCashBookContent() {
     return cashBookRows.filter(r =>
       r.accountName.toLowerCase().includes(q) ||
       r.remarks.toLowerCase().includes(q) ||
-      r.mode.toLowerCase().includes(q)
+      expenseModeLabel(r.mode as never).toLowerCase().includes(q)
     );
   }, [cashBookRows, searchQuery]);
 
@@ -163,16 +168,23 @@ export function ReportCashBookContent() {
     }, { receiptsChequeOnline: 0, paymentsChequeOnline: 0, receiptsCash: 0, paymentsCash: 0 });
   }, [filteredRows]);
 
-  // Opening Cash: net of all CASH receipts/expenses strictly before the period start
+  // Opening Cash: what the cash account held at the close of the previous day.
+  //
+  // Was a local sum of prior CASH receipts minus expenses, which is now wrong
+  // twice over: it ignores the account's opening balance, and it ignores
+  // transfers — and banking the day's takings is a cash movement that no
+  // receipt or expense records. Deferring to the shared helper keeps this page,
+  // the Bank Accounts page and the account ledgers on one definition.
   const openingCash = useMemo(() => {
-    const priorCashReceipts = state.receipts
-      .filter(r => r.paymentMode === 'Cash' && r.date < periodStart)
-      .reduce((sum, r) => sum + r.amount, 0);
-    const priorCashExpenses = state.expenses
-      .filter(e => e.paymentMode === 'Cash' && e.date < periodStart)
-      .reduce((sum, e) => sum + e.amount, 0);
-    return priorCashReceipts - priorCashExpenses;
-  }, [state.receipts, state.expenses, periodStart]);
+    const cash = getCashAccount(state);
+    if (!cash) return 0;
+    const dayBefore = (() => {
+      const d = new Date(periodStart);
+      d.setDate(d.getDate() - 1);
+      return d.toISOString().split('T')[0];
+    })();
+    return getAccountBalance(state, cash.id, dayBefore);
+  }, [state, periodStart]);
 
   const totalCash = openingCash + totals.receiptsCash;
   const cashInHand = totalCash - totals.paymentsCash;
@@ -183,7 +195,7 @@ export function ReportCashBookContent() {
       const isCash = row.mode === 'Cash';
       const isReceipt = row.direction === 'Receipt';
       return [
-        idx + 1, row.accountName, row.remarks, row.mode, row.chequeNo,
+        idx + 1, row.accountName, row.remarks, expenseModeLabel(row.mode as never), row.chequeNo,
         isReceipt && !isCash ? row.amount : '',
         !isReceipt && !isCash ? row.amount : '',
         isReceipt && isCash ? row.amount : '',
@@ -352,7 +364,7 @@ export function ReportCashBookContent() {
                         <td className="p-3 text-xs text-slate-500">{row.remarks}</td>
                         <td className="p-3 text-center">
                           <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700 border uppercase">
-                            {row.mode}
+                            {expenseModeLabel(row.mode as never)}
                           </span>
                         </td>
                         <td className="p-3 text-center font-mono text-xs text-slate-500">{row.chequeNo}</td>

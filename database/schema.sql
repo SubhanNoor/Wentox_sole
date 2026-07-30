@@ -348,6 +348,15 @@ CREATE TABLE dbo.business_accounts (
   link_code   VARCHAR(20)   NULL,
   region_id   INT           NULL,
   city_id     INT           NULL,                             -- UC-36 City column; not inherited from customer
+  -- What the account already held before WentoX started recording it. A stored
+  -- INPUT, not a stored balance -- the running balance is still derived, it just
+  -- starts here instead of at zero.
+  -- On business_accounts rather than bank_accounts on purpose: cash needs one,
+  -- every bank needs one, and so will all 218+ customer/vendor accounts when the
+  -- client's legacy ledger is imported. One mechanism beats a bank-only field
+  -- that gets reinvented three more times.
+  opening_balance DECIMAL(14,2) NULL,
+  opening_date    DATE          NULL,
   status      VARCHAR(10)   NOT NULL CONSTRAINT DF_ba_status  DEFAULT ('ACTIVE'),
   created_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_ba_created DEFAULT (SYSUTCDATETIME()),
   updated_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_ba_updated DEFAULT (SYSUTCDATETIME()),
@@ -356,7 +365,12 @@ CREATE TABLE dbo.business_accounts (
   CONSTRAINT FK_business_accounts_chart  FOREIGN KEY (ac_id)     REFERENCES dbo.chart_of_accounts(ac_id),
   CONSTRAINT FK_business_accounts_region FOREIGN KEY (region_id) REFERENCES dbo.regions(region_id),
   CONSTRAINT FK_business_accounts_city   FOREIGN KEY (city_id)   REFERENCES dbo.cities(city_id),
-  CONSTRAINT CK_business_accounts_status CHECK (status IN ('ACTIVE','CLOSED'))
+  CONSTRAINT CK_business_accounts_status CHECK (status IN ('ACTIVE','CLOSED')),
+  -- An opening balance without a date cannot be placed on a timeline, so a
+  -- ledger could not tell whether it sits before or after the first document.
+  CONSTRAINT CK_business_accounts_opening CHECK (
+        (opening_balance IS NULL     AND opening_date IS NULL)
+     OR (opening_balance IS NOT NULL AND opening_date IS NOT NULL))
 );
 CREATE INDEX IX_business_accounts_chart  ON dbo.business_accounts(ac_id);
 CREATE INDEX IX_business_accounts_region ON dbo.business_accounts(region_id);
@@ -1088,7 +1102,7 @@ GO
 CREATE TABLE dbo.bank_accounts (
   bank_id    INT IDENTITY(1,1) NOT NULL,
   name       NVARCHAR(100) NOT NULL,                          -- e.g. 'Bank Alfalah A/C - 0124'
-  ba_id      INT           NULL,   -- auto-created under CASH AT BANKS chart account on bank create
+  ba_id      INT           NULL,   -- auto-created under the BANK ACCOUNTS chart account (120002) on bank create
   is_active  BIT          NOT NULL CONSTRAINT DF_bankacc_active  DEFAULT (1),
   created_at DATETIME2(0) NOT NULL CONSTRAINT DF_bankacc_created DEFAULT (SYSUTCDATETIME()),
   updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_bankacc_updated DEFAULT (SYSUTCDATETIME()),
@@ -1271,8 +1285,17 @@ CREATE TABLE dbo.expenses (
   amount       DECIMAL(14,2) NOT NULL,
   payment_mode VARCHAR(10)   NOT NULL,
   details      NVARCHAR(200) NULL,
-  cheque_id    INT           NULL,                             -- endorsed cheque, from dbo.cheques
-  bank_id      INT           NULL,                             -- ONLINE only; CHEQUE's bank lives on cheques.bank_id
+  cheque_id    INT           NULL,                             -- CHEQUE_ENDORSED only: the received cheque being handed on
+  bank_id      INT           NULL,                             -- ONLINE and CHEQUE_ISSUED: which of our accounts it leaves
+  -- CHEQUE_ISSUED only: the cheque WE wrote. Deliberately NOT a row in
+  -- dbo.cheques -- that table is for cheques RECEIVED (it requires a
+  -- receipt_id, and its value sits in CHEQUES IN HAND as an asset). A cheque we
+  -- write is the opposite: money leaving a bank. Since the bank is debited the
+  -- day it is written (payroll-style deduct-on-write, cash_and_bank.md SS6),
+  -- there is no pending state to model and no table to add -- just the number
+  -- and date, for the record and for tracing it on a statement later.
+  issued_cheque_no   VARCHAR(50) NULL,
+  issued_cheque_date DATE        NULL,
   remarks      NVARCHAR(500) NULL,
   status       VARCHAR(10)   NOT NULL CONSTRAINT DF_exp_status  DEFAULT ('CONFIRMED'),
   created_by   INT           NULL,
@@ -1286,11 +1309,28 @@ CREATE TABLE dbo.expenses (
   CONSTRAINT FK_expenses_user   FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
   CONSTRAINT FK_expenses_upd    FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id),
   CONSTRAINT CK_expenses_amount CHECK (amount > 0),
-  CONSTRAINT CK_expenses_mode   CHECK (payment_mode IN ('CASH','CHEQUE','ONLINE')),
+  -- 'CHEQUE' split in two, because the two credit DIFFERENT accounts:
+  --   CHEQUE_ENDORSED  hand on a customer's cheque   -> Cr CHEQUES IN HAND
+  --   CHEQUE_ISSUED    write our own cheque          -> Cr the selected bank
+  -- Receipts keep a plain 'CHEQUE': you can only ever RECEIVE someone else's,
+  -- so there is nothing to disambiguate on that side.
+  CONSTRAINT CK_expenses_mode   CHECK (payment_mode IN
+        ('CASH','CHEQUE_ENDORSED','CHEQUE_ISSUED','ONLINE')),
   CONSTRAINT CK_expenses_status CHECK (status IN ('CONFIRMED','DRAFT')),
-  CONSTRAINT CK_expenses_bank   CHECK (
-        (payment_mode = 'ONLINE' AND bank_id IS NOT NULL)
-     OR (payment_mode <> 'ONLINE' AND bank_id IS NULL))
+  -- Each mode carries exactly the identity it needs and nothing it does not.
+  CONSTRAINT CK_expenses_payment CHECK (
+        (payment_mode = 'CASH'
+             AND bank_id IS NULL AND cheque_id IS NULL
+             AND issued_cheque_no IS NULL AND issued_cheque_date IS NULL)
+     OR (payment_mode = 'ONLINE'
+             AND bank_id IS NOT NULL AND cheque_id IS NULL
+             AND issued_cheque_no IS NULL AND issued_cheque_date IS NULL)
+     OR (payment_mode = 'CHEQUE_ENDORSED'
+             AND cheque_id IS NOT NULL AND bank_id IS NULL
+             AND issued_cheque_no IS NULL AND issued_cheque_date IS NULL)
+     OR (payment_mode = 'CHEQUE_ISSUED'
+             AND bank_id IS NOT NULL AND cheque_id IS NULL
+             AND issued_cheque_no IS NOT NULL AND issued_cheque_date IS NOT NULL))
 );
 CREATE INDEX IX_expenses_date ON dbo.expenses(expense_date);
 CREATE INDEX IX_expenses_ba   ON dbo.expenses(ba_id, expense_date);
@@ -1479,7 +1519,11 @@ CREATE TABLE dbo.ledger_entries (
          -- side (Dr WAGES EXPENSE / Cr worker BA); SALARY_RUN is the monthly
          -- salary side (Dr SALARIES EXPENSE / Cr each salaried employee BA).
          -- Paying either is still an EXPENSE row, not a new type.
-         'WAGE_RUN','SALARY_RUN'))
+         'WAGE_RUN','SALARY_RUN',
+         -- Money moved between OUR OWN accounts (cash_and_bank.md SS7).
+         -- Dr destination / Cr source. It is neither income nor expenditure and
+         -- MUST be excluded from every such total -- see dbo.transfers.
+         'TRANSFER'))
 );
 CREATE INDEX IX_ledger_entries_ba     ON dbo.ledger_entries(ba_id, entry_date) WHERE ba_id IS NOT NULL;
 CREATE INDEX IX_ledger_entries_ac     ON dbo.ledger_entries(ac_id, entry_date) WHERE ac_id IS NOT NULL;
@@ -1534,7 +1578,12 @@ CREATE TABLE dbo.cheque_allocations (
   CONSTRAINT CK_cheque_allocations_amount  CHECK (amount > 0),
   CONSTRAINT CK_cheque_allocations_disp    CHECK (disposition_type IN
         ('DEPOSIT','VENDOR_PAYMENT','EXPENSE_PAYMENT')),
-  -- exactly one target column set, and only the one matching the disposition
+  -- exactly one target column set, and only the one matching the disposition.
+  -- DEPOSIT still names NO target here, and that is deliberate: the bank a
+  -- cheque is deposited into lives on dbo.cheques.bank_id, not on the
+  -- allocation, because one cheque is never split across two banks. Whoever
+  -- writes the deposit flow must set cheques.bank_id in the same transaction --
+  -- without it the money leaves CHEQUES IN HAND and lands nowhere.
   CONSTRAINT CK_cheque_allocations_target  CHECK (
         (disposition_type =  'DEPOSIT'         AND target_vendor_id IS NULL     AND target_ba_id IS NULL)
      OR (disposition_type =  'VENDOR_PAYMENT'  AND target_vendor_id IS NOT NULL AND target_ba_id IS NULL)
@@ -1585,6 +1634,54 @@ GO
 -- matching 'CHEQUE_DUE:<receipt_id>' row before showing an amber/red badge
 -- for a cheque due within 7 days / already past due
 -- (sourced from dbo.cheques.cheque_date / cheque_status, not receipts).
+
+/* ----------------------------------------------------------------------------
+   dbo.transfers
+   WHAT:  Money moved between WentoX's OWN accounts — cash banked, one bank to
+          another, or a withdrawal to pay wages in cash.
+   WHY:   This is neither a receipt nor an expense: nobody paid us and we paid
+          nobody. Recording it as an expense-plus-receipt pair (the obvious
+          shortcut) would inflate BOTH income and expenditure with money that
+          never left the business, and every report built on those totals would
+          read wrong.
+   RULE:  A transfer must NEVER appear in an income or expense total. Cash Book,
+          Sale Analysis and the expense reports all have to skip source_type
+          'TRANSFER' explicitly. This is the easiest thing here to get wrong,
+          because a transfer looks like a payment from every angle except the
+          one that counts.
+   NOTE:  from/to are business_accounts, not bank_accounts — cash is a business
+          account too, and bank -> cash is likely the most common direction of
+          all, since piece-rate workers are paid in cash.
+---------------------------------------------------------------------------- */
+CREATE TABLE dbo.transfers (
+  transfer_id   INT IDENTITY(1,1) NOT NULL,
+  transfer_date DATE          NOT NULL,
+  from_ba_id    INT           NOT NULL,
+  to_ba_id      INT           NOT NULL,
+  amount        DECIMAL(14,2) NOT NULL,
+  remarks       NVARCHAR(500) NULL,
+  status        VARCHAR(10)   NOT NULL CONSTRAINT DF_trf_status  DEFAULT ('CONFIRMED'),
+  created_by    INT           NULL,
+  updated_by    INT           NULL,
+  created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_trf_created DEFAULT (SYSUTCDATETIME()),
+  updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_trf_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_transfers        PRIMARY KEY (transfer_id),
+  CONSTRAINT FK_transfers_from   FOREIGN KEY (from_ba_id) REFERENCES dbo.business_accounts(ba_id),
+  CONSTRAINT FK_transfers_to     FOREIGN KEY (to_ba_id)   REFERENCES dbo.business_accounts(ba_id),
+  CONSTRAINT FK_transfers_cby    FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_transfers_uby    FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT CK_transfers_amount CHECK (amount > 0),
+  CONSTRAINT CK_transfers_status CHECK (status IN ('CONFIRMED','DRAFT')),
+  -- Moving money to the account it came from is a no-op that would still show
+  -- as two ledger rows, so it is blocked rather than tolerated.
+  CONSTRAINT CK_transfers_distinct CHECK (from_ba_id <> to_ba_id)
+);
+CREATE INDEX IX_transfers_date ON dbo.transfers(transfer_date);
+CREATE INDEX IX_transfers_from ON dbo.transfers(from_ba_id, transfer_date);
+CREATE INDEX IX_transfers_to   ON dbo.transfers(to_ba_id, transfer_date);
+GO
+-- USED BY: Transfer screen; every cash/bank balance (both sides); Cash Book.
+-- LEDGERS AS: Dr to_ba_id / Cr from_ba_id, source_type 'TRANSFER'.
 
 /* ############################################################################
    PAYROLL — piece-rate wages and monthly salaries.

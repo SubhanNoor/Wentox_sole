@@ -9,6 +9,8 @@ import ReceiptsPage from '@/pages/ReceiptsPage';
 import ExpensesPage from '@/pages/ExpensesPage';
 import WageRunPage from '@/pages/WageRunPage';
 import SalaryRunPage from '@/pages/SalaryRunPage';
+import TransferPage from '@/pages/TransferPage';
+import BankSetupPage from '@/pages/BankSetupPage';
 
 // Setups
 import ProductSetupPage from '@/pages/ProductSetupPage';
@@ -71,6 +73,8 @@ export default function App() {
       return <WageRunPage />;
     case 'salary-run':
       return <SalaryRunPage />;
+    case 'transfer':
+      return <TransferPage />;
 
     // System Setup
     case 'setup-product':
@@ -81,6 +85,8 @@ export default function App() {
       return <VendorSetupPage />;
     case 'setup-employee':
       return <EmployeeSetupPage />;
+    case 'setup-bank':
+      return <BankSetupPage />;
     case 'setup-customer':
       return <CustomerSetupPage />;
     case 'setup-sub-cust':

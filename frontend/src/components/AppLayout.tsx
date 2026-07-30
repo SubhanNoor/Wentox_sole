@@ -4,7 +4,7 @@ import {
   ShoppingCart, Receipt, Package, FileText, Layers,
   Settings, LogOut, Lock, Menu, X, ChevronDown, MapPin, Home,
   Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search, HardHat,
-  BadgeDollarSign
+  BadgeDollarSign, ArrowLeftRight, Landmark
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
@@ -34,6 +34,8 @@ const navSections: NavSection[] = [
       // financial entries. Paying staff is still an Expense above.
       { page: 'wage-run', label: 'Wage Run (Piece Rate)', icon: HardHat },
       { page: 'salary-run', label: 'Salary Run (Monthly)', icon: BadgeDollarSign },
+      // Money between our own accounts — neither income nor expense.
+      { page: 'transfer', label: 'Transfer (Cash \u2194 Bank)', icon: ArrowLeftRight },
     ]
   },
   {
@@ -51,6 +53,7 @@ const navSections: NavSection[] = [
       { page: 'setup-category', label: 'Categories', icon: Layers },
       { page: 'setup-vendor', label: 'Vendors', icon: Truck },
       { page: 'setup-employee', label: 'Employees', icon: HardHat },
+      { page: 'setup-bank', label: 'Bank Accounts', icon: Landmark },
       { page: 'setup-customer', label: 'Customers', icon: Users },
       { page: 'setup-sub-cust', label: 'Sub Customers', icon: Users },
       { page: 'setup-city', label: 'City Creation', icon: MapPin },

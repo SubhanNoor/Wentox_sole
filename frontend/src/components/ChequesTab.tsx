@@ -31,6 +31,10 @@ export default function ChequesTab() {
   const [disposingId, setDisposingId] = useState<string | null>(null);
   const [disposition, setDisposition] = useState<ChequeDisposition>('VENDOR_PAYMENT');
   const [targetId, setTargetId] = useState('');
+  // DEPOSIT only: which of our banks the cheque lands in. Held on the CHEQUE
+  // (receipt.depositBankId), not the allocation, because one cheque is never
+  // split across two banks — cash_and_bank.md SS5.
+  const [depositBankId, setDepositBankId] = useState('');
   const [allocAmount, setAllocAmount] = useState<number>(0);
   const [allocDate, setAllocDate] = useState(todayISO());
   const [allocRemarks, setAllocRemarks] = useState('');
@@ -92,6 +96,7 @@ export default function ChequesTab() {
     setDisposingId(receipt.id);
     setDisposition('VENDOR_PAYMENT');
     setTargetId('');
+    setDepositBankId('');
     setAllocAmount(remaining);          // defaults to the remaining unallocated balance
     setAllocDate(todayISO());
     setAllocRemarks('');
@@ -111,6 +116,10 @@ export default function ChequesTab() {
     if (disposition !== 'DEPOSIT' && !targetId) {
       return setDialogError('Please choose who this cheque is being paid to.');
     }
+    // Without this the money leaves Cheques in Hand and lands nowhere.
+    if (disposition === 'DEPOSIT' && !depositBankId) {
+      return setDialogError('Please choose which bank account this cheque is deposited into.');
+    }
     if (!allocDate) return setDialogError('Please pick an allocation date.');
 
     const allocation: Omit<ChequeAllocation, 'id'> = {
@@ -125,6 +134,14 @@ export default function ChequesTab() {
       remarks: allocRemarks,
       status: 'ACTIVE',
     };
+
+    if (disposition === 'DEPOSIT') {
+      dispatch({
+        type: 'SET_DEPOSIT_BANK',
+        receiptId: disposingRow.receipt.id,
+        bankId: depositBankId
+      });
+    }
 
     dispatch({ type: 'ADD_CHEQUE_ALLOCATION', allocation });
 
@@ -141,6 +158,7 @@ export default function ChequesTab() {
     if (leftover > 0) {
       setAllocAmount(leftover);
       setTargetId('');
+      setDepositBankId('');
       setAllocRemarks('');
       setDialogError('');
     } else {
@@ -412,6 +430,30 @@ export default function ChequesTab() {
                     placeholder="Search & select..."
                     searchPlaceholder="Type to search..."
                   />
+                </div>
+              )}
+
+              {disposition === 'DEPOSIT' && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    Deposit Into <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  {state.bankAccounts.length === 0 ? (
+                    <div className="soleria-input text-rose-600 text-sm flex items-center font-semibold">
+                      Add a bank account first
+                    </div>
+                  ) : (
+                    <SearchableSelect
+                      options={state.bankAccounts.map(b => ({ value: b.id, label: b.name }))}
+                      value={depositBankId}
+                      onChange={setDepositBankId}
+                      placeholder="Select bank account..."
+                      searchPlaceholder="Type to search..."
+                    />
+                  )}
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Without this the cheque leaves Cheques in Hand and lands nowhere.
+                  </p>
                 </div>
               )}
 

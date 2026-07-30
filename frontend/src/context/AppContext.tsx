@@ -6,7 +6,7 @@ import type {
   Customer, SubCustomer, SaleBill, SaleReturn, Purchase, PurchaseReturn,
   Receipt, Expense, ProductionLog, UserRole,
   ChequeAllocation, ChequeStatus, AlertDismissal,
-  WageRun, SalaryRun
+  WageRun, SalaryRun, BankAccount, Transfer
 } from '@/types';
 import { deriveChequeStatus } from '@/lib/cheques';
 
@@ -130,7 +130,10 @@ const demoGroupAccounts: GroupAccount[] = [
 const demoChartAccounts: ChartOfAccount[] = [
   { id: '110001', name: 'CUSTOMERS ACCOUNTS', groupId: '1000', linkCode: 'A', status: 'Active' },
   { id: '120001', name: 'CASH IN HAND', groupId: '1000', linkCode: 'A', status: 'Active' },
-  { id: '120002', name: 'BANK ALFALAH AC - 0124', groupId: '1000', linkCode: 'A', status: 'Active' },
+  // The KIND, not an instance. Named banks are business accounts beneath this,
+  // so a second bank needs no second chart account. Already in
+  // RESTRICTED_CHART_IDS, so the `user` role sees no bank at all.
+  { id: '120002', name: 'BANK ACCOUNTS', groupId: '1000', linkCode: 'A', status: 'Active' },
   // Cheques received but not yet deposited or endorsed (§13). Near-cash, so it
   // sits with cash & bank. An endorsement credits it; a deposit moves it to bank.
   { id: '120003', name: 'CHEQUES IN HAND', groupId: '1000', linkCode: 'A', status: 'Active' },
@@ -164,7 +167,14 @@ const demoBusinessAccounts: BusinessAccount[] = [
   { id: '11000102', name: 'Karachi Boot House (KHI)', controlId: '110001', linkCode: 'A', region: 'SOUTH', status: 'Active' },
   { id: '11000103', name: 'Malik Traders (HYD)', controlId: '110001', linkCode: 'A', region: 'SOUTH', status: 'Active' },
   { id: '11000104', name: 'Mardan Shoe Mart (MRD)', controlId: '110001', linkCode: 'A', region: 'NORTH', status: 'Active' },
-  { id: '12000101', name: 'Lahore Cash Vault', controlId: '120001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  // The single cash account. 4-digit serial like every other new account; the
+  // old 2-digit form caps a chart head at 99 children.
+  { id: '1200010001', name: 'Petty Cash', controlId: '120001', linkCode: 'A', region: 'LOCAL', status: 'Active', openingBalance: 50000, openingDate: '2026-07-01' },
+  // Banks live UNDER the BANK ACCOUNTS chart head, so adding a third is data,
+  // not a schema change. Two here on purpose — a single bank would let the
+  // "which account?" picker look decorative when it is load-bearing.
+  { id: '1200020001', name: 'Bank Alfalah A/C - 0124', controlId: '120002', linkCode: 'A', region: 'LOCAL', status: 'Active', openingBalance: 850000, openingDate: '2026-07-01' },
+  { id: '1200020002', name: 'HBL A/C - 4419', controlId: '120002', linkCode: 'A', region: 'LOCAL', status: 'Active', openingBalance: 320000, openingDate: '2026-07-01' },
   { id: '42000101', name: 'Office Utilities A/C', controlId: '420001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '21000101', name: 'Decent Polyurethane A/C', controlId: '210001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '21000102', name: 'Lahore Chemical Industries A/C', controlId: '210001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
@@ -302,8 +312,24 @@ const demoReceipts: Receipt[] = [
 ];
 
 const demoExpenses: Expense[] = [
-  { id: 'exp1', date: '2026-07-02', businessAccountId: '42000101', amount: 3500, paymentMode: 'Cash', details: 'Office utilities bill payment', remarks: 'Paid via Cash Vault' },
-  { id: 'exp2', date: '2026-07-05', businessAccountId: '21000101', amount: 15000, paymentMode: 'Cheque', details: 'Cheque No. 441098 HBL', remarks: 'Paid to Decent PU' }
+  { id: 'exp1', date: '2026-07-02', businessAccountId: '42000101', amount: 3500, paymentMode: 'Cash', details: 'Office utilities bill payment', remarks: 'Paid from petty cash' },
+  // Was paymentMode 'Cheque' with the number buried in free text ("Cheque No.
+  // 441098 HBL"). It is a cheque WentoX wrote, so it is ChequeIssued, drawn on
+  // a real bank account, with the number in its own field.
+  { id: 'exp2', date: '2026-07-05', businessAccountId: '21000101', amount: 15000, paymentMode: 'ChequeIssued', bankId: 'bank2', issuedChequeNo: '441098', issuedChequeDate: '2026-07-05', details: 'Raw material payment', remarks: 'Paid to Decent PU' }
+];
+
+// WentoX's own bank accounts. Same party pattern as vendors and employees:
+// profile row plus a unique baId under BANK ACCOUNTS (120002).
+const demoBankAccounts: BankAccount[] = [
+  { id: 'bank1', name: 'Bank Alfalah A/C - 0124', accountNo: '0124-7901-33', branch: 'Gulberg, Lahore', baId: '1200020001' },
+  { id: 'bank2', name: 'HBL A/C - 4419', accountNo: '4419-0088-21', branch: 'Shahalam, Lahore', baId: '1200020002' },
+];
+
+// Cash banked on the 6th: takings out of petty cash into Alfalah. Neither
+// income nor expense — which is exactly why it needs its own document.
+const demoTransfers: Transfer[] = [
+  { id: 'trf1', date: '2026-07-06', fromBaId: '1200010001', toBaId: '1200020001', amount: 40000, remarks: 'Cash takings banked' },
 ];
 
 const demoPurchases: Purchase[] = [
@@ -341,6 +367,8 @@ export interface State {
   addas: Adda[];
   vendors: Vendor[];
   employees: Employee[];
+  bankAccounts: BankAccount[];
+  transfers: Transfer[];
   categories: ProductCategory[];
   products: Product[];
   
@@ -387,6 +415,9 @@ type Action =
   | { type: 'ADD_EMPLOYEE'; employee: Employee }
   | { type: 'UPDATE_EMPLOYEE'; employee: Employee }
   | { type: 'DELETE_EMPLOYEE'; id: string }
+  | { type: 'ADD_BANK_ACCOUNT'; bank: BankAccount }
+  | { type: 'UPDATE_BANK_ACCOUNT'; bank: BankAccount }
+  | { type: 'DELETE_BANK_ACCOUNT'; id: string }
   | { type: 'ADD_CITY'; city: City }
   | { type: 'UPDATE_CITY'; city: City }
   | { type: 'DELETE_CITY'; id: string }
@@ -441,6 +472,9 @@ type Action =
   // The id is assigned by the reducer, not the caller — mirrors a real API
   // where the server owns identity, and keeps the page component pure.
   | { type: 'ADD_CHEQUE_ALLOCATION'; allocation: Omit<ChequeAllocation, 'id'> }
+  // Which of our banks a received cheque was deposited into. On the cheque
+  // rather than the allocation: one cheque is never split across two banks.
+  | { type: 'SET_DEPOSIT_BANK'; receiptId: string; bankId: string }
   | { type: 'MARK_CHEQUE_CLEARED'; receiptId: string }
   | { type: 'BOUNCE_CHEQUE'; receiptId: string; bouncedDate: string }
 
@@ -461,6 +495,11 @@ type Action =
   | { type: 'DELETE_WAGE_RUN'; runId: string }
   | { type: 'POST_WAGE_RUN'; runId: string }
   | { type: 'UNPOST_WAGE_RUN'; runId: string; unpostedAt: string }
+  // Money between our own accounts. Deliberately NOT an expense+receipt pair —
+  // that would inflate both totals with money that never left the business.
+  | { type: 'ADD_TRANSFER'; transfer: Transfer }
+  | { type: 'DELETE_TRANSFER'; id: string }
+
   | { type: 'ADD_SALARY_RUN'; run: SalaryRun }
   | { type: 'UPDATE_SALARY_RUN'; runId: string; run: SalaryRun }
   | { type: 'DELETE_SALARY_RUN'; runId: string }
@@ -484,6 +523,8 @@ const initialState: State = {
   addas: demoAddas,
   vendors: demoVendors,
   employees: demoEmployees,
+  bankAccounts: demoBankAccounts,
+  transfers: demoTransfers,
   categories: demoCategories,
   products: demoProducts,
   
@@ -594,6 +635,34 @@ function reducer(state: State, action: Action): State {
           : state.businessAccounts
       };
     }
+    /* ──── Bank Account Handlers ──── */
+    case 'ADD_BANK_ACCOUNT':
+      return { ...state, bankAccounts: [...state.bankAccounts, action.bank] };
+    case 'UPDATE_BANK_ACCOUNT':
+      return {
+        ...state,
+        bankAccounts: state.bankAccounts.map(b => b.id === action.bank.id ? action.bank : b),
+        businessAccounts: state.businessAccounts.map(b =>
+          b.id === action.bank.baId ? { ...b, name: action.bank.name } : b
+        )
+      };
+    case 'DELETE_BANK_ACCOUNT': {
+      const deleted = state.bankAccounts.find(b => b.id === action.id);
+      return {
+        ...state,
+        bankAccounts: state.bankAccounts.filter(b => b.id !== action.id),
+        businessAccounts: deleted
+          ? state.businessAccounts.filter(b => b.id !== deleted.baId)
+          : state.businessAccounts
+      };
+    }
+
+    /* ──── Transfer Handlers ──── */
+    case 'ADD_TRANSFER':
+      return { ...state, transfers: [action.transfer, ...state.transfers] };
+    case 'DELETE_TRANSFER':
+      return { ...state, transfers: state.transfers.filter(t => t.id !== action.id) };
+
     case 'ADD_CITY':
       return { ...state, cities: [...state.cities, action.city] };
     case 'UPDATE_CITY':
@@ -935,6 +1004,13 @@ function reducer(state: State, action: Action): State {
         )
       };
     }
+    case 'SET_DEPOSIT_BANK':
+      return {
+        ...state,
+        receipts: state.receipts.map(r =>
+          r.id === action.receiptId ? { ...r, depositBankId: action.bankId } : r
+        )
+      };
     case 'MARK_CHEQUE_CLEARED':
       return {
         ...state,

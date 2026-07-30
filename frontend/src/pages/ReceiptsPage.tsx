@@ -8,6 +8,7 @@ import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
 import ChequesTab from '@/components/ChequesTab';
+import SearchableSelect from '@/components/SearchableSelect';
 
 type ReceiptTab = 'entry' | 'weekly' | 'monthly' | 'overall' | 'cheques';
 
@@ -26,6 +27,9 @@ export default function ReceiptsPage() {
   const [amount, setAmount] = useState<number>(0);
   const [commission, setCommission] = useState<number>(0);
   const [paymentMode, setPaymentMode] = useState<'Cash' | 'Cheque' | 'Online'>('Cash');
+  // ONLINE only — which of our accounts the money landed in. Without it the
+  // receipt is one-sided and no bank balance can be trusted.
+  const [bankId, setBankId] = useState('');
   const [details, setDetails] = useState('');
   const [chequeNo, setChequeNo] = useState('');
   const [chequeDate, setChequeDate] = useState('');
@@ -93,6 +97,7 @@ export default function ReceiptsPage() {
     if (amount <= 0) return setErrorMsg('Amount must be greater than 0.');
     if (paymentMode === 'Cheque' && !chequeNo.trim()) return setErrorMsg('Cheque No. is required for cheque payments.');
     if (paymentMode === 'Cheque' && !chequeDate) return setErrorMsg('Date on Cheque is required for cheque payments.');
+    if (paymentMode === 'Online' && !bankId) return setErrorMsg('Select which bank account received this money.');
 
     const newReceipt: Receipt = {
       id: 'rc_' + Date.now(),
@@ -101,6 +106,7 @@ export default function ReceiptsPage() {
       amount,
       commission: commission || undefined,
       paymentMode,
+      bankId: paymentMode === 'Online' ? bankId : undefined,
       details,
       ...(paymentMode === 'Cheque' ? {
         chequeNo: chequeNo.trim(),
@@ -120,6 +126,7 @@ export default function ReceiptsPage() {
     // Reset Form
     setCustomerId('');
     setCustomerSearchQuery('');
+    setBankId('');
     setAmount(0);
     setCommission(0);
     setDetails('');
@@ -365,10 +372,37 @@ export default function ReceiptsPage() {
                   </div>
                 </div>
 
+                {paymentMode === 'Online' && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      Received Into <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    {state.bankAccounts.length === 0 ? (
+                      <div className="soleria-input text-rose-600 text-sm flex items-center font-semibold">
+                        Add a bank account first
+                      </div>
+                    ) : (
+                      <SearchableSelect
+                        options={state.bankAccounts.map(b => ({ value: b.id, label: b.name }))}
+                        value={bankId}
+                        onChange={setBankId}
+                        placeholder="Select bank account..."
+                      />
+                    )}
+                  </div>
+                )}
+
+                {paymentMode === 'Cheque' && (
+                  <p className="text-[11px] text-slate-500 -mt-2">
+                    A received cheque goes into <strong>Cheques in Hand</strong>, not a bank. You
+                    choose the bank later, when it is deposited.
+                  </p>
+                )}
+
                 {paymentMode !== 'Cash' && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      {paymentMode === 'Cheque' ? 'Bank Name / Details' : 'Online Reference Code / Details'}
+                      {paymentMode === 'Cheque' ? 'Drawn On (customer\'s bank) / Details' : 'Online Reference Code / Details'}
                     </label>
                     <input
                       type="text"

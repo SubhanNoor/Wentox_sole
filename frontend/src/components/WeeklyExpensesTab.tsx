@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useApp, formatCurrency, isDateInCurrentWeek } from '@/context/AppContext';
 import type { Expense, BusinessAccount } from '@/types';
 import { Calendar, Search, ArrowRight, ArrowLeft, FileText, DollarSign, Landmark, CreditCard } from 'lucide-react';
+import { isChequeMode, expenseModeLabel } from '@/lib/cashbank';
 
 export default function WeeklyExpensesTab() {
   const { state } = useApp();
@@ -137,11 +138,11 @@ export default function WeeklyExpensesTab() {
                     </span>
                   </td>
                   <td className="p-3.5 text-center">
-                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${e.paymentMode === 'Cash' ? 'bg-green-50 text-green-700 border border-green-200' : e.paymentMode === 'Cheque' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-indigo-50 text-indigo-700 border border-indigo-200'}`}>
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${e.paymentMode === 'Cash' ? 'bg-green-50 text-green-700 border border-green-200' : isChequeMode(e.paymentMode) ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-indigo-50 text-indigo-700 border border-indigo-200'}`}>
                       {e.paymentMode === 'Cash' && <DollarSign size={10} />}
-                      {e.paymentMode === 'Cheque' && <Landmark size={10} />}
+                      {isChequeMode(e.paymentMode) && <Landmark size={10} />}
                       {e.paymentMode === 'Online' && <CreditCard size={10} />}
-                      {e.paymentMode}
+                      {expenseModeLabel(e.paymentMode)}
                     </span>
                   </td>
                   <td className="p-3.5 text-slate-600 font-medium">{e.details || '-'}</td>
