@@ -1,5 +1,5 @@
 // Controller layer: req/res handling only — no business logic, no SQL.
-const service = require('../services/controlAccounts.service');
+const service = require('../services/regions.service');
 
 // TODO(milestone): implement handlers, e.g.:
 // exports.list = async (req, res, next) => {
