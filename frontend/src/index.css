@@ -285,6 +285,33 @@
     animation: solera-pulse 2.8s ease-in-out infinite;
     transform-origin: left;
   }
+
+  /* Modal entrance — backdrop fade + panel scale-up, used across every
+     dialog (Add Stock, Dispose of Cheque, account detail windows, etc). */
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes scaleUp {
+    from { opacity: 0; transform: scale(0.96) translateY(4px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+  .animate-fadeIn {
+    animation: fadeIn 0.18s ease-out;
+  }
+  .animate-scaleUp {
+    animation: scaleUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  /* Page content entrance — every page mounts fresh (no router), so this
+     retriggers automatically on each navigation without extra plumbing. */
+  @keyframes pageIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-pageIn {
+    animation: pageIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  }
 }
 
 /* Responsive: stack client name/phone instead of squeezing side-by-side */

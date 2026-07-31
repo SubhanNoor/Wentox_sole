@@ -1,7 +1,7 @@
-import { useState, useMemo } from 'react';
+import { Fragment, useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Trash2, Edit2, Search, ArrowLeft, Settings, Save } from 'lucide-react';
+import { Plus, Trash2, Edit2, Search, ArrowLeft, Settings, Save, ChevronDown, ChevronRight } from 'lucide-react';
 
 export default function CategorySetupPage() {
   const { state, dispatch } = useApp();
@@ -12,6 +12,10 @@ export default function CategorySetupPage() {
 
   // Editing state
   const [selectedCatId, setSelectedCatId] = useState<string | null>(null);
+
+  // Drill-down: clicking a category row expands it to show every product
+  // registered under that category, instead of jumping straight to edit.
+  const [expandedCatId, setExpandedCatId] = useState<string | null>(null);
 
   // Form State
   const [catName, setCatName] = useState('');
@@ -154,7 +158,8 @@ export default function CategorySetupPage() {
               <table className="w-full text-left border-collapse text-sm">
                 <thead>
                   <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                    <th className="p-3 pl-4">Category ID</th>
+                    <th className="p-3 pl-4" style={{ width: '30px' }}></th>
+                    <th className="p-3">Category ID</th>
                     <th className="p-3">Category Name</th>
                     <th className="p-3 text-center">Associated Products</th>
                     <th className="p-3 text-center" style={{ width: '80px' }}>Actions</th>
@@ -163,42 +168,81 @@ export default function CategorySetupPage() {
                 <tbody>
                   {filteredCategories.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="text-center p-8 text-slate-400">
+                      <td colSpan={5} className="text-center p-8 text-slate-400">
                         No registered categories found.
                       </td>
                     </tr>
                   ) : (
                     filteredCategories.map(cat => {
-                      const associatedCount = state.products.filter(p => p.categoryId === cat.id).length;
+                      const associatedProducts = state.products.filter(p => p.categoryId === cat.id);
+                      const isExpanded = expandedCatId === cat.id;
 
                       return (
-                        <tr
-                          key={cat.id}
-                          className="border-b hover:bg-slate-50/50 transition-colors"
-                          style={{ borderColor: 'var(--border-table)' }}
-                        >
-                          <td className="p-3 pl-4 font-semibold text-slate-500">{cat.id}</td>
-                          <td className="p-3 font-semibold text-slate-900">{cat.name}</td>
-                          <td className="p-3 text-center font-bold text-slate-700">{associatedCount}</td>
-                          <td className="p-3 text-center">
-                            <div className="flex items-center justify-center gap-2">
-                              <button
-                                onClick={() => handleSelectCategory(cat)}
-                                className="text-slate-500 hover:text-amber-600 p-1 rounded hover:bg-slate-100"
-                                title="Edit Category"
-                              >
-                                <Edit2 size={14} />
-                              </button>
-                              <button
-                                onClick={() => handleDeleteCategory(cat.id)}
-                                className="text-slate-400 hover:text-red-600 p-1 rounded hover:bg-slate-100"
-                                title="Delete Category"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
+                        <Fragment key={cat.id}>
+                          <tr
+                            className="border-b hover:bg-slate-50/50 transition-colors cursor-pointer"
+                            style={{ borderColor: 'var(--border-table)' }}
+                            onClick={() => setExpandedCatId(isExpanded ? null : cat.id)}
+                          >
+                            <td className="p-3 pl-4 text-slate-400">
+                              {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                            </td>
+                            <td className="p-3 font-semibold text-slate-500">{cat.id}</td>
+                            <td className="p-3 font-semibold text-slate-900">{cat.name}</td>
+                            <td className="p-3 text-center font-bold text-slate-700">{associatedProducts.length}</td>
+                            <td className="p-3 text-center">
+                              <div className="flex items-center justify-center gap-2" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  onClick={() => handleSelectCategory(cat)}
+                                  className="text-slate-500 hover:text-amber-600 p-1 rounded hover:bg-slate-100"
+                                  title="Edit Category"
+                                >
+                                  <Edit2 size={14} />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteCategory(cat.id)}
+                                  className="text-slate-400 hover:text-red-600 p-1 rounded hover:bg-slate-100"
+                                  title="Delete Category"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr className="bg-slate-50/70 border-b" style={{ borderColor: 'var(--border-table)' }}>
+                              <td></td>
+                              <td colSpan={4} className="p-4">
+                                {associatedProducts.length === 0 ? (
+                                  <p className="text-xs text-slate-400 text-center py-2">No products registered under this category yet.</p>
+                                ) : (
+                                  <div className="bg-white border rounded-lg overflow-hidden" style={{ borderColor: 'var(--border-color)' }}>
+                                    <table className="w-full text-left border-collapse text-xs">
+                                      <thead>
+                                        <tr className="bg-slate-50 text-slate-400 uppercase tracking-wider">
+                                          <th className="p-2 pl-3">Code</th>
+                                          <th className="p-2">Product Name</th>
+                                          <th className="p-2">Vendor</th>
+                                          <th className="p-2 text-right pr-3">Current Stock</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {associatedProducts.map(p => (
+                                          <tr key={p.id} className="border-t" style={{ borderColor: 'var(--border-table)' }}>
+                                            <td className="p-2 pl-3 font-mono text-slate-600">{p.id}</td>
+                                            <td className="p-2 font-semibold text-slate-700">{p.name}</td>
+                                            <td className="p-2 text-slate-500">{state.vendors.find(v => v.id === p.vendorId)?.name || 'General'}</td>
+                                            <td className={`p-2 text-right pr-3 font-bold ${(p.stock || 0) <= 0 ? 'text-red-600' : 'text-slate-800'}`}>{(p.stock || 0).toLocaleString()}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       );
                     })
                   )}

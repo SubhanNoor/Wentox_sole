@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
-import { useApp } from '@/context/AppContext';
+import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2, Phone, MapPin } from 'lucide-react';
+import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2, Phone, MapPin, ChevronRight, X } from 'lucide-react';
 import type { Vendor } from '@/types';
 
 export default function VendorSetupPage() {
@@ -14,6 +14,10 @@ export default function VendorSetupPage() {
 
   // Editing state
   const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
+
+  // Drill-down: clicking a vendor card opens a details window showing that
+  // vendor's purchase history, instead of jumping straight to edit.
+  const [viewingVendorId, setViewingVendorId] = useState<string | null>(null);
 
   // Form State
   const [vendorName, setVendorName] = useState('');
@@ -254,13 +258,14 @@ export default function VendorSetupPage() {
                   const productCount = state.products.filter(p => p.vendorId === vendor.id).length;
                   const initialLetter = vendor.name.charAt(0).toUpperCase();
                   const cityName = vendor.city || 'Local / Other';
+                  const purchaseCount = state.purchases.filter(p => p.vendorId === vendor.id).length;
 
                   return (
                     <div
                       key={vendor.id}
                       className="bg-white border rounded-xl p-5 hover:border-amber-500 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
                       style={{ borderColor: 'var(--border-color)' }}
-                      onClick={() => handleSelectVendor(vendor)}
+                      onClick={() => setViewingVendorId(vendor.id)}
                     >
                       <div>
                         {/* Card Top: Code & Status/City badge */}
@@ -268,10 +273,13 @@ export default function VendorSetupPage() {
                           <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
                             CODE: {vendor.id}
                           </span>
-                          <span className="text-[10px] font-bold text-[#B08D57] uppercase tracking-wider flex items-center gap-1">
-                            <MapPin size={10} />
-                            {cityName}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold text-[#B08D57] uppercase tracking-wider flex items-center gap-1">
+                              <MapPin size={10} />
+                              {cityName}
+                            </span>
+                            <ChevronRight size={16} className="text-slate-400" />
+                          </div>
                         </div>
 
                         {/* Card Middle: Avatar circle + Name */}
@@ -288,7 +296,7 @@ export default function VendorSetupPage() {
                               <span>{vendor.phone || 'No Phone Number'}</span>
                             </div>
                             <p className="text-[10px] text-slate-400 font-semibold mt-2 uppercase tracking-wider">
-                              {productCount} {productCount === 1 ? 'PRODUCT ARTICLE' : 'PRODUCT ARTICLES'}
+                              {productCount} {productCount === 1 ? 'PRODUCT ARTICLE' : 'PRODUCT ARTICLES'} · {purchaseCount} PURCHASE{purchaseCount !== 1 ? 'S' : ''}
                             </p>
                           </div>
                         </div>
@@ -402,6 +410,73 @@ export default function VendorSetupPage() {
         )}
 
       </div>
+
+      {/* Details window: this vendor's purchase history */}
+      {viewingVendorId && (() => {
+        const vendor = state.vendors.find(v => v.id === viewingVendorId);
+        if (!vendor) return null;
+        const purchaseHistory = state.purchases
+          .filter(p => p.vendorId === vendor.id)
+          .sort((a, b) => b.date.localeCompare(a.date));
+
+        return (
+          <div
+            className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn"
+            data-no-print
+            onClick={() => setViewingVendorId(null)}
+          >
+            <div
+              className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-3xl mx-4 animate-scaleUp max-h-[80vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b pb-3 mb-4">
+                <div>
+                  <h3 className="font-lora font-bold text-lg text-slate-800">{vendor.name}</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Code: {vendor.id} · {vendor.city || 'Local / Other'} · {purchaseHistory.length} purchase{purchaseHistory.length !== 1 ? 's' : ''}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setViewingVendorId(null)}
+                  className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+                  title="Close"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {purchaseHistory.length === 0 ? (
+                <p className="text-sm text-slate-400 text-center py-8">No purchases recorded from this vendor yet.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                        <th className="p-2 pl-3">Date</th>
+                        <th className="p-2">Materials</th>
+                        <th className="p-2">Remarks</th>
+                        <th className="p-2 text-right">Total Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {purchaseHistory.map(pu => (
+                        <tr key={pu.id} className="border-t align-top hover:bg-slate-50" style={{ borderColor: 'var(--border-table)' }}>
+                          <td className="p-2 pl-3 font-mono text-slate-600 whitespace-nowrap">{pu.date}</td>
+                          <td className="p-2 text-slate-700">
+                            {pu.items.map(it => `${it.materialName} (${it.quantity} ${it.unit})`).join(', ')}
+                          </td>
+                          <td className="p-2 text-slate-500">{pu.remarks || '-'}</td>
+                          <td className="p-2 text-right font-bold text-slate-800 whitespace-nowrap">{formatCurrency(pu.totalValue)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </AppLayout>
   );
 }

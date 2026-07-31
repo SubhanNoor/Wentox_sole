@@ -71,6 +71,13 @@ const navSections: NavSection[] = [
   }
 ];
 
+// There is no router — every page mounts its own <AppLayout>, so the
+// sidebar's <nav> is a brand new DOM node on every navigation and would
+// reset to scrollTop 0 by default. Module-level (survives the remount,
+// resets only on a full reload) so scrolling to, say, Accounting Setup
+// stays put across page changes instead of snapping back to the top.
+let savedSidebarScrollTop = 0;
+
 interface AppLayoutProps {
   children: React.ReactNode;
   pageTitle: string;
@@ -82,6 +89,12 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
   const [showAdminPopup, setShowAdminPopup] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
+
+  // Ref callback (not useEffect) so the restore happens the instant the
+  // node exists — before the browser paints it at scrollTop 0.
+  const navRefCallback = (node: HTMLElement | null) => {
+    if (node) node.scrollTop = savedSidebarScrollTop;
+  };
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -164,7 +177,11 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto py-2.5 px-3 scrollbar-thin">
+        <nav
+          className="flex-1 overflow-y-auto py-2.5 px-3 scrollbar-thin"
+          ref={navRefCallback}
+          onScroll={(e) => { savedSidebarScrollTop = e.currentTarget.scrollTop; }}
+        >
           {navSections.map((section, sIdx) => (
             <div key={sIdx} className="mb-4">
               <div
@@ -327,7 +344,7 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
 
         {/* Content */}
         <main className="app-main flex-1 overflow-auto" style={{ padding: 32 }}>
-          <div className="app-main-inner" style={{ maxWidth: 1200, margin: '0 auto' }}>
+          <div className="app-main-inner animate-pageIn" style={{ maxWidth: 1200, margin: '0 auto' }}>
             {children}
           </div>
         </main>

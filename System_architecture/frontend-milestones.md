@@ -192,19 +192,17 @@ so Fast Refresh still works), `components/NotificationBell.tsx` (new),
 `pages/VendorReportPage.tsx`, `pages/SaleAnalysisPage.tsx`,
 `pages/SaleReportPage.tsx`
 
-### YBD (client still deciding) — Cheque Register / Section
-- [ ] **YBD**: a dedicated Cheque section/page listing every cheque received
+### Cheque Register — RESOLVED (was "YBD")
+- [x] Resolved as the **Cheques tab inside Receipts (Jamma)**
+      (`components/ChequesTab.tsx`), not a standalone page or a Reports tab —
+      it sits alongside where cheques are captured and where Dispose/Mark
+      Cleared/Mark Bounced already act on them. Lists every cheque received
       (across all Receipts) as its own row — Cheque No, Date on Cheque,
-      Received Date, Amount, Customer, current status
-      (Pending/Deposited/Endorsed/Partially Endorsed/Cleared/Bounced) — a
-      single place to see all outstanding cheques at a glance, instead of
-      hunting through Receipts. Not yet scoped: whether it's a standalone
-      page vs. a tab inside Reports, whether it needs its own filters
-      (date range / status / customer), and whether status changes
-      (deposit/endorse/bounce) happen inline here or only from the
-      "Dispose of Cheque" workflow above. Revisit once §12/§13 are further
-      along — this would likely reuse the same `chequeStatus` field and
-      cheque_allocations concept, just as a dedicated register view.
+      Received, Customer, Amount, Unallocated balance, Status — with a status
+      filter (Open / All / each individual `ChequeStatus`) and a search box
+      (cheque no. or customer). Status changes happen **inline** in the same
+      row (Dispose / Mark Cleared / Mark Bounced), so there is no separate
+      register-vs-workflow split. Print / Export PDF / Export Excel included.
 
 ---
 

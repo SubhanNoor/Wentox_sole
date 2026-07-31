@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2, ChevronRight, X } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
 
 export default function ChartAcSetupPage() {
@@ -23,9 +23,9 @@ export default function ChartAcSetupPage() {
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>('');
   const [sortBy, setSortBy] = useState<'code' | 'name'>('code');
 
-  // Drill-down: clicking a card expands it to show every Business Account
-  // registered under that chart account, instead of jumping straight to edit.
-  const [expandedChartId, setExpandedChartId] = useState<string | null>(null);
+  // Drill-down: clicking a card opens a details window showing every
+  // Business Account registered under that chart account.
+  const [viewingChartId, setViewingChartId] = useState<string | null>(null);
 
   // Messages
   const [successMsg, setSuccessMsg] = useState('');
@@ -235,15 +235,14 @@ export default function ChartAcSetupPage() {
                 {filteredAndSortedCharts.map(c => {
                   const initialLetter = c.name.charAt(0).toUpperCase();
                   const groupName = state.groupAccounts.find(g => g.id === c.groupId)?.name || 'UNKNOWN GROUP';
-                  const isExpanded = expandedChartId === c.id;
                   const childAccounts = state.businessAccounts.filter(b => b.controlId === c.id);
 
                   return (
                     <div
                       key={c.id}
-                      className={`bg-white border rounded-xl p-5 hover:border-[#B08D57] hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer ${isExpanded ? 'sm:col-span-2 lg:col-span-3' : ''}`}
+                      className="bg-white border rounded-xl p-5 hover:border-[#B08D57] hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
                       style={{ borderColor: 'var(--border-color)' }}
-                      onClick={() => setExpandedChartId(isExpanded ? null : c.id)}
+                      onClick={() => setViewingChartId(c.id)}
                     >
                       <div>
                         {/* Card Top: Code & Parent group */}
@@ -255,7 +254,7 @@ export default function ChartAcSetupPage() {
                             <span className="text-[10px] font-bold text-[#B08D57] uppercase tracking-wider truncate max-w-[135px]" title={groupName}>
                               {groupName}
                             </span>
-                            {isExpanded ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+                            <ChevronRight size={16} className="text-slate-400" />
                           </div>
                         </div>
 
@@ -273,36 +272,6 @@ export default function ChartAcSetupPage() {
                             </p>
                           </div>
                         </div>
-
-                        {/* Drill-down: every Business Account registered under this chart account */}
-                        {isExpanded && (
-                          <div className="mb-4 border-t pt-3" style={{ borderColor: 'var(--border-color)' }} onClick={(e) => e.stopPropagation()}>
-                            {childAccounts.length === 0 ? (
-                              <p className="text-xs text-slate-400 text-center py-4">No Business Accounts registered under this account yet.</p>
-                            ) : (
-                              <div className="overflow-x-auto">
-                                <table className="w-full text-left border-collapse text-xs">
-                                  <thead>
-                                    <tr className="text-slate-400 uppercase tracking-wider">
-                                      <th className="p-2">Code</th>
-                                      <th className="p-2">Account Name</th>
-                                      <th className="p-2">City / Region</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {childAccounts.map(b => (
-                                      <tr key={b.id} className="border-t hover:bg-slate-50" style={{ borderColor: 'var(--border-table)' }}>
-                                        <td className="p-2 font-mono text-slate-600">{b.id}</td>
-                                        <td className="p-2 font-semibold text-slate-700">{b.name}</td>
-                                        <td className="p-2 text-slate-500">{b.region || '-'}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-                          </div>
-                        )}
                       </div>
 
                       {/* Card Bottom: Actions */}
@@ -453,6 +422,68 @@ export default function ChartAcSetupPage() {
         )}
 
       </div>
+
+      {/* Details window: every Business Account registered under this chart account */}
+      {viewingChartId && (() => {
+        const c = state.chartAccounts.find(x => x.id === viewingChartId);
+        if (!c) return null;
+        const groupName = state.groupAccounts.find(g => g.id === c.groupId)?.name || 'UNKNOWN GROUP';
+        const childAccounts = state.businessAccounts.filter(b => b.controlId === c.id);
+
+        return (
+          <div
+            className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn"
+            data-no-print
+            onClick={() => setViewingChartId(null)}
+          >
+            <div
+              className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-2xl mx-4 animate-scaleUp max-h-[80vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b pb-3 mb-4">
+                <div>
+                  <h3 className="font-lora font-bold text-lg text-slate-800">{c.name}</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Code: {c.id} · {groupName} · {childAccounts.length} business account{childAccounts.length !== 1 ? 's' : ''}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setViewingChartId(null)}
+                  className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+                  title="Close"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {childAccounts.length === 0 ? (
+                <p className="text-sm text-slate-400 text-center py-8">No Business Accounts registered under this account yet.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                        <th className="p-2 pl-3">Code</th>
+                        <th className="p-2">Account Name</th>
+                        <th className="p-2">City / Region</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {childAccounts.map(b => (
+                        <tr key={b.id} className="border-t hover:bg-slate-50" style={{ borderColor: 'var(--border-table)' }}>
+                          <td className="p-2 pl-3 font-mono text-slate-600">{b.id}</td>
+                          <td className="p-2 font-semibold text-slate-700">{b.name}</td>
+                          <td className="p-2 text-slate-500">{b.region || '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </AppLayout>
   );
 }
