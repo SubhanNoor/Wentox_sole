@@ -91,7 +91,8 @@ const getMonthName = (m: number): string => {
 export default function ReportStockPage() {
   const { state, dispatch } = useApp();
 
-  const [activeStockTab, setActiveStockTab] = useState<'current' | 'ledger' | 'daily' | 'weekly' | 'monthly' | 'overall'>('current');
+  const [activeStockTab, setActiveStockTab] = useState<'current' | 'material' | 'ledger' | 'daily' | 'weekly' | 'monthly' | 'overall'>('current');
+  const [materialVendorFilter, setMaterialVendorFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
 
@@ -180,6 +181,49 @@ export default function ReportStockPage() {
   const totalExtraPairs = useMemo(() => {
     return filteredProducts.reduce((sum, p) => sum + ((p.stock || 0) % (p.packing || 12)), 0);
   }, [filteredProducts]);
+
+  // Material Stock: raw materials purchased from vendors, grouped by
+  // vendor + material name + unit, running qty = Purchase - Purchase Return.
+  // Separate from Current Stock (finished-goods pairs) — Purchase never
+  // touches Product.stock, so this is the only place raw material stock
+  // is visible.
+  const materialStockRows = useMemo(() => {
+    const groups: Record<string, { vendorId: string; vendorName: string; materialName: string; unit: string; purchasedQty: number; returnedQty: number }> = {};
+
+    state.purchases.forEach(p => {
+      const vendorName = state.vendors.find(v => v.id === p.vendorId)?.name || 'Unknown Vendor';
+      p.items.forEach(it => {
+        const key = `${p.vendorId}::${it.materialName.trim().toLowerCase()}::${it.unit.trim().toLowerCase()}`;
+        if (!groups[key]) {
+          groups[key] = { vendorId: p.vendorId, vendorName, materialName: it.materialName, unit: it.unit, purchasedQty: 0, returnedQty: 0 };
+        }
+        groups[key].purchasedQty += it.quantity;
+      });
+    });
+
+    state.purchaseReturns.forEach(r => {
+      const vendorName = state.vendors.find(v => v.id === r.vendorId)?.name || 'Unknown Vendor';
+      r.items.forEach(it => {
+        const key = `${r.vendorId}::${it.materialName.trim().toLowerCase()}::${it.unit.trim().toLowerCase()}`;
+        if (!groups[key]) {
+          groups[key] = { vendorId: r.vendorId, vendorName, materialName: it.materialName, unit: it.unit, purchasedQty: 0, returnedQty: 0 };
+        }
+        groups[key].returnedQty += it.quantity;
+      });
+    });
+
+    let rows = Object.values(groups).map(g => ({ ...g, currentQty: g.purchasedQty - g.returnedQty }));
+
+    if (materialVendorFilter !== 'all') {
+      rows = rows.filter(r => r.vendorId === materialVendorFilter);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      rows = rows.filter(r => r.materialName.toLowerCase().includes(q));
+    }
+
+    return rows.sort((a, b) => a.vendorName.localeCompare(b.vendorName) || a.materialName.localeCompare(b.materialName));
+  }, [state.purchases, state.purchaseReturns, state.vendors, materialVendorFilter, searchQuery]);
 
   // 2. Production logs filter memo
   const filteredLogs = useMemo(() => {
@@ -276,6 +320,10 @@ export default function ReportStockPage() {
       const headers = ['Product Code', 'Category', 'Total Pairs'];
       const rows = groupedArticles.map(g => [g.code, state.categories.find(c => c.id === g.categoryId)?.name || 'General', g.products.reduce((s, p) => s + (p.stock || 0), 0)]);
       exportRowsToExcel('current-stock', headers, rows);
+    } else if (activeStockTab === 'material') {
+      const headers = ['Vendor', 'Material', 'Unit', 'Purchased', 'Returned', 'Current Stock'];
+      const rows = materialStockRows.map(r => [r.vendorName, r.materialName, r.unit, r.purchasedQty, r.returnedQty, r.currentQty]);
+      exportRowsToExcel('material-stock', headers, rows);
     } else if (activeStockTab === 'ledger') {
       const headers = ['Date', 'Product Code', 'Article', 'Color', 'Vendor', 'Type', 'Ref', 'Debit (IN)', 'Credit (OUT)'];
       const rows = ledgerTableEntries.map(e => [e.date, e.productCode, e.articleName, e.color, e.vendorName, e.type, e.ref, e.debit, e.credit]);
@@ -306,6 +354,16 @@ export default function ReportStockPage() {
             }`}
           >
             Current Stock
+          </button>
+          <button
+            onClick={() => setActiveStockTab('material')}
+            className={`px-4 py-2 border-b-2 transition-colors ${
+              activeStockTab === 'material'
+                ? 'border-[#B08D57] text-[#111c2a]'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Material Stock
           </button>
           <button
             onClick={() => setActiveStockTab('ledger')}
@@ -404,6 +462,21 @@ export default function ReportStockPage() {
             {/* Timeframe Filters based on Active Tab */}
             {activeStockTab !== 'current' && (
               <div className="flex flex-wrap items-center gap-4 pt-3 border-t" style={{ borderColor: 'var(--border-color)' }}>
+                {activeStockTab === 'material' && (
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-semibold text-slate-500 uppercase">Vendor:</label>
+                    <select
+                      value={materialVendorFilter}
+                      onChange={e => setMaterialVendorFilter(e.target.value)}
+                      className="soleria-input py-1.5 px-3 text-sm font-semibold cursor-pointer"
+                    >
+                      <option value="all">All Vendors</option>
+                      {state.vendors.map(v => (
+                        <option key={v.id} value={v.id}>{v.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 {activeStockTab === 'ledger' && (
                   <div className="flex flex-wrap items-center gap-3">
                     <div className="flex items-center gap-2">
@@ -662,6 +735,43 @@ export default function ReportStockPage() {
                   </tfoot>
                 </table>
               </div>
+            ) : activeStockTab === 'material' ? (
+              // Material Stock View — raw materials purchased from vendors,
+              // separate from finished-goods Current Stock above.
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                      <th className="p-3 pl-4">Vendor</th>
+                      <th className="p-3">Material</th>
+                      <th className="p-3">Unit</th>
+                      <th className="p-3 text-right">Purchased</th>
+                      <th className="p-3 text-right">Returned</th>
+                      <th className="p-3 text-right">Current Stock</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {materialStockRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="text-center p-8 text-slate-400">
+                          No raw material purchases recorded yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      materialStockRows.map((r, idx) => (
+                        <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                          <td className="p-3 pl-4 font-semibold text-slate-700">{r.vendorName}</td>
+                          <td className="p-3 text-slate-800">{r.materialName}</td>
+                          <td className="p-3 text-slate-500">{r.unit}</td>
+                          <td className="p-3 text-right font-semibold text-emerald-700">{r.purchasedQty.toLocaleString()}</td>
+                          <td className="p-3 text-right font-semibold text-rose-700">{r.returnedQty > 0 ? r.returnedQty.toLocaleString() : '-'}</td>
+                          <td className={`p-3 text-right font-bold ${r.currentQty <= 0 ? 'text-red-600' : 'text-slate-900'}`}>{r.currentQty.toLocaleString()}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             ) : activeStockTab === 'ledger' ? (
               // Product Ledger View (TASK-02 / TASK-02 UPDATE)
               <div className="overflow-x-auto">
@@ -812,6 +922,8 @@ export default function ReportStockPage() {
             <div style={{ textAlign: 'right' }}>
               <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>
                 {activeStockTab === 'current' && 'CURRENT STOCK REPORT'}
+                {activeStockTab === 'material' && 'MATERIAL STOCK REPORT'}
+                {activeStockTab === 'ledger' && 'PRODUCT LEDGER REPORT'}
                 {activeStockTab === 'daily' && 'DAILY PRODUCTION REPORT'}
                 {activeStockTab === 'weekly' && 'WEEKLY PRODUCTION REPORT'}
                 {activeStockTab === 'monthly' && 'MONTHLY PRODUCTION REPORT'}
@@ -819,6 +931,8 @@ export default function ReportStockPage() {
               </h2>
               <p style={{ margin: 0, fontSize: '11px', color: '#555555' }}>
                 {activeStockTab === 'current' && `Date: ${new Date().toLocaleDateString()}`}
+                {activeStockTab === 'material' && `Date: ${new Date().toLocaleDateString()}`}
+                {activeStockTab === 'ledger' && `Range: ${ledgerFromDate || 'Beginning'} to ${ledgerToDate || 'Present'}`}
                 {activeStockTab === 'daily' && `Production Date: ${dailyDate}`}
                 {activeStockTab === 'weekly' && `${getWeekRange(weeklyDate).start.toLocaleDateString()} - ${getWeekRange(weeklyDate).end.toLocaleDateString()}`}
                 {activeStockTab === 'monthly' && `Period: ${getMonthName(monthlyMonth)} ${monthlyYear}`}
@@ -883,6 +997,66 @@ export default function ReportStockPage() {
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right' }}>{totalExtraPairs > 0 ? totalExtraPairs : '-'}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', borderBottom: '3px double #000000' }}>{totalPairs.toLocaleString()}</td>
                 </tr>
+              </tbody>
+            </table>
+          ) : activeStockTab === 'material' ? (
+            <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+              <thead>
+                <tr style={{ backgroundColor: '#f2f2f2' }}>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '22%' }}>Vendor</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '28%' }}>Material</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '12%' }}>Unit</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right', width: '11%' }}>Purchased</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right', width: '11%' }}>Returned</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right', width: '11%' }}>Current Stock</th>
+                </tr>
+              </thead>
+              <tbody>
+                {materialStockRows.map((r, idx) => (
+                  <tr key={idx}>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{r.vendorName}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.materialName}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.unit}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{r.purchasedQty.toLocaleString()}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{r.returnedQty > 0 ? r.returnedQty.toLocaleString() : '-'}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold' }}>{r.currentQty.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : activeStockTab === 'ledger' ? (
+            <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+              <thead>
+                <tr style={{ backgroundColor: '#f2f2f2' }}>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Date</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Code</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '18%' }}>Article</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Color</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '14%' }}>Vendor</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Type</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '9%' }}>Ref</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right', width: '9%' }}>Debit</th>
+                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right', width: '9%' }}>Credit</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ledgerTableEntries.map((e, idx) => (
+                  <tr key={idx}>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.date}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{e.productCode}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.articleName}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.color}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.vendorName}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.type}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.ref}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{e.debit > 0 ? e.debit : '-'}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{e.credit > 0 ? e.credit : '-'}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           ) : (

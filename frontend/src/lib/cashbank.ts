@@ -98,6 +98,14 @@ export function getAccountBalance(state: State, baId: string, upto?: string): nu
     if (t.fromBaId === baId) total -= t.amount;
   }
 
+  // Manual adjustments from outside WentoX's own books — owner capital, a
+  // loan, or a bank charge/correction. No counter-account, so credit and
+  // debit both apply directly.
+  for (const d of state.deposits) {
+    if (!onOrBefore(d.date, upto)) continue;
+    if (d.toBaId === baId) total += d.direction === 'debit' ? -d.amount : d.amount;
+  }
+
   // ── out ───────────────────────────────────────────────────────────────────
   for (const e of state.expenses) {
     if (!onOrBefore(e.date, upto)) continue;

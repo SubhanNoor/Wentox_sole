@@ -35,7 +35,7 @@ const navSections: NavSection[] = [
       { page: 'wage-run', label: 'Wage Run (Piece Rate)', icon: HardHat },
       { page: 'salary-run', label: 'Salary Run (Monthly)', icon: BadgeDollarSign },
       // Money between our own accounts — neither income nor expense.
-      { page: 'transfer', label: 'Transfer (Cash \u2194 Bank)', icon: ArrowLeftRight },
+      { page: 'transfer', label: 'Bank Transactions', icon: ArrowLeftRight },
     ]
   },
   {

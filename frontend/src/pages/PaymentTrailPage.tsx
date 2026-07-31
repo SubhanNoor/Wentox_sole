@@ -3,6 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Printer, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { getBankBusinessAccounts, getAccountBalance } from '@/lib/cashbank';
 
 // Maps each Payment Trail category to the Chart of Account it's sourced from.
 // "Cash at Banks" is a running balance (holdings), not a spend total — see below.
@@ -38,19 +39,15 @@ export function PaymentTrailContent() {
     });
   }, [visibleCategories, state.businessAccounts, state.expenses, fromDate, toDate]);
 
-  // "Cash at Banks" — a running balance (deposits via cheque/online minus
-  // withdrawals via cheque/online, all-time up to the end of the period),
-  // not a spend total, so it's shown separately from the Grand Total below.
+  // "Cash at Banks" — sum of every bank account's real ledger balance
+  // (opening balance + receipts + deposits + transfers + cheque deposits -
+  // expenses), as at the end of the period. Uses the same `getAccountBalance`
+  // helper as the Bank Accounts page and Cash Book, so all three agree.
   const cashAtBanks = useMemo(() => {
-    const asOf = toDate || '9999-12-31';
-    const deposits = state.receipts
-      .filter(r => r.paymentMode !== 'Cash' && r.date <= asOf)
-      .reduce((sum, r) => sum + r.amount, 0);
-    const withdrawals = state.expenses
-      .filter(e => e.paymentMode !== 'Cash' && e.date <= asOf)
-      .reduce((sum, e) => sum + e.amount, 0);
-    return deposits - withdrawals;
-  }, [state.receipts, state.expenses, toDate]);
+    const asOf = toDate || undefined;
+    return getBankBusinessAccounts(state)
+      .reduce((sum, b) => sum + getAccountBalance(state, b.id, asOf), 0);
+  }, [state, toDate]);
 
   const grandTotal = useMemo(() => spendRows.reduce((s, r) => s + r.amount, 0), [spendRows]);
 

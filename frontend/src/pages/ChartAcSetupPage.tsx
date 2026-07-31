@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
 
 export default function ChartAcSetupPage() {
@@ -22,6 +22,10 @@ export default function ChartAcSetupPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>('');
   const [sortBy, setSortBy] = useState<'code' | 'name'>('code');
+
+  // Drill-down: clicking a card expands it to show every Business Account
+  // registered under that chart account, instead of jumping straight to edit.
+  const [expandedChartId, setExpandedChartId] = useState<string | null>(null);
 
   // Messages
   const [successMsg, setSuccessMsg] = useState('');
@@ -231,13 +235,15 @@ export default function ChartAcSetupPage() {
                 {filteredAndSortedCharts.map(c => {
                   const initialLetter = c.name.charAt(0).toUpperCase();
                   const groupName = state.groupAccounts.find(g => g.id === c.groupId)?.name || 'UNKNOWN GROUP';
+                  const isExpanded = expandedChartId === c.id;
+                  const childAccounts = state.businessAccounts.filter(b => b.controlId === c.id);
 
                   return (
                     <div
                       key={c.id}
-                      className="bg-white border rounded-xl p-5 hover:border-[#B08D57] hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
+                      className={`bg-white border rounded-xl p-5 hover:border-[#B08D57] hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer ${isExpanded ? 'sm:col-span-2 lg:col-span-3' : ''}`}
                       style={{ borderColor: 'var(--border-color)' }}
-                      onClick={() => handleSelectChart(c)}
+                      onClick={() => setExpandedChartId(isExpanded ? null : c.id)}
                     >
                       <div>
                         {/* Card Top: Code & Parent group */}
@@ -245,9 +251,12 @@ export default function ChartAcSetupPage() {
                           <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider flex-shrink-0">
                             CODE: {c.id}
                           </span>
-                          <span className="text-[10px] font-bold text-[#B08D57] uppercase tracking-wider truncate max-w-[135px]" title={groupName}>
-                            {groupName}
-                          </span>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <span className="text-[10px] font-bold text-[#B08D57] uppercase tracking-wider truncate max-w-[135px]" title={groupName}>
+                              {groupName}
+                            </span>
+                            {isExpanded ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+                          </div>
                         </div>
 
                         {/* Card Middle: Avatar circle + Name */}
@@ -260,17 +269,47 @@ export default function ChartAcSetupPage() {
                               {c.name}
                             </h4>
                             <p className="text-[11px] text-slate-400 font-medium mt-0.5 uppercase tracking-wider truncate">
-                              Account
+                              {childAccounts.length} business account{childAccounts.length !== 1 ? 's' : ''}
                             </p>
                           </div>
                         </div>
+
+                        {/* Drill-down: every Business Account registered under this chart account */}
+                        {isExpanded && (
+                          <div className="mb-4 border-t pt-3" style={{ borderColor: 'var(--border-color)' }} onClick={(e) => e.stopPropagation()}>
+                            {childAccounts.length === 0 ? (
+                              <p className="text-xs text-slate-400 text-center py-4">No Business Accounts registered under this account yet.</p>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-left border-collapse text-xs">
+                                  <thead>
+                                    <tr className="text-slate-400 uppercase tracking-wider">
+                                      <th className="p-2">Code</th>
+                                      <th className="p-2">Account Name</th>
+                                      <th className="p-2">City / Region</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {childAccounts.map(b => (
+                                      <tr key={b.id} className="border-t hover:bg-slate-50" style={{ borderColor: 'var(--border-table)' }}>
+                                        <td className="p-2 font-mono text-slate-600">{b.id}</td>
+                                        <td className="p-2 font-semibold text-slate-700">{b.name}</td>
+                                        <td className="p-2 text-slate-500">{b.region || '-'}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {/* Card Bottom: Actions */}
                       <div className="border-t pt-3 mt-1 flex items-center justify-between gap-3" onClick={(e) => e.stopPropagation()}>
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider border ${
-                          c.status === 'Active' 
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                          c.status === 'Active'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                             : 'bg-rose-50 text-rose-700 border-rose-200'
                         }`}>
                           {c.status === 'Active' ? 'Active' : 'Inactive'}

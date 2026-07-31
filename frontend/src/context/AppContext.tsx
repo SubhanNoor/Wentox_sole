@@ -6,7 +6,7 @@ import type {
   Customer, SubCustomer, SaleBill, SaleReturn, Purchase, PurchaseReturn,
   Receipt, Expense, ProductionLog, UserRole,
   ChequeAllocation, ChequeStatus, AlertDismissal,
-  WageRun, SalaryRun, BankAccount, Transfer
+  WageRun, SalaryRun, BankAccount, Transfer, Deposit
 } from '@/types';
 import { deriveChequeStatus } from '@/lib/cheques';
 
@@ -137,12 +137,22 @@ const demoChartAccounts: ChartOfAccount[] = [
   // Cheques received but not yet deposited or endorsed (§13). Near-cash, so it
   // sits with cash & bank. An endorsement credits it; a deposit moves it to bank.
   { id: '120003', name: 'CHEQUES IN HAND', groupId: '1000', linkCode: 'A', status: 'Active' },
+  // From the legacy Group Accounts list — STOCK IN TRADE, SHORT TERM
+  // ADVANCES and FIXED ASSETS had no equivalent yet. TRADE DEBTORS,
+  // CASH AND BANK BALANCES were skipped as duplicates already covered above
+  // (CUSTOMERS ACCOUNTS / CASH IN HAND + BANK ACCOUNTS + CHEQUES IN HAND).
+  { id: '130001', name: 'STOCK IN TRADE', groupId: '1000', linkCode: 'A', status: 'Active' },
+  { id: '140001', name: 'SHORT TERM ADVANCES, DEP. & PRE-PAYMENTS', groupId: '1000', linkCode: 'A', status: 'Active' },
+  { id: '150001', name: 'FIXED ASSETS', groupId: '1000', linkCode: 'A', status: 'Active' },
   { id: '210001', name: 'VENDORS ACCOUNTS', groupId: '2000', linkCode: 'A', status: 'Active' },
   { id: '220001', name: 'WORKER WAGES', groupId: '2000', linkCode: 'A', status: 'Active' },
   // What we OWE salaried staff, kept apart from WORKER WAGES so piece-rate
   // labour (a product cost) can be read separately from salary (overhead).
   // Blended, you cannot see what a pair actually costs in direct labour.
   { id: '220002', name: 'SALARIES PAYABLE', groupId: '2000', linkCode: 'A', status: 'Active' },
+  // MISC.PAYABLES from the legacy list — TRADE CREDITORS skipped as a
+  // duplicate of VENDORS ACCOUNTS above.
+  { id: '230001', name: 'MISC.PAYABLES', groupId: '2000', linkCode: 'A', status: 'Active' },
   { id: '310001', name: 'WHOLESALE SHOE SALES', groupId: '3000', linkCode: 'A', status: 'Active' },
   // The cost side of wages. WORKER WAGES (220001) is what we OWE a worker;
   // this is what the labour COSTS us. A wage earned debits here and credits the
@@ -160,6 +170,10 @@ const demoChartAccounts: ChartOfAccount[] = [
   // Commission given at payment time (§7) — a cost, never a sale-time discount.
   // A Receipt's commission debits here and credits the customer.
   { id: '450001', name: 'COMMISSION ALLOWED', groupId: '4000', linkCode: 'A', status: 'Active' },
+  // COST OF GOODS SOLD and the generic EXPENSES catch-all from the legacy
+  // list, kept distinct from PURCHASES (raw material bought, not yet sold).
+  { id: '460001', name: 'COST OF GOODS SOLD', groupId: '4000', linkCode: 'A', status: 'Active' },
+  { id: '470001', name: 'GENERAL EXPENSES', groupId: '4000', linkCode: 'A', status: 'Active' },
 ];
 
 const demoBusinessAccounts: BusinessAccount[] = [
@@ -179,7 +193,29 @@ const demoBusinessAccounts: BusinessAccount[] = [
   { id: '21000101', name: 'Decent Polyurethane A/C', controlId: '210001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '21000102', name: 'Lahore Chemical Industries A/C', controlId: '210001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '21000103', name: 'Star Sole Materials A/C', controlId: '210001', linkCode: 'A', region: 'SOUTH', status: 'Active' },
-  { id: '44000101', name: "Director's Drawings A/C", controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  // Employees (410001 / WAGES EXPENSE) — off-payroll staff paid straight as an
+  // expense, distinct from the piece-rate workers under 220001.
+  { id: '41000101', name: 'Noman Butt (Upperman, Muridke)', controlId: '410001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '41000102', name: 'Zafar (Chowkidaar)', controlId: '410001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  // Directors Expenses - Drawings (440001) — every named draw/personal-use
+  // account the directors track separately from business running expenses.
+  { id: '44000101', name: 'Usman Bhatti', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000102', name: 'Abu Bakar', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000103', name: 'Imran Amir', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000104', name: 'Dhoodh', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000105', name: 'Haji Sb.', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000106', name: 'Zakat', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000107', name: 'Charity', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000108', name: 'Committee', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000109', name: 'Hafiz Irfan', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000110', name: 'Vehicles Owned', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000111', name: 'Saggian Factory', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000112', name: 'Umer Farooq Bhatti', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000113', name: 'Aarzi Account', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000114', name: '@Home Bills', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000115', name: 'UK Remittance', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000116', name: 'Payable Pays', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
+  { id: '44000117', name: 'Borrowings', controlId: '440001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '2200010001', name: 'Noman Butt A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '2200010002', name: 'Zafar Hussain A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
   { id: '2200010003', name: 'Imran Amir A/C', controlId: '220001', linkCode: 'A', region: 'LOCAL', status: 'Active' },
@@ -332,6 +368,9 @@ const demoTransfers: Transfer[] = [
   { id: 'trf1', date: '2026-07-06', fromBaId: '1200010001', toBaId: '1200020001', amount: 40000, remarks: 'Cash takings banked' },
 ];
 
+// Money entering the books from outside — not a receipt, not a transfer.
+const demoDeposits: Deposit[] = [];
+
 const demoPurchases: Purchase[] = [
   {
     id: 'pu1',
@@ -369,6 +408,7 @@ export interface State {
   employees: Employee[];
   bankAccounts: BankAccount[];
   transfers: Transfer[];
+  deposits: Deposit[];
   categories: ProductCategory[];
   products: Product[];
   
@@ -499,6 +539,11 @@ type Action =
   // that would inflate both totals with money that never left the business.
   | { type: 'ADD_TRANSFER'; transfer: Transfer }
   | { type: 'DELETE_TRANSFER'; id: string }
+  // Money entering from outside WentoX's own books — owner capital, a loan,
+  // a non-customer refund. Not a Receipt (no customer), not a Transfer (no
+  // counter-account already in the books).
+  | { type: 'ADD_DEPOSIT'; deposit: Deposit }
+  | { type: 'DELETE_DEPOSIT'; id: string }
 
   | { type: 'ADD_SALARY_RUN'; run: SalaryRun }
   | { type: 'UPDATE_SALARY_RUN'; runId: string; run: SalaryRun }
@@ -525,6 +570,7 @@ const initialState: State = {
   employees: demoEmployees,
   bankAccounts: demoBankAccounts,
   transfers: demoTransfers,
+  deposits: demoDeposits,
   categories: demoCategories,
   products: demoProducts,
   
@@ -662,6 +708,12 @@ function reducer(state: State, action: Action): State {
       return { ...state, transfers: [action.transfer, ...state.transfers] };
     case 'DELETE_TRANSFER':
       return { ...state, transfers: state.transfers.filter(t => t.id !== action.id) };
+
+    /* ──── Deposit Handlers (money entering from outside our own books) ──── */
+    case 'ADD_DEPOSIT':
+      return { ...state, deposits: [action.deposit, ...state.deposits] };
+    case 'DELETE_DEPOSIT':
+      return { ...state, deposits: state.deposits.filter(d => d.id !== action.id) };
 
     case 'ADD_CITY':
       return { ...state, cities: [...state.cities, action.city] };

@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 
 export default function GroupAcSetupPage() {
   const { state, dispatch } = useApp();
@@ -17,6 +17,10 @@ export default function GroupAcSetupPage() {
 
   // Search State
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Drill-down: clicking a card expands it to show every Chart of Account
+  // registered under that group, instead of jumping straight to edit.
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
 
   // Messages
   const [successMsg, setSuccessMsg] = useState('');
@@ -198,13 +202,15 @@ export default function GroupAcSetupPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredAndSortedGroups.map(grp => {
                   const initialLetter = grp.name.charAt(0).toUpperCase();
+                  const isExpanded = expandedGroupId === grp.id;
+                  const childCharts = state.chartAccounts.filter(c => c.groupId === grp.id);
 
                   return (
                     <div
                       key={grp.id}
-                      className="bg-white border rounded-xl p-5 hover:border-amber-500 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
+                      className={`bg-white border rounded-xl p-5 hover:border-amber-500 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer ${isExpanded ? 'sm:col-span-2 lg:col-span-3' : ''}`}
                       style={{ borderColor: 'var(--border-color)' }}
-                      onClick={() => handleSelectGroup(grp)}
+                      onClick={() => setExpandedGroupId(isExpanded ? null : grp.id)}
                     >
                       <div>
                         {/* Card Top: Code badge */}
@@ -212,6 +218,7 @@ export default function GroupAcSetupPage() {
                           <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider flex-shrink-0">
                             CODE: {grp.id}
                           </span>
+                          {isExpanded ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
                         </div>
 
                         {/* Card Middle: Avatar circle + Name & Subheading (Class) */}
@@ -224,10 +231,46 @@ export default function GroupAcSetupPage() {
                               {grp.name}
                             </h4>
                             <p className="text-[11px] text-[#B08D57] font-semibold mt-0.5 uppercase tracking-wider truncate">
-                              {grp.class}
+                              {grp.class} <span className="text-slate-400 normal-case">· {childCharts.length} account{childCharts.length !== 1 ? 's' : ''}</span>
                             </p>
                           </div>
                         </div>
+
+                        {/* Drill-down: every Chart of Account registered under this group */}
+                        {isExpanded && (
+                          <div className="mb-4 border-t pt-3" style={{ borderColor: 'var(--border-color)' }} onClick={(e) => e.stopPropagation()}>
+                            {childCharts.length === 0 ? (
+                              <p className="text-xs text-slate-400 text-center py-4">No Chart of Accounts registered under this group yet.</p>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-left border-collapse text-xs">
+                                  <thead>
+                                    <tr className="text-slate-400 uppercase tracking-wider">
+                                      <th className="p-2">Code</th>
+                                      <th className="p-2">Account Name</th>
+                                      <th className="p-2 text-center">Status</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {childCharts.map(c => (
+                                      <tr key={c.id} className="border-t hover:bg-slate-50" style={{ borderColor: 'var(--border-table)' }}>
+                                        <td className="p-2 font-mono text-slate-600">{c.id}</td>
+                                        <td className="p-2 font-semibold text-slate-700">{c.name}</td>
+                                        <td className="p-2 text-center">
+                                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                                            c.status === 'Active' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                                          }`}>
+                                            {c.status || 'Active'}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {/* Card Bottom: Actions */}

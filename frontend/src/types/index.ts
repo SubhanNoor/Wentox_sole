@@ -171,6 +171,28 @@ export interface Transfer {
   remarks?: string;
 }
 
+/**
+ * A manual adjustment to a cash/bank account's balance from OUTSIDE WentoX's
+ * own recorded books — owner capital or a bank loan credited in (`credit`),
+ * or a bank charge, error correction, or unrecorded withdrawal debited out
+ * (`debit`).
+ *
+ * Distinct from a Receipt (always tied to a customer, feeds customer ledgers/
+ * aging) and from a Transfer (moves money already recorded between our own
+ * accounts, nets to zero). This has no counter-account inside the books —
+ * it is money appearing or disappearing from outside — so it is its own
+ * document with a `source` describing why, for the audit trail.
+ */
+export interface Deposit {
+  id: string;
+  date: string;
+  toBaId: string;   // the cash/bank Business Account being adjusted
+  direction: 'credit' | 'debit';
+  amount: number;
+  source: string;   // e.g. "Owner Capital", "Bank Loan", "Bank Charges"
+  remarks?: string;
+}
+
 export interface Customer {
   id: string; // Code
   name: string;

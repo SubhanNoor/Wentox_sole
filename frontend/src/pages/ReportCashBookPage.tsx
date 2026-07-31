@@ -105,6 +105,44 @@ export function ReportCashBookContent() {
         });
       });
 
+    // Transfers and Deposits that touch the Cash account are real cash
+    // movements on the day they happen (cash banked, cash withdrawn from a
+    // bank, owner capital handed over as cash) — without a row here, the
+    // day's own totals would miss them even though tomorrow's Opening Cash
+    // (sourced from the same shared ledger helper) already reflects them.
+    const cash = getCashAccount(state);
+    if (cash) {
+      state.transfers
+        .filter(t => (t.fromBaId === cash.id || t.toBaId === cash.id) && t.date >= periodStart && t.date <= periodEnd)
+        .forEach(t => {
+          const isIn = t.toBaId === cash.id;
+          const other = state.businessAccounts.find(b => b.id === (isIn ? t.fromBaId : t.toBaId));
+          rows.push({
+            date: t.date,
+            accountName: other?.name || 'Transfer',
+            remarks: t.remarks || (isIn ? `Transfer in from ${other?.name || 'account'}` : `Transfer out to ${other?.name || 'account'}`),
+            mode: 'Cash',
+            chequeNo: '-',
+            direction: isIn ? 'Receipt' : 'Payment',
+            amount: t.amount
+          });
+        });
+
+      state.deposits
+        .filter(d => d.toBaId === cash.id && d.date >= periodStart && d.date <= periodEnd)
+        .forEach(d => {
+          rows.push({
+            date: d.date,
+            accountName: d.source,
+            remarks: d.remarks || `${d.direction === 'debit' ? 'Debit' : 'Credit'} — ${d.source}`,
+            mode: 'Cash',
+            chequeNo: '-',
+            direction: d.direction === 'debit' ? 'Payment' : 'Receipt',
+            amount: d.amount
+          });
+        });
+    }
+
     // Bounce reversals, dated the day the bounce was recorded.
     state.receipts
       .filter(r => r.chequeStatus === 'BOUNCED' && r.bouncedDate &&
@@ -142,7 +180,8 @@ export function ReportCashBookContent() {
 
     return rows.sort((a, b) => a.date.localeCompare(b.date));
   }, [state.receipts, state.expenses, state.customers, state.businessAccounts,
-      state.chequeAllocations, state.vendors, periodStart, periodEnd]);
+      state.chequeAllocations, state.vendors, state.transfers, state.deposits,
+      periodStart, periodEnd]);
 
   const filteredRows = useMemo(() => {
     if (!searchQuery.trim()) return cashBookRows;
