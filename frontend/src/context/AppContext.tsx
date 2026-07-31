@@ -1390,7 +1390,7 @@ function reducer(state: State, action: Action): State {
         id: `ca_${Date.now()}_${state.chequeAllocations.length}`
       };
       const allocations = [...state.chequeAllocations, allocation];
-      const nextStatus = deriveChequeStatus(receipt, allocations);
+      const nextStatus = deriveChequeStatus(receipt, allocations, state.expenses);
 
       return {
         ...state,
@@ -1448,10 +1448,42 @@ function reducer(state: State, action: Action): State {
       return { ...state, alertDismissals: [] };
 
     /* ──── Expense Handlers ──── */
-    case 'ADD_EXPENSE':
-      return { ...state, expenses: [action.expense, ...state.expenses] };
-    case 'DELETE_EXPENSE':
-      return { ...state, expenses: state.expenses.filter(e => e.id !== action.id) };
+    case 'ADD_EXPENSE': {
+      const expenses = [action.expense, ...state.expenses];
+      // "Cheque — Endorse" spends a received cheque exactly like a
+      // ChequeAllocation does, just from the Expenses page instead of the
+      // Cheques tab's Dispose workflow — so the source receipt's stored
+      // status must be recomputed the same way, or it silently stays
+      // PENDING/alertable while already partly or fully spent.
+      if (action.expense.paymentMode === 'ChequeEndorsed' && action.expense.chequeId) {
+        const receipt = state.receipts.find(r => r.id === action.expense.chequeId);
+        if (receipt) {
+          const nextStatus = deriveChequeStatus(receipt, state.chequeAllocations, expenses);
+          return {
+            ...state,
+            expenses,
+            receipts: state.receipts.map(r => r.id === receipt.id ? { ...r, chequeStatus: nextStatus } : r)
+          };
+        }
+      }
+      return { ...state, expenses };
+    }
+    case 'DELETE_EXPENSE': {
+      const deleted = state.expenses.find(e => e.id === action.id);
+      const expenses = state.expenses.filter(e => e.id !== action.id);
+      if (deleted?.paymentMode === 'ChequeEndorsed' && deleted.chequeId) {
+        const receipt = state.receipts.find(r => r.id === deleted.chequeId);
+        if (receipt) {
+          const nextStatus = deriveChequeStatus(receipt, state.chequeAllocations, expenses);
+          return {
+            ...state,
+            expenses,
+            receipts: state.receipts.map(r => r.id === receipt.id ? { ...r, chequeStatus: nextStatus } : r)
+          };
+        }
+      }
+      return { ...state, expenses };
+    }
 
     /* ──── Payroll Handlers (payroll.md §8) ────
      * Unlike sale bills, posting a payroll run has no stock side effect to

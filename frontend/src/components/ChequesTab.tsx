@@ -57,7 +57,7 @@ export default function ChequesTab() {
           receipt: r,
           customerName: customer?.name || 'Unknown customer',
           status,
-          unallocated: status === 'BOUNCED' ? 0 : getUnallocatedBalance(r, state.chequeAllocations),
+          unallocated: status === 'BOUNCED' ? 0 : getUnallocatedBalance(r, state.chequeAllocations, state.expenses),
           allocations: state.chequeAllocations.filter(a => a.receiptId === r.id),
         };
       })
@@ -74,7 +74,7 @@ export default function ChequesTab() {
         );
       })
       .sort((a, b) => (a.receipt.chequeDate || '').localeCompare(b.receipt.chequeDate || ''));
-  }, [state.receipts, state.customers, state.chequeAllocations, search, statusFilter]);
+  }, [state.receipts, state.customers, state.chequeAllocations, state.expenses, search, statusFilter]);
 
   const disposingRow = chequeRows.find(r => r.receipt.id === disposingId)
     ?? (disposingId
@@ -85,14 +85,14 @@ export default function ChequesTab() {
             receipt: r,
             customerName: state.customers.find(c => c.id === r.customerId)?.name || 'Unknown customer',
             status: (r.chequeStatus || 'PENDING') as ChequeStatus,
-            unallocated: getUnallocatedBalance(r, state.chequeAllocations),
+            unallocated: getUnallocatedBalance(r, state.chequeAllocations, state.expenses),
             allocations: state.chequeAllocations.filter(a => a.receiptId === r.id),
           };
         })()
       : undefined);
 
   function openDispose(receipt: Receipt) {
-    const remaining = getUnallocatedBalance(receipt, state.chequeAllocations);
+    const remaining = getUnallocatedBalance(receipt, state.chequeAllocations, state.expenses);
     setDisposingId(receipt.id);
     setDisposition('VENDOR_PAYMENT');
     setTargetId('');

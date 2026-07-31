@@ -142,13 +142,24 @@ export function getChequesInHand(state: State, upto?: string): number {
   return total;
 }
 
-/** How much of a received cheque has not yet been deposited or endorsed. */
+/**
+ * How much of a received cheque has not yet been deposited or endorsed.
+ *
+ * A cheque can be spent two ways — a `ChequeAllocation` (the Cheques tab's
+ * Dispose workflow) or a `ChequeEndorsed` Expense (picked directly on the
+ * Expenses page) — both must be subtracted together, or the two paths can
+ * double-spend the same cheque.
+ */
 export function getUnallocatedCheque(state: State, receiptId: string): number {
   const r = state.receipts.find(x => x.id === receiptId);
   if (!r) return 0;
-  const used = state.chequeAllocations
+  const usedViaAllocation = state.chequeAllocations
     .filter(a => a.receiptId === receiptId && a.status === 'ACTIVE')
     .reduce((s, a) => s + a.amount, 0);
+  const usedViaExpense = state.expenses
+    .filter(e => e.paymentMode === 'ChequeEndorsed' && e.chequeId === receiptId)
+    .reduce((s, e) => s + e.amount, 0);
+  const used = usedViaAllocation + usedViaExpense;
   return r.amount - used;
 }
 

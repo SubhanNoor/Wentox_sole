@@ -115,7 +115,8 @@ export default function BankSetupPage() {
     const used =
       state.receipts.filter(r => r.bankId === bank.id || r.depositBankId === bank.id).length +
       state.expenses.filter(e => e.bankId === bank.id).length +
-      state.transfers.filter(t => t.fromBaId === bank.baId || t.toBaId === bank.baId).length;
+      state.transfers.filter(t => t.fromBaId === bank.baId || t.toBaId === bank.baId).length +
+      state.deposits.filter(d => d.toBaId === bank.baId).length;
     if (used > 0) {
       return fail(`Cannot delete ${bank.name}: ${used} transaction(s) are recorded against it.`);
     }

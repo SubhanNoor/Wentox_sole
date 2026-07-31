@@ -6,7 +6,7 @@
 // derivations a future `GET /api/notifications` will run server-side.
 
 import type {
-  Receipt, SaleBill, SaleReturn, Customer,
+  Receipt, SaleBill, SaleReturn, Customer, Expense,
   ChequeAllocation, ChequeStatus, AlertDismissal, AppAlert
 } from '@/types';
 
@@ -21,9 +21,25 @@ export function getActiveAllocations(receiptId: string, allocations: ChequeAlloc
   return allocations.filter(a => a.receiptId === receiptId && a.status === 'ACTIVE');
 }
 
+/**
+ * A cheque can be spent two ways: the Cheques tab's "Dispose of Cheque"
+ * workflow (a `ChequeAllocation`), or picking "Cheque — Endorse" directly on
+ * the Expenses page (an `Expense` with `chequeId`). Both draw down the SAME
+ * cheque, so a balance/status check that only reads `ChequeAllocation`s would
+ * let the two paths double-spend it. `expenses` defaults to `[]` so existing
+ * call sites that haven't been updated yet still compile — but every caller
+ * that can reach `state.expenses` should pass it.
+ */
+function getEndorsedViaExpense(receiptId: string, expenses: Expense[]): number {
+  return expenses
+    .filter(e => e.paymentMode === 'ChequeEndorsed' && e.chequeId === receiptId)
+    .reduce((s, e) => s + e.amount, 0);
+}
+
 /** How much of a cheque is still unassigned. Never allowed to go negative. */
-export function getUnallocatedBalance(receipt: Receipt, allocations: ChequeAllocation[]): number {
-  const allocated = getActiveAllocations(receipt.id, allocations).reduce((s, a) => s + a.amount, 0);
+export function getUnallocatedBalance(receipt: Receipt, allocations: ChequeAllocation[], expenses: Expense[] = []): number {
+  const allocated = getActiveAllocations(receipt.id, allocations).reduce((s, a) => s + a.amount, 0)
+    + getEndorsedViaExpense(receipt.id, expenses);
   return Math.max(0, receipt.amount - allocated);
 }
 
@@ -31,17 +47,19 @@ export function getUnallocatedBalance(receipt: Receipt, allocations: ChequeAlloc
  * Status implied by a cheque's allocations. BOUNCED and CLEARED are terminal
  * states set explicitly by the user, so they are never re-derived away.
  */
-export function deriveChequeStatus(receipt: Receipt, allocations: ChequeAllocation[]): ChequeStatus {
+export function deriveChequeStatus(receipt: Receipt, allocations: ChequeAllocation[], expenses: Expense[] = []): ChequeStatus {
   if (receipt.chequeStatus === 'BOUNCED' || receipt.chequeStatus === 'CLEARED') {
     return receipt.chequeStatus;
   }
   const active = getActiveAllocations(receipt.id, allocations);
-  const allocated = active.reduce((s, a) => s + a.amount, 0);
+  const allocated = active.reduce((s, a) => s + a.amount, 0) + getEndorsedViaExpense(receipt.id, expenses);
 
   if (allocated <= 0) return 'PENDING';
   if (allocated < receipt.amount) return 'PARTIALLY_ENDORSED';
   // Fully allocated: purely banked is DEPOSITED, anything handed on is ENDORSED.
-  return active.every(a => a.dispositionType === 'DEPOSIT') ? 'DEPOSITED' : 'ENDORSED';
+  // A cheque fully spent via the Expenses "Endorse" path (no ChequeAllocation
+  // rows at all) is handed-on money, same as an allocation-based endorsement.
+  return active.length > 0 && active.every(a => a.dispositionType === 'DEPOSIT') ? 'DEPOSITED' : 'ENDORSED';
 }
 
 /** A bounced receipt contributes nothing to a customer's balance — the credit is cancelled. */
@@ -89,6 +107,7 @@ export interface AlertSources {
   saleReturns: SaleReturn[];
   customers: Customer[];
   chequeAllocations: ChequeAllocation[];
+  expenses: Expense[];
   alertDismissals: AlertDismissal[];
 }
 
@@ -108,7 +127,7 @@ export function computeAlerts(src: AlertSources, today: string = todayISO()): Ap
     if (daysLeft > CHEQUE_DUE_WARNING_DAYS) return;
 
     const customer = src.customers.find(c => c.id === rec.customerId);
-    const unallocated = getUnallocatedBalance(rec, src.chequeAllocations);
+    const unallocated = getUnallocatedBalance(rec, src.chequeAllocations, src.expenses);
 
     alerts.push({
       key: `CHEQUE_DUE:${rec.id}`,

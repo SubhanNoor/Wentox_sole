@@ -124,6 +124,27 @@ export default function BusinessAcSetupPage() {
       return;
     }
 
+    // Safety check: is it a named Bank Account (Cash and Banks setup)?
+    const linkedBank = state.bankAccounts.find(b => b.baId === bizId);
+    if (linkedBank) {
+      setErrorMsg(`Cannot delete: This is the ledger account for bank "${linkedBank.name}". Delete it from Bank Accounts instead.`);
+      setTimeout(() => setErrorMsg(''), 4000);
+      return;
+    }
+
+    // Safety check: is it referenced by any cash/bank transaction? Deleting it
+    // here would orphan those records — they'd point at a business account
+    // that no longer exists.
+    const used =
+      state.expenses.filter(e => e.businessAccountId === bizId).length +
+      state.transfers.filter(t => t.fromBaId === bizId || t.toBaId === bizId).length +
+      state.deposits.filter(d => d.toBaId === bizId).length;
+    if (used > 0) {
+      setErrorMsg(`Cannot delete: ${used} transaction(s) are recorded against this account.`);
+      setTimeout(() => setErrorMsg(''), 4000);
+      return;
+    }
+
     if (window.confirm('Are you sure you want to delete this Business Account?')) {
       dispatch({ type: 'DELETE_BUSINESS_ACCOUNT', id: bizId });
       setSuccessMsg('Business Account deleted successfully.');
