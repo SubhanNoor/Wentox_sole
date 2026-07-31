@@ -157,6 +157,97 @@ async function insertStockMovements(transaction, rows) {
   }
 }
 
+async function deleteItems(transaction, billId) {
+  const request = requestWithParams(transaction, { billId: { type: sql.Int, value: billId } });
+  await request.query('DELETE FROM dbo.sale_bill_items WHERE bill_id = @billId');
+}
+
+async function updateHeader(transaction, billId, bill) {
+  const request = requestWithParams(transaction, {
+    billId: { type: sql.Int, value: billId },
+    billDate: { type: sql.Date, value: bill.bill_date },
+    storeId: { type: sql.Int, value: bill.store_id ?? null },
+    customerId: { type: sql.Int, value: bill.customer_id },
+    subCustomerId: { type: sql.Int, value: bill.sub_customer_id ?? null },
+    mainAcId: { type: sql.Int, value: bill.main_ac_id ?? null },
+    deliveryType: { type: sql.VarChar(10), value: bill.delivery_type },
+    deliveryAddress: { type: sql.NVarChar(300), value: bill.delivery_address ?? null },
+    billNo: { type: sql.VarChar(30), value: bill.bill_no },
+    gpNo: { type: sql.VarChar(30), value: bill.gp_no },
+    biltyNo: { type: sql.VarChar(30), value: bill.bilty_no },
+    addaId: { type: sql.Int, value: bill.adda_id },
+    remarks: { type: sql.NVarChar(500), value: bill.remarks ?? null },
+    invoiceDiscount: { type: sql.Decimal(12, 2), value: bill.invoice_discount },
+    totalCartons: { type: sql.Int, value: bill.total_cartons },
+    totalPairs: { type: sql.Int, value: bill.total_pairs },
+    grossValue: { type: sql.Decimal(14, 2), value: bill.gross_value },
+    netValue: { type: sql.Decimal(14, 2), value: bill.net_value },
+  });
+
+  await request.query(`
+    UPDATE dbo.sale_bills SET
+      bill_date = @billDate, store_id = @storeId, customer_id = @customerId,
+      sub_customer_id = @subCustomerId, main_ac_id = @mainAcId, delivery_type = @deliveryType,
+      delivery_address = @deliveryAddress, bill_no = @billNo, gp_no = @gpNo, bilty_no = @biltyNo,
+      adda_id = @addaId, remarks = @remarks, invoice_discount = @invoiceDiscount,
+      total_cartons = @totalCartons, total_pairs = @totalPairs, gross_value = @grossValue,
+      net_value = @netValue
+    WHERE bill_id = @billId
+  `);
+}
+
+async function setStatus(transaction, billId, status) {
+  const request = requestWithParams(transaction, {
+    billId: { type: sql.Int, value: billId },
+    status: { type: sql.VarChar(10), value: status },
+  });
+  await request.query('UPDATE dbo.sale_bills SET status = @status WHERE bill_id = @billId');
+}
+
+async function deleteLedgerAndStock(transaction, billId) {
+  const request = requestWithParams(transaction, { billId: { type: sql.Int, value: billId } });
+  await request.query(
+    `DELETE FROM dbo.ledger_entries WHERE source_type = 'SALE_BILL' AND source_id = @billId`,
+  );
+  await request.query(
+    `DELETE FROM dbo.stock_movements WHERE source_type = 'SALE_BILL' AND source_id = @billId`,
+  );
+}
+
+async function list(filters = {}) {
+  const conditions = [];
+  const params = {};
+
+  if (filters.customer_id) {
+    conditions.push('customer_id = @customerId');
+    params.customerId = { type: sql.Int, value: filters.customer_id };
+  }
+  if (filters.sub_customer_id) {
+    conditions.push('sub_customer_id = @subCustomerId');
+    params.subCustomerId = { type: sql.Int, value: filters.sub_customer_id };
+  }
+  if (filters.bill_no) {
+    conditions.push('bill_no = @billNo');
+    params.billNo = { type: sql.VarChar(30), value: filters.bill_no };
+  }
+  if (filters.date_from) {
+    conditions.push('bill_date >= @dateFrom');
+    params.dateFrom = { type: sql.Date, value: filters.date_from };
+  }
+  if (filters.date_to) {
+    conditions.push('bill_date <= @dateTo');
+    params.dateTo = { type: sql.Date, value: filters.date_to };
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const result = await query(
+    `SELECT * FROM dbo.sale_bills ${where} ORDER BY bill_date DESC, bill_id DESC`,
+    params,
+  );
+  return result.recordset;
+}
+
 module.exports = {
   getVariantPackings, insert, insertItems, findById, insertLedgerEntries, insertStockMovements,
+  deleteItems, updateHeader, setStatus, deleteLedgerAndStock, list,
 };

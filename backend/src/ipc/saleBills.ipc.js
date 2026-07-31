@@ -13,6 +13,43 @@ module.exports = function register() {
     }),
   );
 
-  // TODO(milestone2.md remaining bullets): sale-bills:list, sale-bills:get, sale-bills:update,
-  // sale-bills:post, sale-bills:unpost.
+  ipcMain.handle(
+    'sale-bills:list',
+    wrap((payload) => {
+      requireSession();
+      return service.list(payload);
+    }),
+  );
+
+  ipcMain.handle(
+    'sale-bills:get',
+    wrap((payload) => {
+      requireSession();
+      return service.getById(payload.id);
+    }),
+  );
+
+  ipcMain.handle(
+    'sale-bills:update',
+    wrap((payload) => {
+      requireSession();
+      return service.update(payload.id, payload);
+    }),
+  );
+
+  ipcMain.handle(
+    'sale-bills:post',
+    wrap((payload) => {
+      requireSession();
+      return service.post(payload.id);
+    }),
+  );
+
+  ipcMain.handle(
+    'sale-bills:unpost',
+    wrap((payload) => {
+      requireSession();
+      return service.unpost(payload.id);
+    }),
+  );
 };

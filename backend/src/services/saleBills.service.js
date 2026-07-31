@@ -19,7 +19,10 @@ function validateHeader(payload) {
   validateDeliveryCustomer(payload);
 }
 
-async function create(payload, userId) {
+// Shared line/total resolution for create() and update() — validates items, looks up packing,
+// builds lines + rolled-up totals. Header fields are assembled separately since create() needs
+// status/created_by and update() doesn't touch either.
+async function resolveLinesAndTotals(payload) {
   validateItems(payload.items);
   validateHeader(payload);
 
@@ -29,8 +32,11 @@ async function create(payload, userId) {
 
   const lines = payload.items.map((item) => buildLine(item, packings.get(item.variant_id)));
   const totals = buildTotals(lines, payload.invoice_discount);
+  return { lines, totals };
+}
 
-  const bill = {
+function buildBillFields(payload, totals) {
+  return {
     bill_date: payload.bill_date,
     store_id: payload.store_id,
     customer_id: payload.customer_id,
@@ -48,9 +54,12 @@ async function create(payload, userId) {
     total_pairs: totals.totalPairs,
     gross_value: totals.grossValue,
     net_value: totals.netValue,
-    status: 'DRAFT',
-    created_by: userId,
   };
+}
+
+async function create(payload, userId) {
+  const { lines, totals } = await resolveLinesAndTotals(payload);
+  const bill = { ...buildBillFields(payload, totals), status: 'DRAFT', created_by: userId };
 
   const billId = await withTransaction(async (transaction) => {
     const id = await repository.insert(transaction, bill);
@@ -59,6 +68,87 @@ async function create(payload, userId) {
   });
 
   return repository.findById(billId);
+}
+
+// Weekly/monthly/overall convenience on top of explicit date_from/date_to (explicit wins).
+function resolveDateRange(filters) {
+  if (filters.date_from || filters.date_to) {
+    return { date_from: filters.date_from, date_to: filters.date_to };
+  }
+  const today = new Date();
+  const iso = (d) => d.toISOString().slice(0, 10);
+  if (filters.range === 'weekly') {
+    const from = new Date(today);
+    from.setDate(from.getDate() - 7);
+    return { date_from: iso(from), date_to: iso(today) };
+  }
+  if (filters.range === 'monthly') {
+    const from = new Date(today.getFullYear(), today.getMonth(), 1);
+    return { date_from: iso(from), date_to: iso(today) };
+  }
+  return {}; // 'overall' or unspecified — no date filter
+}
+
+function list(filters = {}) {
+  return repository.list({
+    customer_id: filters.customer_id,
+    sub_customer_id: filters.sub_customer_id,
+    bill_no: filters.bill_no,
+    ...resolveDateRange(filters),
+  });
+}
+
+// Financial edits only while UNPOSTED (status = 'DRAFT') — schema §6.
+async function update(id, payload) {
+  const existing = await getById(id);
+  if (existing.status !== 'DRAFT') {
+    throw ApiError.conflict('Unpost the bill before editing', 'POSTED_LOCK');
+  }
+
+  const { lines, totals } = await resolveLinesAndTotals(payload);
+  const bill = buildBillFields(payload, totals);
+
+  await withTransaction(async (transaction) => {
+    await repository.updateHeader(transaction, id, bill);
+    await repository.deleteItems(transaction, id);
+    await repository.insertItems(transaction, id, lines);
+  });
+
+  return getById(id);
+}
+
+async function post(id) {
+  const bill = await getById(id);
+  if (bill.status === 'CONFIRMED') {
+    throw ApiError.conflict('Bill is already posted', 'ALREADY_POSTED');
+  }
+
+  await withTransaction(async (transaction) => {
+    await postLedgerAndStock(transaction, {
+      billId: id,
+      customerId: bill.customer_id,
+      netValue: bill.net_value,
+      billDate: bill.bill_date,
+      items: bill.items,
+    });
+    await repository.setStatus(transaction, id, 'CONFIRMED');
+  });
+
+  return getById(id);
+}
+
+async function unpost(id) {
+  const bill = await getById(id);
+  if (bill.status === 'DRAFT') {
+    throw ApiError.conflict('Bill is not posted', 'NOT_POSTED');
+  }
+
+  await withTransaction(async (transaction) => {
+    await repository.deleteLedgerAndStock(transaction, id);
+    await repository.setStatus(transaction, id, 'DRAFT');
+  });
+
+  return getById(id);
 }
 
 // Shared posting logic (schema §6 posting matrix): debit CUSTOMER BA / credit SALES chart account,
@@ -127,4 +217,6 @@ async function getById(billId) {
   return bill;
 }
 
-module.exports = { create, postLedgerAndStock, insertConfirmed, getById };
+module.exports = {
+  create, list, getById, update, post, unpost, postLedgerAndStock, insertConfirmed,
+};

@@ -17,11 +17,11 @@ post/unpost) run inside a single DB transaction (`withTransaction`).
 ## Module 2.1 — Sale Bill (UC-18, UC-19)
 - [x] `saleBills` (ipc handler/service/repository) — create with items (one transaction), server-side totals (pairs = cartons × packing, line/invoice discounts, net value); `bilty_no`/`adda_id` required at creation (no dispatch-later path)
 - [x] `draftSaleBills`/`draftSaleBillItems` — dummy/unconfirmed bills that deduct stock on save and restore it on delete; `confirm` behaves as create+post in one step per the real workflow (reverses the draft's stock deduction, inserts the real bill as `CONFIRMED`, posts ledger + stock, deletes the draft) — schema §5.6.1
-- [ ] `sale-bills:list` with weekly/monthly/overall/date-range + customer/sub-customer/bill-no filters
-- [ ] `sale-bills:get` with items (for edit + print)
-- [ ] Update (UNPOSTED only) — replace items, recompute totals
-- [ ] `sale-bills:post` and `sale-bills:unpost` — ledger + stock writes in one transaction
-- [ ] Verify: create → post → check `ledger_entries` + `stock_movements` rows; unpost removes them
+- [x] `sale-bills:list` with weekly/monthly/overall/date-range + customer/sub-customer/bill-no filters
+- [x] `sale-bills:get` with items (for edit + print)
+- [x] Update (UNPOSTED only) — replace items, recompute totals; blocked with a clear error once `CONFIRMED`
+- [x] `sale-bills:post` and `sale-bills:unpost` — ledger + stock writes in one transaction; both guarded against double-post/double-unpost
+- [x] Verify: create → post → check `ledger_entries` + `stock_movements` rows; unpost removes them — verified with stubbed-dependency tests (no live SQL Server yet)
 
 ## Module 2.2 — Sale Return (UC-21, UC-22)
 - [ ] `saleReturns` (ipc handler/service/repository) — mirror of sale bills (create/list/get/update/post/unpost)

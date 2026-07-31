@@ -1,7 +1,7 @@
 # Wentox Backend — Progress Log
 
 **Current milestone:** Milestone 2 — Sale Bill & Sale Return
-**Status:** Milestone 1 code-complete (Modules 1.1–1.3, verification pending SQL Server + `npm install`). Milestone 2 in progress: Module 2.1 create-with-items and draftSaleBills (create/list/get/remove/confirm) done and debugged; sale-bills:list/get/update/post/unpost and Module 2.2 still pending.
+**Status:** Milestone 1 code-complete (Modules 1.1–1.3, verification pending SQL Server + `npm install`). Milestone 2: **Module 2.1 (Sale Bill) fully complete** — create, draftSaleBills, list/get/update/post/unpost, all debugged. Module 2.2 (Sale Return) not started.
 
 Log every completed task here (newest first within its milestone). Format:
 
@@ -15,6 +15,31 @@ Log every completed task here (newest first within its milestone). Format:
 ---
 
 ## Milestone 2 — Sale Bill & Sale Return
+
+### 2026-07-31 — Module 2.1 complete: sale-bills:list/get/update/post/unpost
+- **What:** Finished every remaining `milestone2.md` Module 2.1 checkbox. `saleBills.repository.js`
+  gained `deleteItems`, `updateHeader`, `setStatus`, `deleteLedgerAndStock`, `list(filters)`.
+  `saleBills.service.js` gained `list` (with a `resolveDateRange` helper — `weekly`/`monthly`/
+  `overall` convenience on top of explicit `date_from`/`date_to`, explicit always wins), `update`
+  (blocked unless `status = 'DRAFT'`, i.e. unposted — reuses the exact same totals math as `create`
+  via two new extracted helpers, `resolveLinesAndTotals`/`buildBillFields`, so the two don't drift),
+  `post` (reuses the existing `postLedgerAndStock` built earlier for `draftSaleBills.confirm`, then
+  sets `status = 'CONFIRMED'`; blocked if already posted), `unpost` (deletes the bill's
+  `ledger_entries`/`stock_movements` rows and sets `status = 'DRAFT'`; blocked if not posted).
+  `saleBills.ipc.js` wired `sale-bills:list/get/update/post/unpost`.
+- **How:** Verified the full lifecycle with a stubbed-dependency `node -e` test: create → update
+  while DRAFT (succeeds, totals recompute) → post (ledger + stock rows written, status flips) →
+  update while CONFIRMED (blocked) → double-post (blocked) → unpost (ledger/stock rows removed,
+  status flips back) → double-unpost (blocked) → list with a weekly range (correct date window). A
+  separate subagent debug review (briefed from `.claude/agents/debugger.md`) checked the parts that
+  test wouldn't catch — `deleteLedgerAndStock`'s WHERE clause can't touch a different bill's rows or
+  a `SALE_RETURN`'s rows, `updateHeader` updates every column `insert` sets except `status`/
+  `created_by` (correctly immutable outside `setStatus`), no invalid status string is ever written,
+  and every multi-write path is inside one `withTransaction` call. No bugs found.
+- **Files:** `backend/src/repositories/saleBills.repository.js`, `backend/src/services/saleBills.service.js`,
+  `backend/src/ipc/saleBills.ipc.js`
+- **Module 2.1 is now fully complete.** Next: Module 2.2 (Sale Return) — same shape, mirrored
+  direction. No live SQL Server yet — everything here is logic-verified, not DB-verified.
 
 ### 2026-07-30 — Module 2.1 (partial): sale-bills:create + debug pass
 - **What:** Implemented the first `milestone2.md` checklist item: `saleBills.repository.js`
