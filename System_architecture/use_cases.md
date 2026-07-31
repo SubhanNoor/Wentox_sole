@@ -85,12 +85,20 @@ frontend↔backend integration is at 0%).
 4. A `USER` who requests a restricted account directly receives a 403.
 
 **Data:** reads `users.role`, `chart_of_accounts.is_restricted`.
-**Rework:** the frontend enforces this, but from a **hardcoded list of chart-account ids**
-(`RESTRICTED_CHART_IDS = ['120002','440001']`) duplicated across `BusinessAcSetupPage`,
-`BusinessLedgerContent` and `PaymentTrailPage`, and the `User` role comes from a static
-`user`/`user` demo login rather than a `users` row. Moving to `users.role` +
-`chart_of_accounts.is_restricted` removes the duplication and lets a new restricted account be
-added as data. Server-side enforcement does not exist at all yet.
+**Rework (partially done, 2026-08-01):** the frontend's duplicated `RESTRICTED_CHART_IDS` list is
+fixed — `ChartOfAccount` now carries a real `isRestricted` field (`frontend/src/types/index.ts`),
+set on the two demo accounts it actually applies to, and `BusinessAcSetupPage`,
+`BusinessLedgerContent`, and `PaymentTrailPage` all read it through one shared helper
+(`frontend/src/lib/access.ts`) instead of three copies of a hardcoded id array. The sidebar
+(`AppLayout.tsx`) now also hides the Bank Accounts and Chart of Accounts setup screens entirely for
+`User` — previously it showed every nav item regardless of role, an outright gap for point 2 above.
+Receipts/Expenses entry remain intentionally unrestricted for `User` — UC-03's restriction is about
+*visibility* (ledgers, reports, account-configuration screens), not the ability to record a bank or
+director's-drawings transaction.
+Still outstanding: the `User` role still comes from a static `user`/`user` demo login rather than a
+real `users` row (see UC-02's own rework note), and **server-side enforcement does not exist at all
+yet** (points 3–4 above) — that lands with Milestone 8's `users`/`chart_of_accounts` backend work
+and Milestone 9's frontend↔backend wiring, not before.
 
 ---
 

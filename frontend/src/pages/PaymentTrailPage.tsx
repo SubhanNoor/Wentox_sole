@@ -3,6 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Printer, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { isChartAccountRestrictedForRole } from '@/lib/access';
 
 // Maps each Payment Trail category to the Chart of Account it's sourced from.
 // "Cash at Banks" is a running balance (holdings), not a spend total — see below.
@@ -12,6 +13,7 @@ const CATEGORY_CHART_MAP: { label: string; chartId: string }[] = [
   { label: 'Employees', chartId: '220001' },
   { label: 'Vendors - Suppliers', chartId: '210001' }
 ];
+const BANK_ACCOUNTS_CHART_ID = '120002';
 
 export function PaymentTrailContent() {
   const { state } = useApp();
@@ -23,10 +25,13 @@ export function PaymentTrailContent() {
 
   // "Total amount spent" categories — sum of Expenses against business accounts
   // under that chart account, within the selected date range.
-  // TASK-14: User role never sees Director Expenses - Drawings.
-  const visibleCategories = state.currentUserRole === 'User'
-    ? CATEGORY_CHART_MAP.filter(c => c.chartId !== '440001')
-    : CATEGORY_CHART_MAP;
+  // UC-03: hide any category whose chart account is flagged isRestricted for this role.
+  const visibleCategories = useMemo(() => {
+    return CATEGORY_CHART_MAP.filter(({ chartId }) => {
+      const chartAccount = state.chartAccounts.find(c => c.id === chartId);
+      return !chartAccount || !isChartAccountRestrictedForRole(chartAccount, state.currentUserRole);
+    });
+  }, [state.chartAccounts, state.currentUserRole]);
 
   const spendRows = useMemo(() => {
     return visibleCategories.map(({ label, chartId }) => {
@@ -54,7 +59,10 @@ export function PaymentTrailContent() {
 
   const grandTotal = useMemo(() => spendRows.reduce((s, r) => s + r.amount, 0), [spendRows]);
 
-  const showCashAtBanks = state.currentUserRole !== 'User';
+  const showCashAtBanks = useMemo(() => {
+    const bankChartAccount = state.chartAccounts.find(c => c.id === BANK_ACCOUNTS_CHART_ID);
+    return !bankChartAccount || !isChartAccountRestrictedForRole(bankChartAccount, state.currentUserRole);
+  }, [state.chartAccounts, state.currentUserRole]);
 
   const handleExportExcel = () => {
     const headers = ['Account Title', 'Amount'];

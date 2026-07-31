@@ -119,6 +119,10 @@ export interface ChartOfAccount {
   groupId: string; // parent Group Account
   linkCode: string;
   status: 'Active' | 'Closed';
+  // UC-03: hidden from User-role sessions in dropdowns, ledgers, reports, and setup nav — mirrors
+  // the backend's chart_of_accounts.is_restricted column. Optional so existing demo rows without
+  // it just default to visible (see isRestrictedForRole in lib/access.ts).
+  isRestricted?: boolean;
 }
 
 export interface BusinessAccount {
@@ -174,7 +178,10 @@ export interface Transfer {
 export interface Customer {
   id: string; // Code
   name: string;
-  acId: string; // Chart of Account ID
+  acId: string; // Chart of Account ID (parent group, e.g. '110001' CUSTOMERS ACCOUNTS)
+  // Linked Business Account leaf (e.g. '11000101') — mirrors Vendor.baId. Optional: matches the
+  // real schema's nullable customers.ba_id ("please add customer account first").
+  baId?: string;
   regionId: string; // primary identification, checked before City
   cityId: string;
 }

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
   ShoppingCart, Receipt, Package, FileText, Layers,
@@ -13,6 +13,10 @@ interface NavItem {
   page: NavPage;
   label: string;
   icon: React.ComponentType<{ size: number; className?: string }>;
+  // UC-03: hidden from the sidebar for the User role. Only for screens that manage a restricted
+  // chart account's records (Bank Accounts, Chart of Accounts setup) — not day-to-day entry
+  // screens like Receipts/Expenses, which stay open to User for credit/debit.
+  adminOnly?: boolean;
 }
 
 interface NavSection {
@@ -53,7 +57,7 @@ const navSections: NavSection[] = [
       { page: 'setup-category', label: 'Categories', icon: Layers },
       { page: 'setup-vendor', label: 'Vendors', icon: Truck },
       { page: 'setup-employee', label: 'Employees', icon: HardHat },
-      { page: 'setup-bank', label: 'Bank Accounts', icon: Landmark },
+      { page: 'setup-bank', label: 'Bank Accounts', icon: Landmark, adminOnly: true },
       { page: 'setup-customer', label: 'Customers', icon: Users },
       { page: 'setup-sub-cust', label: 'Sub Customers', icon: Users },
       { page: 'setup-city', label: 'City Creation', icon: MapPin },
@@ -65,7 +69,7 @@ const navSections: NavSection[] = [
     title: 'Accounting Setup',
     items: [
       { page: 'setup-group-ac', label: 'Group Accounts', icon: ListCollapse },
-      { page: 'setup-chart-ac', label: 'Chart of Accounts', icon: BookOpen },
+      { page: 'setup-chart-ac', label: 'Chart of Accounts', icon: BookOpen, adminOnly: true },
       { page: 'setup-business-ac', label: 'Business Accounts', icon: Settings },
     ]
   }
@@ -82,6 +86,14 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
   const [showAdminPopup, setShowAdminPopup] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
+
+  // UC-03: drop adminOnly items for the User role, then drop any section left empty.
+  const visibleNavSections = useMemo(() => {
+    if (state.currentUserRole !== 'User') return navSections;
+    return navSections
+      .map(section => ({ ...section, items: section.items.filter(item => !item.adminOnly) }))
+      .filter(section => section.items.length > 0);
+  }, [state.currentUserRole]);
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -165,7 +177,7 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
 
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto py-2.5 px-3 scrollbar-thin">
-          {navSections.map((section, sIdx) => (
+          {visibleNavSections.map((section, sIdx) => (
             <div key={sIdx} className="mb-4">
               <div
                 className="px-3 mb-1.5 text-xs font-semibold uppercase tracking-wider"

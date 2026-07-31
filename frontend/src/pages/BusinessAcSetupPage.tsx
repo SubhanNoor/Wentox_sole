@@ -3,9 +3,7 @@ import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
-
-// TASK-14: User role cannot see Bank Accounts or Director Expenses - Drawings accounts
-const RESTRICTED_CHART_IDS = ['120002', '440001'];
+import { filterChartAccountsForRole, filterBusinessAccountsForRole } from '@/lib/access';
 
 export default function BusinessAcSetupPage() {
   const { state, dispatch } = useApp();
@@ -132,8 +130,7 @@ export default function BusinessAcSetupPage() {
   };
 
   const visibleChartAccounts = useMemo(() => {
-    if (state.currentUserRole !== 'User') return state.chartAccounts;
-    return state.chartAccounts.filter(c => !RESTRICTED_CHART_IDS.includes(c.id));
+    return filterChartAccountsForRole(state.chartAccounts, state.currentUserRole);
   }, [state.chartAccounts, state.currentUserRole]);
 
   const chartOptions = useMemo(() => {
@@ -154,9 +151,8 @@ export default function BusinessAcSetupPage() {
   }, [visibleChartAccounts]);
 
   const visibleAccounts = useMemo(() => {
-    if (state.currentUserRole !== 'User') return state.businessAccounts;
-    return state.businessAccounts.filter(b => !RESTRICTED_CHART_IDS.includes(b.controlId));
-  }, [state.businessAccounts, state.currentUserRole]);
+    return filterBusinessAccountsForRole(state.businessAccounts, state.chartAccounts, state.currentUserRole);
+  }, [state.businessAccounts, state.chartAccounts, state.currentUserRole]);
 
   const filteredAndSortedAccounts = useMemo(() => {
     let list = visibleAccounts;
