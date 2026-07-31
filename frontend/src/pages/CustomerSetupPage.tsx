@@ -48,16 +48,16 @@ export default function CustomerSetupPage() {
     );
   }, [state.customers, searchQuery]);
 
+  // FOUR-digit serial — two digits caps a chart account at 99 children, and
+  // the client's legacy data already holds 200+ accounts under one head.
+  // See database_schema.md §3.2.
   const getNextCustomerCode = () => {
     const customerAccounts = state.businessAccounts.filter(acc => acc.controlId === '110001');
-    if (customerAccounts.length === 0) return '11000101';
-    const suffixes = customerAccounts.map(acc => {
+    const maxSuffix = customerAccounts.reduce((max, acc) => {
       const num = parseInt(acc.id.substring(6), 10);
-      return isNaN(num) ? 0 : num;
-    });
-    const nextSuffix = Math.max(...suffixes, 0) + 1;
-    const formattedSuffix = nextSuffix < 10 ? `0${nextSuffix}` : `${nextSuffix}`;
-    return `110001${formattedSuffix}`;
+      return isNaN(num) ? max : Math.max(max, num);
+    }, 0);
+    return `110001${String(maxSuffix + 1).padStart(4, '0')}`;
   };
 
   const handleOpenAdd = () => {

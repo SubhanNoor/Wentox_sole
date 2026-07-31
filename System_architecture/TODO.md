@@ -10,35 +10,23 @@ Companion docs: [`payroll.md`](payroll.md), [`cash_and_bank.md`](cash_and_bank.m
 
 ## 1. Bugs — real defects in code that is already shipped
 
-### 1.1 Business-account serials are 2 digits in four places — **caps a chart head at 99 children**
+### 1.1 Business-account serials are 2 digits in four places — **FIXED**
 
-The numbering scheme is a 6-digit chart code plus a **4-digit** serial. Four pages still generate
-two, which silently caps each chart account at 99 children. The client's legacy data already holds
-**218+ accounts under one head**, so an import hits the ceiling immediately and starts colliding.
+All four generators (`VendorSetupPage.tsx`, `CustomerSetupPage.tsx`, `PurchasePage.tsx`'s vendor
+quick-add, `SaleBillPage.tsx`'s customer quick-add) now use `String(max + 1).padStart(4, '0')`,
+matching `EmployeeSetupPage.tsx`/`BankSetupPage.tsx`. Existing 2-digit demo ids (`21000101` etc.)
+still parse correctly — `parseInt` reads the numeric value regardless of padding width — so old and
+new records coexist; only newly generated codes get the 4-digit serial going forward.
 
-| File | |
-|---|---|
-| `pages/VendorSetupPage.tsx:56` | `nextSuffix < 10 ? \`0${n}\` : \`${n}\`` |
-| `pages/CustomerSetupPage.tsx` | same |
-| `pages/PurchasePage.tsx:49` | vendor quick-add |
-| `pages/SaleBillPage.tsx` | customer quick-add |
+Still true: the quick-add paths (`PurchasePage.tsx`, `SaleBillPage.tsx`) duplicate the setup pages'
+logic rather than sharing it — worth extracting one helper, or the next new party type will
+reintroduce the bug a fifth time.
 
-Correct versions to copy: `pages/EmployeeSetupPage.tsx` and `pages/BankSetupPage.tsx`
-(`String(max + 1).padStart(4, '0')`).
+### 1.2 Cash Book does not show transfers — **FIXED**
 
-Note the quick-add paths duplicate the setup pages' logic rather than sharing it — worth extracting
-one helper while fixing, or the next new party type will reintroduce it a fifth time.
-
-### 1.2 Cash Book does not show transfers
-
-`grep -c "state.transfers" pages/ReportCashBookPage.tsx` → **0**.
-
-Banking the day's takings is a cash movement, but no receipt or expense records it, so the Cash
-Book's rows are now incomplete. The *opening* figure is already right (it defers to
-`getAccountBalance`), which makes this worse rather than better: opening and closing include the
-transfer, the rows in between do not, so the page will not add up.
-
-Transfers must appear as rows, labelled clearly enough that nobody reads one as income.
+`ReportCashBookPage.tsx` now adds a row for any Transfer or Deposit that touches the Cash account,
+labelled as Receipt/Payment on the day it happens — so the day's totals reconcile with what the
+*opening* figure (already correct via `getAccountBalance`) shows for the next day.
 
 ### 1.3 `frontend/CLAUDE.md` describes a data model that no longer exists
 

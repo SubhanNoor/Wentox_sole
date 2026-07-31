@@ -44,21 +44,17 @@ export default function VendorSetupPage() {
     setActiveTab('form');
   };
 
-  // Generate the next Business Account code under the "Vendors" chart account (210001)
+  // Generate the next Business Account code under the "Vendors" chart account
+  // (210001). FOUR-digit serial — two digits caps a chart account at 99
+  // children, and the client's legacy data already holds 200+ accounts under
+  // one head. See database_schema.md §3.2.
   const getNextVendorAccountCode = () => {
     const vendorAccounts = state.businessAccounts.filter(acc => acc.controlId === '210001');
-    if (vendorAccounts.length === 0) return '21000101';
-
-    const suffixes = vendorAccounts.map(acc => {
-      const suffixStr = acc.id.substring(6); // '210001' is 6 characters
-      const num = parseInt(suffixStr, 10);
-      return isNaN(num) ? 0 : num;
-    });
-
-    const maxSuffix = Math.max(...suffixes, 0);
-    const nextSuffix = maxSuffix + 1;
-    const formattedSuffix = nextSuffix < 10 ? `0${nextSuffix}` : `${nextSuffix}`;
-    return `210001${formattedSuffix}`;
+    const maxSuffix = vendorAccounts.reduce((max, acc) => {
+      const num = parseInt(acc.id.substring(6), 10); // '210001' is 6 characters
+      return isNaN(num) ? max : Math.max(max, num);
+    }, 0);
+    return `210001${String(maxSuffix + 1).padStart(4, '0')}`;
   };
 
   const handleSaveVendor = (e: React.FormEvent) => {

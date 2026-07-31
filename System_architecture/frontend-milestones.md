@@ -125,7 +125,7 @@ The original plan item "Purchase as a stock-in source" is dropped.
 
 ---
 
-## TASK-14 — User Roles & Access Control ✅ DONE (uncommitted)
+## TASK-14 — User Roles & Access Control ✅ DONE
 
 **Goal:** Two-tier demo access — Admin (full access) vs. User (blocked from
 Bank Accounts and Director Expenses - Drawings). Added mid-cycle, not part
@@ -143,7 +143,6 @@ touches Business Accounts setup and several report pages built there.
       (also hides the Cash at Banks row/export), and
       `BusinessLedgerContent.tsx`
 - [x] Verified via `tsc -b` (clean) and dev server health check
-- [ ] **Not yet committed/pushed** — code complete, pending a push
 
 ---
 
