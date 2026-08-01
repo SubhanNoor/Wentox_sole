@@ -4,6 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import { Printer, Search, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { expenseModeLabel, getAccountBalance, getCashAccount } from '@/lib/cashbank';
+import { maskedBusinessAccountName } from '@/lib/access';
 import type { ReceiptMode, ExpenseMode } from '@/types';
 
 interface CashBookRow {
@@ -66,10 +67,12 @@ export function ReportCashBookContent() {
     state.expenses
       .filter(e => e.date >= periodStart && e.date <= periodEnd)
       .forEach(e => {
-        const biz = state.businessAccounts.find(b => b.id === e.businessAccountId);
+        const accountName = maskedBusinessAccountName(
+          e.businessAccountId, state.businessAccounts, state.chartAccounts, state.currentUserRole,
+        );
         rows.push({
           date: e.date,
-          accountName: biz?.name || 'General Expense Account',
+          accountName: accountName || 'General Expense Account',
           remarks: e.remarks || e.details || '-',
           mode: e.paymentMode,
           chequeNo: '-',
@@ -93,7 +96,7 @@ export function ReportCashBookContent() {
         const sourceReceipt = state.receipts.find(r => r.id === a.receiptId);
         const name = a.targetType === 'VENDOR'
           ? state.vendors.find(v => v.id === a.targetId)?.name
-          : state.businessAccounts.find(b => b.id === a.targetId)?.name;
+          : maskedBusinessAccountName(a.targetId, state.businessAccounts, state.chartAccounts, state.currentUserRole);
         rows.push({
           date: a.allocationDate,
           accountName: name || 'Cheque endorsement',
@@ -127,7 +130,7 @@ export function ReportCashBookContent() {
           .forEach(a => {
             const name = a.targetType === 'VENDOR'
               ? state.vendors.find(v => v.id === a.targetId)?.name
-              : state.businessAccounts.find(b => b.id === a.targetId)?.name;
+              : maskedBusinessAccountName(a.targetId, state.businessAccounts, state.chartAccounts, state.currentUserRole);
             rows.push({
               date: r.bouncedDate!,
               accountName: name || 'Cheque endorsement',
@@ -142,7 +145,8 @@ export function ReportCashBookContent() {
 
     return rows.sort((a, b) => a.date.localeCompare(b.date));
   }, [state.receipts, state.expenses, state.customers, state.businessAccounts,
-      state.chequeAllocations, state.vendors, periodStart, periodEnd]);
+      state.chequeAllocations, state.vendors, state.chartAccounts, state.currentUserRole,
+      periodStart, periodEnd]);
 
   const filteredRows = useMemo(() => {
     if (!searchQuery.trim()) return cashBookRows;

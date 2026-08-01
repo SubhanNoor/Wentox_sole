@@ -36,3 +36,20 @@ export function filterBusinessAccountsForRole(
     (b) => !isBusinessAccountRestrictedForRole(b, chartAccounts, role),
   );
 }
+
+// For places that show an account's real name in a report/history view where the account itself
+// can't be filtered out of the row (the transaction still needs to appear — just not whose
+// restricted account it touched). Returns undefined if the id doesn't resolve to a known account,
+// so callers can fall back to their own default label.
+export function maskedBusinessAccountName(
+  businessAccountId: string | null | undefined,
+  businessAccounts: BusinessAccount[],
+  chartAccounts: ChartOfAccount[],
+  role: UserRole | null,
+): string | undefined {
+  if (!businessAccountId) return undefined;
+  const account = businessAccounts.find((b) => b.id === businessAccountId);
+  if (!account) return undefined;
+  if (isBusinessAccountRestrictedForRole(account, chartAccounts, role)) return 'Restricted Account';
+  return account.name;
+}

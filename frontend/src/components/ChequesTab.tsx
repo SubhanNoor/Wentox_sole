@@ -4,6 +4,7 @@ import { getUnallocatedBalance, todayISO } from '@/lib/cheques';
 import { Printer, FileDown, FileSpreadsheet, Search, AlertTriangle } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
+import { filterBusinessAccountsForRole, maskedBusinessAccountName } from '@/lib/access';
 import type { Receipt, ChequeAllocation, ChequeDisposition, ChequeStatus } from '@/types';
 
 const STATUS_STYLES: Record<ChequeStatus, string> = {
@@ -187,17 +188,18 @@ export default function ChequesTab() {
       return state.vendors.map(v => ({ value: v.id, label: v.name }));
     }
     if (disposition === 'EXPENSE_PAYMENT') {
-      return state.businessAccounts.map(b => ({ value: b.id, label: `${b.name} (${b.id})` }));
+      return filterBusinessAccountsForRole(state.businessAccounts, state.chartAccounts, state.currentUserRole)
+        .map(b => ({ value: b.id, label: `${b.name} (${b.id})` }));
     }
     return [];
-  }, [disposition, state.vendors, state.businessAccounts]);
+  }, [disposition, state.vendors, state.businessAccounts, state.chartAccounts, state.currentUserRole]);
 
   function targetName(a: ChequeAllocation): string {
     if (a.dispositionType === 'DEPOSIT') return 'Bank deposit';
     if (a.targetType === 'VENDOR') {
       return state.vendors.find(v => v.id === a.targetId)?.name || 'Vendor';
     }
-    return state.businessAccounts.find(b => b.id === a.targetId)?.name || 'Account';
+    return maskedBusinessAccountName(a.targetId, state.businessAccounts, state.chartAccounts, state.currentUserRole) || 'Account';
   }
 
   const handleExportExcel = () => {

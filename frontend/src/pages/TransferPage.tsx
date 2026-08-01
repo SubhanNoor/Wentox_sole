@@ -71,6 +71,19 @@ export default function TransferPage() {
     [state.transfers]
   );
 
+  // Defense-in-depth: the sidebar already hides this page's nav item for User (UC-03) — this
+  // whole screen shows bank balances and transfer history, exactly the "bank ledger" view User
+  // must not see, so it's guarded here too rather than relying solely on the sidebar.
+  if (state.currentUserRole === 'User') {
+    return (
+      <AppLayout pageTitle="Transfer Between Accounts">
+        <div className="mx-auto text-center p-12 text-slate-400" style={{ maxWidth: 1000 }}>
+          You don't have access to this page.
+        </div>
+      </AppLayout>
+    );
+  }
+
   return (
     <AppLayout pageTitle="Transfer Between Accounts">
       <div className="mx-auto" style={{ maxWidth: 1000 }}>

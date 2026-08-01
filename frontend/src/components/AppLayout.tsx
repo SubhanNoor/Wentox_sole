@@ -39,7 +39,7 @@ const navSections: NavSection[] = [
       { page: 'wage-run', label: 'Wage Run (Piece Rate)', icon: HardHat },
       { page: 'salary-run', label: 'Salary Run (Monthly)', icon: BadgeDollarSign },
       // Money between our own accounts — neither income nor expense.
-      { page: 'transfer', label: 'Transfer (Cash \u2194 Bank)', icon: ArrowLeftRight },
+      { page: 'transfer', label: 'Transfer (Cash \u2194 Bank)', icon: ArrowLeftRight, adminOnly: true },
     ]
   },
   {
@@ -69,7 +69,7 @@ const navSections: NavSection[] = [
     title: 'Accounting Setup',
     items: [
       { page: 'setup-group-ac', label: 'Group Accounts', icon: ListCollapse },
-      { page: 'setup-chart-ac', label: 'Chart of Accounts', icon: BookOpen, adminOnly: true },
+      { page: 'setup-chart-ac', label: 'Chart of Accounts', icon: BookOpen },
       { page: 'setup-business-ac', label: 'Business Accounts', icon: Settings },
     ]
   }
