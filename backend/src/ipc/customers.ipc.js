@@ -5,10 +5,28 @@ const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
 
 module.exports = function register() {
-  // TODO(milestone): register channels, e.g.:
-  // ipcMain.handle('customers:list', wrap((payload) => { requireSession(); return service.list(payload); }));
-  // ipcMain.handle('customers:get', wrap((payload) => { requireSession(); return service.getById(payload.id); }));
-  // ipcMain.handle('customers:create', wrap((payload) => { requireSession(); return service.create(payload); }));
-  // ipcMain.handle('customers:update', wrap((payload) => { requireSession(); return service.update(payload.id, payload); }));
-  // ipcMain.handle('customers:remove', wrap((payload) => { requireSession(); return service.remove(payload.id); }));
+  ipcMain.handle('customers:list', wrap((payload) => {
+    requireSession();
+    return service.list(payload);
+  }));
+
+  ipcMain.handle('customers:get', wrap((payload) => {
+    requireSession();
+    return service.getById(payload.id);
+  }));
+
+  ipcMain.handle('customers:create', wrap((payload) => {
+    requireSession();
+    return service.create(payload);
+  }));
+
+  ipcMain.handle('customers:update', wrap((payload) => {
+    requireSession();
+    return service.update(payload.id, payload);
+  }));
+
+  ipcMain.handle('customers:remove', wrap((payload) => {
+    requireSession();
+    return service.remove(payload.id);
+  }));
 };

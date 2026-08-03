@@ -1,7 +1,7 @@
 # Wentox Backend — Progress Log
 
-**Current milestone:** Milestone 6 — System Setup: Product Details, Categories, Vendors (pulled forward ahead of Milestone 4 — see rationale below)
-**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account — see below). Milestone 4 (Receipts/Expenses) and Milestone 3/2's frontend wiring are still pending — Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures.
+**Current milestone:** Milestone 7 — System Setup: Workers, Customers, Sub-Customers (pulled forward ahead of Milestone 4, same as Milestone 6 — see rationale below)
+**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10 — see below); **Module 7.1 (Workers) is blocked** — no definition exists in `use_cases.md`/`database_schema_v4.3.md`, needs the user's input before any schema/CRUD work. Milestone 4 (Receipts/Expenses) and the Milestone 2/3 frontend wiring are still pending — Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures.
 
 Log every completed task here (newest first within its milestone). Format:
 
@@ -13,6 +13,70 @@ Log every completed task here (newest first within its milestone). Format:
 ```
 
 ---
+
+## Milestone 7 — System Setup: Workers, Customers, Sub-Customers
+
+### 2026-08-16 — Added region_id/city_id to sub_customers (schema change, per client instruction)
+- **What:** Sale Bill/Sale Return's "deliver to" sub-customer dropdown needs to narrow to the
+  selected customer's region — sub_customers previously had no region/city at all. Confirmed the
+  exact requirements with the user first (region_id required, city_id optional/informational;
+  filter matches region only, not city) before touching schema or code.
+- **How:** `region_id INT NOT NULL` + `city_id INT NULL` (both FK'd to `regions`/`cities`) added to
+  `dbo.sub_customers`, folded directly into `database/schema.sql` (table was empty in `wentox_db`,
+  so the `NOT NULL` add needed no backfill — applied via a temporary migration first, verified
+  live, then folded in and the migration deleted, same pattern as every other schema change this
+  project). `subCustomers.repository.js`'s `list()` gained a `region_id` filter (unfiltered still
+  returns everyone — this is opt-in narrowing, not a hard restriction), `findById()`/`list()` now
+  join `regions` (INNER, required) and `cities` (LEFT, optional) for display names, `insert()`/
+  `update()` carry the new columns through. `subCustomers.service.js`'s `validate()` now requires
+  `region_id`. Also corrected two docs that were now stale: `use_cases.md`'s UC-10, which
+  explicitly said the dropdown lists "every sub-customer... not a filtered subset" (struck
+  through, replaced with the new region-match behavior), and `database_schema_v4.3.md`'s
+  `sub_customers` CREATE TABLE block + a new "Post-v4.3 amendment" note.
+- **Verified:** live against `wentox_db` — missing `region_id` rejected; created two sub-customers
+  in different regions; `list({ region_id: lahoreId })` correctly included the matching one and
+  excluded the other; unfiltered `list()` still returned both. Also re-verified the from-scratch
+  `schema.sql`-only import path against a disposable scratch database (`sub_customers.region_id`
+  `NOT NULL`, `city_id` nullable, matching the live database exactly).
+- **Files:** `database/schema.sql`, `System_architecture/database_schema_v4.3.md`,
+  `System_architecture/use_cases.md`, `backend/src/repositories/subCustomers.repository.js`,
+  `backend/src/services/subCustomers.service.js`, `backend/milestones/milestone7.md`
+
+### 2026-08-15 — Modules 7.2 & 7.3 complete: customers, subCustomers
+- **What:** Built module-by-module with a functionality check-in before each, per explicit
+  direction this session (confirm scope/approach first, then implement — not the whole milestone
+  in one pass).
+  - **Customers** (`customers.*`, Module 7.2, UC-09): confirmed as an exact mirror of Module 6.3's
+    Vendors before building — same CRUD shape, same auto-linked-`business_accounts`-on-create
+    pattern (reusing `businessAccountsService.createUnderChartCode` under CUSTOMERS ACCOUNTS this
+    time), same rename-syncs-the-account behavior, same transaction-safe `create()` from the
+    start (no repeat of the Vendors orphan-row bug — a debugger review confirmed this). One real
+    schema difference correctly handled: `region_id` is required (`NOT NULL` on `dbo.customers`,
+    unlike vendors' nullable `region_id`), validated accordingly. Debugger review flagged one
+    low-risk informational note: `customers.name` has no DB-level `UNIQUE` constraint (unlike
+    `vendors.name`'s `UQ_vendors_name`) — duplicate protection is service-layer-only, accepted as
+    low risk in this single-admin-session desktop app, not schema-patched.
+  - **Sub-Customers** (`subCustomers.*`, Module 7.3, UC-10): milestone7.md's checklist said
+    sub-customers "must belong to a customer" — checked this against the actual schema (no
+    `customer_id` column on `dbo.sub_customers`) and UC-10's explicit text ("Sub-customers are
+    independent. They have no parent customer... the parent-customer link still exists and must
+    be *removed*") and confirmed with the user that the milestone doc's line was stale before
+    building. Built as a flat CRUD instead: `name`/`phone`/`address`/`is_active` only, no
+    region/city, no linked business account. The Sale Bill inline "+ Add Sub-Customer" flow uses
+    the same `sub-customers:create` channel as the standalone screen (no parent to scope under, so
+    no separate customer-scoped channel needed, correcting milestone7.md's other stale line).
+- **How:** Both modules follow the same list/get/create/update/remove IPC shape as every other
+  Milestone 6/7 module. `milestone7.md` updated in place to strike the two stale lines with a
+  note explaining what was actually built and why.
+- **Verified:** debugger-subagent review on each module separately (Customers: confirmed
+  transaction safety, correct `region_id` requirement, correct `CODES.CUSTOMERS_ACCOUNTS` usage,
+  correct JOIN directions; Sub-Customers: confirmed no parent-link anywhere, correct IPC channel
+  casing) — both clean. Then live against `wentox_db` for each before moving to the next: Customers
+  (missing region rejected → create with linked account `100001XXXX` → duplicate rejected → update
+  renames both → soft-delete, account stays `ACTIVE`); Sub-Customers (create → duplicate rejected →
+  update → list/soft-delete).
+- **Files:** `backend/src/{repositories,services,ipc}/customers.*`,
+  `backend/src/{repositories,services,ipc}/subCustomers.*`, `backend/milestones/milestone7.md`
 
 ## Milestone 6 — System Setup: Product Details, Categories, Vendors
 

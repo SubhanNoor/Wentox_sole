@@ -534,18 +534,30 @@ CREATE UNIQUE INDEX UQ_customers_ba     ON dbo.customers(ba_id) WHERE ba_id IS N
 CREATE INDEX        IX_customers_region ON dbo.customers(region_id, city_id);   -- Region first, City second
 CREATE INDEX        IX_customers_name   ON dbo.customers(name);
 
+> **Post-v4.3 amendment (folded directly into `database/schema.sql`):** `region_id` (required)/
+> `city_id` (optional) added, per client instruction, so the Sale Bill/Sale Return "deliver to"
+> dropdown can be narrowed to sub-customers in the selected customer's region. This reverses
+> UC-10's original "lists every sub-customer... not a filtered subset" wording (see the updated
+> UC-10 note in `use_cases.md`). Still no parent customer FK.
+
+```sql
 CREATE TABLE dbo.sub_customers (                              -- TASK-06: NO parent customer FK
   sub_customer_id INT IDENTITY(1,1) NOT NULL,
   name            NVARCHAR(150) NOT NULL,
+  region_id       INT           NOT NULL,
+  city_id         INT           NULL,
   phone           VARCHAR(30)   NULL,
   address         NVARCHAR(200) NULL,
   is_active       BIT          NOT NULL CONSTRAINT DF_subcust_active  DEFAULT (1),
   created_at      DATETIME2(0) NOT NULL CONSTRAINT DF_subcust_created DEFAULT (SYSUTCDATETIME()),
   updated_at      DATETIME2(0) NOT NULL CONSTRAINT DF_subcust_updated DEFAULT (SYSUTCDATETIME()),
-  CONSTRAINT PK_sub_customers      PRIMARY KEY (sub_customer_id),
-  CONSTRAINT UQ_sub_customers_name UNIQUE (name)
+  CONSTRAINT PK_sub_customers        PRIMARY KEY (sub_customer_id),
+  CONSTRAINT UQ_sub_customers_name   UNIQUE (name),
+  CONSTRAINT FK_sub_customers_region FOREIGN KEY (region_id) REFERENCES dbo.regions(region_id),
+  CONSTRAINT FK_sub_customers_city   FOREIGN KEY (city_id)   REFERENCES dbo.cities(city_id)
 );
-CREATE INDEX IX_sub_customers_name ON dbo.sub_customers(name);   -- TASK-06 searchable dropdown
+CREATE INDEX IX_sub_customers_name   ON dbo.sub_customers(name);        -- TASK-06 searchable dropdown
+CREATE INDEX IX_sub_customers_region ON dbo.sub_customers(region_id);   -- Sale Bill/Return region filter
 ```
 
 ### 5.5 Products and colour variants

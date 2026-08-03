@@ -544,22 +544,33 @@ GO
    WHY:   TASK-06 — deliberately a flat independent list, NOT a child of
           customers (the old schema's customer_id NOT NULL FK is removed).
 ---------------------------------------------------------------------------- */
+-- POST-v4.3: region_id (required)/city_id (optional) added so the Sale Bill/Sale Return
+-- "deliver to" dropdown can be narrowed to sub-customers in the selected customer's region —
+-- per client instruction, reversing UC-10's original "lists every sub-customer, not a filtered
+-- subset" wording (see use_cases.md UC-10 note). Sub-customers otherwise stay independent — no
+-- parent customer link.
 CREATE TABLE dbo.sub_customers (
   sub_customer_id INT IDENTITY(1,1) NOT NULL,
   name            NVARCHAR(150) NOT NULL,
+  region_id       INT           NOT NULL,
+  city_id         INT           NULL,
   phone           VARCHAR(30)   NULL,
   address         NVARCHAR(200) NULL,
   is_active       BIT          NOT NULL CONSTRAINT DF_subcust_active  DEFAULT (1),
   created_at      DATETIME2(0) NOT NULL CONSTRAINT DF_subcust_created DEFAULT (SYSUTCDATETIME()),
   updated_at      DATETIME2(0) NOT NULL CONSTRAINT DF_subcust_updated DEFAULT (SYSUTCDATETIME()),
-  CONSTRAINT PK_sub_customers      PRIMARY KEY (sub_customer_id),
-  CONSTRAINT UQ_sub_customers_name UNIQUE (name)
+  CONSTRAINT PK_sub_customers        PRIMARY KEY (sub_customer_id),
+  CONSTRAINT UQ_sub_customers_name   UNIQUE (name),
+  CONSTRAINT FK_sub_customers_region FOREIGN KEY (region_id) REFERENCES dbo.regions(region_id),
+  CONSTRAINT FK_sub_customers_city   FOREIGN KEY (city_id)   REFERENCES dbo.cities(city_id)
 );
-CREATE INDEX IX_sub_customers_name ON dbo.sub_customers(name);   -- TASK-06 searchable dropdown
+CREATE INDEX IX_sub_customers_name   ON dbo.sub_customers(name);        -- TASK-06 searchable dropdown
+CREATE INDEX IX_sub_customers_region ON dbo.sub_customers(region_id);   -- Sale Bill/Return region filter
 GO
 -- USED BY: Sale Bill / Sale Return "deliver to" dropdown when
 -- delivery_type = 'CUSTOM' (sale_bills.sub_customer_id,
--- sale_returns.sub_customer_id, and their draft mirrors).
+-- sale_returns.sub_customer_id, and their draft mirrors) — filtered by the
+-- selected customer's region_id.
 
 /* ============================================================================
    5. ARTICLES AND COLOUR VARIANTS

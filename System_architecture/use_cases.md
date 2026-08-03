@@ -228,14 +228,18 @@ grouping and search key throughout the app.
 **Actor:** Admin / Sales staff · **Goal:** Maintain delivery agents / middlemen
 **Screen:** Sub Customers
 
-**Steps:** browse → **Add New** or select to edit → enter name, phone, address → **Save**.
+**Steps:** browse → **Add New** or select to edit → enter name, **Region** (required), City,
+phone, address → **Save**.
 
-**Sub-customers are independent.** They have **no parent customer**. The dropdown on Sale Bill and
-Sale Return lists **every** sub-customer with a search box, not a filtered subset.
-A sub-customer can also be added inline from the Sale Bill form.
+**Sub-customers are independent.** They have **no parent customer**. ~~The dropdown on Sale Bill
+and Sale Return lists every sub-customer with a search box, not a filtered subset.~~ **Post-v4.3
+amendment, per client instruction:** the dropdown is narrowed to sub-customers whose `region_id`
+matches the selected customer's region (city is not part of the match rule). A sub-customer can
+also be added inline from the Sale Bill form.
 
-**Data:** writes `sub_customers`.
-**Rework:** the parent-customer link still exists and must be removed.
+**Data:** writes `sub_customers`; reads `regions`, `cities`.
+**Rework:** the parent-customer link still exists and must be removed. (Done — see
+`database_schema_v4.3.md`'s post-v4.3 amendment note; no `customer_id` column exists.)
 
 ---
 
