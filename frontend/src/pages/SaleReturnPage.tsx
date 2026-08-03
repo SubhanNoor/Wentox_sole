@@ -6,9 +6,10 @@ import WeeklyReturnTab from '@/components/WeeklyReturnTab';
 import MonthlyReturnTab from '@/components/MonthlyReturnTab';
 import OverallReturnTab from '@/components/OverallReturnTab';
 import FindReturnTab from '@/components/FindReturnTab';
-import { Save, Plus, Trash2, Printer, Lock, FileDown, FileSpreadsheet } from 'lucide-react';
+import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
+import PasswordPromptModal from '@/components/PasswordPromptModal';
 
 export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?: 'return' | 'weekly' | 'monthly' | 'overall' | 'find' }) {
   const { state, dispatch } = useApp();
@@ -17,6 +18,11 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   // Mode: 'view' | 'edit' | 'new'
   const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');
+
+  // Password Modal Protection State
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [passwordActionType, setPasswordActionType] = useState<'edit_return' | 'save_return' | null>(null);
+  const [targetReturnToEdit, setTargetReturnToEdit] = useState<SaleReturn | null>(null);
 
   // Form State
   const [returnId, setReturnId] = useState('');
@@ -28,7 +34,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   const [gpNo, setGpNo] = useState('');
   const [biltyNo, setBiltyNo] = useState('');
   const [remarks, setRemarks] = useState('');
-  const [status, setStatus] = useState<'Posted' | 'Unposted'>('Unposted');
+  const [status, setStatus] = useState<'Posted' | 'Unposted'>('Posted');
   const [invoiceDiscount, setInvoiceDiscount] = useState(0);
   
   // Line items state
@@ -123,9 +129,16 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   };
 
   const handleEditSpecificReturn = (ret: SaleReturn) => {
-    loadReturn(ret);
-    setMode('edit');
-    setActiveTab('return');
+    const isConfirmed = state.saleReturns.some(r => r.id === ret.id);
+    if (isConfirmed) {
+      setTargetReturnToEdit(ret);
+      setPasswordActionType('edit_return');
+      setIsPasswordModalOpen(true);
+    } else {
+      loadReturn(ret);
+      setMode('edit');
+      setActiveTab('return');
+    }
   };
 
   const handlePrintSpecificReturn = (ret: SaleReturn) => {
@@ -174,7 +187,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setGpNo('');
     setBiltyNo('');
     setRemarks('');
-    setStatus('Unposted');
+    setStatus('Posted');
     setInvoiceDiscount(0);
     setItems([{
       id: 'sri_' + Date.now() + '_0',
@@ -188,6 +201,44 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       discountValue: 0,
       value: 0
     }]);
+    setErrorMsg('');
+  };
+
+  const executeSaveReturn = () => {
+    const savedReturn: SaleReturn = {
+      id: returnId,
+      date,
+      storeId,
+      customerId,
+      subCustomerId: subCustomerId === 'sub-same' ? null : subCustomerId,
+      billNo,
+      gpNo,
+      biltyNo,
+      remarks,
+      status: 'Posted',
+      invoiceDiscount,
+      items
+    };
+
+    if (mode === 'new') {
+      dispatch({ type: 'ADD_SALE_RETURN', returnObj: savedReturn });
+      setSuccessMsg('New sale return confirmed & posted successfully.');
+    } else {
+      dispatch({ type: 'UPDATE_SALE_RETURN', returnId, returnObj: savedReturn });
+      setSuccessMsg('Sale return updated & posted successfully.');
+    }
+
+    // Clean up draft from cache if saved/confirmed
+    setDrafts(prev => {
+      const updated = prev.filter(d => d.id !== returnId && d.id !== selectedDraftId);
+      localStorage.setItem('wento_sale_return_drafts', JSON.stringify(updated));
+      return updated;
+    });
+    setSelectedDraftId('');
+
+    setStatus('Posted');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    setMode('view');
     setErrorMsg('');
   };
 
@@ -206,40 +257,27 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       if (it.rate <= 0) return setErrorMsg(`Rate must be greater than 0 at row ${i + 1}.`);
     }
 
-    const savedReturn: SaleReturn = {
-      id: returnId,
-      date,
-      storeId,
-      customerId,
-      subCustomerId: subCustomerId === 'sub-same' ? null : subCustomerId,
-      billNo,
-      gpNo,
-      biltyNo,
-      remarks,
-      status,
-      invoiceDiscount,
-      items
-    };
-
-    if (mode === 'new') {
-      dispatch({ type: 'ADD_SALE_RETURN', returnObj: savedReturn });
-      setSuccessMsg('New sale return saved successfully.');
+    if (mode === 'edit') {
+      setPasswordActionType('save_return');
+      setIsPasswordModalOpen(true);
     } else {
-      dispatch({ type: 'UPDATE_SALE_RETURN', returnId, returnObj: savedReturn });
-      setSuccessMsg('Sale return updated successfully.');
+      executeSaveReturn();
     }
+  };
 
-    // Clean up draft from cache if saved/confirmed
-    setDrafts(prev => {
-      const updated = prev.filter(d => d.id !== returnId && d.id !== selectedDraftId);
-      localStorage.setItem('wento_sale_return_drafts', JSON.stringify(updated));
-      return updated;
-    });
-    setSelectedDraftId('');
-
-    setTimeout(() => setSuccessMsg(''), 3000);
-    setMode('view');
-    setErrorMsg('');
+  const handlePasswordSuccess = () => {
+    setIsPasswordModalOpen(false);
+    if (passwordActionType === 'edit_return' && targetReturnToEdit) {
+      loadReturn(targetReturnToEdit);
+      setMode('edit');
+      setActiveTab('return');
+      setSuccessMsg(`Password verified for user '${state.currentUsername || 'user'}'. Return editing unlocked.`);
+      setTimeout(() => setSuccessMsg(''), 3000);
+    } else if (passwordActionType === 'save_return') {
+      executeSaveReturn();
+    }
+    setPasswordActionType(null);
+    setTargetReturnToEdit(null);
   };
 
   const handleSaveDraft = () => {
@@ -272,15 +310,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     });
 
     setSuccessMsg('Return saved to drafts cache.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-  };
-
-  const handlePostToggle = () => {
-    if (status === 'Unposted') {
-      dispatch({ type: 'POST_SALE_RETURN', returnId });
-      setStatus('Posted');
-      setSuccessMsg('Return Posted to accounts and stock updated.');
-    }
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
@@ -740,16 +769,24 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   <FileSpreadsheet size={16} /> Export Excel
                 </button>
                 <button
+                  onClick={() => {
+                    const currentReturn = state.saleReturns.find(r => r.id === returnId);
+                    if (currentReturn) {
+                      handleEditSpecificReturn(currentReturn);
+                    } else {
+                      setMode('edit');
+                    }
+                  }}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
+                >
+                  <Edit size={16} /> Edit Return
+                </button>
+                <button
                   onClick={handleNew}
                   className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
                 >
                   Create New Return
                 </button>
-                {status === 'Unposted' && (
-                  <button onClick={handlePostToggle} className="flex items-center gap-1.5 px-4 py-2 rounded-md font-semibold text-sm transition-colors border bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
-                    <Lock size={16} /> Post Return
-                  </button>
-                )}
               </>
             ) : (
               <>
@@ -1251,6 +1288,27 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
       </div>
       </div>
+
+      {/* Security Password Protection Modal */}
+      <PasswordPromptModal
+        isOpen={isPasswordModalOpen}
+        onClose={() => {
+          setIsPasswordModalOpen(false);
+          setPasswordActionType(null);
+          setTargetReturnToEdit(null);
+        }}
+        onSuccess={handlePasswordSuccess}
+        title={
+          passwordActionType === 'edit_return'
+            ? 'Authorization Required to Edit Confirmed Return'
+            : 'Authorization Required to Save Return Changes'
+        }
+        subtitle={
+          passwordActionType === 'edit_return'
+            ? `Please enter password for user '${state.currentUsername || (state.currentUserRole === 'Admin' ? 'admin' : 'user')}' to unlock & edit Return #${targetReturnToEdit?.billNo || targetReturnToEdit?.id}.`
+            : `Please enter password for user '${state.currentUsername || (state.currentUserRole === 'Admin' ? 'admin' : 'user')}' to confirm & save changes to Return #${billNo || returnId}.`
+        }
+      />
     </AppLayout>
   );
 }

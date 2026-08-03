@@ -48,6 +48,7 @@ const navSections: NavSection[] = [
       { page: 'report-stock', label: 'Current Stock', icon: Package },
       { page: 'reports', label: 'Reports', icon: FileText },
       { page: 'bilty-update', label: 'Search & Bilty Adda Updation', icon: Search },
+      { page: 'overall-search', label: 'Overall Searching', icon: Users },
     ]
   },
   {

@@ -32,6 +32,7 @@ import BusinessAcSetupPage from '@/pages/BusinessAcSetupPage';
 import ReportStockPage from '@/pages/ReportStockPage';
 import ReportsHubPage from '@/pages/ReportsHubPage';
 import BiltyUpdatePage from '@/pages/BiltyUpdatePage';
+import OverallSearchPage from '@/pages/OverallSearchPage';
 
 // Settings
 import SettingsPage from '@/pages/SettingsPage';
@@ -113,6 +114,8 @@ export default function App() {
       return <ReportsHubPage />;
     case 'bilty-update':
       return <BiltyUpdatePage />;
+    case 'overall-search':
+      return <OverallSearchPage />;
 
     case 'settings':
       return <SettingsPage />;

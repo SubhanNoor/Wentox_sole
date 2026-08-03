@@ -6,9 +6,10 @@ import WeeklyTab from '@/components/WeeklyTab';
 import MonthlyTab from '@/components/MonthlyTab';
 import OverallTab from '@/components/OverallTab';
 import FindTab from '@/components/FindTab';
-import { Save, Plus, Trash2, Printer, Lock, FileDown, FileSpreadsheet } from 'lucide-react';
+import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
+import PasswordPromptModal from '@/components/PasswordPromptModal';
 
 export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 'billing' | 'weekly' | 'monthly' | 'overall' | 'find' }) {
   const { state, dispatch } = useApp();
@@ -17,6 +18,11 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
   // Mode: 'view' | 'edit' | 'new'
   const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');
+
+  // Password Modal Protection State
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [passwordActionType, setPasswordActionType] = useState<'edit_bill' | 'save_bill' | null>(null);
+  const [targetBillToEdit, setTargetBillToEdit] = useState<SaleBill | null>(null);
   
 
 
@@ -33,7 +39,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   const [remarks, setRemarks] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [invoiceDiscount, setInvoiceDiscount] = useState(0);
-  const [status, setStatus] = useState<'Posted' | 'Unposted'>('Unposted');
+  const [status, setStatus] = useState<'Posted' | 'Unposted'>('Posted');
   
   // Account Group state
   const [mainAcId, setMainAcId] = useState('');
@@ -222,9 +228,17 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   };
 
   const handleEditSpecificBill = (bill: SaleBill) => {
-    loadBill(bill);
-    setMode('edit');
-    setActiveTab('billing');
+    // If this is an existing confirmed bill saved in state.saleBills
+    const isConfirmed = state.saleBills.some(b => b.id === bill.id);
+    if (isConfirmed) {
+      setTargetBillToEdit(bill);
+      setPasswordActionType('edit_bill');
+      setIsPasswordModalOpen(true);
+    } else {
+      loadBill(bill);
+      setMode('edit');
+      setActiveTab('billing');
+    }
   };
 
   const handlePrintSpecificBill = (bill: SaleBill) => {
@@ -242,12 +256,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       handleNew();
     }
   }, [activeTab, mode, billId]);
-
-
-
-  // Auto-selection of account group and delivery type is handled directly in the customer dropdown onChange handler.
-
-
 
   // Calculations
   const totalCartons = useMemo(() => {
@@ -304,7 +312,48 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setErrorMsg('');
   };
 
+  const executeSaveBill = () => {
+    const savedBill: SaleBill = {
+      id: billId,
+      date,
+      storeId,
+      customerId,
+      subCustomerId: !isCustomDelivery ? null : subCustomerId,
+      customAddress: isCustomDelivery ? customAddress : undefined,
+      mainAcId: mainAcId === 'custom' ? customMainAcName : mainAcId,
+      billNo,
+      gpNo,
+      biltyNo,
+      addaId,
+      remarks,
+      dueDate: dueDate || undefined,
+      invoiceDiscount,
+      totalValue: finalTotalValue,
+      status: 'Posted',
+      items
+    };
 
+    if (mode === 'new') {
+      dispatch({ type: 'ADD_SALE_BILL', bill: savedBill });
+      setSuccessMsg('New sale bill confirmed & posted successfully.');
+    } else {
+      dispatch({ type: 'UPDATE_SALE_BILL', billId, bill: savedBill });
+      setSuccessMsg('Sale bill updated & posted successfully.');
+    }
+
+    // Clean up draft from cache if saved/confirmed
+    setDrafts(prev => {
+      const updated = prev.filter(d => d.id !== billId && d.id !== selectedDraftId);
+      localStorage.setItem('wento_sale_bill_drafts', JSON.stringify(updated));
+      return updated;
+    });
+    setSelectedDraftId('');
+
+    setStatus('Posted');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    setMode('view');
+    setErrorMsg('');
+  };
 
   const handleSave = () => {
     // Validations
@@ -325,45 +374,28 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       return setErrorMsg('Please select a Sub-Customer for Custom Delivery.');
     }
 
-    const savedBill: SaleBill = {
-      id: billId,
-      date,
-      storeId,
-      customerId,
-      subCustomerId: !isCustomDelivery ? null : subCustomerId,
-      customAddress: isCustomDelivery ? customAddress : undefined,
-      mainAcId: mainAcId === 'custom' ? customMainAcName : mainAcId,
-      billNo,
-      gpNo,
-      biltyNo,
-      addaId,
-      remarks,
-      dueDate: dueDate || undefined,
-      invoiceDiscount,
-      totalValue: finalTotalValue,
-      status,
-      items
-    };
-
-    if (mode === 'new') {
-      dispatch({ type: 'ADD_SALE_BILL', bill: savedBill });
-      setSuccessMsg('New sale bill saved successfully.');
+    // Require password if editing an existing confirmed bill
+    if (mode === 'edit') {
+      setPasswordActionType('save_bill');
+      setIsPasswordModalOpen(true);
     } else {
-      dispatch({ type: 'UPDATE_SALE_BILL', billId, bill: savedBill });
-      setSuccessMsg('Sale bill updated successfully.');
+      executeSaveBill();
     }
+  };
 
-    // Clean up draft from cache if saved/confirmed
-    setDrafts(prev => {
-      const updated = prev.filter(d => d.id !== billId && d.id !== selectedDraftId);
-      localStorage.setItem('wento_sale_bill_drafts', JSON.stringify(updated));
-      return updated;
-    });
-    setSelectedDraftId('');
-
-    setTimeout(() => setSuccessMsg(''), 3000);
-    setMode('view');
-    setErrorMsg('');
+  const handlePasswordSuccess = () => {
+    setIsPasswordModalOpen(false);
+    if (passwordActionType === 'edit_bill' && targetBillToEdit) {
+      loadBill(targetBillToEdit);
+      setMode('edit');
+      setActiveTab('billing');
+      setSuccessMsg(`Password verified for user '${state.currentUsername || 'user'}'. Bill editing unlocked.`);
+      setTimeout(() => setSuccessMsg(''), 3000);
+    } else if (passwordActionType === 'save_bill') {
+      executeSaveBill();
+    }
+    setPasswordActionType(null);
+    setTargetBillToEdit(null);
   };
 
   const handleSaveDraft = () => {
@@ -401,15 +433,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     });
 
     setSuccessMsg('Bill saved to drafts cache.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-  };
-
-  const handlePostToggle = () => {
-    if (status === 'Unposted') {
-      dispatch({ type: 'POST_SALE_BILL', billId });
-      setStatus('Posted');
-      setSuccessMsg('Bill Posted — stock deducted and it now appears in the Account Ledger.');
-    }
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
@@ -856,16 +879,24 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   <FileSpreadsheet size={16} /> Export Excel
                 </button>
                 <button
+                  onClick={() => {
+                    const currentBill = state.saleBills.find(b => b.id === billId);
+                    if (currentBill) {
+                      handleEditSpecificBill(currentBill);
+                    } else {
+                      setMode('edit');
+                    }
+                  }}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
+                >
+                  <Edit size={16} /> Edit Bill
+                </button>
+                <button
                   onClick={handleNew}
                   className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
                 >
                   Create New Bill
                 </button>
-                {status === 'Unposted' && (
-                  <button onClick={handlePostToggle} className="flex items-center gap-1.5 px-4 py-2 rounded-md font-semibold text-sm transition-colors border bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
-                    <Lock size={16} /> Post Bill
-                  </button>
-                )}
               </>
             ) : (
               <>
@@ -1578,6 +1609,27 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
           </form>
         </div>
       )}
+
+      {/* Security Password Protection Modal */}
+      <PasswordPromptModal
+        isOpen={isPasswordModalOpen}
+        onClose={() => {
+          setIsPasswordModalOpen(false);
+          setPasswordActionType(null);
+          setTargetBillToEdit(null);
+        }}
+        onSuccess={handlePasswordSuccess}
+        title={
+          passwordActionType === 'edit_bill'
+            ? 'Authorization Required to Edit Confirmed Bill'
+            : 'Authorization Required to Save Bill Changes'
+        }
+        subtitle={
+          passwordActionType === 'edit_bill'
+            ? `Please enter password for user '${state.currentUsername || (state.currentUserRole === 'Admin' ? 'admin' : 'user')}' to unlock & edit Bill #${targetBillToEdit?.billNo || targetBillToEdit?.id}.`
+            : `Please enter password for user '${state.currentUsername || (state.currentUserRole === 'Admin' ? 'admin' : 'user')}' to confirm & save changes to Bill #${billNo || billId}.`
+        }
+      />
     </AppLayout>
   );
 }

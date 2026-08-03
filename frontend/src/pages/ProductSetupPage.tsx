@@ -46,13 +46,26 @@ export default function ProductSetupPage() {
   // Start adding a new product
   const handleAddNew = () => {
     setSelectedProductId('');
-    setId((Math.floor(Math.random() * 9000) + 1000).toString());
+    // Auto-generate next product code from database (max existing product ID + 1)
+    const maxId = state.products.reduce((max, p) => {
+      const num = parseInt(p.id, 10);
+      return isNaN(num) ? max : Math.max(max, num);
+    }, 1000);
+    const nextCode = (maxId + 1).toString();
+
+    // Auto-generate next batch number from database (max existing batchNo + 1)
+    const maxBatch = state.products.reduce((max, p) => {
+      return Math.max(max, p.batchNo || 0);
+    }, 100);
+    const nextBatchNo = maxBatch > 0 ? maxBatch + 1 : 101;
+
+    setId(nextCode);
     setName('');
     setColor('');
     setCategoryId(state.categories[0]?.id || '');
     setVendorId(state.vendors[0]?.id || '');
-    setBatchNo(100);
-    setPacking(12);
+    setBatchNo(nextBatchNo);
+    setPacking(0);
     setSalePrice(0);
     setCosts(emptyCosts());
     setErrorMsg('');
@@ -68,7 +81,7 @@ export default function ProductSetupPage() {
     setCategoryId(prod.categoryId);
     setVendorId(prod.vendorId);
     setBatchNo(prod.batchNo || 0);
-    setPacking(prod.packing || 12);
+    setPacking(prod.packing || 0);
     setSalePrice(prod.salePrice || 0);
     setCosts(costsFromProduct(prod));
     setErrorMsg('');
@@ -77,31 +90,33 @@ export default function ProductSetupPage() {
 
   const handleSaveProduct = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!id.trim()) return setErrorMsg('Product code is required.');
-    if (!name.trim()) return setErrorMsg('Product name is required.');
-    if (!categoryId) return setErrorMsg('Category is required.');
-    if (!vendorId) return setErrorMsg('Vendor is required.');
-    if (packing <= 0) return setErrorMsg('Packing must be at least 1 pair.');
+    if (!id.trim()) return setErrorMsg('Product / Article Code is required.');
+    if (!name.trim()) return setErrorMsg('Product Article Name is required.');
+    if (!categoryId) return setErrorMsg('Category is required. Please select a category.');
+    if (!vendorId) return setErrorMsg('Vendor Partner is required. Please select a vendor partner.');
 
     const savedProduct: Product = {
-      id,
-      name,
+      id: id.trim(),
+      name: name.trim(),
       color: color.trim() || undefined,
       categoryId,
       vendorId,
-      batchNo,
-      packing,
-      salePrice,
+      batchNo: isNaN(batchNo) ? 0 : batchNo,
+      packing: isNaN(packing) ? 0 : packing,
+      salePrice: isNaN(salePrice) ? 0 : salePrice,
       ...costs,
       stock: selectedProductId ? state.products.find(p => p.id === id)?.stock || 0 : 0
     };
 
     if (selectedProductId) {
+      if (id.trim() !== selectedProductId && state.products.some(p => p.id === id.trim())) {
+        return setErrorMsg('A product with this code already exists.');
+      }
       dispatch({ type: 'UPDATE_PRODUCT', product: savedProduct });
       setSuccessMsg('Product details updated successfully.');
     } else {
       // Check duplicate code
-      if (state.products.some(p => p.id === id)) {
+      if (state.products.some(p => p.id === id.trim())) {
         return setErrorMsg('A product with this code already exists.');
       }
       dispatch({ type: 'ADD_PRODUCT', product: savedProduct });
@@ -323,10 +338,9 @@ export default function ProductSetupPage() {
                     <input
                       type="text"
                       value={id}
-                      disabled={Boolean(selectedProductId)}
-                      onChange={e => setId(e.target.value)}
+                      disabled
                       placeholder="e.g. 1005"
-                      className="soleria-input font-semibold"
+                      className="soleria-input font-semibold bg-slate-100 text-slate-500 cursor-not-allowed"
                     />
                   </div>
                   <div>
@@ -379,17 +393,19 @@ export default function ProductSetupPage() {
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Batch Number</label>
                     <input
                       type="number"
-                      value={batchNo || ''}
-                      onChange={e => setBatchNo(parseInt(e.target.value) || 0)}
-                      className="soleria-input font-semibold"
+                      value={batchNo}
+                      disabled
+                      placeholder="0"
+                      className="soleria-input font-semibold bg-slate-100 text-slate-500 cursor-not-allowed"
                     />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Packing (Pairs/Carton)</label>
                     <input
                       type="number"
-                      value={packing || ''}
-                      onChange={e => setPacking(parseInt(e.target.value) || 12)}
+                      value={packing === 0 ? '' : packing}
+                      placeholder="0"
+                      onChange={e => setPacking(e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
                       className="soleria-input font-semibold"
                     />
                   </div>
@@ -397,8 +413,9 @@ export default function ProductSetupPage() {
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Sale Price (Rs)</label>
                     <input
                       type="number"
-                      value={salePrice || ''}
-                      onChange={e => setSalePrice(parseInt(e.target.value) || 0)}
+                      value={salePrice === 0 ? '' : salePrice}
+                      placeholder="0"
+                      onChange={e => setSalePrice(e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
                       className="soleria-input font-semibold text-slate-800"
                     />
                     <p className="text-[10px] text-slate-400 mt-0.5">Used as the default rate when this article is sold</p>
@@ -418,8 +435,9 @@ export default function ProductSetupPage() {
                       <label className="block text-xs text-slate-600 mb-0.5">{field.label}</label>
                       <input
                         type="number"
-                        value={costs[field.key] || ''}
-                        onChange={e => setCost(field.key, parseInt(e.target.value) || 0)}
+                        value={costs[field.key] === 0 ? '' : costs[field.key]}
+                        placeholder="0"
+                        onChange={e => setCost(field.key, e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
                         className="soleria-input text-xs font-semibold"
                       />
                     </div>

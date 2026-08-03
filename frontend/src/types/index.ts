@@ -530,4 +530,5 @@ export type NavPage =
   | 'report-stock'
   | 'reports'
   | 'bilty-update'
+  | 'overall-search'
   | 'settings';

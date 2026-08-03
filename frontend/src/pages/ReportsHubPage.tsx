@@ -8,10 +8,12 @@ import { ReportKhaataContent } from '@/pages/ReportKhaataPage';
 import { ReportCashBookContent } from '@/pages/ReportCashBookPage';
 import BusinessLedgerContent from '@/pages/BusinessLedgerContent';
 import ProductLedgerContent from '@/pages/ProductLedgerContent';
+import OverallTrailContent from '@/pages/OverallTrailContent';
 
 type ReportTab =
   | 'sale-analysis' | 'sale-report' | 'vendor' | 'payment-trail'
-  | 'account-ledger' | 'business-ledger' | 'cash-book' | 'product-ledger';
+  | 'account-ledger' | 'business-ledger' | 'cash-book' | 'product-ledger'
+  | 'overall-trail';
 
 const TABS: { key: ReportTab; label: string }[] = [
   { key: 'sale-analysis', label: 'Sale Analysis' },
@@ -22,6 +24,7 @@ const TABS: { key: ReportTab; label: string }[] = [
   { key: 'business-ledger', label: 'Business Ledger' },
   { key: 'cash-book', label: 'Cash Book' },
   { key: 'product-ledger', label: 'Product Ledger' },
+  { key: 'overall-trail', label: 'Overall Trail' },
 ];
 
 // TASK-19: a single dedicated Reports section — top bar acts as tabs to
@@ -57,6 +60,7 @@ export default function ReportsHubPage() {
         {activeTab === 'business-ledger' && <BusinessLedgerContent />}
         {activeTab === 'cash-book' && <ReportCashBookContent />}
         {activeTab === 'product-ledger' && <ProductLedgerContent />}
+        {activeTab === 'overall-trail' && <OverallTrailContent />}
       </div>
     </AppLayout>
   );
