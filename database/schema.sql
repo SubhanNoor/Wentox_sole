@@ -604,8 +604,13 @@ CREATE TABLE dbo.articles (
   code        VARCHAR(30)   NOT NULL,                         -- TASK-03 "article code (pcode)", e.g. 'P-101'
   name        NVARCHAR(150) NOT NULL,                         -- common name, colour excluded
   category_id INT           NOT NULL,
-  vendor_id   INT           NULL,                             -- TASK-02: filter ledger by company/vendor
-  batch_no    VARCHAR(50)   NULL,
+  -- POST-v4.3: promoted to NOT NULL, per client instruction — batch_no is generated per vendor
+  -- (see below), so a vendor must always be present to scope it against.
+  vendor_id   INT           NOT NULL,                         -- TASK-02: filter ledger by company/vendor
+  -- POST-v4.3: was VARCHAR(50), free-typed. Now system-generated, per client instruction: each
+  -- vendor has its own batch-numbering sequence (batch_no = MAX(batch_no) + 1 WHERE vendor_id =
+  -- this article's vendor), immutable once assigned — never typed by hand, never edited.
+  batch_no    INT           NOT NULL,
   packing     INT           NOT NULL,                         -- default pairs per carton (usually 12)
   -- The one price on an article: typed in by hand, never computed from the stage
   -- costs below. Every sale line defaults its rate from this.
@@ -635,6 +640,7 @@ CREATE TABLE dbo.articles (
   updated_at  DATETIME2(0) NOT NULL CONSTRAINT DF_articles_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_articles          PRIMARY KEY (article_id),
   CONSTRAINT UQ_articles_code     UNIQUE (code),
+  CONSTRAINT UQ_articles_vendor_batch UNIQUE (vendor_id, batch_no),
   CONSTRAINT FK_articles_category FOREIGN KEY (category_id) REFERENCES dbo.product_categories(category_id),
   CONSTRAINT FK_articles_vendor   FOREIGN KEY (vendor_id)   REFERENCES dbo.vendors(vendor_id),
   CONSTRAINT CK_articles_packing  CHECK (packing > 0)

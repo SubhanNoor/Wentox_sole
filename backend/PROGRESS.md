@@ -14,6 +14,50 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Milestone 6 — System Setup: Product Details, Categories, Vendors (follow-up)
+
+### 2026-08-18 — articles.batch_no: free-text → system-generated, scoped per vendor
+- **What:** Per explicit client instruction ("Ali has his own batch number, Abdullah has his own"),
+  `batch_no` on Product Details stopped being a free-typed field and became a system-generated
+  integer with its own sequence per vendor — the same "each vendor has an independent counter"
+  shape already established for `businessAccounts`' §3.2 serials, just scoped to `articles`
+  instead of `business_accounts`.
+- **How:** Confirmed the exact rules with the user before touching anything (global vs. per-vendor
+  scope, unique + immutable vs. editable) since this was a real schema change, not just app logic.
+  Schema: `articles.batch_no` `VARCHAR(50) NULL` → `INT NOT NULL`; `articles.vendor_id` promoted
+  from nullable to `NOT NULL` (a batch number can't be generated without a vendor to scope it to —
+  the user confirmed this consequence explicitly rather than leaving vendor optional and batch_no
+  null in that case). New `UQ_articles_vendor_batch UNIQUE (vendor_id, batch_no)`.
+  `products.repository.js` gained `nextBatchNo(vendorId)` (`MAX(batch_no) + 1 WHERE vendor_id =
+  @vendorId`, starting at 1); `insert()` now requires both `vendor_id`/`batch_no` as `sql.Int`
+  (previously `batch_no` was typed `sql.VarChar(50)`); `update()` excludes both from its `SET`
+  clause entirely — immutable after creation, since changing the vendor later would orphan the
+  article's batch number from the sequence it actually came from. `products.service.js:create()`
+  gained `validateVendor()` (400 if missing) and a `vendorsService.getById()` call (404 if the
+  vendor doesn't exist) before generating the batch number, so a bad `vendor_id` never burns a
+  sequence slot on a request that was going to fail anyway.
+  Schema change went through the usual path: a temporary numbered migration, applied to
+  `wentox_db`, then folded directly into `database/schema.sql` and the migration file deleted — a
+  fresh `schema.sql`-only import needs nothing else.
+- **Debugger review caught a real bug before it shipped:** the migration's first draft backfilled
+  every pre-existing row's new `batch_no` column to a flat `1`, rather than a real per-vendor
+  sequence — harmless against `wentox_db` today (only one pre-existing article, from earlier test
+  fixtures), but would have hard-failed the new unique constraint (or produced wrong numbers) on
+  any database with more than one existing article under the same vendor. Fixed using `ROW_NUMBER()
+  OVER (PARTITION BY vendor_id ORDER BY article_id)` instead, and re-verified against a seeded
+  4-article, 2-vendor, 1-null-vendor scenario in a disposable scratch database — Vendor A's two
+  articles correctly got `batch_no` 1 and 2, Vendor B's one article independently got 1, and the
+  previously-vendorless article was backfilled to a vendor and got the next number in that vendor's
+  sequence.
+- **Verified:** live against `wentox_db` — missing `vendor_id` on create rejected; two products
+  created under the same vendor got sequential `batch_no` values continuing from the existing
+  fixture; an update attempt that tried to change `vendor_id` and other fields left `vendor_id`/
+  `batch_no` completely unchanged while every other field updated normally. Also re-verified the
+  from-scratch `schema.sql`-only import path against a second disposable scratch database, matching
+  `wentox_db`'s column types/constraints exactly.
+- **Files:** `database/schema.sql`, `backend/src/repositories/products.repository.js`,
+  `backend/src/services/products.service.js`, `backend/milestones/milestone6.md`
+
 ## Milestone 8 — System Setup: City Creation & Accounts Hierarchy
 
 ### 2026-08-17 — Module 8.1 complete: regions, cities, stores, addas

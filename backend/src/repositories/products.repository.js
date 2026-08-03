@@ -77,13 +77,24 @@ async function nextCode() {
   return `P-${(maxNum || 100) + 1}`;
 }
 
+// batch_no is scoped per vendor (per client instruction — each vendor has its own batch
+// sequence, e.g. Ali's batches and Abdullah's don't share a counter), starting at 1. Backed by
+// UQ_articles_vendor_batch UNIQUE (vendor_id, batch_no).
+async function nextBatchNo(vendorId) {
+  const result = await query(
+    `SELECT MAX(batch_no) AS maxBatch FROM dbo.articles WHERE vendor_id = @vendorId`,
+    { vendorId: { type: sql.Int, value: vendorId } },
+  );
+  return (result.recordset[0].maxBatch || 0) + 1;
+}
+
 async function insert(article) {
   const params = {
     code: { type: sql.VarChar(30), value: article.code },
     name: { type: sql.NVarChar(150), value: article.name },
     categoryId: { type: sql.Int, value: article.category_id },
-    vendorId: { type: sql.Int, value: article.vendor_id ?? null },
-    batchNo: { type: sql.VarChar(50), value: article.batch_no ?? null },
+    vendorId: { type: sql.Int, value: article.vendor_id },
+    batchNo: { type: sql.Int, value: article.batch_no },
     packing: { type: sql.Int, value: article.packing },
     salePrice: { type: sql.Decimal(12, 2), value: article.sale_price || 0 },
     ...costParams(article),
@@ -103,13 +114,14 @@ async function insert(article) {
   return result.recordset[0].article_id;
 }
 
+// vendor_id and batch_no are immutable after creation — batch_no is a per-vendor auto-generated
+// sequence (§ batch numbering), so changing the vendor later would orphan the article's batch
+// number from the sequence it was actually drawn from. Neither is part of this SET clause.
 async function update(articleId, article) {
   const params = {
     articleId: { type: sql.Int, value: articleId },
     name: { type: sql.NVarChar(150), value: article.name },
     categoryId: { type: sql.Int, value: article.category_id },
-    vendorId: { type: sql.Int, value: article.vendor_id ?? null },
-    batchNo: { type: sql.VarChar(50), value: article.batch_no ?? null },
     packing: { type: sql.Int, value: article.packing },
     salePrice: { type: sql.Decimal(12, 2), value: article.sale_price || 0 },
     ...costParams(article),
@@ -118,7 +130,7 @@ async function update(articleId, article) {
   const costSets = COST_FIELDS.map((f) => `${f} = @${f}`).join(', ');
   await query(`
     UPDATE dbo.articles SET
-      name = @name, category_id = @categoryId, vendor_id = @vendorId, batch_no = @batchNo,
+      name = @name, category_id = @categoryId,
       packing = @packing, sale_price = @salePrice, ${costSets}
     WHERE article_id = @articleId
   `, params);
@@ -134,4 +146,4 @@ async function setActive(articleId, isActive) {
   );
 }
 
-module.exports = { list, findById, nextCode, insert, update, setActive };
+module.exports = { list, findById, nextCode, nextBatchNo, insert, update, setActive };
