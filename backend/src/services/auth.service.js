@@ -48,4 +48,18 @@ async function updateCredentials(userId, payload) {
   return { username: updates.username || user.username };
 }
 
-module.exports = { login, updateCredentials };
+// Re-verifies the current session user's password without changing session state — used to gate
+// sensitive actions (e.g. editing/posting a sale bill or return) that require re-entering the
+// password mid-session, distinct from login (which establishes the session) and
+// updateCredentials (which changes it).
+async function verifyPassword(userId, password) {
+  const user = await repository.findById(userId);
+  if (!user) throw ApiError.notFound('User not found');
+
+  const matches = await bcrypt.compare(password || '', user.password_hash);
+  if (!matches) throw ApiError.unauthorized('Incorrect password');
+
+  return { ok: true };
+}
+
+module.exports = { login, updateCredentials, verifyPassword };

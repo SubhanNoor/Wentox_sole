@@ -142,7 +142,6 @@ async function confirm(draftId, userId) {
     total_pairs: draft.total_pairs,
     gross_value: draft.gross_value,
     net_value: draft.net_value,
-    status: 'CONFIRMED',
     created_by: userId,
   };
 

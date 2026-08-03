@@ -29,4 +29,12 @@ module.exports = function register() {
       return service.updateCredentials(current.userId, payload);
     }),
   );
+
+  ipcMain.handle(
+    'auth:verify-password',
+    wrap(async (payload) => {
+      const current = session.requireSession();
+      return service.verifyPassword(current.userId, payload.password);
+    }),
+  );
 };

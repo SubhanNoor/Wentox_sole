@@ -1,7 +1,7 @@
 # Wentox Backend — Progress Log
 
 **Current milestone:** Milestone 2 — Sale Bill & Sale Return
-**Status:** Milestone 1 code-complete (Modules 1.1–1.3, verification pending SQL Server + `npm install`). Milestone 2: **Module 2.1 (Sale Bill) fully complete** — create, draftSaleBills, list/get/update/post/unpost, all debugged. Module 2.2 (Sale Return) not started.
+**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** against the live database (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition — see below).
 
 Log every completed task here (newest first within its milestone). Format:
 
@@ -15,6 +15,69 @@ Log every completed task here (newest first within its milestone). Format:
 ---
 
 ## Milestone 2 — Sale Bill & Sale Return
+
+### 2026-08-07 — Folded the status-drop/due_date migrations directly into database/schema.sql
+- **What:** Per explicit client instruction ("only run schema.sql on import"), consolidated the two
+  migrations from the entry below (`001_sale_bills_due_date.sql`, `002_drop_sale_status.sql`)
+  directly into `database/schema.sql`'s `sale_bills`/`sale_returns` `CREATE TABLE` blocks, then
+  deleted both migration files and the now-empty `src/db/migrations/` directory. This is a
+  deliberate one-time exception to the project's usual "never edit an applied schema file" rule
+  (see `backend/CLAUDE.md`) — done only because consolidating is exactly what was asked for.
+- **How:** `sale_bills` now declares `due_date DATE NULL` directly (no `status` column);
+  `sale_returns` declares neither. Also updated the `alert_dismissals` block comment, which used to
+  say `due_date` "was removed from sale_bills/purchases" — now notes it's back on `sale_bills` (not
+  `purchases`) for the pending notification feature, though the alert itself isn't wired up yet.
+  `database_schema_v4.3.md`'s CREATE TABLE blocks for both tables were updated to match (the doc's
+  blocks are meant to mirror the actual applied schema), and its top-of-file amendments note was
+  reworded from "applied via migrations" to "folded directly into schema.sql."
+  For the already-migrated `wentox_db`, this is a no-op — `migrate.js` tracks applied files by
+  basename in `schema_migrations`, so it never re-runs `schema.sql`, and the two migration files it
+  already ran are simply gone from disk now (their effect is already permanently in that database).
+- **Verified:** created a disposable scratch database (`wentox_schema_scratch_test`) on the same SQL
+  Server instance, applied `schema.sql` alone (no migrations directory, none exist anymore),
+  confirmed `sale_bills` has `due_date` and no `status`, confirmed `sale_returns` has no `status`,
+  then dropped the scratch database — `wentox_db` was never touched by this verification.
+- **Files:** `database/schema.sql`, `System_architecture/database_schema_v4.3.md`; removed
+  `backend/src/db/migrations/001_sale_bills_due_date.sql`,
+  `backend/src/db/migrations/002_drop_sale_status.sql`, and the (now-empty) `migrations/` dir.
+
+### 2026-08-07 — Dropped `status` from sale_bills/sale_returns; re-added `sale_bills.due_date`
+- **What:** Two schema amendments beyond the applied `database/schema.sql` (both via new files
+  under `src/db/migrations/`, per the project's "never edit an applied schema file" rule):
+  1. `001_sale_bills_due_date.sql` — `ALTER TABLE sale_bills ADD due_date DATE NULL`. Reverses
+     v4.3's deliberate removal of this column, per explicit client instruction, ahead of a planned
+     payment-overdue notification feature (details pending). Wired through
+     `saleBills.repository.js` (`insert`, `updateHeader`) and `saleBills.service.js`
+     (`buildBillFields`). Not added to `sale_returns` (schema note: "a return is not a payable").
+  2. `002_drop_sale_status.sql` — drops `status` (+ its `DF_*`/`CK_*` constraints) from both
+     `sale_bills` and `sale_returns`, per client confirmation that the column never actually
+     changed value given the frontend's real button set: Confirm creates+posts atomically, and
+     editing an already-posted document reverses+reapplies its ledger inside `update()` itself
+     (from an earlier session), so a real row is never left visibly "unposted" in between.
+- **How:** Both repositories gained `isPosted(id)` — `SELECT CASE WHEN EXISTS (... ledger_entries
+  WHERE source_type=... AND source_id=@id) THEN 1 ELSE 0 END` — and `findById` now attaches the
+  result as `is_posted` on every returned row. `create()` no longer sets any status field.
+  `update()`/`post()`/`unpost()` in both services branch on `existing.is_posted` /`bill.is_posted`
+  instead of a stored string; `setStatus` removed from both repositories entirely.
+  `draftSaleBills.service.js`/`draftSaleReturns.service.js`'s `confirm()` no longer builds a
+  `status: 'CONFIRMED'` field when assembling the row to insert (posting happens right after via
+  `postLedgerAndStock`, which is what makes it "posted" now). The two ipc handlers
+  (`sale-bills:update`, `sale-returns:update`) that gate the password check on "is this document
+  currently posted" now read `existing.is_posted` instead of `existing.status === 'CONFIRMED'`.
+  `database_schema_v4.3.md` got a "Post-v4.3 live amendments" note up top rather than rewritten
+  CREATE TABLE blocks, since the doc's blocks are meant to match the *original* applied
+  `schema.sql`, not the migrations layered on top.
+- **Verified:** live against `wentox_db` — confirmed zero `status` columns remain on either table;
+  full bill lifecycle (create → `is_posted=false` → post → `is_posted=true` → double-post rejected
+  → edit-while-posted, ledger/stock correctly reversed+reapplied at new totals → unpost →
+  `is_posted=false` → double-unpost rejected); same lifecycle on sale return; draft-return
+  `confirm()` still produces a correctly-posted return with no `status` field involved anywhere.
+- **Files:** `backend/src/db/migrations/001_sale_bills_due_date.sql`,
+  `backend/src/db/migrations/002_drop_sale_status.sql`,
+  `backend/src/repositories/{saleBills,saleReturns}.repository.js`,
+  `backend/src/services/{saleBills,saleReturns,draftSaleBills,draftSaleReturns}.service.js`,
+  `backend/src/ipc/{saleBills,saleReturns}.ipc.js`,
+  `System_architecture/database_schema_v4.3.md`
 
 ### 2026-07-31 — Module 2.1 complete: sale-bills:list/get/update/post/unpost
 - **What:** Finished every remaining `milestone2.md` Module 2.1 checkbox. `saleBills.repository.js`
@@ -272,7 +335,54 @@ Log every completed task here (newest first within its milestone). Format:
 - **Pending:** no SQL Server instance set up yet — migration/seed scripts are unverified end-to-end.
 
 ## Milestone 2 — Sale Bill & Sale Return
-_Not started._
+
+### Module 2.1 — Sale Bill (UC-18, UC-19)
+- **What:** `saleBills`/`draftSaleBills` (ipc/service/repository) — create with items, server-side
+  totals, list with weekly/monthly/overall/date-range + customer filters, get, update
+  (UNPOSTED-only), post/unpost (ledger + stock, one transaction), and the confirm-as-create+post
+  draft flow.
+- **Files:** `backend/src/{ipc,services,repositories}/{saleBills,draftSaleBills}.*`,
+  `backend/src/services/saleBillMath.js`
+- **Verified:** stubbed-dependency review only — no live SQL Server yet.
+
+### Module 2.2 — Sale Return (UC-21, UC-22)
+- **What:** `saleReturns`/`draftSaleReturns` (ipc/service/repository) — mirror of Module 2.1, with
+  the schema's reversed semantics: no `main_ac_id`/`delivery_type`/`delivery_address` (not columns
+  on `sale_returns`); post debits SALES / credits customer BA with positive `SALE_RETURN` stock
+  movements (reverse of sale bill posting); draft-save restores stock (positive `ADJUSTMENT`),
+  draft-delete deducts it back out (negative `ADJUSTMENT`) — reverse of draft sale bills.
+- **New cross-cutting requirement (password re-verification), final design:** the frontend's edit
+  icon never unposts anything on open — it just opens the form on a still-`CONFIRMED` row. Only
+  pressing Confirm/Save actually writes anything, so `update(id, payload)` itself now branches on
+  the row's *existing* status: `DRAFT` → plain header/item replace, no ledger involved, no
+  password. `CONFIRMED` → the same call also deletes the old `ledger_entries`/`stock_movements`
+  rows and reposts fresh ones against the new totals, all inside one `withTransaction` — the
+  unpost→edit→repost cycle collapsed into a single atomic step so `status` never visibly leaves
+  `CONFIRMED`. The password is required only for that `CONFIRMED` branch: the ipc handler fetches
+  the existing row via `service.getById` first, and calls `authService.verifyPassword` only if
+  `status === 'CONFIRMED'`, before calling `service.update`. `post()` (the initial Confirm/Save on
+  a still-DRAFT row) always requires the password. `unpost()` was reverted to a plain standalone
+  action with no password guard — it's no longer part of the edit flow.
+  Added `auth.service.js:verifyPassword(userId, password)` + `auth:verify-password` IPC channel
+  (re-checks the session user's password without touching session state, distinct from login/
+  updateCredentials) to back this. Scoped to Sale Bill/Sale Return for now; same pattern extends
+  to Purchase/Receipts/Expenses when those milestones come up.
+- **Files:** `backend/src/{ipc,services,repositories}/{saleReturns,draftSaleReturns}.*`,
+  `backend/src/services/saleReturnMath.js`, `backend/src/services/auth.service.js`,
+  `backend/src/ipc/auth.ipc.js`, `backend/src/services/saleBills.service.js`,
+  `backend/src/ipc/saleBills.ipc.js`, `backend/src/ipc/index.js`, `backend/electron/preload.js`
+- **Verified:** static review + `debugger` subagent pass, then live end-to-end against a real SQL
+  Server (`wentox_db`, migrated + seeded): sale bill post → debit customer BA / credit SALES,
+  negative `SALE` stock movement; sale return post → debit SALES / credit customer BA, positive
+  `SALE_RETURN` stock movement (confirmed reverse of the bill); unpost removes ledger + stock rows
+  on both; draft-return create restores stock (+12 pairs), delete deducts it back out (net 0);
+  draft-return confirm reverses the restoration and posts exactly one `SALE_RETURN` movement,
+  deletes the draft row; `authService.verifyPassword` rejects a wrong password and accepts the
+  right one. Re-verified again after the update()-redesign: editing a CONFIRMED bill (cartons 2→5)
+  produced exactly 2 ledger rows and 1 stock row reflecting the new total, `status` stayed
+  `CONFIRMED` throughout; editing a DRAFT bill produced 0 ledger rows, `status` stayed `DRAFT`.
+- **Pending:** frontend wiring for the password prompt on save/confirm when editing a posted
+  document.
 
 ## Milestone 3 — Purchase & Purchase Return
 _Not started._

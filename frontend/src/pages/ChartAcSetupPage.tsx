@@ -3,6 +3,7 @@ import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2, ChevronRight, X } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
+import { filterChartAccountsForRole } from '@/lib/access';
 
 export default function ChartAcSetupPage() {
   const { state, dispatch } = useApp();
@@ -111,7 +112,9 @@ export default function ChartAcSetupPage() {
   }, [state.groupAccounts]);
 
   const filteredAndSortedCharts = useMemo(() => {
-    let list = state.chartAccounts;
+    // UC-03: User never sees BANK ACCOUNTS / DIRECTORS EXPENSES - DRAWINGS themselves here, same
+    // rule as everywhere else — the screen stays open, just this one chart account is invisible.
+    let list = filterChartAccountsForRole(state.chartAccounts, state.currentUserRole);
     if (selectedGroupFilter) {
       list = list.filter(c => c.groupId === selectedGroupFilter);
     }
@@ -129,12 +132,12 @@ export default function ChartAcSetupPage() {
         return a.name.localeCompare(b.name);
       }
     });
-  }, [state.chartAccounts, searchQuery, sortBy, selectedGroupFilter]);
+  }, [state.chartAccounts, state.currentUserRole, searchQuery, sortBy, selectedGroupFilter]);
 
   return (
     <AppLayout pageTitle="Chart of Accounts Setup">
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
-        
+
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
         )}

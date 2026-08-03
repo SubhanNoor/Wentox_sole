@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
+import { filterBusinessAccountsForRole } from '@/lib/access';
 
 interface ActivityEntry {
   date: string;
@@ -8,9 +9,6 @@ interface ActivityEntry {
   debit: number;
   credit: number;
 }
-
-// TASK-14: User role cannot see Bank Accounts or Director Expenses - Drawings accounts
-const RESTRICTED_CHART_IDS = ['120002', '440001'];
 
 // Business Accounts Ledger (TASK-19 item 6) — a general-purpose ledger over
 // ALL business accounts (not just customers), since Account Ledger (Khaata)
@@ -26,9 +24,8 @@ export default function BusinessLedgerContent() {
   const inRange = (date: string) => (!fromDate || date >= fromDate) && (!toDate || date <= toDate);
 
   const accessibleAccounts = useMemo(() => {
-    if (state.currentUserRole !== 'User') return state.businessAccounts;
-    return state.businessAccounts.filter(b => !RESTRICTED_CHART_IDS.includes(b.controlId));
-  }, [state.businessAccounts, state.currentUserRole]);
+    return filterBusinessAccountsForRole(state.businessAccounts, state.chartAccounts, state.currentUserRole);
+  }, [state.businessAccounts, state.chartAccounts, state.currentUserRole]);
 
   const visibleAccounts = useMemo(() => {
     if (viewMode === 'customer') {
@@ -40,7 +37,7 @@ export default function BusinessLedgerContent() {
   // Net activity (Debit - Credit) for a business account within the range,
   // sourced from whichever ledger applies to that account's type.
   const getAccountActivity = (baId: string): { debit: number; credit: number } => {
-    const cust = state.customers.find(c => c.id === baId);
+    const cust = state.customers.find(c => c.baId === baId);
     if (cust) {
       const debit = state.saleBills
         .filter(b => b.customerId === cust.id && b.status === 'Posted' && inRange(b.date))
@@ -87,7 +84,7 @@ export default function BusinessLedgerContent() {
   const detailEntries = useMemo((): ActivityEntry[] => {
     if (!selectedAccount) return [];
     const entries: ActivityEntry[] = [];
-    const cust = state.customers.find(c => c.id === selectedAccount.id);
+    const cust = state.customers.find(c => c.baId === selectedAccount.id);
     const vendor = state.vendors.find(v => v.baId === selectedAccount.id);
 
     if (cust) {

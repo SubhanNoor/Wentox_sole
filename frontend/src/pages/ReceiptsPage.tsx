@@ -16,9 +16,11 @@ export default function ReceiptsPage() {
   const { state, dispatch } = useApp();
 
   // Navigation / Tabs State — an alert click-through can deep-link straight
-  // to the Cheques tab via NAVIGATE's optional `tab`.
+  // to the Cheques tab via NAVIGATE's optional `tab`. UC-03: the Cheques tab shows cheque
+  // disposal/allocation history touching bank and restricted accounts, so User never lands there,
+  // even via that deep link.
   const [activeTab, setActiveTab] = useState<ReceiptTab>(
-    state.currentTab === 'cheques' ? 'cheques' : 'entry'
+    state.currentTab === 'cheques' && state.currentUserRole !== 'User' ? 'cheques' : 'entry'
   );
 
   // Form State
@@ -183,23 +185,25 @@ export default function ReceiptsPage() {
           >
             Overall Records
           </button>
-          <button
-            onClick={() => setActiveTab('cheques')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'cheques'
-                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Cheques
-          </button>
+          {state.currentUserRole !== 'User' && (
+            <button
+              onClick={() => setActiveTab('cheques')}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                activeTab === 'cheques'
+                  ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Cheques
+            </button>
+          )}
         </div>
 
         {/* Tab Content */}
         {activeTab === 'weekly' && <WeeklyReceiptsTab />}
         {activeTab === 'monthly' && <MonthlyReceiptsTab />}
         {activeTab === 'overall' && <OverallReceiptsTab />}
-        {activeTab === 'cheques' && <ChequesTab />}
+        {activeTab === 'cheques' && state.currentUserRole !== 'User' && <ChequesTab />}
 
         {activeTab === 'entry' && (
           <div className="max-w-2xl mx-auto">

@@ -2,6 +2,19 @@
 
 **Version 4.3 — tentative, for review before the migration script is written.**
 
+> **Post-v4.3 amendments (folded directly into `database/schema.sql` — a fresh import needs only
+> that one file, no separate migrations; see `backend/CLAUDE.md`):** `due_date` re-added to
+> `sale_bills` (nullable) — deliberately reverses the v4.3 removal below, per explicit client
+> instruction, ahead of a planned payment-overdue notification feature (`purchases.due_date`
+> stays removed — not requested). `status` dropped from `sale_bills` and `sale_returns` — the
+> frontend's button set (Confirm creates+posts atomically; editing an already-posted document
+> reverses+reapplies its ledger/stock inside the same update call, never leaving a row visibly
+> "unposted" in between) meant the column's value never actually changed in practice. "Posted" is
+> now derived by checking whether `ledger_entries`/`stock_movements` rows exist for that document
+> (`source_type`/`source_id`), instead of trusting a separately-stored flag. The CREATE TABLE
+> blocks for both tables below already reflect this — `sale_bills` carries `due_date` and no
+> `status`; `sale_returns` carries neither.
+>
 > **v4.3 changes:** merged in the working-session actions/answers applied on top of the reverted
 > v4.0 copy, so this file now carries both lineages. Renames `articles` → `products` (cascaded to
 > `product_id` and all constraint/index names). Promotes `account_class` from a fixed `CHECK` list
@@ -630,7 +643,7 @@ CREATE TABLE dbo.sale_bills (
   total_pairs      INT           NOT NULL CONSTRAINT DF_sb_pairs    DEFAULT (0),
   gross_value      DECIMAL(14,2) NOT NULL CONSTRAINT DF_sb_gross    DEFAULT (0),
   net_value        DECIMAL(14,2) NOT NULL CONSTRAINT DF_sb_net      DEFAULT (0),
-  status           VARCHAR(10)   NOT NULL CONSTRAINT DF_sb_status   DEFAULT ('DRAFT'),
+  due_date         DATE          NULL,                       -- post-v4.3: re-added for the payment-overdue notification feature
   created_by       INT           NULL,
   updated_by              INT           NULL,
   created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sb_created  DEFAULT (SYSUTCDATETIME()),
@@ -644,7 +657,6 @@ CREATE TABLE dbo.sale_bills (
   CONSTRAINT FK_sale_bills_user     FOREIGN KEY (created_by)      REFERENCES dbo.users(user_id),
   CONSTRAINT FK_sale_bills_upd     FOREIGN KEY (updated_by)      REFERENCES dbo.users(user_id),
   CONSTRAINT CK_sale_bills_deliv    CHECK (delivery_type IN ('SAME','CUSTOM')),
-  CONSTRAINT CK_sale_bills_status   CHECK (status IN ('CONFIRMED','DRAFT')),
   CONSTRAINT CK_sale_bills_custdlv  CHECK (delivery_type = 'SAME' OR sub_customer_id IS NOT NULL)
 );
 CREATE INDEX IX_sale_bills_date     ON dbo.sale_bills(bill_date);
@@ -777,7 +789,6 @@ CREATE TABLE dbo.sale_returns (
   total_pairs      INT           NOT NULL CONSTRAINT DF_sr_pairs   DEFAULT (0),
   gross_value      DECIMAL(14,2) NOT NULL CONSTRAINT DF_sr_gross   DEFAULT (0),
   net_value        DECIMAL(14,2) NOT NULL CONSTRAINT DF_sr_net     DEFAULT (0),
-  status           VARCHAR(10)   NOT NULL CONSTRAINT DF_sr_status  DEFAULT ('DRAFT'),
   created_by       INT           NULL,
   updated_by              INT           NULL,
   created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sr_created DEFAULT (SYSUTCDATETIME()),
@@ -788,8 +799,7 @@ CREATE TABLE dbo.sale_returns (
   CONSTRAINT FK_sale_returns_subcust FOREIGN KEY (sub_customer_id) REFERENCES dbo.sub_customers(sub_customer_id),
   CONSTRAINT FK_sale_returns_adda    FOREIGN KEY (adda_id)         REFERENCES dbo.addas(adda_id),
   CONSTRAINT FK_sale_returns_user    FOREIGN KEY (created_by)      REFERENCES dbo.users(user_id),
-  CONSTRAINT FK_sale_returns_upd    FOREIGN KEY (updated_by)      REFERENCES dbo.users(user_id),
-  CONSTRAINT CK_sale_returns_status  CHECK (status IN ('CONFIRMED','DRAFT'))
+  CONSTRAINT FK_sale_returns_upd    FOREIGN KEY (updated_by)      REFERENCES dbo.users(user_id)
 );
 CREATE INDEX IX_sale_returns_date     ON dbo.sale_returns(return_date);
 CREATE INDEX IX_sale_returns_customer ON dbo.sale_returns(customer_id, return_date);

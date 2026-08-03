@@ -54,12 +54,13 @@ function buildBillFields(payload, totals) {
     total_pairs: totals.totalPairs,
     gross_value: totals.grossValue,
     net_value: totals.netValue,
+    due_date: payload.due_date || null,
   };
 }
 
 async function create(payload, userId) {
   const { lines, totals } = await resolveLinesAndTotals(payload);
-  const bill = { ...buildBillFields(payload, totals), status: 'DRAFT', created_by: userId };
+  const bill = { ...buildBillFields(payload, totals), created_by: userId };
 
   const billId = await withTransaction(async (transaction) => {
     const id = await repository.insert(transaction, bill);
@@ -98,20 +99,35 @@ function list(filters = {}) {
   });
 }
 
-// Financial edits only while UNPOSTED (status = 'DRAFT') — schema §6.
+// Editing a not-yet-posted bill just replaces header/items (nothing posted yet, nothing to
+// reverse). Editing an already-posted bill reverses its live ledger/stock rows and reapplies them
+// against the new totals in the same transaction — the unpost-edit-repost cycle collapsed into
+// one atomic step so "posted" (derived from ledger_entries — see repository.isPosted) never
+// visibly flips off from the user's perspective (see saleBills.ipc.js for the password guard,
+// which only applies to this already-posted-edit branch).
 async function update(id, payload) {
   const existing = await getById(id);
-  if (existing.status !== 'DRAFT') {
-    throw ApiError.conflict('Unpost the bill before editing', 'POSTED_LOCK');
-  }
-
   const { lines, totals } = await resolveLinesAndTotals(payload);
   const bill = buildBillFields(payload, totals);
 
   await withTransaction(async (transaction) => {
+    if (existing.is_posted) {
+      await repository.deleteLedgerAndStock(transaction, id);
+    }
+
     await repository.updateHeader(transaction, id, bill);
     await repository.deleteItems(transaction, id);
     await repository.insertItems(transaction, id, lines);
+
+    if (existing.is_posted) {
+      await postLedgerAndStock(transaction, {
+        billId: id,
+        customerId: bill.customer_id,
+        netValue: totals.netValue,
+        billDate: bill.bill_date,
+        items: lines,
+      });
+    }
   });
 
   return getById(id);
@@ -119,7 +135,7 @@ async function update(id, payload) {
 
 async function post(id) {
   const bill = await getById(id);
-  if (bill.status === 'CONFIRMED') {
+  if (bill.is_posted) {
     throw ApiError.conflict('Bill is already posted', 'ALREADY_POSTED');
   }
 
@@ -131,7 +147,6 @@ async function post(id) {
       billDate: bill.bill_date,
       items: bill.items,
     });
-    await repository.setStatus(transaction, id, 'CONFIRMED');
   });
 
   return getById(id);
@@ -139,13 +154,12 @@ async function post(id) {
 
 async function unpost(id) {
   const bill = await getById(id);
-  if (bill.status === 'DRAFT') {
+  if (!bill.is_posted) {
     throw ApiError.conflict('Bill is not posted', 'NOT_POSTED');
   }
 
   await withTransaction(async (transaction) => {
     await repository.deleteLedgerAndStock(transaction, id);
-    await repository.setStatus(transaction, id, 'DRAFT');
   });
 
   return getById(id);
@@ -202,9 +216,10 @@ async function postLedgerAndStock(transaction, { billId, customerId, netValue, b
   );
 }
 
-// Inserts an already-built bill+lines with an explicit status (used by draftSaleBills.confirm,
-// which builds a CONFIRMED bill directly from a draft's already-computed data instead of
-// recomputing totals). Caller owns the transaction.
+// Inserts an already-built bill+lines (used by draftSaleBills.confirm, which builds a bill
+// directly from a draft's already-computed data instead of recomputing totals — the caller posts
+// it right after via postLedgerAndStock, which is what makes it "posted"). Caller owns the
+// transaction.
 async function insertConfirmed(transaction, bill, lines) {
   const id = await repository.insert(transaction, bill);
   await repository.insertItems(transaction, id, lines);

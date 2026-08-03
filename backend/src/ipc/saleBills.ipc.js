@@ -1,6 +1,7 @@
 // IPC layer: registers ipcMain.handle channels for sale-bills — no business logic, no SQL.
 const { ipcMain } = require('electron');
 const service = require('../services/saleBills.service');
+const authService = require('../services/auth.service');
 const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
 
@@ -29,22 +30,35 @@ module.exports = function register() {
     }),
   );
 
+  // Editing a not-yet-posted bill needs no password. Editing an already-posted bill
+  // reverses+reapplies its live ledger/stock in the same update() call (see saleBills.service.js),
+  // so the password is required only in that branch — checked here, before the write, once we
+  // know whether the bill is currently posted (`is_posted`, derived from ledger_entries — there's
+  // no stored status column).
   ipcMain.handle(
     'sale-bills:update',
-    wrap((payload) => {
-      requireSession();
+    wrap(async (payload) => {
+      const session = requireSession();
+      const existing = await service.getById(payload.id);
+      if (existing.is_posted) {
+        await authService.verifyPassword(session.userId, payload.password);
+      }
       return service.update(payload.id, payload);
     }),
   );
 
+  // Save/confirm — re-verifies the logged-in user's password before posting.
   ipcMain.handle(
     'sale-bills:post',
-    wrap((payload) => {
-      requireSession();
+    wrap(async (payload) => {
+      const session = requireSession();
+      await authService.verifyPassword(session.userId, payload.password);
       return service.post(payload.id);
     }),
   );
 
+  // Standalone unpost (not part of the edit flow — editing an already-posted bill now
+  // reverses+reapplies internally within update()).
   ipcMain.handle(
     'sale-bills:unpost',
     wrap((payload) => {

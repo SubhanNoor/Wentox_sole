@@ -164,9 +164,10 @@ const demoChartAccounts: ChartOfAccount[] = [
   { id: '110001', name: 'CUSTOMERS ACCOUNTS', groupId: '1000', linkCode: 'A', status: 'Active' },
   { id: '120001', name: 'CASH IN HAND', groupId: '1000', linkCode: 'A', status: 'Active' },
   // The KIND, not an instance. Named banks are business accounts beneath this,
-  // so a second bank needs no second chart account. Already in
-  // RESTRICTED_CHART_IDS, so the `user` role sees no bank at all.
-  { id: '120002', name: 'BANK ACCOUNTS', groupId: '1000', linkCode: 'A', status: 'Active' },
+  // so a second bank needs no second chart account. isRestricted (UC-03): the
+  // `User` role can still credit/debit banks via Receipts/Expenses, but can't
+  // see this chart head's ledger, reports, or setup screens.
+  { id: '120002', name: 'BANK ACCOUNTS', groupId: '1000', linkCode: 'A', status: 'Active', isRestricted: true },
   // Cheques received but not yet deposited or endorsed (§13). Near-cash, so it
   // sits with cash & bank. An endorsement credits it; a deposit moves it to bank.
   { id: '120003', name: 'CHEQUES IN HAND', groupId: '1000', linkCode: 'A', status: 'Active' },
@@ -199,7 +200,9 @@ const demoChartAccounts: ChartOfAccount[] = [
   // Cost of raw material bought from vendors. A Purchase debits here and credits
   // the vendor's account — the same two-sided shape wages now have.
   { id: '430001', name: 'PURCHASES', groupId: '4000', linkCode: 'A', status: 'Active' },
-  { id: '440001', name: 'DIRECTORS EXPENSES - DRAWINGS', groupId: '4000', linkCode: 'A', status: 'Active' },
+  // isRestricted (UC-03): same rule as BANK ACCOUNTS above — User can still record a
+  // director's expense entry, just can't see this chart head's ledger/reports/setup.
+  { id: '440001', name: 'DIRECTORS EXPENSES - DRAWINGS', groupId: '4000', linkCode: 'A', status: 'Active', isRestricted: true },
   // Commission given at payment time (§7) — a cost, never a sale-time discount.
   // A Receipt's commission debits here and credits the customer.
   { id: '450001', name: 'COMMISSION ALLOWED', groupId: '4000', linkCode: 'A', status: 'Active' },

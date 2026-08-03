@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
   ShoppingCart, Receipt, Package, FileText, Layers,
@@ -13,6 +13,10 @@ interface NavItem {
   page: NavPage;
   label: string;
   icon: React.ComponentType<{ size: number; className?: string }>;
+  // UC-03: hidden from the sidebar for the User role. Only for screens that manage a restricted
+  // chart account's records (Bank Accounts, Chart of Accounts setup) — not day-to-day entry
+  // screens like Receipts/Expenses, which stay open to User for credit/debit.
+  adminOnly?: boolean;
 }
 
 interface NavSection {
@@ -35,7 +39,11 @@ const navSections: NavSection[] = [
       { page: 'wage-run', label: 'Wage Run (Piece Rate)', icon: HardHat },
       { page: 'salary-run', label: 'Salary Run (Monthly)', icon: BadgeDollarSign },
       // Money between our own accounts — neither income nor expense.
+<<<<<<< HEAD
       { page: 'transfer', label: 'Bank Transactions', icon: ArrowLeftRight },
+=======
+      { page: 'transfer', label: 'Transfer (Cash \u2194 Bank)', icon: ArrowLeftRight, adminOnly: true },
+>>>>>>> subhan
     ]
   },
   {
@@ -53,7 +61,7 @@ const navSections: NavSection[] = [
       { page: 'setup-category', label: 'Categories', icon: Layers },
       { page: 'setup-vendor', label: 'Vendors', icon: Truck },
       { page: 'setup-employee', label: 'Employees', icon: HardHat },
-      { page: 'setup-bank', label: 'Bank Accounts', icon: Landmark },
+      { page: 'setup-bank', label: 'Bank Accounts', icon: Landmark, adminOnly: true },
       { page: 'setup-customer', label: 'Customers', icon: Users },
       { page: 'setup-sub-cust', label: 'Sub Customers', icon: Users },
       { page: 'setup-city', label: 'City Creation', icon: MapPin },
@@ -90,11 +98,21 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
 
+<<<<<<< HEAD
   // Ref callback (not useEffect) so the restore happens the instant the
   // node exists — before the browser paints it at scrollTop 0.
   const navRefCallback = (node: HTMLElement | null) => {
     if (node) node.scrollTop = savedSidebarScrollTop;
   };
+=======
+  // UC-03: drop adminOnly items for the User role, then drop any section left empty.
+  const visibleNavSections = useMemo(() => {
+    if (state.currentUserRole !== 'User') return navSections;
+    return navSections
+      .map(section => ({ ...section, items: section.items.filter(item => !item.adminOnly) }))
+      .filter(section => section.items.length > 0);
+  }, [state.currentUserRole]);
+>>>>>>> subhan
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -177,12 +195,17 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
         </div>
 
         {/* Navigation */}
+<<<<<<< HEAD
         <nav
           className="flex-1 overflow-y-auto py-2.5 px-3 scrollbar-thin"
           ref={navRefCallback}
           onScroll={(e) => { savedSidebarScrollTop = e.currentTarget.scrollTop; }}
         >
           {navSections.map((section, sIdx) => (
+=======
+        <nav className="flex-1 overflow-y-auto py-2.5 px-3 scrollbar-thin">
+          {visibleNavSections.map((section, sIdx) => (
+>>>>>>> subhan
             <div key={sIdx} className="mb-4">
               <div
                 className="px-3 mb-1.5 text-xs font-semibold uppercase tracking-wider"
