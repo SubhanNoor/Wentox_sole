@@ -15,19 +15,25 @@ export default function AddaSetupPage() {
 
   // Form State
   const [addaName, setAddaName] = useState('');
+  const [regionId, setRegionId] = useState('');
+  const [cityId, setCityId] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
   const handleAddNew = () => {
     setSelectedAddaId(null);
     setAddaName('');
+    setRegionId(state.regions[0]?.id || '');
+    setCityId('');
     setErrorMsg('');
     setActiveTab('form');
   };
 
-  const handleSelectAdda = (adda: { id: string; name: string }) => {
+  const handleSelectAdda = (adda: { id: string; name: string; regionId?: string; cityId: string }) => {
     setSelectedAddaId(adda.id);
     setAddaName(adda.name);
+    setRegionId(adda.regionId || '');
+    setCityId(adda.cityId || '');
     setErrorMsg('');
     setActiveTab('form');
   };
@@ -37,12 +43,20 @@ export default function AddaSetupPage() {
     if (!addaName.trim()) {
       return setErrorMsg('Adda name is required.');
     }
+    if (!cityId) {
+      return setErrorMsg('City selection is required.');
+    }
 
     if (selectedAddaId) {
       // Edit mode
       dispatch({
         type: 'UPDATE_ADDA',
-        adda: { id: selectedAddaId, name: addaName.trim() }
+        adda: {
+          id: selectedAddaId,
+          name: addaName.trim(),
+          regionId: regionId || undefined,
+          cityId: cityId
+        }
       });
       setSuccessMsg('Adda details updated successfully.');
     } else {
@@ -50,13 +64,20 @@ export default function AddaSetupPage() {
       const newId = 'ad_' + Date.now();
       dispatch({
         type: 'ADD_ADDA',
-        adda: { id: newId, name: addaName.trim() }
+        adda: {
+          id: newId,
+          name: addaName.trim(),
+          regionId: regionId || undefined,
+          cityId: cityId
+        }
       });
       setSuccessMsg('New Transport Adda registered successfully.');
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
     setAddaName('');
+    setRegionId('');
+    setCityId('');
     setSelectedAddaId(null);
     setErrorMsg('');
     setActiveTab('list');
@@ -82,8 +103,8 @@ export default function AddaSetupPage() {
   const filteredAddas = useMemo(() => {
     if (!addaSearch.trim()) return state.addas;
     const q = addaSearch.toLowerCase();
-    return state.addas.filter(a => 
-      a.name.toLowerCase().includes(q) || 
+    return state.addas.filter(a =>
+      a.name.toLowerCase().includes(q) ||
       a.id.toLowerCase().includes(q)
     );
   }, [state.addas, addaSearch]);
@@ -91,7 +112,7 @@ export default function AddaSetupPage() {
   return (
     <AppLayout pageTitle="Transport Adda Setup">
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
-        
+
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
         )}
@@ -107,21 +128,19 @@ export default function AddaSetupPage() {
                 setActiveTab('list');
                 setSelectedAddaId(null);
               }}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${
-                activeTab === 'list' 
-                  ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' 
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'list'
+                  ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                   : 'text-slate-600 hover:text-slate-900'
-              }`}
+                }`}
             >
               Addas Directory
             </button>
             <button
               onClick={handleAddNew}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${
-                activeTab === 'form' && !selectedAddaId 
-                  ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' 
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'form' && !selectedAddaId
+                  ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                   : 'text-slate-600 hover:text-slate-900'
-              }`}
+                }`}
             >
               Add New Adda
             </button>
@@ -192,9 +211,18 @@ export default function AddaSetupPage() {
                             <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
                               {adda.name}
                             </h4>
-                            <p className="text-[11px] text-slate-400 font-medium mt-0.5 uppercase tracking-wider">
-                              Transport Point
-                            </p>
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                              {adda.regionId && (
+                                <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
+                                  {state.regions.find(r => r.id === adda.regionId)?.name || adda.regionId}
+                                </span>
+                              )}
+                              {adda.cityId && (
+                                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
+                                  {state.cities.find(c => c.id === adda.cityId)?.name || adda.cityId}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -227,7 +255,7 @@ export default function AddaSetupPage() {
           <div className="max-w-2xl mx-auto">
             <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm">
               <div className="flex items-center gap-3 border-b pb-4 mb-6">
-                <button 
+                <button
                   onClick={() => {
                     setActiveTab('list');
                     setSelectedAddaId(null);
@@ -240,7 +268,7 @@ export default function AddaSetupPage() {
                   <h3 className="font-lora font-semibold text-lg text-slate-800">
                     {selectedAddaId ? 'Edit Transport Adda' : 'Register New Transport Adda'}
                   </h3>
-                  <p className="text-xs text-slate-500 font-medium font-inter">Configure delivery points for wholesale shipment routing.</p>
+                  <p className="text-xs text-slate-500 font-medium font-inter">Configure delivery points and location parameters for wholesale shipment routing.</p>
                 </div>
               </div>
 
@@ -259,6 +287,40 @@ export default function AddaSetupPage() {
                     placeholder="e.g. Multan Adda Service, Faisalabad Goods"
                     className="soleria-input font-semibold"
                   />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1 font-inter">Region</label>
+                    <select
+                      value={regionId}
+                      onChange={e => {
+                        setRegionId(e.target.value);
+                        setCityId('');
+                      }}
+                      className="soleria-input font-semibold"
+                    >
+                      <option value="">Select Region (Optional)</option>
+                      {state.regions.map(r => (
+                        <option key={r.id} value={r.id}>{r.name} ({r.id})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1 font-inter">City</label>
+                    <select
+                      value={cityId}
+                      onChange={e => setCityId(e.target.value)}
+                      className="soleria-input font-semibold"
+                    >
+                      <option value="">Select City</option>
+                      {state.cities
+                        .filter(c => !regionId || c.regionId === regionId)
+                        .map(c => (
+                          <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
+                        ))}
+                    </select>
+                  </div>
                 </div>
 
                 <div className="flex justify-end gap-3 mt-6 border-t pt-4">

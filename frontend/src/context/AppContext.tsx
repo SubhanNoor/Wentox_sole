@@ -39,10 +39,10 @@ const demoStores: Store[] = [
 ];
 
 const demoAddas: Adda[] = [
-  { id: 'ad1', name: 'Karachi Goods Transport' },
-  { id: 'ad2', name: 'Peshawar Niazi Cargo' },
-  { id: 'ad3', name: 'Multan Adda Service' },
-  { id: 'ad4', name: 'Sukkur Cargo Express' },
+  { id: 'ad1', name: 'Karachi Goods Transport', regionId: 'rg3', cityId: 'ct3' },
+  { id: 'ad2', name: 'Peshawar Niazi Cargo', regionId: 'rg2', cityId: 'ct2' },
+  { id: 'ad3', name: 'Multan Adda Service', regionId: 'rg4', cityId: 'ct4' },
+  { id: 'ad4', name: 'Sukkur Cargo Express', regionId: 'rg3', cityId: 'ct5' },
 ];
 
 const demoVendors: Vendor[] = [
@@ -288,12 +288,12 @@ const demoCustomers: Customer[] = [
 ];
 
 const demoSubCustomers: SubCustomer[] = [
-  { id: 'sub1', name: 'Saleem Transport Agent' },
-  { id: 'sub2', name: 'Liaqat Traders Karachi' },
-  { id: 'sub3', name: 'Ghafoor Bakhsh Agency' },
-  { id: 'sub4', name: 'Khyber Delivery Hub' },
-  { id: 'sub5', name: 'Multan Freight Forwarders' },
-  { id: 'sub6', name: 'Sindh Goods Carrier' },
+  { id: 'sub1', name: 'Saleem Transport Agent', regionId: 'rg1', cityId: 'ct1' },
+  { id: 'sub2', name: 'Liaqat Traders Karachi', regionId: 'rg3', cityId: 'ct2' },
+  { id: 'sub3', name: 'Ghafoor Bakhsh Agency', regionId: 'rg3', cityId: 'ct3' },
+  { id: 'sub4', name: 'Khyber Delivery Hub', regionId: 'rg2', cityId: 'ct4' },
+  { id: 'sub5', name: 'Multan Freight Forwarders', regionId: 'rg4', cityId: 'ct5' },
+  { id: 'sub6', name: 'Sindh Goods Carrier', regionId: 'rg3', cityId: 'ct6' },
 ];
 
 const demoSaleBills: SaleBill[] = [
@@ -820,6 +820,9 @@ type Action =
   | { type: 'ADD_ADDA'; adda: Adda }
   | { type: 'UPDATE_ADDA'; adda: Adda }
   | { type: 'DELETE_ADDA'; id: string }
+  | { type: 'ADD_STORE'; store: Store }
+  | { type: 'UPDATE_STORE'; store: Store }
+  | { type: 'DELETE_STORE'; id: string }
   
   // Account Actions
   | { type: 'ADD_GROUP_ACCOUNT'; account: GroupAccount }
@@ -1128,6 +1131,18 @@ function reducer(state: State, action: Action): State {
       return {
         ...state,
         addas: state.addas.filter(a => a.id !== action.id)
+      };
+    case 'ADD_STORE':
+      return { ...state, stores: [...state.stores, action.store] };
+    case 'UPDATE_STORE':
+      return {
+        ...state,
+        stores: state.stores.map(s => s.id === action.store.id ? action.store : s)
+      };
+    case 'DELETE_STORE':
+      return {
+        ...state,
+        stores: state.stores.filter(s => s.id !== action.id)
       };
 
     /* ──── Account Handlers ──── */

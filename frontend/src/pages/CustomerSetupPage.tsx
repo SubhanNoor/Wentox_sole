@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Printer, Download, MapPin, Edit2, Trash2, FileDown } from 'lucide-react';
+import { Plus, Search, Printer, Download, MapPin, Edit2, Trash2, FileDown, ArrowLeft, Settings, Save } from 'lucide-react';
 import { exportToPDF } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import type { Customer } from '@/types';
@@ -18,16 +18,20 @@ interface ProductLedgerRow {
 export default function CustomerSetupPage() {
   const { state, dispatch } = useApp();
 
+  // Tab State: 'list' | 'form'
+  const [activeTab, setActiveTab] = useState<'list' | 'form'>('list');
+
   // Directory view state
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Add/Edit Customer modal state
-  const [isFormOpen, setIsFormOpen] = useState(false);
+  // Add/Edit Customer form state
   const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerRegionId, setNewCustomerRegionId] = useState('');
   const [newCustomerCityId, setNewCustomerCityId] = useState('');
+  const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [newCustomerAddress, setNewCustomerAddress] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
@@ -64,10 +68,12 @@ export default function CustomerSetupPage() {
   const handleOpenAdd = () => {
     setEditingCustomerId(null);
     setNewCustomerName('');
-    setNewCustomerRegionId('');
+    setNewCustomerRegionId(state.regions[0]?.id || '');
     setNewCustomerCityId('');
+    setNewCustomerPhone('');
+    setNewCustomerAddress('');
     setErrorMsg('');
-    setIsFormOpen(true);
+    setActiveTab('form');
   };
 
   const handleOpenEdit = (c: Customer) => {
@@ -75,8 +81,10 @@ export default function CustomerSetupPage() {
     setNewCustomerName(c.name);
     setNewCustomerRegionId(c.regionId);
     setNewCustomerCityId(c.cityId);
+    setNewCustomerPhone(c.phone || '');
+    setNewCustomerAddress(c.address || '');
     setErrorMsg('');
-    setIsFormOpen(true);
+    setActiveTab('form');
   };
 
   const handleSaveCustomer = (e: React.FormEvent) => {
@@ -93,7 +101,9 @@ export default function CustomerSetupPage() {
           name: newCustomerName.trim(),
           acId: '110001',
           regionId: newCustomerRegionId,
-          cityId: newCustomerCityId
+          cityId: newCustomerCityId,
+          phone: newCustomerPhone.trim() || undefined,
+          address: newCustomerAddress.trim() || undefined
         }
       });
       setSuccessMsg('Customer details updated successfully.');
@@ -120,17 +130,21 @@ export default function CustomerSetupPage() {
           name: newCustomerName.trim(),
           acId: '110001',
           regionId: newCustomerRegionId,
-          cityId: newCustomerCityId
+          cityId: newCustomerCityId,
+          phone: newCustomerPhone.trim() || undefined,
+          address: newCustomerAddress.trim() || undefined
         }
       });
       setSuccessMsg('New customer added successfully.');
     }
 
-    setIsFormOpen(false);
+    setActiveTab('list');
     setEditingCustomerId(null);
     setNewCustomerName('');
     setNewCustomerRegionId('');
     setNewCustomerCityId('');
+    setNewCustomerPhone('');
+    setNewCustomerAddress('');
     setErrorMsg('');
     setTimeout(() => setSuccessMsg(''), 3000);
   };
@@ -228,11 +242,171 @@ export default function CustomerSetupPage() {
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
         )}
-        {errorMsg && !isFormOpen && (
+        {errorMsg && activeTab === 'list' && (
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
         )}
 
-        {!selectedCustomerId ? (
+        {/* Tab Selection Header */}
+        <div className="flex justify-between items-center mb-6">
+          <div className="flex gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+            <button
+              onClick={() => {
+                setActiveTab('list');
+                setSelectedCustomerId('');
+              }}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'list' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              Active Customers
+            </button>
+            <button
+              onClick={handleOpenAdd}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'form' && !editingCustomerId ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              Add New Customer
+            </button>
+          </div>
+
+          {activeTab === 'list' && !selectedCustomerId && (
+            <button
+              onClick={handleOpenAdd}
+              className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm"
+            >
+              <Plus size={16} /> Add New Customer
+            </button>
+          )}
+        </div>
+
+        {activeTab === 'form' ? (
+          /* View 2: Add New / Edit Customer Form */
+          <div className="card-white p-6 md:p-8 bg-white border">
+            <div className="flex items-center gap-2 border-b pb-3 mb-6">
+              <button
+                onClick={() => {
+                  setActiveTab('list');
+                  setEditingCustomerId(null);
+                }}
+                className="p-1.5 hover:bg-slate-100 rounded text-slate-500 hover:text-slate-800 transition-colors"
+              >
+                <ArrowLeft size={16} />
+              </button>
+              <div>
+                <h3 className="font-lora font-semibold text-lg text-[#111c2a]">
+                  {editingCustomerId ? `Edit Customer: ${newCustomerName}` : 'Register New Customer'}
+                </h3>
+                <p className="text-xs text-slate-500 font-medium">Configure customer parameters, regional placement, and contact details.</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveCustomer} className="flex flex-col gap-6">
+              <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-4" style={{ borderColor: 'var(--border-color)' }}>
+                <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
+                  <Settings size={15} className="text-[#B08D57]" /> Customer Parameters
+                </div>
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Customer Name <span className="text-red-500 font-bold">*</span></label>
+                    <input
+                      type="text"
+                      value={newCustomerName}
+                      onChange={e => setNewCustomerName(e.target.value)}
+                      placeholder="Enter customer name..."
+                      className="soleria-input font-semibold"
+                      autoFocus
+                      required
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Select Region <span className="text-red-500 font-bold">*</span></label>
+                      <select
+                        value={newCustomerRegionId}
+                        onChange={e => {
+                          setNewCustomerRegionId(e.target.value);
+                          setNewCustomerCityId('');
+                        }}
+                        className="soleria-input cursor-pointer font-semibold"
+                        required
+                      >
+                        <option value="">Select Region...</option>
+                        {state.regions.map(rg => (
+                          <option key={rg.id} value={rg.id}>{rg.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Select City <span className="text-red-500 font-bold">*</span></label>
+                      <select
+                        value={newCustomerCityId}
+                        onChange={e => setNewCustomerCityId(e.target.value)}
+                        className="soleria-input cursor-pointer font-semibold"
+                        required
+                      >
+                        <option value="">Select City...</option>
+                        {state.cities
+                          .filter(ct => !newCustomerRegionId || ct.regionId === newCustomerRegionId)
+                          .map(ct => (
+                            <option key={ct.id} value={ct.id}>{ct.name}</option>
+                          ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Phone Number</label>
+                      <input
+                        type="text"
+                        value={newCustomerPhone}
+                        onChange={e => setNewCustomerPhone(e.target.value)}
+                        placeholder="e.g. 0300-1234567"
+                        className="soleria-input font-semibold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Address / Location</label>
+                      <input
+                        type="text"
+                        value={newCustomerAddress}
+                        onChange={e => setNewCustomerAddress(e.target.value)}
+                        placeholder="e.g. Main Market, Lahore"
+                        className="soleria-input font-semibold"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Form Actions */}
+              <div className="flex gap-3 justify-end border-t pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('list');
+                    setEditingCustomerId(null);
+                    setNewCustomerName('');
+                    setNewCustomerRegionId('');
+                    setNewCustomerCityId('');
+                    setNewCustomerPhone('');
+                    setNewCustomerAddress('');
+                    setErrorMsg('');
+                  }}
+                  className="btn-outline px-5 py-2"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn-gold px-6 py-2 flex items-center gap-1.5"
+                >
+                  <Save size={16} /> {editingCustomerId ? 'Update Customer' : 'Save Customer Details'}
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : !selectedCustomerId ? (
           /* ───── Directory View ───── */
           <div className="mb-6">
             <div className="flex flex-wrap items-center justify-between gap-4 mb-6" data-no-print>
@@ -240,23 +414,15 @@ export default function CustomerSetupPage() {
                 <h3 className="font-lora font-semibold text-lg text-slate-800">Customers Directory</h3>
                 <p className="text-xs text-slate-500 font-medium">Browse customers as cards. Select a card to view its product ledger.</p>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="relative min-w-[240px]">
-                  <input
-                    type="text"
-                    placeholder="Search by name or code..."
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold bg-white"
-                  />
-                  <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
-                </div>
-                <button
-                  onClick={handleOpenAdd}
-                  className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm"
-                >
-                  <Plus size={16} /> Add New Customer
-                </button>
+              <div className="relative min-w-[240px]">
+                <input
+                  type="text"
+                  placeholder="Search by name or code..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold bg-white"
+                />
+                <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
               </div>
             </div>
 
@@ -444,93 +610,6 @@ export default function CustomerSetupPage() {
               </div>
             </div>
           </>
-        )}
-
-        {/* Add/Edit Customer Modal */}
-        {isFormOpen && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-            <form onSubmit={handleSaveCustomer} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
-              <h3 className="font-lora font-bold text-lg text-slate-800 mb-4">
-                {editingCustomerId ? `Edit Customer: ${newCustomerName}` : 'Add New Customer'}
-              </h3>
-
-              {errorMsg && (
-                <div className="banner-error rounded-lg px-3 py-2 text-xs mb-4">{errorMsg}</div>
-              )}
-
-              <div className="mb-4">
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  Customer Name <span className="text-red-500 font-bold">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={newCustomerName}
-                  onChange={e => setNewCustomerName(e.target.value)}
-                  placeholder="Enter customer name..."
-                  className="soleria-input font-semibold"
-                  autoFocus
-                  required
-                />
-              </div>
-
-              <div className="mb-4">
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  Select Region <span className="text-red-500 font-bold">*</span>
-                </label>
-                <select
-                  value={newCustomerRegionId}
-                  onChange={e => setNewCustomerRegionId(e.target.value)}
-                  className="soleria-input cursor-pointer font-semibold"
-                  required
-                >
-                  <option value="">Select Region...</option>
-                  {state.regions.map(rg => (
-                    <option key={rg.id} value={rg.id}>{rg.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="mb-6">
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  Select City <span className="text-red-500 font-bold">*</span>
-                </label>
-                <select
-                  value={newCustomerCityId}
-                  onChange={e => setNewCustomerCityId(e.target.value)}
-                  className="soleria-input cursor-pointer font-semibold"
-                  required
-                >
-                  <option value="">Select City...</option>
-                  {state.cities.map(ct => (
-                    <option key={ct.id} value={ct.id}>{ct.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-2 text-sm font-semibold">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsFormOpen(false);
-                    setEditingCustomerId(null);
-                    setNewCustomerName('');
-                    setNewCustomerRegionId('');
-                    setNewCustomerCityId('');
-                    setErrorMsg('');
-                  }}
-                  className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-[#111c2a] text-[#B08D57] rounded-lg hover:opacity-90 transition-opacity"
-                >
-                  {editingCustomerId ? 'Update Customer' : 'Save Customer'}
-                </button>
-              </div>
-            </form>
-          </div>
         )}
 
       </div>

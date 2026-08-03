@@ -22,6 +22,7 @@ import SubCustomerSetupPage from '@/pages/SubCustomerSetupPage';
 import CitySetupPage from '@/pages/CitySetupPage';
 import RegionSetupPage from '@/pages/RegionSetupPage';
 import AddaSetupPage from '@/pages/AddaSetupPage';
+import StoreSetupPage from '@/pages/StoreSetupPage';
 
 // Accounting Setups
 import GroupAcSetupPage from '@/pages/GroupAcSetupPage';
@@ -98,6 +99,8 @@ export default function App() {
       return <RegionSetupPage />;
     case 'setup-adda':
       return <AddaSetupPage />;
+    case 'setup-store':
+      return <StoreSetupPage />;
 
     // Accounting Setup
     case 'setup-group-ac':

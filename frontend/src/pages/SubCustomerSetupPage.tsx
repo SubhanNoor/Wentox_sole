@@ -15,19 +15,31 @@ export default function SubCustomerSetupPage() {
 
   // Form State
   const [subName, setSubName] = useState('');
+  const [regionId, setRegionId] = useState('');
+  const [cityId, setCityId] = useState('');
+  const [phone, setPhone] = useState('');
+  const [address, setAddress] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
   const handleAddNew = () => {
     setSelectedSubId(null);
     setSubName('');
+    setRegionId(state.regions[0]?.id || '');
+    setCityId('');
+    setPhone('');
+    setAddress('');
     setErrorMsg('');
     setActiveTab('form');
   };
 
-  const handleSelectSubCustomer = (sub: { id: string; name: string }) => {
+  const handleSelectSubCustomer = (sub: { id: string; name: string; regionId: string; cityId: string; phone?: string; address?: string }) => {
     setSelectedSubId(sub.id);
     setSubName(sub.name);
+    setRegionId(sub.regionId);
+    setCityId(sub.cityId);
+    setPhone(sub.phone || '');
+    setAddress(sub.address || '');
     setErrorMsg('');
     setActiveTab('form');
   };
@@ -35,26 +47,44 @@ export default function SubCustomerSetupPage() {
   const handleSaveSubCustomer = (e: React.FormEvent) => {
     e.preventDefault();
     if (!subName.trim()) return setErrorMsg('Please enter a Sub Customer name.');
+    if (!regionId) return setErrorMsg('Region selection is required.');
+    if (!cityId) return setErrorMsg('City selection is required.');
 
     if (selectedSubId) {
-      // Edit mode
       dispatch({
         type: 'UPDATE_SUB_CUSTOMER',
-        subCust: { id: selectedSubId, name: subName.trim() }
+        subCust: {
+          id: selectedSubId,
+          name: subName.trim(),
+          regionId: regionId,
+          cityId: cityId,
+          phone: phone.trim() || undefined,
+          address: address.trim() || undefined
+        }
       });
       setSuccessMsg('Sub Customer details updated successfully.');
     } else {
-      // Add mode
       const newId = 'sub_' + Date.now();
       dispatch({
         type: 'ADD_SUB_CUSTOMER',
-        subCust: { id: newId, name: subName.trim() }
+        subCust: {
+          id: newId,
+          name: subName.trim(),
+          regionId: regionId,
+          cityId: cityId,
+          phone: phone.trim() || undefined,
+          address: address.trim() || undefined
+        }
       });
       setSuccessMsg('New Sub Customer registered successfully.');
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
     setSubName('');
+    setRegionId('');
+    setCityId('');
+    setPhone('');
+    setAddress('');
     setSelectedSubId(null);
     setErrorMsg('');
     setActiveTab('list');
@@ -174,9 +204,18 @@ export default function SubCustomerSetupPage() {
                             <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
                               {sub.name}
                             </h4>
-                            <p className="text-[11px] text-slate-400 font-medium mt-0.5 uppercase tracking-wider truncate">
-                              AGENT / SUB DESTINATION
-                            </p>
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                              {sub.regionId && (
+                                <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
+                                  {state.regions.find(r => r.id === sub.regionId)?.name || sub.regionId}
+                                </span>
+                              )}
+                              {sub.cityId && (
+                                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
+                                  {state.cities.find(c => c.id === sub.cityId)?.name || sub.cityId}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -221,7 +260,7 @@ export default function SubCustomerSetupPage() {
                 <h3 className="font-lora font-semibold text-lg text-[#111c2a]">
                   {selectedSubId ? `Edit Sub Customer: ${subName}` : 'Register New Sub Customer'}
                 </h3>
-                <p className="text-xs text-slate-500 font-medium">Register an independent sub customer agent or sub destination account.</p>
+                <p className="text-xs text-slate-500 font-medium">Register an independent sub customer agent or sub destination account with regional parameters.</p>
               </div>
             </div>
 
@@ -231,15 +270,76 @@ export default function SubCustomerSetupPage() {
                 <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
                   <Settings size={15} className="text-[#B08D57]" /> Sub Customer Details
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Sub Customer Name</label>
-                  <input
-                    type="text"
-                    value={subName}
-                    onChange={e => setSubName(e.target.value)}
-                    placeholder="e.g. Salim Agent LHR"
-                    className="soleria-input font-semibold"
-                  />
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Sub Customer Name</label>
+                    <input
+                      type="text"
+                      value={subName}
+                      onChange={e => setSubName(e.target.value)}
+                      placeholder="e.g. Salim Agent LHR"
+                      className="soleria-input font-semibold"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Region <span className="text-red-500 font-bold">*</span></label>
+                      <select
+                        value={regionId}
+                        onChange={e => {
+                          setRegionId(e.target.value);
+                          setCityId('');
+                        }}
+                        className="soleria-input font-semibold"
+                        required
+                      >
+                        <option value="">Select Region...</option>
+                        {state.regions.map(r => (
+                          <option key={r.id} value={r.id}>{r.name} ({r.id})</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">City <span className="text-red-500 font-bold">*</span></label>
+                      <select
+                        value={cityId}
+                        onChange={e => setCityId(e.target.value)}
+                        className="soleria-input font-semibold"
+                        required
+                      >
+                        <option value="">Select City...</option>
+                        {state.cities
+                          .filter(c => !regionId || c.regionId === regionId)
+                          .map(c => (
+                            <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
+                          ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Phone Number</label>
+                      <input
+                        type="text"
+                        value={phone}
+                        onChange={e => setPhone(e.target.value)}
+                        placeholder="e.g. 0300-9876543"
+                        className="soleria-input font-semibold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Address / Note</label>
+                      <input
+                        type="text"
+                        value={address}
+                        onChange={e => setAddress(e.target.value)}
+                        placeholder="e.g. Shah Alam Market, Lahore"
+                        className="soleria-input font-semibold"
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
 

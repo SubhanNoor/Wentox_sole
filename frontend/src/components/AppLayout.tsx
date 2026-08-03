@@ -4,7 +4,7 @@ import {
   ShoppingCart, Receipt, Package, FileText, Layers,
   Settings, LogOut, Lock, Menu, X, ChevronDown, MapPin, Home,
   Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search, HardHat,
-  BadgeDollarSign, ArrowLeftRight, Landmark, Pin, BookmarkPlus, Trash2, GripHorizontal, ArrowDownToLine
+  BadgeDollarSign, ArrowLeftRight, Landmark, Pin, BookmarkPlus, Trash2, GripHorizontal, ArrowDownToLine, Warehouse
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
@@ -65,6 +65,7 @@ const navSections: NavSection[] = [
       { page: 'setup-city', label: 'City Creation', icon: MapPin },
       { page: 'setup-region', label: 'Regions', icon: MapPin },
       { page: 'setup-adda', label: 'Transport Addas', icon: Milestone },
+      { page: 'setup-store', label: 'Store Setup', icon: Warehouse },
     ]
   },
   {

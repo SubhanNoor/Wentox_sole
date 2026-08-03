@@ -1,6 +1,7 @@
 export interface City {
   id: string; // Code
   name: string;
+  regionId?: string;
 }
 
 export interface Region {
@@ -9,13 +10,15 @@ export interface Region {
 }
 
 export interface Store {
-  id: string;
+  id: string; // Auto-generated code
   name: string;
 }
 
 export interface Adda {
   id: string;
   name: string;
+  regionId?: string;
+  cityId: string;
 }
 
 export interface Vendor {
@@ -206,11 +209,17 @@ export interface Customer {
   baId?: string;
   regionId: string; // primary identification, checked before City
   cityId: string;
+  phone?: string;
+  address?: string;
 }
 
 export interface SubCustomer {
   id: string; // Code
   name: string;
+  regionId: string;
+  cityId: string;
+  phone?: string;
+  address?: string;
 }
 
 export interface SaleBillItem {
@@ -527,6 +536,7 @@ export type NavPage =
   | 'setup-city'
   | 'setup-region'
   | 'setup-adda'
+  | 'setup-store'
   | 'report-stock'
   | 'reports'
   | 'bilty-update'

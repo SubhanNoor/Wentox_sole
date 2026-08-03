@@ -64,6 +64,10 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   // Add new sub-customer modal state
   const [isAddSubCustomerOpen, setIsAddSubCustomerOpen] = useState(false);
   const [newSubCustomerName, setNewSubCustomerName] = useState('');
+  const [newSubCustomerRegionId, setNewSubCustomerRegionId] = useState('');
+  const [newSubCustomerCityId, setNewSubCustomerCityId] = useState('');
+  const [newSubCustomerPhone, setNewSubCustomerPhone] = useState('');
+  const [newSubCustomerAddress, setNewSubCustomerAddress] = useState('');
   const [isPrintingSingle, setIsPrintingSingle] = useState(false);
 
   // Add new customer modal state
@@ -71,6 +75,8 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerRegionId, setNewCustomerRegionId] = useState('');
   const [newCustomerCityId, setNewCustomerCityId] = useState('');
+  const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [newCustomerAddress, setNewCustomerAddress] = useState('');
 
   // Customer search: Primary = Region, Secondary = City
   const customerOptions = useMemo(() => {
@@ -126,7 +132,18 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       alert('Region is required.');
       return;
     }
-    const cityId = newCustomerCityId || state.cities[0]?.id || 'ct1';
+    if (!newCustomerCityId) {
+      alert('City is required.');
+      return;
+    }
+    if (!newCustomerPhone.trim()) {
+      alert('Phone number is required.');
+      return;
+    }
+    if (!newCustomerAddress.trim()) {
+      alert('Address is required.');
+      return;
+    }
     const regionName = state.regions.find(r => r.id === newCustomerRegionId)?.name || 'LOCAL';
     const newId = getNextCustomerCode();
 
@@ -151,7 +168,9 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         name: newCustomerName.trim(),
         acId: '110001',
         regionId: newCustomerRegionId,
-        cityId
+        cityId: newCustomerCityId,
+        phone: newCustomerPhone.trim(),
+        address: newCustomerAddress.trim()
       }
     });
 
@@ -168,6 +187,8 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setNewCustomerName('');
     setNewCustomerRegionId('');
     setNewCustomerCityId('');
+    setNewCustomerPhone('');
+    setNewCustomerAddress('');
 
     setSuccessMsg('New customer added successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
@@ -1474,24 +1495,95 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       {/* Add New Sub-Customer Modal */}
       {isAddSubCustomerOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-4">
               Add New Sub-Customer
             </h3>
             
             {/* Sub-Customer Name Input */}
-            <div className="mb-6">
+            <div className="mb-4">
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                Sub-Customer Name
+                Sub-Customer Name <span className="text-red-500 font-bold">*</span>
               </label>
               <input
                 type="text"
                 value={newSubCustomerName}
                 onChange={e => setNewSubCustomerName(e.target.value)}
                 placeholder="Enter sub-customer name..."
-                className="soleria-input"
+                className="soleria-input font-semibold"
                 autoFocus
               />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Region <span className="text-red-500 font-bold">*</span>
+                </label>
+                <select
+                  value={newSubCustomerRegionId}
+                  onChange={e => {
+                    setNewSubCustomerRegionId(e.target.value);
+                    setNewSubCustomerCityId('');
+                  }}
+                  className="soleria-input font-semibold cursor-pointer"
+                  required
+                >
+                  <option value="">Select Region...</option>
+                  {state.regions.map(r => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  City <span className="text-red-500 font-bold">*</span>
+                </label>
+                <select
+                  value={newSubCustomerCityId}
+                  onChange={e => setNewSubCustomerCityId(e.target.value)}
+                  className="soleria-input font-semibold cursor-pointer"
+                  required
+                >
+                  <option value="">Select City...</option>
+                  {state.cities
+                    .filter(c => !newSubCustomerRegionId || c.regionId === newSubCustomerRegionId)
+                    .map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Phone Number <span className="text-red-500 font-bold">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={newSubCustomerPhone}
+                  onChange={e => setNewSubCustomerPhone(e.target.value)}
+                  placeholder="e.g. 0300-9876543"
+                  className="soleria-input font-semibold"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Address / Location <span className="text-red-500 font-bold">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={newSubCustomerAddress}
+                  onChange={e => setNewSubCustomerAddress(e.target.value)}
+                  placeholder="e.g. Shah Alam Market, Lahore"
+                  className="soleria-input font-semibold"
+                  required
+                />
+              </div>
             </div>
 
             {/* Actions */}
@@ -1501,6 +1593,10 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 onClick={() => {
                   setIsAddSubCustomerOpen(false);
                   setNewSubCustomerName('');
+                  setNewSubCustomerRegionId('');
+                  setNewSubCustomerCityId('');
+                  setNewSubCustomerPhone('');
+                  setNewSubCustomerAddress('');
                 }}
                 className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
               >
@@ -1513,17 +1609,41 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                     alert('Sub-customer name cannot be empty.');
                     return;
                   }
+                  if (!newSubCustomerRegionId) {
+                    alert('Region selection is required.');
+                    return;
+                  }
+                  if (!newSubCustomerCityId) {
+                    alert('City selection is required.');
+                    return;
+                  }
+                  if (!newSubCustomerPhone.trim()) {
+                    alert('Phone number is required.');
+                    return;
+                  }
+                  if (!newSubCustomerAddress.trim()) {
+                    alert('Address is required.');
+                    return;
+                  }
                   const newId = 'sc_' + Date.now();
                   dispatch({
                     type: 'ADD_SUB_CUSTOMER',
                     subCust: {
                       id: newId,
-                      name: newSubCustomerName.trim()
+                      name: newSubCustomerName.trim(),
+                      regionId: newSubCustomerRegionId,
+                      cityId: newSubCustomerCityId,
+                      phone: newSubCustomerPhone.trim(),
+                      address: newSubCustomerAddress.trim()
                     }
                   });
                   setSubCustomerId(newId);
                   setIsAddSubCustomerOpen(false);
                   setNewSubCustomerName('');
+                  setNewSubCustomerRegionId('');
+                  setNewSubCustomerCityId('');
+                  setNewSubCustomerPhone('');
+                  setNewSubCustomerAddress('');
                   setSuccessMsg('Sub-customer added successfully.');
                   setTimeout(() => setSuccessMsg(''), 3000);
                 }}
@@ -1539,11 +1659,12 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       {/* Add New Customer Modal */}
       {isAddCustomerOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <form onSubmit={handleCreateCustomer} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+          <form onSubmit={handleCreateCustomer} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-4">
               Add New Customer
             </h3>
-            
+
+            {/* Customer Name */}
             <div className="mb-4">
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                 Customer Name <span className="text-red-500 font-bold">*</span>
@@ -1559,38 +1680,77 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               />
             </div>
 
-            <div className="mb-4">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                Select Region <span className="text-red-500 font-bold">*</span>
-              </label>
-              <select
-                value={newCustomerRegionId}
-                onChange={e => setNewCustomerRegionId(e.target.value)}
-                className="soleria-input cursor-pointer font-semibold"
-                required
-              >
-                <option value="">Select Region...</option>
-                {state.regions.map(rg => (
-                  <option key={rg.id} value={rg.id}>{rg.name}</option>
-                ))}
-              </select>
+            {/* Region + City side by side */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Select Region <span className="text-red-500 font-bold">*</span>
+                </label>
+                <select
+                  value={newCustomerRegionId}
+                  onChange={e => {
+                    setNewCustomerRegionId(e.target.value);
+                    setNewCustomerCityId('');
+                  }}
+                  className="soleria-input cursor-pointer font-semibold"
+                  required
+                >
+                  <option value="">Select Region...</option>
+                  {state.regions.map(rg => (
+                    <option key={rg.id} value={rg.id}>{rg.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Select City <span className="text-red-500 font-bold">*</span>
+                </label>
+                <select
+                  value={newCustomerCityId}
+                  onChange={e => setNewCustomerCityId(e.target.value)}
+                  className="soleria-input cursor-pointer font-semibold"
+                  required
+                >
+                  <option value="">Select City...</option>
+                  {state.cities
+                    .filter(ct => !newCustomerRegionId || ct.regionId === newCustomerRegionId)
+                    .map(ct => (
+                      <option key={ct.id} value={ct.id}>{ct.name}</option>
+                    ))}
+                </select>
+              </div>
             </div>
 
-            <div className="mb-6">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                Select City <span className="text-red-500 font-bold">*</span>
-              </label>
-              <select
-                value={newCustomerCityId}
-                onChange={e => setNewCustomerCityId(e.target.value)}
-                className="soleria-input cursor-pointer font-semibold"
-                required
-              >
-                <option value="">Select City...</option>
-                {state.cities.map(ct => (
-                  <option key={ct.id} value={ct.id}>{ct.name}</option>
-                ))}
-              </select>
+            {/* Phone + Address side by side */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Phone Number <span className="text-red-500 font-bold">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={newCustomerPhone}
+                  onChange={e => setNewCustomerPhone(e.target.value)}
+                  placeholder="e.g. 0300-1234567"
+                  className="soleria-input font-semibold"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Address / Location <span className="text-red-500 font-bold">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={newCustomerAddress}
+                  onChange={e => setNewCustomerAddress(e.target.value)}
+                  placeholder="e.g. Main Market, Lahore"
+                  className="soleria-input font-semibold"
+                  required
+                />
+              </div>
             </div>
 
             {/* Actions */}
@@ -1602,6 +1762,8 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   setNewCustomerName('');
                   setNewCustomerRegionId('');
                   setNewCustomerCityId('');
+                  setNewCustomerPhone('');
+                  setNewCustomerAddress('');
                 }}
                 className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
               >
