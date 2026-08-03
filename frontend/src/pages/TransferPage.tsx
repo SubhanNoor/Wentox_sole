@@ -116,12 +116,11 @@ export default function TransferPage() {
     [state.transfers]
   );
 
-<<<<<<< HEAD
   const sortedDeposits = useMemo(
     () => [...state.deposits].sort((a, b) => b.date.localeCompare(a.date)),
     [state.deposits]
   );
-=======
+
   // Defense-in-depth: the sidebar already hides this page's nav item for User (UC-03) — this
   // whole screen shows bank balances and transfer history, exactly the "bank ledger" view User
   // must not see, so it's guarded here too rather than relying solely on the sidebar.
@@ -134,7 +133,6 @@ export default function TransferPage() {
       </AppLayout>
     );
   }
->>>>>>> subhan
 
   return (
     <AppLayout pageTitle="Bank Transactions">

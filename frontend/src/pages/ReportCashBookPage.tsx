@@ -183,11 +183,8 @@ export function ReportCashBookContent() {
 
     return rows.sort((a, b) => a.date.localeCompare(b.date));
   }, [state.receipts, state.expenses, state.customers, state.businessAccounts,
-<<<<<<< HEAD
       state.chequeAllocations, state.vendors, state.transfers, state.deposits,
-=======
-      state.chequeAllocations, state.vendors, state.chartAccounts, state.currentUserRole,
->>>>>>> subhan
+      state.chartAccounts, state.currentUserRole,
       periodStart, periodEnd]);
 
   const filteredRows = useMemo(() => {
