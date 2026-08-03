@@ -3,11 +3,8 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Printer, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
-<<<<<<< HEAD
 import { getBankBusinessAccounts, getAccountBalance } from '@/lib/cashbank';
-=======
 import { isChartAccountRestrictedForRole } from '@/lib/access';
->>>>>>> subhan
 
 // Maps each Payment Trail category to the Chart of Account it's sourced from.
 // "Cash at Banks" is a running balance (holdings), not a spend total — see below.

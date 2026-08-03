@@ -39,11 +39,7 @@ const navSections: NavSection[] = [
       { page: 'wage-run', label: 'Wage Run (Piece Rate)', icon: HardHat },
       { page: 'salary-run', label: 'Salary Run (Monthly)', icon: BadgeDollarSign },
       // Money between our own accounts — neither income nor expense.
-<<<<<<< HEAD
-      { page: 'transfer', label: 'Bank Transactions', icon: ArrowLeftRight },
-=======
-      { page: 'transfer', label: 'Transfer (Cash \u2194 Bank)', icon: ArrowLeftRight, adminOnly: true },
->>>>>>> subhan
+      { page: 'transfer', label: 'Transfer (Cash ↔ Bank)', icon: ArrowLeftRight, adminOnly: true },
     ]
   },
   {
@@ -98,13 +94,12 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
 
-<<<<<<< HEAD
   // Ref callback (not useEffect) so the restore happens the instant the
   // node exists — before the browser paints it at scrollTop 0.
   const navRefCallback = (node: HTMLElement | null) => {
     if (node) node.scrollTop = savedSidebarScrollTop;
   };
-=======
+
   // UC-03: drop adminOnly items for the User role, then drop any section left empty.
   const visibleNavSections = useMemo(() => {
     if (state.currentUserRole !== 'User') return navSections;
@@ -112,7 +107,6 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
       .map(section => ({ ...section, items: section.items.filter(item => !item.adminOnly) }))
       .filter(section => section.items.length > 0);
   }, [state.currentUserRole]);
->>>>>>> subhan
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -195,17 +189,12 @@ export default function AppLayout({ children, pageTitle, headerAction }: AppLayo
         </div>
 
         {/* Navigation */}
-<<<<<<< HEAD
         <nav
           className="flex-1 overflow-y-auto py-2.5 px-3 scrollbar-thin"
           ref={navRefCallback}
           onScroll={(e) => { savedSidebarScrollTop = e.currentTarget.scrollTop; }}
         >
-          {navSections.map((section, sIdx) => (
-=======
-        <nav className="flex-1 overflow-y-auto py-2.5 px-3 scrollbar-thin">
           {visibleNavSections.map((section, sIdx) => (
->>>>>>> subhan
             <div key={sIdx} className="mb-4">
               <div
                 className="px-3 mb-1.5 text-xs font-semibold uppercase tracking-wider"
