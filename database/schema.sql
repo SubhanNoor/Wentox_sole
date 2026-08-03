@@ -177,18 +177,23 @@ GO
           every bill must name a dispatch adda (the "Without Adda" deferred
           workflow was removed, see doc §5.6 note).
 ---------------------------------------------------------------------------- */
+-- POST-v4.3: region_id (required) added, per client instruction, so the Sale Bill/Sale Return
+-- adda dropdown/filter can be scoped the same way sub_customers' region filtering works.
 CREATE TABLE dbo.addas (
   adda_id    INT IDENTITY(1,1) NOT NULL,
   name       NVARCHAR(100) NOT NULL,
+  region_id  INT          NOT NULL,
   city_id    INT          NULL,
   details    NVARCHAR(200) NULL,
   is_active  BIT          NOT NULL CONSTRAINT DF_addas_active  DEFAULT (1),
   created_at DATETIME2(0) NOT NULL CONSTRAINT DF_addas_created DEFAULT (SYSUTCDATETIME()),
   updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_addas_updated DEFAULT (SYSUTCDATETIME()),
-  CONSTRAINT PK_addas      PRIMARY KEY (adda_id),
-  CONSTRAINT UQ_addas_name UNIQUE (name),
-  CONSTRAINT FK_addas_city FOREIGN KEY (city_id) REFERENCES dbo.cities(city_id)
+  CONSTRAINT PK_addas        PRIMARY KEY (adda_id),
+  CONSTRAINT UQ_addas_name   UNIQUE (name),
+  CONSTRAINT FK_addas_region FOREIGN KEY (region_id) REFERENCES dbo.regions(region_id),
+  CONSTRAINT FK_addas_city   FOREIGN KEY (city_id)   REFERENCES dbo.cities(city_id)
 );
+CREATE INDEX IX_addas_region ON dbo.addas(region_id);
 -- Hard-deleting an adda referenced by a sale bill is blocked by FK NO ACTION; use is_active = 0.
 GO
 -- USED BY: Adda dropdown on Sale Bill / Sale Return forms; TASK-09's Search &

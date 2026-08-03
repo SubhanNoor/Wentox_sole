@@ -19,6 +19,7 @@ const registerProductColors = require('./productColors.ipc');
 const registerPurchases = require('./purchases.ipc');
 const registerPurchaseReturns = require('./purchaseReturns.ipc');
 const registerReceipts = require('./receipts.ipc');
+const registerRegions = require('./regions.ipc');
 const registerReports = require('./reports.ipc');
 const registerSaleBills = require('./saleBills.ipc');
 const registerSaleReturns = require('./saleReturns.ipc');
@@ -46,6 +47,7 @@ module.exports = function registerIpcHandlers() {
   registerPurchases();
   registerPurchaseReturns();
   registerReceipts();
+  registerRegions();
   registerReports();
   registerSaleBills();
   registerSaleReturns();

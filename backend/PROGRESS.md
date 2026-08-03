@@ -1,7 +1,7 @@
 # Wentox Backend — Progress Log
 
-**Current milestone:** Milestone 7 — System Setup: Workers, Customers, Sub-Customers (pulled forward ahead of Milestone 4, same as Milestone 6 — see rationale below)
-**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10 — see below); **Module 7.1 (Workers) is blocked** — no definition exists in `use_cases.md`/`database_schema_v4.3.md`, needs the user's input before any schema/CRUD work. Milestone 4 (Receipts/Expenses) and the Milestone 2/3 frontend wiring are still pending — Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures.
+**Current milestone:** Milestone 8 — System Setup: City Creation & Accounts Hierarchy (pulled forward ahead of Milestone 4, same as Milestones 6/7 — see rationale below)
+**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10, later given a required `region_id` for Sale Bill/Return dropdown filtering); **Module 7.1 (Workers) is blocked** — no definition exists in `use_cases.md`/`database_schema_v4.3.md`, needs the user's input before any schema/CRUD work. Milestone 8: **Module 8.1 complete and verified end-to-end** (Regions, Cities, Stores, Addas — including Addas' UC-14 delete-guard and its new required `region_id` — see below); Modules 8.2/8.3 (accounting hierarchy) not started. Milestone 4 (Receipts/Expenses) and the Milestone 2/3 frontend wiring are still pending — Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures. **Parked for later discussion:** "reactivate an inactive duplicate-named row instead of rejecting on create()" — raised mid-Milestone-8, explicitly deferred; every entity built so far still does flat duplicate-name rejection.
 
 Log every completed task here (newest first within its milestone). Format:
 
@@ -13,6 +13,56 @@ Log every completed task here (newest first within its milestone). Format:
 ```
 
 ---
+
+## Milestone 8 — System Setup: City Creation & Accounts Hierarchy
+
+### 2026-08-17 — Module 8.1 complete: regions, cities, stores, addas
+- **What:** Confirmed exact scope with the user before building (same module-by-module check-in
+  discipline as Milestone 7): flat CRUD for Regions/Cities/Stores, Addas with a UC-14 delete-guard
+  plus a new required `region_id` column. Two doc mismatches caught and deliberately NOT followed
+  before writing any code: (1) UC-11/UC-12 mention an "auto code" step for cities/regions, but the
+  applied schema has no `code` column on either table — confirmed with the user this is stale
+  wording, built as plain name-only (+ optional `region_id` on cities) CRUD instead; (2) a
+  "reactivate an inactive duplicate-named row instead of rejecting" idea was raised mid-session,
+  explicitly parked/flagged rather than built into any entity, old or new.
+  - **Regions** (`regions.*`): plain CRUD. `regions.ipc.js` didn't exist at all, and `regions` was
+    missing from both `src/ipc/index.js` and `electron/preload.js`'s `FEATURES` array — all three
+    gaps fixed as part of this module (not a pre-existing bug elsewhere, just never wired up).
+  - **Cities** (`cities.*`): CRUD, `region_id` optional per UC-11 ("optionally attach it to a
+    region"), list/get join region name for display.
+  - **Stores** (`stores.*`): plain CRUD.
+  - **Addas** (`addas.*`): CRUD plus UC-14's delete-guard — `remove()` checks `isReferenced()`
+    (`sale_bills`, `sale_returns`, `draft_sale_bills`, `draft_sale_returns`, all by `adda_id`)
+    before soft-deleting; if referenced, throws `409 ADDA_IN_USE` and makes no change at all,
+    rather than silently soft-deleting. Also gained a new required `region_id` (see schema change
+    below) — `list()` supports an optional `region_id` filter for a future region-scoped adda
+    dropdown, mirroring `sub_customers`.
+  - **Schema change:** `addas.region_id INT NOT NULL` added, FK'd to `regions`, per explicit
+    client instruction — same rationale/pattern as `sub_customers.region_id` from the prior
+    session. One pre-existing "Test Adda" fixture row (created during earlier Sale Bill/Return
+    verification) had a `NULL` city and no region at all — backfilled to a real region via the
+    migration before the `NOT NULL` constraint was applied, so the `ALTER COLUMN` wouldn't fail
+    against existing data. Folded directly into `database/schema.sql` afterward (temporary
+    migration file applied, verified live, then deleted), same pattern as every prior schema
+    change this project. `use_cases.md` UC-14 and `database_schema_v4.3.md` updated to match.
+- **Verified:** debugger-subagent review (column names against schema.sql, `isReferenced()`'s four
+  table/column checks, guard-before-soft-delete ordering, correct optional-vs-required `region_id`
+  split between Cities/Addas, duplicate-name-excludes-own-row pattern, no hard deletes, IPC action
+  casing, migration step ordering against existing data, `regions` actually wired into both
+  registration points) came back clean. Then live against `wentox_db`: Regions/Cities/Stores CRUD
+  with duplicate rejection and soft-delete; Addas — missing `region_id` rejected, create/update,
+  an unreferenced adda soft-deletes successfully, and the pre-existing genuinely-referenced
+  "Test Adda" row (used by real sale bills/returns from earlier verification runs) correctly
+  blocked deletion with `ADDA_IN_USE`. Also re-verified the from-scratch `schema.sql`-only import
+  path against a disposable scratch database — `addas.region_id` `NOT NULL`, matching `wentox_db`
+  exactly.
+- **Files:** `backend/src/{repositories,services,ipc}/regions.*` (new `ipc` file),
+  `backend/src/{repositories,services,ipc}/cities.*`,
+  `backend/src/{repositories,services,ipc}/stores.*`,
+  `backend/src/{repositories,services,ipc}/addas.*`, `backend/src/ipc/index.js`,
+  `backend/electron/preload.js`, `database/schema.sql`,
+  `System_architecture/database_schema_v4.3.md`, `System_architecture/use_cases.md`,
+  `backend/milestones/milestone8.md`
 
 ## Milestone 7 — System Setup: Workers, Customers, Sub-Customers
 

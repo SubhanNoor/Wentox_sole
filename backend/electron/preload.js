@@ -7,7 +7,7 @@ const FEATURES = [
   'auth', 'addas', 'businessAccounts', 'categories', 'chartAccounts', 'cities', 'customers',
   'draftPurchases', 'draftPurchaseReturns', 'draftSaleBills', 'draftSaleReturns', 'expenses',
   'groupAccounts', 'products', 'productColors', 'purchases', 'purchaseReturns', 'receipts',
-  'reports', 'saleBills', 'saleReturns', 'stock', 'stores', 'subCustomers', 'vendors',
+  'regions', 'reports', 'saleBills', 'saleReturns', 'stock', 'stores', 'subCustomers', 'vendors',
 ];
 
 // window.api.<feature> stays camelCase (normal JS property access); the wire channel name is

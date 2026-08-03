@@ -259,9 +259,11 @@ so stores are bill metadata (the FROM store on a bill, the TO store on a return)
 partition stock. **Data:** writes `stores`.
 
 ## UC-14: Manage transport addas — ✅
-Browse → **Add New** or select → enter the adda name, city and optional details → **Save**.
-**Delete is blocked** when the adda is referenced by any sale bill; deactivate it instead.
-**Data:** writes `addas`; reads `sale_bills`.
+Browse → **Add New** or select → enter the adda name, **Region** (required, post-v4.3), city and
+optional details → **Save**.
+**Delete is blocked** when the adda is referenced by any sale bill or return (or their drafts);
+deactivate it instead.
+**Data:** writes `addas`; reads `regions`, `cities`, `sale_bills`, `sale_returns`.
 
 ---
 

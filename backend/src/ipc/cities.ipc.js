@@ -5,10 +5,28 @@ const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
 
 module.exports = function register() {
-  // TODO(milestone): register channels, e.g.:
-  // ipcMain.handle('cities:list', wrap((payload) => { requireSession(); return service.list(payload); }));
-  // ipcMain.handle('cities:get', wrap((payload) => { requireSession(); return service.getById(payload.id); }));
-  // ipcMain.handle('cities:create', wrap((payload) => { requireSession(); return service.create(payload); }));
-  // ipcMain.handle('cities:update', wrap((payload) => { requireSession(); return service.update(payload.id, payload); }));
-  // ipcMain.handle('cities:remove', wrap((payload) => { requireSession(); return service.remove(payload.id); }));
+  ipcMain.handle('cities:list', wrap((payload) => {
+    requireSession();
+    return service.list(payload);
+  }));
+
+  ipcMain.handle('cities:get', wrap((payload) => {
+    requireSession();
+    return service.getById(payload.id);
+  }));
+
+  ipcMain.handle('cities:create', wrap((payload) => {
+    requireSession();
+    return service.create(payload);
+  }));
+
+  ipcMain.handle('cities:update', wrap((payload) => {
+    requireSession();
+    return service.update(payload.id, payload);
+  }));
+
+  ipcMain.handle('cities:remove', wrap((payload) => {
+    requireSession();
+    return service.remove(payload.id);
+  }));
 };
