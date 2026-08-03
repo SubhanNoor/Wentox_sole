@@ -6,7 +6,7 @@ import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 
 interface KhaataRow {
   date: string;
-  type: 'Opening Balance' | 'Sale Bill' | 'Sale Return' | 'Receipt (Jamma)' | 'Commission' | 'Cheque Bounced';
+  type: 'Opening Balance' | 'Sale Bill' | 'Sale Return' | 'Receipt (Jamma)' | 'Commission' | 'Cheque Bounced' | 'Cheque Returned';
   invNo: string;    // system-generated id
   billNo: string;   // manual bill number, '-' for non-bill rows
   narration: string; // free text (blank for cheque rows, which use the 3 sub-columns instead)
@@ -142,6 +142,21 @@ export function ReportKhaataContent() {
           invNo: rec.id,
           billNo: '-',
           narration: `Cheque ${rec.chequeNo || ''} bounced — reverses receipt of ${rec.date}`,
+          pairs: 0,
+          debit: rec.amount + (rec.commission || 0),
+          credit: 0
+        });
+      }
+
+      // 6. Return to sender — same reversal shape as a bounce, distinct wording (we handed the
+      //    overdue cheque back voluntarily, not a bank rejection).
+      if (rec.chequeStatus === 'RETURNED' && rec.returnedDate) {
+        entries.push({
+          date: rec.returnedDate,
+          type: 'Cheque Returned',
+          invNo: rec.id,
+          billNo: '-',
+          narration: `Cheque ${rec.chequeNo || ''} returned to sender — reverses receipt of ${rec.date}`,
           pairs: 0,
           debit: rec.amount + (rec.commission || 0),
           credit: 0

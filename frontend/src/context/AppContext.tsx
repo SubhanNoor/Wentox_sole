@@ -864,6 +864,9 @@ type Action =
   | { type: 'SET_DEPOSIT_BANK'; receiptId: string; bankId: string }
   | { type: 'MARK_CHEQUE_CLEARED'; receiptId: string }
   | { type: 'BOUNCE_CHEQUE'; receiptId: string; bouncedDate: string }
+  // Overdue cheque handed back to the customer voluntarily — not a bank rejection (that's
+  // BOUNCE_CHEQUE), but the same reversal mechanics: customer due restored, allocations reversed.
+  | { type: 'RETURN_CHEQUE_TO_SENDER'; receiptId: string; returnedDate: string }
 
   // Alerts (§12)
   | { type: 'DISMISS_ALERT'; alertKey: string; dismissedAt: string }
@@ -1430,6 +1433,24 @@ function reducer(state: State, action: Action): State {
         receipts: state.receipts.map(r =>
           r.id === action.receiptId
             ? { ...r, chequeStatus: 'BOUNCED' as ChequeStatus, bouncedDate: action.bouncedDate }
+            : r
+        ),
+        chequeAllocations: state.chequeAllocations.map(a =>
+          a.receiptId === action.receiptId ? { ...a, status: 'REVERSED' as const } : a
+        )
+      };
+    }
+    case 'RETURN_CHEQUE_TO_SENDER': {
+      // Same reversal mechanics as BOUNCE_CHEQUE (customer due restored, every allocation
+      // sourced from this cheque reversed), but a distinct terminal status: this is us handing
+      // an overdue cheque back voluntarily, not the bank rejecting it. The customer's due goes
+      // back up like any other outstanding balance — they're expected to pay again later via a
+      // normal Receipt, in any payment mode; nothing further to track here.
+      return {
+        ...state,
+        receipts: state.receipts.map(r =>
+          r.id === action.receiptId
+            ? { ...r, chequeStatus: 'RETURNED' as ChequeStatus, returnedDate: action.returnedDate }
             : r
         ),
         chequeAllocations: state.chequeAllocations.map(a =>

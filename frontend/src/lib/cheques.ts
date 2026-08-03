@@ -44,11 +44,11 @@ export function getUnallocatedBalance(receipt: Receipt, allocations: ChequeAlloc
 }
 
 /**
- * Status implied by a cheque's allocations. BOUNCED and CLEARED are terminal
- * states set explicitly by the user, so they are never re-derived away.
+ * Status implied by a cheque's allocations. BOUNCED, RETURNED and CLEARED are
+ * terminal states set explicitly by the user, so they are never re-derived away.
  */
 export function deriveChequeStatus(receipt: Receipt, allocations: ChequeAllocation[], expenses: Expense[] = []): ChequeStatus {
-  if (receipt.chequeStatus === 'BOUNCED' || receipt.chequeStatus === 'CLEARED') {
+  if (receipt.chequeStatus === 'BOUNCED' || receipt.chequeStatus === 'RETURNED' || receipt.chequeStatus === 'CLEARED') {
     return receipt.chequeStatus;
   }
   const active = getActiveAllocations(receipt.id, allocations);
@@ -62,9 +62,9 @@ export function deriveChequeStatus(receipt: Receipt, allocations: ChequeAllocati
   return active.length > 0 && active.every(a => a.dispositionType === 'DEPOSIT') ? 'DEPOSITED' : 'ENDORSED';
 }
 
-/** A bounced receipt contributes nothing to a customer's balance — the credit is cancelled. */
+/** A bounced or returned-to-sender receipt contributes nothing to a customer's balance — the credit is cancelled. */
 export function isReceiptLive(receipt: Receipt): boolean {
-  return receipt.chequeStatus !== 'BOUNCED';
+  return receipt.chequeStatus !== 'BOUNCED' && receipt.chequeStatus !== 'RETURNED';
 }
 
 /**

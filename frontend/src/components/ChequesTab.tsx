@@ -14,6 +14,7 @@ const STATUS_STYLES: Record<ChequeStatus, string> = {
   PARTIALLY_ENDORSED: 'bg-orange-50 text-orange-800 border-orange-200',
   CLEARED: 'bg-emerald-50 text-emerald-800 border-emerald-200',
   BOUNCED: 'bg-rose-50 text-rose-800 border-rose-200',
+  RETURNED: 'bg-slate-100 text-slate-700 border-slate-300',
 };
 
 const DISPOSITION_LABELS: Record<ChequeDisposition, string> = {
@@ -45,6 +46,11 @@ export default function ChequesTab() {
   const [bouncingId, setBouncingId] = useState<string | null>(null);
   const [bounceDate, setBounceDate] = useState(todayISO());
 
+  // Return-to-sender confirmation state — an overdue cheque handed back to the customer
+  // voluntarily (not a bank rejection, so kept separate from the bounce flow above).
+  const [returningId, setReturningId] = useState<string | null>(null);
+  const [returnDate, setReturnDate] = useState(todayISO());
+
   const [successMsg, setSuccessMsg] = useState('');
 
   const chequeRows = useMemo(() => {
@@ -58,7 +64,7 @@ export default function ChequesTab() {
           receipt: r,
           customerName: customer?.name || 'Unknown customer',
           status,
-          unallocated: status === 'BOUNCED' ? 0 : getUnallocatedBalance(r, state.chequeAllocations, state.expenses),
+          unallocated: status === 'BOUNCED' || status === 'RETURNED' ? 0 : getUnallocatedBalance(r, state.chequeAllocations, state.expenses),
           allocations: state.chequeAllocations.filter(a => a.receiptId === r.id),
         };
       })
@@ -183,6 +189,22 @@ export default function ChequesTab() {
     setBouncingId(null);
   };
 
+  const confirmReturn = () => {
+    if (!returningId) return;
+    const row = state.receipts.find(r => r.id === returningId);
+    dispatch({ type: 'RETURN_CHEQUE_TO_SENDER', receiptId: returningId, returnedDate: returnDate });
+    const reversedCount = state.chequeAllocations.filter(
+      a => a.receiptId === returningId && a.status === 'ACTIVE'
+    ).length;
+    setSuccessMsg(
+      reversedCount > 0
+        ? `Cheque ${row?.chequeNo || ''} returned to sender. The customer's due is restored and ${reversedCount} allocation(s) were reversed. They can pay again later via any payment method.`
+        : `Cheque ${row?.chequeNo || ''} returned to sender. The customer's due is restored — they can pay again later via any payment method.`
+    );
+    setTimeout(() => setSuccessMsg(''), 5000);
+    setReturningId(null);
+  };
+
   const targetOptions = useMemo(() => {
     if (disposition === 'VENDOR_PAYMENT') {
       return state.vendors.map(v => ({ value: v.id, label: v.name }));
@@ -252,6 +274,7 @@ export default function ChequesTab() {
               <option value="DEPOSITED">Deposited</option>
               <option value="CLEARED">Cleared</option>
               <option value="BOUNCED">Bounced</option>
+              <option value="RETURNED">Returned to Sender</option>
             </select>
           </div>
         </div>
@@ -304,6 +327,9 @@ export default function ChequesTab() {
               ) : (
                 chequeRows.map(row => {
                   const canDispose = row.status !== 'BOUNCED' && row.status !== 'CLEARED' && row.unallocated > 0;
+                  // Only makes sense for a still-open (overdue) cheque — a fully deposited/
+                  // endorsed/cleared cheque isn't "returned to sender."
+                  const canReturn = row.status === 'PENDING' || row.status === 'PARTIALLY_ENDORSED';
                   return (
                     <Fragment key={row.receipt.id}>
                       <tr
@@ -325,31 +351,41 @@ export default function ChequesTab() {
                             {row.status.replace('_', ' ')}
                           </span>
                         </td>
-                        <td className="p-3 text-center whitespace-nowrap" data-no-print>
-                          {canDispose && (
-                            <button
-                              onClick={() => openDispose(row.receipt)}
-                              className="text-xs font-semibold text-blue-600 hover:text-blue-800 underline mr-3"
-                            >
-                              Dispose
-                            </button>
-                          )}
-                          {row.status === 'DEPOSITED' && (
-                            <button
-                              onClick={() => dispatch({ type: 'MARK_CHEQUE_CLEARED', receiptId: row.receipt.id })}
-                              className="text-xs font-semibold text-emerald-600 hover:text-emerald-800 underline mr-3"
-                            >
-                              Mark Cleared
-                            </button>
-                          )}
-                          {row.status !== 'BOUNCED' && (
-                            <button
-                              onClick={() => { setBouncingId(row.receipt.id); setBounceDate(todayISO()); }}
-                              className="text-xs font-semibold text-rose-600 hover:text-rose-800 underline"
-                            >
-                              Mark Bounced
-                            </button>
-                          )}
+                        <td className="p-3" data-no-print>
+                          <div className="flex flex-wrap items-center justify-center gap-1.5">
+                            {canDispose && (
+                              <button
+                                onClick={() => openDispose(row.receipt)}
+                                className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 transition-colors"
+                              >
+                                Dispose
+                              </button>
+                            )}
+                            {row.status === 'DEPOSITED' && (
+                              <button
+                                onClick={() => dispatch({ type: 'MARK_CHEQUE_CLEARED', receiptId: row.receipt.id })}
+                                className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 transition-colors"
+                              >
+                                Mark Cleared
+                              </button>
+                            )}
+                            {row.status !== 'BOUNCED' && row.status !== 'RETURNED' && (
+                              <button
+                                onClick={() => { setBouncingId(row.receipt.id); setBounceDate(todayISO()); }}
+                                className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 transition-colors"
+                              >
+                                Mark Bounced
+                              </button>
+                            )}
+                            {canReturn && (
+                              <button
+                                onClick={() => { setReturningId(row.receipt.id); setReturnDate(todayISO()); }}
+                                className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200 transition-colors"
+                              >
+                                Return to Sender
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
 
@@ -550,6 +586,50 @@ export default function ChequesTab() {
                 className="px-4 py-2 text-sm rounded-lg bg-rose-600 text-white hover:bg-rose-700"
               >
                 Confirm Bounce
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Return-to-sender confirmation ── */}
+      {returningId && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+            <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
+              <AlertTriangle size={18} className="text-slate-600" /> Return Cheque to Sender
+            </h3>
+            <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+              For an overdue cheque being handed back to the customer — not a bank rejection. This
+              reverses <strong>both sides</strong>, same as a bounce: the customer's payment is
+              cancelled so their due goes back up, and every allocation made from this cheque is
+              reversed. The customer is expected to pay again later via any payment method — a
+              normal new Receipt. Original entries are kept — the correction is posted on the date
+              below, so reports you have already printed still reconcile.
+            </p>
+
+            <div className="mb-4">
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Return date</label>
+              <input
+                type="date"
+                value={returnDate}
+                onChange={e => setReturnDate(e.target.value)}
+                className="soleria-input"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setReturningId(null)}
+                className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmReturn}
+                className="px-4 py-2 text-sm rounded-lg bg-slate-700 text-white hover:bg-slate-800"
+              >
+                Confirm Return
               </button>
             </div>
           </div>

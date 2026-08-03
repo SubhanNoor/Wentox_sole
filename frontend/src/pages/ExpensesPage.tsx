@@ -33,10 +33,10 @@ export default function ExpensesPage() {
   );
 
   // Cheques still in the drawer with value left — the only ones that can be
-  // handed on. A fully-endorsed or bounced cheque must not appear here.
+  // handed on. A fully-endorsed, bounced, or returned-to-sender cheque must not appear here.
   const endorsableCheques = useMemo(() => {
     return state.receipts
-      .filter(r => r.paymentMode === 'Cheque' && r.chequeStatus !== 'BOUNCED')
+      .filter(r => r.paymentMode === 'Cheque' && r.chequeStatus !== 'BOUNCED' && r.chequeStatus !== 'RETURNED')
       .map(r => ({ receipt: r, left: getUnallocatedCheque(state, r.id) }))
       .filter(x => x.left > 0)
       .map(x => ({

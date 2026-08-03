@@ -131,7 +131,7 @@ export function getChequesInHand(state: State, upto?: string): number {
   for (const r of state.receipts) {
     if (r.paymentMode !== 'Cheque') continue;
     if (!onOrBefore(r.date, upto)) continue;
-    if (r.chequeStatus === 'BOUNCED') continue;   // never was money
+    if (r.chequeStatus === 'BOUNCED' || r.chequeStatus === 'RETURNED') continue;   // never was money / handed back
     total += r.amount;
     for (const a of state.chequeAllocations) {
       if (a.receiptId !== r.id || a.status !== 'ACTIVE') continue;

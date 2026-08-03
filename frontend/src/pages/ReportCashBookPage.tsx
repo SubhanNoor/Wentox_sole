@@ -181,6 +181,40 @@ export function ReportCashBookContent() {
           });
       });
 
+    // Return-to-sender reversals, dated the day the return was recorded. Mirrors the bounce
+    // block above — same reversal shape, distinct wording (not a bank rejection).
+    state.receipts
+      .filter(r => r.chequeStatus === 'RETURNED' && r.returnedDate &&
+                   r.returnedDate >= periodStart && r.returnedDate <= periodEnd)
+      .forEach(r => {
+        const cust = state.customers.find(c => c.id === r.customerId);
+        rows.push({
+          date: r.returnedDate!,
+          accountName: cust?.name || 'Walk-in Client',
+          remarks: `Cheque ${r.chequeNo || ''} RETURNED to sender — reverses receipt of ${r.date}`,
+          mode: 'Cheque',
+          chequeNo: r.chequeNo || '-',
+          direction: 'Payment',
+          amount: r.amount
+        });
+        state.chequeAllocations
+          .filter(a => a.receiptId === r.id && a.status === 'REVERSED' && a.dispositionType !== 'DEPOSIT')
+          .forEach(a => {
+            const name = a.targetType === 'VENDOR'
+              ? state.vendors.find(v => v.id === a.targetId)?.name
+              : maskedBusinessAccountName(a.targetId, state.businessAccounts, state.chartAccounts, state.currentUserRole);
+            rows.push({
+              date: r.returnedDate!,
+              accountName: name || 'Cheque endorsement',
+              remarks: `Endorsement reversed — cheque ${r.chequeNo || ''} returned to sender`,
+              mode: 'Cheque',
+              chequeNo: r.chequeNo || '-',
+              direction: 'Receipt',
+              amount: a.amount
+            });
+          });
+      });
+
     return rows.sort((a, b) => a.date.localeCompare(b.date));
   }, [state.receipts, state.expenses, state.customers, state.businessAccounts,
       state.chequeAllocations, state.vendors, state.transfers, state.deposits,

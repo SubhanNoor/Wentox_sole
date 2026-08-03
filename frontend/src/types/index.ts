@@ -274,7 +274,10 @@ export interface SaleReturn {
   items: SaleReturnItem[];
 }
 
-export type ChequeStatus = 'PENDING' | 'DEPOSITED' | 'ENDORSED' | 'PARTIALLY_ENDORSED' | 'CLEARED' | 'BOUNCED';
+// RETURNED = an overdue cheque handed back to the customer voluntarily (not a bank rejection —
+// that's BOUNCED). Same reversal mechanics as BOUNCED (customer due restored, allocations
+// reversed), kept as its own terminal status so the two are distinguishable in reports/history.
+export type ChequeStatus = 'PENDING' | 'DEPOSITED' | 'ENDORSED' | 'PARTIALLY_ENDORSED' | 'CLEARED' | 'BOUNCED' | 'RETURNED';
 
 // TASK-14: Admin = full access. User = everything except Bank Accounts and
 // Director Expenses - Drawings accounts.
@@ -304,6 +307,7 @@ export interface Receipt {
    */
   depositBankId?: string;
   bouncedDate?: string; // date the bounce was recorded — reversing entries are dated here
+  returnedDate?: string; // date the cheque was returned to the sender — reversing entries are dated here
   remarks: string;
 }
 
