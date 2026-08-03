@@ -1,7 +1,7 @@
 # Wentox Backend — Progress Log
 
-**Current milestone:** Milestone 2 — Sale Bill & Sale Return
-**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** against the live database (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition — see below).
+**Current milestone:** Milestone 3 — Purchase & Purchase Return
+**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard — see below).
 
 Log every completed task here (newest first within its milestone). Format:
 
@@ -13,6 +13,50 @@ Log every completed task here (newest first within its milestone). Format:
 ```
 
 ---
+
+## Milestone 3 — Purchase & Purchase Return
+
+### 2026-08-13 — Modules 3.1 & 3.2 complete: purchases, purchaseReturns, both draft mirrors
+- **What:** Full Purchase (UC-23) and Purchase Return (UC-24) backend, same shape as Sale
+  Bill/Return but with real differences settled via a short round of clarifying questions before
+  building: (1) no password guard anywhere — there's no edit-a-posted-purchase UI flow, so
+  `update()` just blocks entirely once posted (`POSTED_LOCK`), never reverses+reapplies ledger;
+  (2) `draft_purchases`/`draft_purchase_returns` are their own tables (not a status value), per
+  client instruction; (3) unlike `draft_sale_bills`, saving/deleting a draft purchase has **zero**
+  effect on `vendor_stock_movements` — nothing physically arrives before a purchase is recorded.
+  New: `materials.repository.js` (`resolveOrCreate` — case-insensitive material lookup-or-register,
+  transactional), `purchaseMath.js` (shared line/total math, no packing/discount concept — just
+  `quantity × price_per_unit`), `purchases`/`purchaseReturns`/`draftPurchases`/
+  `draftPurchaseReturns` (ipc/service/repository each), `vendors.service.js`/
+  `vendors.repository.js` gained the same minimal `getById`/`findById` pattern
+  `customers.service.js` already has (full CRUD still deferred to Milestone 7).
+- **How:** Posting (schema §7): Purchase → debit PURCHASES chart account / credit vendor BA,
+  positive `PURCHASE` vendor_stock_movements row per line. Purchase Return → reverse — debit
+  vendor BA / credit PURCHASES, negative `PURCHASE_RETURN` row (return items are stored positive
+  per `CK_purchase_return_items_qty`, negated only when building the vendor-stock movement).
+  Purchases never touch `stock_movements` (finished-goods/pairs) — only `vendor_stock_movements`
+  (material units), per UC-23's explicit note. Schema changes (drop `status` from both tables, add
+  the four draft tables) went through the usual path: a temporary numbered migration, applied and
+  verified live, then folded directly into `database/schema.sql` and the migration file deleted —
+  a fresh `schema.sql`-only import needs nothing else (verified against a disposable scratch
+  database, `wentox_db` unaffected/no-op on re-migrate).
+- **Verified:** `debugger`-pattern subagent review (posting signs, transaction scoping — material
+  resolution happens inside the same transaction as the line it belongs to, not a separate
+  connection — export/usage consistency, draft-confirm asymmetry vs. Sale Bill) came back clean.
+  Then live against `wentox_db`: create with a brand-new material name → auto-registered in
+  `dbo.materials`; a second purchase using a different-case spelling of the same name resolved to
+  the identical `material_id` (case-insensitive collation); post → correct ledger direction +
+  positive vendor-stock row; double-post rejected; update-while-posted rejected
+  (`POSTED_LOCK`, not a reverse+reapply); unpost removes the rows; Purchase Return posted the exact
+  reverse (debit vendor BA / credit PURCHASES, negative vendor-stock row); draft create/delete
+  confirmed zero net vendor-stock movement; draft confirm (both Purchase and Purchase Return)
+  posted exactly once and deleted the draft row.
+- **Files:** `backend/src/repositories/materials.repository.js`,
+  `backend/src/services/purchaseMath.js`,
+  `backend/src/repositories/vendors.repository.js`, `backend/src/services/vendors.service.js`,
+  `backend/src/{ipc,services,repositories}/{purchases,draftPurchases,purchaseReturns,draftPurchaseReturns}.*`,
+  `backend/src/ipc/index.js`, `backend/electron/preload.js`, `database/schema.sql`,
+  `System_architecture/database_schema_v4.3.md`, `backend/milestones/milestone3.md`
 
 ## Milestone 2 — Sale Bill & Sale Return
 

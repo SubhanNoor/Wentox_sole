@@ -1,6 +1,6 @@
 // Service layer: business logic, validation, transactions.
 // Throw ApiError for expected failures; use withTransaction for multi-write ops.
-const repository = require('../repositories/purchases.repository');
+const repository = require('../repositories/purchaseReturns.repository');
 const materialsRepository = require('../repositories/materials.repository');
 const chartAccountsRepository = require('../repositories/chartAccounts.repository');
 const vendorsService = require('./vendors.service');
@@ -11,12 +11,9 @@ const CODES = require('../constants/reservedAccounts');
 
 function validateHeader(payload) {
   if (!payload.vendor_id) throw ApiError.badRequest('vendor_id is required');
-  if (!payload.purchase_date) throw ApiError.badRequest('purchase_date is required');
+  if (!payload.return_date) throw ApiError.badRequest('return_date is required');
 }
 
-// Resolves each line's material_id (existing id, or auto-registers payload.material_name — UC-23
-// "material entry is open-ended, but only once per material") inside the given transaction, then
-// builds lines + rolled-up totals.
 async function resolveLinesAndTotals(transaction, payload) {
   validateItems(payload.items);
   validateHeader(payload);
@@ -33,9 +30,9 @@ async function resolveLinesAndTotals(transaction, payload) {
   return { lines, totals };
 }
 
-function buildPurchaseFields(payload, totals) {
+function buildReturnFields(payload, totals) {
   return {
-    purchase_date: payload.purchase_date,
+    return_date: payload.return_date,
     vendor_id: payload.vendor_id,
     bill_no: payload.bill_no,
     remarks: payload.remarks,
@@ -44,15 +41,15 @@ function buildPurchaseFields(payload, totals) {
 }
 
 async function create(payload, userId) {
-  const purchaseId = await withTransaction(async (transaction) => {
+  const returnId = await withTransaction(async (transaction) => {
     const { lines, totals } = await resolveLinesAndTotals(transaction, payload);
-    const purchase = { ...buildPurchaseFields(payload, totals), created_by: userId };
-    const id = await repository.insert(transaction, purchase);
+    const ret = { ...buildReturnFields(payload, totals), created_by: userId };
+    const id = await repository.insert(transaction, ret);
     await repository.insertItems(transaction, id, lines);
     return id;
   });
 
-  return repository.findById(purchaseId);
+  return repository.findById(returnId);
 }
 
 // Weekly/monthly/overall convenience on top of explicit date_from/date_to (explicit wins).
@@ -81,18 +78,17 @@ function list(filters = {}) {
   });
 }
 
-// Financial edits only while not yet posted — no edit-a-posted-purchase flow exists (unlike Sale
-// Bill/Return), so unlike those services this simply blocks instead of reversing+reapplying.
+// Financial edits only while not yet posted — no edit-a-posted-return flow, same as purchases.service.js.
 async function update(id, payload) {
   const existing = await getById(id);
   if (existing.is_posted) {
-    throw ApiError.conflict('Unpost the purchase before editing', 'POSTED_LOCK');
+    throw ApiError.conflict('Unpost the return before editing', 'POSTED_LOCK');
   }
 
   await withTransaction(async (transaction) => {
     const { lines, totals } = await resolveLinesAndTotals(transaction, payload);
-    const purchase = buildPurchaseFields(payload, totals);
-    await repository.updateHeader(transaction, id, purchase);
+    const ret = buildReturnFields(payload, totals);
+    await repository.updateHeader(transaction, id, ret);
     await repository.deleteItems(transaction, id);
     await repository.insertItems(transaction, id, lines);
   });
@@ -101,18 +97,18 @@ async function update(id, payload) {
 }
 
 async function post(id) {
-  const purchase = await getById(id);
-  if (purchase.is_posted) {
-    throw ApiError.conflict('Purchase is already posted', 'ALREADY_POSTED');
+  const ret = await getById(id);
+  if (ret.is_posted) {
+    throw ApiError.conflict('Return is already posted', 'ALREADY_POSTED');
   }
 
   await withTransaction(async (transaction) => {
     await postLedgerAndStock(transaction, {
-      purchaseId: id,
-      vendorId: purchase.vendor_id,
-      totalValue: purchase.total_value,
-      purchaseDate: purchase.purchase_date,
-      items: purchase.items,
+      returnId: id,
+      vendorId: ret.vendor_id,
+      totalValue: ret.total_value,
+      returnDate: ret.return_date,
+      items: ret.items,
     });
   });
 
@@ -120,9 +116,9 @@ async function post(id) {
 }
 
 async function unpost(id) {
-  const purchase = await getById(id);
-  if (!purchase.is_posted) {
-    throw ApiError.conflict('Purchase is not posted', 'NOT_POSTED');
+  const ret = await getById(id);
+  if (!ret.is_posted) {
+    throw ApiError.conflict('Return is not posted', 'NOT_POSTED');
   }
 
   await withTransaction(async (transaction) => {
@@ -132,12 +128,11 @@ async function unpost(id) {
   return getById(id);
 }
 
-// Shared posting logic (schema §7 posting matrix): debit PURCHASES chart account / credit VENDOR
-// BA, positive PURCHASE vendor-stock movement per item. Used by purchases:post and by
-// draftPurchases.confirm (which posts immediately instead of leaving the purchase unposted).
-// Purchases never touch finished-goods (pairs) stock — only vendor_stock_movements.
+// Shared posting logic (schema §7 posting matrix, reverse of purchase): debit VENDOR BA / credit
+// PURCHASES chart account, negative PURCHASE_RETURN vendor-stock movement per item. Used by
+// purchase-returns:post and by draftPurchaseReturns.confirm.
 async function postLedgerAndStock(transaction, {
-  purchaseId, vendorId, totalValue, purchaseDate, items,
+  returnId, vendorId, totalValue, returnDate, items,
 }) {
   const vendor = await vendorsService.getById(vendorId);
   if (!vendor.ba_id) {
@@ -154,22 +149,22 @@ async function postLedgerAndStock(transaction, {
 
   await repository.insertLedgerEntries(transaction, [
     {
-      entry_date: purchaseDate,
-      ac_id: purchasesAccount.ac_id,
+      entry_date: returnDate,
+      ba_id: vendor.ba_id,
       debit: totalValue,
       credit: 0,
-      source_type: 'PURCHASE',
-      source_id: purchaseId,
-      narration: `Purchase #${purchaseId}`,
+      source_type: 'PURCHASE_RETURN',
+      source_id: returnId,
+      narration: `Purchase return #${returnId}`,
     },
     {
-      entry_date: purchaseDate,
-      ba_id: vendor.ba_id,
+      entry_date: returnDate,
+      ac_id: purchasesAccount.ac_id,
       debit: 0,
       credit: totalValue,
-      source_type: 'PURCHASE',
-      source_id: purchaseId,
-      narration: `Purchase #${purchaseId}`,
+      source_type: 'PURCHASE_RETURN',
+      source_id: returnId,
+      narration: `Purchase return #${returnId}`,
     },
   ]);
 
@@ -179,29 +174,26 @@ async function postLedgerAndStock(transaction, {
       vendor_id: vendorId,
       material_id: item.material_id,
       unit: item.unit,
-      qty: item.quantity,
-      movement_type: 'PURCHASE',
-      movement_date: purchaseDate,
-      source_type: 'PURCHASE',
-      source_id: purchaseId,
+      qty: -item.quantity,
+      movement_type: 'PURCHASE_RETURN',
+      movement_date: returnDate,
+      source_type: 'PURCHASE_RETURN',
+      source_id: returnId,
     })),
   );
 }
 
-// Inserts an already-built purchase+lines (used by draftPurchases.confirm, which builds a
-// purchase directly from a draft's already-computed data instead of recomputing totals — the
-// caller posts it right after via postLedgerAndStock, which is what makes it "posted"). Caller
-// owns the transaction.
-async function insertConfirmed(transaction, purchase, lines) {
-  const id = await repository.insert(transaction, purchase);
+// Inserts an already-built return+lines (used by draftPurchaseReturns.confirm). Caller owns the transaction.
+async function insertConfirmed(transaction, ret, lines) {
+  const id = await repository.insert(transaction, ret);
   await repository.insertItems(transaction, id, lines);
   return id;
 }
 
-async function getById(purchaseId) {
-  const purchase = await repository.findById(purchaseId);
-  if (!purchase) throw ApiError.notFound('Purchase not found');
-  return purchase;
+async function getById(returnId) {
+  const ret = await repository.findById(returnId);
+  if (!ret) throw ApiError.notFound('Purchase return not found');
+  return ret;
 }
 
 module.exports = {

@@ -904,7 +904,6 @@ CREATE TABLE dbo.purchases (                                  -- TASK-01
   bill_no       VARCHAR(30)   NULL,                           -- vendor's own invoice number
   remarks       NVARCHAR(500) NULL,
   total_value   DECIMAL(14,2) NOT NULL CONSTRAINT DF_pur_total  DEFAULT (0),
-  status        VARCHAR(10)   NOT NULL CONSTRAINT DF_pur_status DEFAULT ('DRAFT'),
   created_by    INT           NULL,
   updated_by        INT           NULL,
   created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_pur_created DEFAULT (SYSUTCDATETIME()),
@@ -912,8 +911,7 @@ CREATE TABLE dbo.purchases (                                  -- TASK-01
   CONSTRAINT PK_purchases        PRIMARY KEY (purchase_id),
   CONSTRAINT FK_purchases_vendor FOREIGN KEY (vendor_id)  REFERENCES dbo.vendors(vendor_id),
   CONSTRAINT FK_purchases_user   FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
-  CONSTRAINT FK_purchases_upd   FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id),
-  CONSTRAINT CK_purchases_status CHECK (status IN ('CONFIRMED','DRAFT'))
+  CONSTRAINT FK_purchases_upd   FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id)
 );
 CREATE INDEX IX_purchases_date   ON dbo.purchases(purchase_date);
 CREATE INDEX IX_purchases_vendor ON dbo.purchases(vendor_id, purchase_date);
@@ -940,6 +938,57 @@ CREATE INDEX IX_purchase_items_purchase ON dbo.purchase_items(purchase_id);
 CREATE INDEX IX_purchase_items_material ON dbo.purchase_items(material_id);
 ```
 
+> **Post-v4.3 amendment (folded directly into `database/schema.sql`, same as `sale_bills`/
+> `sale_returns` above):** `draft_purchases`/`draft_purchase_items` added as their own table —
+> not a status value on `purchases` — per explicit client instruction, mirroring
+> `draft_sale_bills`. Unlike `draft_sale_bills`, saving/deleting a draft purchase has **zero**
+> effect on `vendor_stock_movements`: nothing physically arrives before a purchase is actually
+> recorded, so there's no eager stock effect to apply or reverse. Confirming inserts into
+> `purchases`/`purchase_items` and posts (ledger + vendor stock) in one step, then deletes the
+> draft rows.
+
+```sql
+CREATE TABLE dbo.draft_purchases (
+  draft_id      INT IDENTITY(1,1) NOT NULL,
+  purchase_date DATE          NOT NULL,
+  vendor_id     INT           NOT NULL,
+  bill_no       VARCHAR(30)   NULL,
+  remarks       NVARCHAR(500) NULL,
+  total_value   DECIMAL(14,2) NOT NULL CONSTRAINT DF_dpur_total   DEFAULT (0),
+  created_by    INT           NULL,
+  updated_by    INT           NULL,
+  created_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_dpur_created DEFAULT (SYSUTCDATETIME()),
+  updated_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_dpur_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_draft_purchases        PRIMARY KEY (draft_id),
+  CONSTRAINT FK_draft_purchases_vendor FOREIGN KEY (vendor_id)  REFERENCES dbo.vendors(vendor_id),
+  CONSTRAINT FK_draft_purchases_user   FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_draft_purchases_upd    FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id)
+);
+CREATE INDEX IX_draft_purchases_date   ON dbo.draft_purchases(purchase_date);
+CREATE INDEX IX_draft_purchases_vendor ON dbo.draft_purchases(vendor_id, purchase_date);
+
+CREATE TABLE dbo.draft_purchase_items (
+  item_id        INT IDENTITY(1,1) NOT NULL,
+  draft_id       INT           NOT NULL,
+  material_id    INT           NOT NULL,
+  unit           NVARCHAR(30)  NOT NULL,
+  quantity       DECIMAL(14,3) NOT NULL,
+  weight         DECIMAL(14,3) NULL,
+  price_per_unit DECIMAL(12,2) NOT NULL,
+  total_price    DECIMAL(14,2) NOT NULL,
+  line_no        INT           NOT NULL CONSTRAINT DF_dpui_line    DEFAULT (1),
+  created_at     DATETIME2(0)  NOT NULL CONSTRAINT DF_dpui_created DEFAULT (SYSUTCDATETIME()),
+  updated_at     DATETIME2(0)  NOT NULL CONSTRAINT DF_dpui_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_draft_purchase_items          PRIMARY KEY (item_id),
+  CONSTRAINT FK_draft_purchase_items_draft    FOREIGN KEY (draft_id)    REFERENCES dbo.draft_purchases(draft_id) ON DELETE CASCADE,
+  CONSTRAINT FK_draft_purchase_items_material FOREIGN KEY (material_id) REFERENCES dbo.materials(material_id),
+  CONSTRAINT CK_draft_purchase_items_qty      CHECK (quantity > 0),
+  CONSTRAINT CK_draft_purchase_items_price    CHECK (price_per_unit >= 0)
+);
+CREATE INDEX IX_draft_purchase_items_draft    ON dbo.draft_purchase_items(draft_id);
+CREATE INDEX IX_draft_purchase_items_material ON dbo.draft_purchase_items(material_id);
+```
+
 `purchase_returns` / `purchase_return_items` mirror the two tables above (§10 gap 1: Purchase
 Return gets its own dedicated page and tables, mirroring Sale Return exactly).
 
@@ -951,7 +1000,6 @@ CREATE TABLE dbo.purchase_returns (
   bill_no     VARCHAR(30)   NULL,
   remarks     NVARCHAR(500) NULL,                             -- return reason
   total_value DECIMAL(14,2) NOT NULL CONSTRAINT DF_pret_total  DEFAULT (0),
-  status      VARCHAR(10)   NOT NULL CONSTRAINT DF_pret_status DEFAULT ('DRAFT'),
   created_by  INT           NULL,
   updated_by    INT           NULL,
   created_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_pret_created DEFAULT (SYSUTCDATETIME()),
@@ -959,8 +1007,7 @@ CREATE TABLE dbo.purchase_returns (
   CONSTRAINT PK_purchase_returns        PRIMARY KEY (return_id),
   CONSTRAINT FK_purchase_returns_vendor FOREIGN KEY (vendor_id)  REFERENCES dbo.vendors(vendor_id),
   CONSTRAINT FK_purchase_returns_user   FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
-  CONSTRAINT FK_purchase_returns_upd   FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id),
-  CONSTRAINT CK_purchase_returns_status CHECK (status IN ('CONFIRMED','DRAFT'))
+  CONSTRAINT FK_purchase_returns_upd   FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id)
 );
 CREATE INDEX IX_purchase_returns_date   ON dbo.purchase_returns(return_date);
 CREATE INDEX IX_purchase_returns_vendor ON dbo.purchase_returns(vendor_id, return_date);
@@ -984,6 +1031,51 @@ CREATE TABLE dbo.purchase_return_items (
 );
 CREATE INDEX IX_purchase_return_items_return   ON dbo.purchase_return_items(return_id);
 CREATE INDEX IX_purchase_return_items_material ON dbo.purchase_return_items(material_id);
+```
+
+> **Post-v4.3 amendment:** `draft_purchase_returns`/`draft_purchase_return_items` added, same
+> rationale as `draft_purchases` above — zero effect on `vendor_stock_movements` until confirmed.
+
+```sql
+CREATE TABLE dbo.draft_purchase_returns (
+  draft_id    INT IDENTITY(1,1) NOT NULL,
+  return_date DATE          NOT NULL,
+  vendor_id   INT           NOT NULL,
+  bill_no     VARCHAR(30)   NULL,
+  remarks     NVARCHAR(500) NULL,
+  total_value DECIMAL(14,2) NOT NULL CONSTRAINT DF_dpret_total   DEFAULT (0),
+  created_by  INT           NULL,
+  updated_by  INT           NULL,
+  created_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_dpret_created DEFAULT (SYSUTCDATETIME()),
+  updated_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_dpret_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_draft_purchase_returns        PRIMARY KEY (draft_id),
+  CONSTRAINT FK_draft_purchase_returns_vendor FOREIGN KEY (vendor_id)  REFERENCES dbo.vendors(vendor_id),
+  CONSTRAINT FK_draft_purchase_returns_user   FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_draft_purchase_returns_upd    FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id)
+);
+CREATE INDEX IX_draft_purchase_returns_date   ON dbo.draft_purchase_returns(return_date);
+CREATE INDEX IX_draft_purchase_returns_vendor ON dbo.draft_purchase_returns(vendor_id, return_date);
+
+CREATE TABLE dbo.draft_purchase_return_items (
+  item_id        INT IDENTITY(1,1) NOT NULL,
+  draft_id       INT           NOT NULL,
+  material_id    INT           NOT NULL,
+  unit           NVARCHAR(30)  NOT NULL,
+  quantity       DECIMAL(14,3) NOT NULL,
+  weight         DECIMAL(14,3) NULL,
+  price_per_unit DECIMAL(12,2) NOT NULL,
+  total_price    DECIMAL(14,2) NOT NULL,
+  line_no        INT           NOT NULL CONSTRAINT DF_dpri_line    DEFAULT (1),
+  created_at     DATETIME2(0)  NOT NULL CONSTRAINT DF_dpri_created DEFAULT (SYSUTCDATETIME()),
+  updated_at     DATETIME2(0)  NOT NULL CONSTRAINT DF_dpri_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_draft_purchase_return_items          PRIMARY KEY (item_id),
+  CONSTRAINT FK_draft_purchase_return_items_draft    FOREIGN KEY (draft_id)    REFERENCES dbo.draft_purchase_returns(draft_id) ON DELETE CASCADE,
+  CONSTRAINT FK_draft_purchase_return_items_material FOREIGN KEY (material_id) REFERENCES dbo.materials(material_id),
+  CONSTRAINT CK_draft_purchase_return_items_qty      CHECK (quantity > 0),
+  CONSTRAINT CK_draft_purchase_return_items_price    CHECK (price_per_unit >= 0)
+);
+CREATE INDEX IX_draft_purchase_return_items_draft    ON dbo.draft_purchase_return_items(draft_id);
+CREATE INDEX IX_draft_purchase_return_items_material ON dbo.draft_purchase_return_items(material_id);
 ```
 
 ### 5.8 Money — receipts, expenses, banks, cheques
