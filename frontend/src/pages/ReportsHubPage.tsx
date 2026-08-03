@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { SaleAnalysisContent } from '@/pages/SaleAnalysisPage';
 import { SaleReportContent } from '@/pages/SaleReportPage';
@@ -27,21 +28,35 @@ const TABS: { key: ReportTab; label: string }[] = [
   { key: 'overall-trail', label: 'Overall Trail' },
 ];
 
-// TASK-19: a single dedicated Reports section — top bar acts as tabs to
-// switch between report types, each with its own filters below.
 export default function ReportsHubPage() {
-  const [activeTab, setActiveTab] = useState<ReportTab>('sale-analysis');
+  const { state } = useApp();
+  const [activeTab, setActiveTab] = useState<ReportTab>(() => {
+    return (state.currentTab as ReportTab) || 'sale-analysis';
+  });
+
+  useEffect(() => {
+    if (state.currentTab && TABS.some(t => t.key === state.currentTab)) {
+      setActiveTab(state.currentTab as ReportTab);
+    }
+  }, [state.currentTab]);
+
+  const activeTabObj = TABS.find(t => t.key === activeTab);
 
   return (
-    <AppLayout pageTitle="Reports">
+    <AppLayout pageTitle="Reports Hub" subTabTitle={activeTabObj?.label} subTabId={activeTab}>
       <div className="mx-auto" style={{ maxWidth: 1150 }}>
         {/* Top Bar Tabs - data-no-print */}
         <div className="flex flex-wrap gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           {TABS.map(tab => (
             <button
               key={tab.key}
+              draggable={true}
+              onDragStart={(e) => {
+                e.dataTransfer.setData('text/plain', JSON.stringify({ page: 'reports', tab: tab.key, label: tab.label }));
+              }}
               onClick={() => setActiveTab(tab.key)}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+              title="Drag tab to Quick Access Menu Bar to pin"
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
                 activeTab === tab.key
                   ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                   : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'

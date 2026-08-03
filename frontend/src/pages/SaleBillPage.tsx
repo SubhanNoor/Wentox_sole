@@ -14,7 +14,15 @@ import PasswordPromptModal from '@/components/PasswordPromptModal';
 export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 'billing' | 'weekly' | 'monthly' | 'overall' | 'find' }) {
   const { state, dispatch } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'billing' | 'weekly' | 'monthly' | 'overall' | 'find'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'billing' | 'weekly' | 'monthly' | 'overall' | 'find'>(() => {
+    return (state.currentTab as any) || initialTab;
+  });
+
+  useEffect(() => {
+    if (state.currentTab && ['billing', 'weekly', 'monthly', 'overall', 'find'].includes(state.currentTab)) {
+      setActiveTab(state.currentTab as any);
+    }
+  }, [state.currentTab]);
 
   // Mode: 'view' | 'edit' | 'new'
   const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');

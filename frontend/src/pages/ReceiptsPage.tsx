@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import { getCustomerBalance } from '@/lib/cheques';
 import AppLayout from '@/components/AppLayout';
@@ -12,16 +12,32 @@ import SearchableSelect from '@/components/SearchableSelect';
 
 type ReceiptTab = 'entry' | 'weekly' | 'monthly' | 'overall' | 'cheques';
 
+const RECEIPT_TAB_LABELS: Record<ReceiptTab, string> = {
+  entry: 'Receipt Entry',
+  weekly: 'Weekly Records',
+  monthly: 'Monthly Records',
+  overall: 'Overall Records',
+  cheques: 'Cheques Disposal'
+};
+
 export default function ReceiptsPage() {
   const { state, dispatch } = useApp();
 
-  // Navigation / Tabs State — an alert click-through can deep-link straight
-  // to the Cheques tab via NAVIGATE's optional `tab`. UC-03: the Cheques tab shows cheque
-  // disposal/allocation history touching bank and restricted accounts, so User never lands there,
-  // even via that deep link.
-  const [activeTab, setActiveTab] = useState<ReceiptTab>(
-    state.currentTab === 'cheques' && state.currentUserRole !== 'User' ? 'cheques' : 'entry'
-  );
+  // Navigation / Tabs State — sync with state.currentTab
+  const [activeTab, setActiveTab] = useState<ReceiptTab>(() => {
+    if (state.currentTab && ['entry', 'weekly', 'monthly', 'overall', 'cheques'].includes(state.currentTab)) {
+      if (state.currentTab === 'cheques' && state.currentUserRole === 'User') return 'entry';
+      return state.currentTab as ReceiptTab;
+    }
+    return 'entry';
+  });
+
+  useEffect(() => {
+    if (state.currentTab && ['entry', 'weekly', 'monthly', 'overall', 'cheques'].includes(state.currentTab)) {
+      if (state.currentTab === 'cheques' && state.currentUserRole === 'User') return;
+      setActiveTab(state.currentTab as ReceiptTab);
+    }
+  }, [state.currentTab, state.currentUserRole]);
 
   // Form State
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -140,14 +156,19 @@ export default function ReceiptsPage() {
   };
 
   return (
-    <AppLayout pageTitle="Receipts / Jamma Entry">
+    <AppLayout pageTitle="Receipts / Jamma Entry" subTabTitle={RECEIPT_TAB_LABELS[activeTab]} subTabId={activeTab}>
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
         
         {/* Top Tab Navigation */}
         <div className="flex flex-wrap gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           <button
+            draggable={true}
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/plain', JSON.stringify({ page: 'receipts-jamma', tab: 'entry', label: 'Receipt Entry' }));
+            }}
             onClick={() => setActiveTab('entry')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+            title="Drag tab to Quick Access Menu Bar to pin"
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
               activeTab === 'entry'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                 : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
@@ -156,8 +177,13 @@ export default function ReceiptsPage() {
             Receipt Entry
           </button>
           <button
+            draggable={true}
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/plain', JSON.stringify({ page: 'receipts-jamma', tab: 'weekly', label: 'Weekly Records' }));
+            }}
             onClick={() => setActiveTab('weekly')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+            title="Drag tab to Quick Access Menu Bar to pin"
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
               activeTab === 'weekly'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                 : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
@@ -166,8 +192,13 @@ export default function ReceiptsPage() {
             Weekly Records
           </button>
           <button
+            draggable={true}
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/plain', JSON.stringify({ page: 'receipts-jamma', tab: 'monthly', label: 'Monthly Records' }));
+            }}
             onClick={() => setActiveTab('monthly')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+            title="Drag tab to Quick Access Menu Bar to pin"
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
               activeTab === 'monthly'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                 : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
@@ -176,8 +207,13 @@ export default function ReceiptsPage() {
             Monthly Records
           </button>
           <button
+            draggable={true}
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/plain', JSON.stringify({ page: 'receipts-jamma', tab: 'overall', label: 'Overall Records' }));
+            }}
             onClick={() => setActiveTab('overall')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+            title="Drag tab to Quick Access Menu Bar to pin"
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
               activeTab === 'overall'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                 : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
@@ -187,8 +223,13 @@ export default function ReceiptsPage() {
           </button>
           {state.currentUserRole !== 'User' && (
             <button
+              draggable={true}
+              onDragStart={(e) => {
+                e.dataTransfer.setData('text/plain', JSON.stringify({ page: 'receipts-jamma', tab: 'cheques', label: 'Cheques Disposal' }));
+              }}
               onClick={() => setActiveTab('cheques')}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+              title="Drag tab to Quick Access Menu Bar to pin"
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
                 activeTab === 'cheques'
                   ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                   : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
