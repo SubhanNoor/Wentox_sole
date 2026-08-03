@@ -1,7 +1,7 @@
 # Wentox Backend — Progress Log
 
-**Current milestone:** Milestone 3 — Purchase & Purchase Return
-**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard — see below).
+**Current milestone:** Milestone 6 — System Setup: Product Details, Categories, Vendors (pulled forward ahead of Milestone 4 — see rationale below)
+**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account — see below). Milestone 4 (Receipts/Expenses) and Milestone 3/2's frontend wiring are still pending — Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures.
 
 Log every completed task here (newest first within its milestone). Format:
 
@@ -13,6 +13,65 @@ Log every completed task here (newest first within its milestone). Format:
 ```
 
 ---
+
+## Milestone 6 — System Setup: Product Details, Categories, Vendors
+
+### 2026-08-14 — Modules 6.1, 6.2, 6.3 complete: products, categories, vendors
+- **What:** Pulled forward ahead of Milestone 4 (see status line above) so Sale Bill/Return/
+  Purchase/Return have real dropdown data to test against instead of hardcoded fixture IDs. Built
+  module-by-module, checking in and live-verifying after each before moving to the next, per
+  explicit direction partway through this session.
+  - **Categories** (`categories.*`): plain CRUD, duplicate-name rejected, soft delete via `is_active`.
+  - **Products** (`products.*`, queries `dbo.articles` — see milestone6.md's naming note):
+    CRUD with the full 12-column manufacturing cost breakdown; `code` (e.g. `P-101`) is
+    system-generated on create, never typed — `nextCode()` takes
+    `MAX(TRY_CAST(SUBSTRING(code,3,30) AS INT))` over `code LIKE 'P-%'` and adds 1, starting at 101.
+    `create()`/`update()` validate `category_id` exists via `categoriesService.getById` first, for a
+    clean 404 instead of a raw FK-violation.
+  - **Product Colors** (`productColors.*`, queries `dbo.article_colors`): per UC-07, colors are
+    *not* created from the Product Details form — `resolveOrCreate(article_id, color, packing)` is
+    what the Current Stock "Add" dialog (UC-28, Milestone 5) will call later; case-insensitive
+    dedup on `(article_id, color)`, backed by `UQ_article_colors_acolor`.
+  - **Vendors** (`vendors.*`): full CRUD; `create()` auto-creates a linked `business_accounts` row
+    under the reserved VENDORS ACCOUNTS chart account (§3.2 composition: parent 6-digit chart code
+    + 4-digit zero-padded serial, `serial = MAX(existing under that parent) + 1`) and links it via
+    `vendors.ba_id` — the user never sees a separate account-setup step (UC-08). Renaming a vendor
+    renames the linked account too.
+  - New reusable helper: `businessAccountsService.createUnderChartCode(transaction, chartCode,
+    name, extra)` — the §3.2 code-generation logic pulled out so Customers/Sub-Customers
+    (Milestone 7) can call the identical pattern under CUSTOMERS ACCOUNTS instead of
+    reimplementing it.
+- **How:** A debugger-subagent review of the Vendors module caught a real bug before it shipped:
+  the first version created the `business_accounts` row and the `vendors` row as two separate,
+  non-transactional `query()` calls — if the vendor insert failed after the account insert
+  succeeded, the account row would be permanently orphaned (a ledger account with no vendor
+  pointing at it, visible in Chart of Accounts listings with no way to clean it up from the UI).
+  Fixed by threading a `transaction` parameter through `businessAccounts.repository.js`
+  (`nextSerial`, `insert`) and `vendors.repository.js` (`insert`), and wrapping both calls in one
+  `withTransaction` block in `vendors.service.js:create()` — same pattern every other multi-write
+  service in this codebase already follows.
+  Also fixed, while auditing for the same bug class: `auth.ipc.js`'s `auth:update-credentials`/
+  `auth:verify-password` channels were kebab-case on the action segment, but
+  `electron/preload.js`'s `window.api` Proxy only kebab-cases the *feature* prefix, not the action
+  — it passes the JS property access straight through unmodified. A future
+  `window.api.auth.verifyPassword(...)` call would have silently mismatched. Renamed to
+  `auth:updateCredentials`/`auth:verifyPassword`. New `productColors.ipc.js` channels
+  (`listByArticle`, `resolveOrCreate`) were written camelCase from the start to avoid the same trap.
+- **Verified:** debugger-subagent review on both the Products/Categories/ProductColors batch and
+  the Vendors batch (separately) came back clean after the transaction fix; then live against
+  `wentox_db` for each module before moving to the next: category → product (auto-code, rejects
+  unknown category) → second product (incremented code) → update → two color variants (including
+  a different-case duplicate resolving to the same variant) → soft-delete variant → soft-delete
+  product; vendor create (linked business account `200001XXXX`) → duplicate name rejected → update
+  (renames both) → list/soft-delete (linked account stays `ACTIVE`) → structural check confirming
+  no orphaned `business_accounts` row.
+- **Files:** `backend/src/{repositories,services,ipc}/categories.*`,
+  `backend/src/{repositories,services,ipc}/products.*`,
+  `backend/src/{repositories,services,ipc}/productColors.*` (new `ipc` file),
+  `backend/src/{repositories,services,ipc}/vendors.*`,
+  `backend/src/{repositories,services}/businessAccounts.*`, `backend/src/ipc/index.js`,
+  `backend/src/ipc/auth.ipc.js`, `backend/electron/preload.js`,
+  `backend/milestones/milestone6.md`
 
 ## Milestone 3 — Purchase & Purchase Return
 

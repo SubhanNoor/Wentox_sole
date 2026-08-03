@@ -6,7 +6,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 const FEATURES = [
   'auth', 'addas', 'businessAccounts', 'categories', 'chartAccounts', 'cities', 'customers',
   'draftPurchases', 'draftPurchaseReturns', 'draftSaleBills', 'draftSaleReturns', 'expenses',
-  'groupAccounts', 'products', 'purchases', 'purchaseReturns', 'receipts',
+  'groupAccounts', 'products', 'productColors', 'purchases', 'purchaseReturns', 'receipts',
   'reports', 'saleBills', 'saleReturns', 'stock', 'stores', 'subCustomers', 'vendors',
 ];
 

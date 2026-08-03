@@ -22,8 +22,11 @@ module.exports = function register() {
     }),
   );
 
+  // Action names stay camelCase (not kebab-case) — the preload Proxy passes the JS property
+  // access straight through as the action segment with no case conversion, so this must match
+  // window.api.auth.updateCredentials(...) / window.api.auth.verifyPassword(...) exactly.
   ipcMain.handle(
-    'auth:update-credentials',
+    'auth:updateCredentials',
     wrap(async (payload) => {
       const current = session.requireSession();
       return service.updateCredentials(current.userId, payload);
@@ -31,7 +34,7 @@ module.exports = function register() {
   );
 
   ipcMain.handle(
-    'auth:verify-password',
+    'auth:verifyPassword',
     wrap(async (payload) => {
       const current = session.requireSession();
       return service.verifyPassword(current.userId, payload.password);
