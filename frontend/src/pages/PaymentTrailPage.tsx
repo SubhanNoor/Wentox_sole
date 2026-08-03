@@ -5,6 +5,7 @@ import { Printer, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getBankBusinessAccounts, getAccountBalance } from '@/lib/cashbank';
 import { isChartAccountRestrictedForRole } from '@/lib/access';
+import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
 // Maps each Payment Trail category to the Chart of Account it's sourced from.
 // "Cash at Banks" is a running balance (holdings), not a spend total — see below.
@@ -19,8 +20,8 @@ const BANK_ACCOUNTS_CHART_ID = '120002';
 export function PaymentTrailContent() {
   const { state } = useApp();
 
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(getTodayDate());
 
   const inRange = (date: string) => (!fromDate || date >= fromDate) && (!toDate || date <= toDate);
 

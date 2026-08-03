@@ -3,6 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Printer, Search, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
 interface VendorLedgerRow {
   date: string;
@@ -18,8 +19,8 @@ export function VendorReportContent() {
 
   const [selectedVendorId, setSelectedVendorId] = useState('');
   const [vendorSearch, setVendorSearch] = useState('');
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(getTodayDate());
 
   const inRange = (date: string) => (!fromDate || date >= fromDate) && (!toDate || date <= toDate);
 

@@ -3,6 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Printer, Search, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
 interface KhaataRow {
   date: string;
@@ -23,8 +24,8 @@ export function ReportKhaataContent() {
 
   const [customerId, setCustomerId] = useState('');
   const [accountSearch, setAccountSearch] = useState('');
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(getTodayDate());
 
   // Find selected customer info
   const selectedCustomer = useMemo(() => {

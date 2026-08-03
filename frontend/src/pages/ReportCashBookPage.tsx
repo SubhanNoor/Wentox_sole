@@ -18,6 +18,21 @@ interface CashBookRow {
   chequeNo: string;
   direction: 'Receipt' | 'Payment';
   amount: number;
+  // The Cash Book is usually viewed one day at a time, where every row shares the same `date` —
+  // sorting by date alone leaves same-day rows grouped by category (all receipts, then all
+  // expenses, ...) instead of the order they actually happened. Every id in this app embeds
+  // Date.now() at creation (`extractSortKey` below), so this recovers true FIFO order even
+  // within a single day. Reversal rows (bounce/return) reuse the *original* record's key, since
+  // they don't have one of their own and slotting them in true entry order isn't the point —
+  // they just need to not disrupt the same-day ordering of everything else.
+  sortKey: number;
+}
+
+// Every id in this app is '<prefix>_' + Date.now() (see ReceiptsPage/ExpensesPage/TransferPage) —
+// pulls the trailing digits back out as a real creation-order tiebreaker for same-day rows.
+function extractSortKey(id: string): number {
+  const match = id.match(/(\d+)$/);
+  return match ? Number(match[1]) : 0;
 }
 
 export function ReportCashBookContent() {
@@ -60,7 +75,8 @@ export function ReportCashBookContent() {
           mode: r.paymentMode,
           chequeNo: r.chequeNo || '-',
           direction: 'Receipt',
-          amount: r.amount
+          amount: r.amount,
+          sortKey: extractSortKey(r.id)
         });
       });
 
@@ -77,7 +93,8 @@ export function ReportCashBookContent() {
           mode: e.paymentMode,
           chequeNo: '-',
           direction: 'Payment',
-          amount: e.amount
+          amount: e.amount,
+          sortKey: extractSortKey(e.id)
         });
       });
 
@@ -104,7 +121,8 @@ export function ReportCashBookContent() {
           mode: 'Cheque',
           chequeNo: sourceReceipt?.chequeNo || '-',
           direction: 'Payment',
-          amount: a.amount
+          amount: a.amount,
+          sortKey: extractSortKey(a.id)
         });
       });
 
@@ -127,7 +145,8 @@ export function ReportCashBookContent() {
             mode: 'Cash',
             chequeNo: '-',
             direction: isIn ? 'Receipt' : 'Payment',
-            amount: t.amount
+            amount: t.amount,
+            sortKey: extractSortKey(t.id)
           });
         });
 
@@ -141,7 +160,8 @@ export function ReportCashBookContent() {
             mode: 'Cash',
             chequeNo: '-',
             direction: d.direction === 'debit' ? 'Payment' : 'Receipt',
-            amount: d.amount
+            amount: d.amount,
+            sortKey: extractSortKey(d.id)
           });
         });
     }
@@ -160,7 +180,8 @@ export function ReportCashBookContent() {
           mode: 'Cheque',
           chequeNo: r.chequeNo || '-',
           direction: 'Payment',
-          amount: r.amount
+          amount: r.amount,
+          sortKey: extractSortKey(r.id)
         });
         // Cancels each endorsement made from it.
         state.chequeAllocations
@@ -176,7 +197,8 @@ export function ReportCashBookContent() {
               mode: 'Cheque',
               chequeNo: r.chequeNo || '-',
               direction: 'Receipt',
-              amount: a.amount
+              amount: a.amount,
+              sortKey: extractSortKey(a.id)
             });
           });
       });
@@ -195,7 +217,8 @@ export function ReportCashBookContent() {
           mode: 'Cheque',
           chequeNo: r.chequeNo || '-',
           direction: 'Payment',
-          amount: r.amount
+          amount: r.amount,
+          sortKey: extractSortKey(r.id)
         });
         state.chequeAllocations
           .filter(a => a.receiptId === r.id && a.status === 'REVERSED' && a.dispositionType !== 'DEPOSIT')
@@ -210,12 +233,13 @@ export function ReportCashBookContent() {
               mode: 'Cheque',
               chequeNo: r.chequeNo || '-',
               direction: 'Receipt',
-              amount: a.amount
+              amount: a.amount,
+              sortKey: extractSortKey(a.id)
             });
           });
       });
 
-    return rows.sort((a, b) => a.date.localeCompare(b.date));
+    return rows.sort((a, b) => a.date.localeCompare(b.date) || a.sortKey - b.sortKey);
   }, [state.receipts, state.expenses, state.customers, state.businessAccounts,
       state.chequeAllocations, state.vendors, state.transfers, state.deposits,
       state.chartAccounts, state.currentUserRole,

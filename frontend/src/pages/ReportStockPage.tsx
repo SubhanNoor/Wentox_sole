@@ -1,8 +1,9 @@
 import { Fragment, useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Search, Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
+import { Search, Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet, LayoutList, X } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
 interface ProductLedgerEntry {
   date: string;
@@ -108,6 +109,10 @@ export default function ReportStockPage() {
   // since all color variants of an article now live under one row.
   const [expandedArticleCode, setExpandedArticleCode] = useState<string | null>(null);
 
+  // Full Report modal — one row per article, every color's cartons/pairs inline on the same
+  // line (no click-to-expand), ending with a combined Total Pairs across all colors.
+  const [showColorReport, setShowColorReport] = useState(false);
+
   const getProductLedgerEntries = (productIds: string[]): ProductLedgerEntry[] => {
     const idSet = new Set(productIds);
     const entries: ProductLedgerEntry[] = [];
@@ -130,12 +135,12 @@ export default function ReportStockPage() {
   const [weeklyDate, setWeeklyDate] = useState(new Date().toISOString().split('T')[0]);
   const [monthlyMonth, setMonthlyMonth] = useState(new Date().getMonth());
   const [monthlyYear, setMonthlyYear] = useState(new Date().getFullYear());
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(getTodayDate());
 
   // Product Ledger tab filtering state (TASK-02 / TASK-02 UPDATE)
-  const [ledgerFromDate, setLedgerFromDate] = useState('');
-  const [ledgerToDate, setLedgerToDate] = useState('');
+  const [ledgerFromDate, setLedgerFromDate] = useState(getThreeMonthsAgoDate());
+  const [ledgerToDate, setLedgerToDate] = useState(getTodayDate());
   const [ledgerVendorFilter, setLedgerVendorFilter] = useState('all');
 
   // 1. Current stock filter memo
@@ -169,6 +174,36 @@ export default function ReportStockPage() {
     });
     return Object.values(groups).sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
   }, [filteredProducts]);
+
+// Full Report: a pivot table — one column per distinct color found across ALL filtered
+  // articles (one-hot style), each cell showing that article's cartons/extra-pairs in that
+  // color, or 0/0 if the article has no stock in it.
+  const allColorsAcrossArticles = useMemo(() => {
+    const colors = new Set<string>();
+    groupedArticles.forEach(group => {
+      group.products.forEach(p => colors.add(p.color || getColorFromName(p.name)));
+    });
+    return Array.from(colors).sort((a, b) => a.localeCompare(b));
+  }, [groupedArticles]);
+
+  const colorReportRows = useMemo(() => {
+    return groupedArticles.map(group => {
+      const catName = state.categories.find(c => c.id === group.categoryId)?.name || 'General';
+      const byColor: Record<string, { cartons: number; extraPairs: number }> = {};
+      group.products.forEach(p => {
+        const pairs = p.stock || 0;
+        const packing = p.packing || 12;
+        const color = p.color || getColorFromName(p.name);
+        byColor[color] = { cartons: Math.floor(pairs / packing), extraPairs: pairs % packing };
+      });
+      const totalPairs = group.products.reduce((sum, p) => sum + (p.stock || 0), 0);
+      return { code: group.code, commonName: group.commonName, categoryName: catName, byColor, totalPairs };
+    });
+  }, [groupedArticles, state.categories]);
+
+  const colorReportTotalPairs = useMemo(() => {
+    return colorReportRows.reduce((sum, r) => sum + r.totalPairs, 0);
+  }, [colorReportRows]);
 
   const totalPairs = useMemo(() => {
     return filteredProducts.reduce((sum, p) => sum + (p.stock || 0), 0);
@@ -315,6 +350,16 @@ export default function ReportStockPage() {
     }), { debit: 0, credit: 0 });
   }, [ledgerTableEntries]);
 
+  const handleExportColorReportExcel = () => {
+    const headers = ['Product Code', 'Article', 'Category', ...allColorsAcrossArticles.map(c => `${c} (Ctn/Prs)`), 'Total Pairs'];
+    const rows = colorReportRows.map(r => [
+      r.code, r.commonName, r.categoryName,
+      ...allColorsAcrossArticles.map(c => `${r.byColor[c]?.cartons ?? 0}/${r.byColor[c]?.extraPairs ?? 0}`),
+      r.totalPairs
+    ]);
+    exportRowsToExcel('current-stock-full-report', headers, rows);
+  };
+
   const handleExportExcel = () => {
     if (activeStockTab === 'current') {
       const headers = ['Product Code', 'Category', 'Total Pairs'];
@@ -343,74 +388,74 @@ export default function ReportStockPage() {
     <AppLayout pageTitle="Stock & Production Center">
       <div className="mx-auto" style={{ maxWidth: 1000 }}>
         
-        {/* On-screen Tabs Selector - hidden on print */}
-        <div className="flex border-b mb-6 text-sm font-semibold overflow-x-auto whitespace-nowrap" data-no-print style={{ borderColor: 'var(--border-color)' }}>
+        {/* Top Tab Navigation - hidden on print */}
+        <div className="flex flex-wrap gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           <button
             onClick={() => setActiveStockTab('current')}
-            className={`px-4 py-2 border-b-2 transition-colors ${
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'current'
-                ? 'border-[#B08D57] text-[#111c2a]'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
             }`}
           >
             Current Stock
           </button>
           <button
             onClick={() => setActiveStockTab('material')}
-            className={`px-4 py-2 border-b-2 transition-colors ${
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'material'
-                ? 'border-[#B08D57] text-[#111c2a]'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
             }`}
           >
             Material Stock
           </button>
           <button
             onClick={() => setActiveStockTab('ledger')}
-            className={`px-4 py-2 border-b-2 transition-colors ${
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'ledger'
-                ? 'border-[#B08D57] text-[#111c2a]'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
             }`}
           >
             Product Ledger
           </button>
           <button
             onClick={() => setActiveStockTab('daily')}
-            className={`px-4 py-2 border-b-2 transition-colors ${
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'daily'
-                ? 'border-[#B08D57] text-[#111c2a]'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
             }`}
           >
             Daily Production
           </button>
           <button
             onClick={() => setActiveStockTab('weekly')}
-            className={`px-4 py-2 border-b-2 transition-colors ${
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'weekly'
-                ? 'border-[#B08D57] text-[#111c2a]'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
             }`}
           >
             Weekly Production
           </button>
           <button
             onClick={() => setActiveStockTab('monthly')}
-            className={`px-4 py-2 border-b-2 transition-colors ${
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'monthly'
-                ? 'border-[#B08D57] text-[#111c2a]'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
             }`}
           >
             Monthly Production
           </button>
           <button
             onClick={() => setActiveStockTab('overall')}
-            className={`px-4 py-2 border-b-2 transition-colors ${
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'overall'
-                ? 'border-[#B08D57] text-[#111c2a]'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
             }`}
           >
             Overall Production
@@ -420,43 +465,48 @@ export default function ReportStockPage() {
         {/* On-screen View - hidden on print */}
         <div data-no-print>
           {/* Search and Filters */}
-          <div className="flex flex-col gap-4 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex flex-wrap items-center gap-3 flex-1">
-                <div className="relative flex-1 min-w-[200px]">
-                  <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
-                  <input
-                    type="text"
-                    placeholder="Search by article code or name..."
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    className="soleria-input pl-10 py-2 w-full text-sm"
-                  />
-                </div>
-                
-                <select
-                  value={selectedCategory}
-                  onChange={e => setSelectedCategory(e.target.value)}
-                  className="soleria-input py-2 cursor-pointer text-sm max-w-[200px]"
-                >
-                  <option value="all">All Categories</option>
-                  {state.categories.map(cat => (
-                    <option key={cat.id} value={cat.id}>{cat.name}</option>
-                  ))}
-                </select>
+          <div className="p-3 rounded-lg border mb-4 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="relative w-56 md:w-64 shrink-0">
+                <Search className="absolute left-3 top-2 text-slate-400" size={16} />
+                <input
+                  type="text"
+                  placeholder="Search by article code or name..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="soleria-input pl-9 py-1.5 w-full text-xs font-semibold"
+                />
               </div>
+              
+              <select
+                value={selectedCategory}
+                onChange={e => setSelectedCategory(e.target.value)}
+                className="soleria-input py-1.5 px-2.5 cursor-pointer text-xs font-semibold w-40 shrink-0"
+              >
+                <option value="all">All Categories</option>
+                {state.categories.map(cat => (
+                  <option key={cat.id} value={cat.id}>{cat.name}</option>
+                ))}
+              </select>
 
-              <div className="flex items-center gap-2 shrink-0">
-                <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-                  <Printer size={16} /> Print Report
+              {activeStockTab === 'current' && (
+                <button
+                  onClick={() => setShowColorReport(true)}
+                  className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0"
+                >
+                  <LayoutList size={14} /> View Full Report
                 </button>
-                <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-                  <FileDown size={16} /> Export PDF
-                </button>
-                <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-                  <FileSpreadsheet size={16} /> Export Excel
-                </button>
-              </div>
+              )}
+
+              <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0">
+                <Printer size={14} /> Print Report
+              </button>
+              <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0">
+                <FileDown size={14} /> Export PDF
+              </button>
+              <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0">
+                <FileSpreadsheet size={14} /> Export Excel
+              </button>
             </div>
 
             {/* Timeframe Filters based on Active Tab */}
@@ -910,7 +960,9 @@ export default function ReportStockPage() {
           </div>
         </div>
 
-        {/* Printable Excel-style layout for physical printers */}
+        {/* Printable Excel-style layout for physical printers — hidden while the Full Report
+            modal is open, so printing there prints only the modal's own block below. */}
+        {!showColorReport && (
         <div className="hidden print:block excel-print-container">
           <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '10px' }}>
             <div>
@@ -1126,8 +1178,165 @@ export default function ReportStockPage() {
             </div>
           </div>
         </div>
+        )}
+
+        {/* Full Report print block — only rendered while the modal is open, so it's the sole
+            thing that ends up on paper when printing from inside it. */}
+        {showColorReport && (
+        <div className="hidden print:block excel-print-container">
+          <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '10px' }}>
+            <div>
+              <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>WENTOX WAREHOUSE</h1>
+              <p style={{ margin: 0, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', color: '#555555' }}>
+                Footwear Wholesale Distribution
+              </p>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>CURRENT STOCK — FULL REPORT</h2>
+              <p style={{ margin: 0, fontSize: '11px', color: '#555555' }}>Date: {new Date().toLocaleDateString()}</p>
+            </div>
+          </div>
+
+          <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+            <thead>
+              <tr style={{ backgroundColor: '#f2f2f2' }}>
+                <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center' }}>S#</th>
+                <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left' }}>Code</th>
+                <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left' }}>Article</th>
+                <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left' }}>Category</th>
+                {allColorsAcrossArticles.map(color => (
+                  <th key={color} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center' }}>{color}</th>
+                ))}
+                <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right' }}>Total Pairs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {colorReportRows.map((r, idx) => (
+                <tr key={r.code}>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{r.code}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.commonName}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.categoryName}</td>
+                  {allColorsAcrossArticles.map(color => {
+                    const cell = r.byColor[color];
+                    return (
+                      <td key={color} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>
+                        {cell ? cell.cartons : 0}/{cell ? cell.extraPairs : 0}
+                      </td>
+                    );
+                  })}
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold' }}>{r.totalPairs.toLocaleString()}</td>
+                </tr>
+              ))}
+              <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2', fontSize: '12px' }}>
+                <td colSpan={4 + allColorsAcrossArticles.length} style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', textTransform: 'uppercase' }}>Report Total:</td>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', borderBottom: '3px double #000000' }}>{colorReportTotalPairs.toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '60px', fontSize: '11px' }}>
+            <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>
+              Prepared By
+            </div>
+            <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>
+              Checked By
+            </div>
+            <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>
+              Manager Production
+            </div>
+          </div>
+        </div>
+        )}
 
       </div>
+
+      {/* Full Report modal — a pivot table: one column per distinct color across every
+          filtered article, each cell showing that article's cartons/extra-pairs in that
+          color (0/0 if absent), ending with a combined Total Pairs. */}
+      {showColorReport && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+          <div className="bg-white rounded-xl shadow-xl border w-full max-w-[95vw] mx-4 max-h-[85vh] flex flex-col animate-scaleUp">
+            <div className="flex items-center justify-between p-6 pb-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
+              <div>
+                <h3 className="font-lora font-bold text-lg text-slate-800">Current Stock — Full Report</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Every article × every color, cartons/extra-pairs (0/0 if the article has none of that color)</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
+                  <Printer size={14} /> Print
+                </button>
+                <button onClick={handleExportColorReportExcel} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
+                  <FileSpreadsheet size={14} /> Export Excel
+                </button>
+                <button
+                  onClick={() => setShowColorReport(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+                  title="Close"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-y-auto overflow-x-auto p-6 pt-4">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                    <th className="p-3 pl-4 whitespace-nowrap">Code</th>
+                    <th className="p-3 whitespace-nowrap">Article</th>
+                    <th className="p-3 whitespace-nowrap">Category</th>
+                    {allColorsAcrossArticles.map(color => (
+                      <th key={color} className="p-3 text-center whitespace-nowrap">{color}</th>
+                    ))}
+                    <th className="p-3 text-right whitespace-nowrap">Total Pairs</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {colorReportRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={4 + allColorsAcrossArticles.length} className="text-center p-8 text-slate-400">
+                        No products found matching stock criteria.
+                      </td>
+                    </tr>
+                  ) : (
+                    colorReportRows.map(r => (
+                      <tr key={r.code} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                        <td className="p-3 pl-4 font-semibold text-slate-700 whitespace-nowrap">{r.code}</td>
+                        <td className="p-3 text-slate-700 whitespace-nowrap">{r.commonName}</td>
+                        <td className="p-3 text-slate-500 whitespace-nowrap">{r.categoryName}</td>
+                        {allColorsAcrossArticles.map(color => {
+                          const cell = r.byColor[color];
+                          const has = !!cell && (cell.cartons > 0 || cell.extraPairs > 0);
+                          return (
+                            <td
+                              key={color}
+                              className={`p-3 text-center font-mono ${has ? 'font-semibold text-slate-800' : 'text-slate-300'}`}
+                            >
+                              {cell ? cell.cartons : 0}/{cell ? cell.extraPairs : 0}
+                            </td>
+                          );
+                        })}
+                        <td className={`p-3 text-right font-bold whitespace-nowrap ${r.totalPairs <= 0 ? 'text-red-600' : 'text-slate-900'}`}>
+                          {r.totalPairs.toLocaleString()}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
+                    <td colSpan={3 + allColorsAcrossArticles.length} className="p-4 text-left font-lora">REPORT TOTAL</td>
+                    <td className="p-4 text-right text-lg whitespace-nowrap" style={{ color: 'var(--brand-gold)' }}>
+                      {colorReportTotalPairs.toLocaleString()} Pairs
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Stock Modal */}
       {selectedGroup && (() => {

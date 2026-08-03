@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import { filterBusinessAccountsForRole } from '@/lib/access';
+import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
 interface ActivityEntry {
   date: string;
@@ -18,8 +19,8 @@ export default function BusinessLedgerContent() {
 
   const [viewMode, setViewMode] = useState<'summary' | 'detail' | 'customer'>('summary');
   const [accountFilter, setAccountFilter] = useState('all');
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(getTodayDate());
 
   const inRange = (date: string) => (!fromDate || date >= fromDate) && (!toDate || date <= toDate);
 

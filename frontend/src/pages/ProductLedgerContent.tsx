@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
+import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
 interface ProductLedgerEntry {
   date: string;
@@ -41,8 +42,8 @@ export default function ProductLedgerContent() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(getTodayDate());
   const [vendorFilter, setVendorFilter] = useState('all');
 
   const filteredProducts = useMemo(() => {

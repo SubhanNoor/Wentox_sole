@@ -4,6 +4,7 @@ import { isReceiptLive } from '@/lib/cheques';
 import AppLayout from '@/components/AppLayout';
 import { Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
 interface SaleReportRow {
   key: string;
@@ -28,8 +29,8 @@ export function SaleReportContent() {
   const [viewMode, setViewMode] = useState<'overall' | 'month' | 'range'>('overall');
   const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(getTodayDate());
   const [expandedRegionId, setExpandedRegionId] = useState<string | null>(null);
 
   const { periodStart, periodEnd, periodLabel } = useMemo(() => {

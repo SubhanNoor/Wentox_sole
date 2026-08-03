@@ -3,6 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Printer, Download, MapPin, Edit2, Trash2, FileDown } from 'lucide-react';
 import { exportToPDF } from '@/lib/export';
+import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import type { Customer } from '@/types';
 
 interface ProductLedgerRow {
@@ -31,8 +32,8 @@ export default function CustomerSetupPage() {
   const [successMsg, setSuccessMsg] = useState('');
 
   // Ledger detail filters
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(getTodayDate());
   const [articleFilter, setArticleFilter] = useState('');
 
   const selectedCustomer = useMemo(() => {

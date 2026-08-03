@@ -3,6 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import type { SaleReturn } from '@/types';
 import { Search, Printer, Calendar, FileText, User, Edit2, Package, Layers, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
 interface FindReturnTabProps {
   onEditReturn: (ret: SaleReturn) => void;
@@ -13,8 +14,8 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
   const { state } = useApp();
 
   // ── Search Filter State ──────────────────────────────────────────────────────
-  const [fromDate, setFromDate]             = useState('');
-  const [toDate, setToDate]                 = useState('');
+  const [fromDate, setFromDate]             = useState(getThreeMonthsAgoDate());
+  const [toDate, setToDate]                 = useState(getTodayDate());
   const [customerQuery, setCustomerQuery]   = useState('');
   const [subCustomerQuery, setSubCustomerQuery] = useState('');
   const [billNoQuery, setBillNoQuery]       = useState('');
@@ -101,7 +102,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
   const hasFilters = fromDate || toDate || billNoQuery || biltyNoQuery || customerQuery || subCustomerQuery || articleFilter || missingFilter !== 'all';
 
   const clearAllFilters = () => {
-    setFromDate(''); setToDate(''); setBillNoQuery(''); setBiltyNoQuery('');
+    setFromDate(getThreeMonthsAgoDate()); setToDate(getTodayDate()); setBillNoQuery(''); setBiltyNoQuery('');
     setCustomerQuery(''); setSubCustomerQuery(''); setArticleFilter('');
     setMissingFilter('all');
   };

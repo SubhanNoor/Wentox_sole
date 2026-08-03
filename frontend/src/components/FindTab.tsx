@@ -3,6 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import type { SaleBill } from '@/types';
 import { Search, Printer, Calendar, FileText, User, Edit2, Package, Truck, Layers, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
 interface FindTabProps {
   onEditBill: (bill: SaleBill) => void;
@@ -13,8 +14,8 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
   const { state } = useApp();
 
   // ── Search Filter State ──────────────────────────────────────────────────────
-  const [fromDate, setFromDate]             = useState('');
-  const [toDate, setToDate]                 = useState('');
+  const [fromDate, setFromDate]             = useState(getThreeMonthsAgoDate());
+  const [toDate, setToDate]                 = useState(getTodayDate());
   const [customerQuery, setCustomerQuery]   = useState('');
   const [subCustomerQuery, setSubCustomerQuery] = useState('');
   const [billNoQuery, setBillNoQuery]       = useState('');
@@ -105,7 +106,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
   const hasFilters = fromDate || toDate || billNoQuery || biltyNoQuery || customerQuery || subCustomerQuery || addaFilter || articleFilter || missingFilter !== 'all';
 
   const clearAllFilters = () => {
-    setFromDate(''); setToDate(''); setBillNoQuery(''); setBiltyNoQuery('');
+    setFromDate(getThreeMonthsAgoDate()); setToDate(getTodayDate()); setBillNoQuery(''); setBiltyNoQuery('');
     setCustomerQuery(''); setSubCustomerQuery(''); setAddaFilter(''); setArticleFilter('');
     setMissingFilter('all');
   };
