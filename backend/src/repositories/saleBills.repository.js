@@ -40,7 +40,7 @@ async function insert(transaction, bill) {
     totalPairs: { type: sql.Int, value: bill.total_pairs },
     grossValue: { type: sql.Decimal(14, 2), value: bill.gross_value },
     netValue: { type: sql.Decimal(14, 2), value: bill.net_value },
-    status: { type: sql.VarChar(10), value: bill.status },
+    dueDate: { type: sql.Date, value: bill.due_date ?? null },
     createdBy: { type: sql.Int, value: bill.created_by ?? null },
   });
 
@@ -48,13 +48,13 @@ async function insert(transaction, bill) {
     INSERT INTO dbo.sale_bills (
       bill_date, store_id, customer_id, sub_customer_id, main_ac_id, delivery_type,
       delivery_address, bill_no, gp_no, bilty_no, adda_id, remarks, invoice_discount,
-      total_cartons, total_pairs, gross_value, net_value, status, created_by
+      total_cartons, total_pairs, gross_value, net_value, due_date, created_by
     )
     OUTPUT inserted.bill_id
     VALUES (
       @billDate, @storeId, @customerId, @subCustomerId, @mainAcId, @deliveryType,
       @deliveryAddress, @billNo, @gpNo, @biltyNo, @addaId, @remarks, @invoiceDiscount,
-      @totalCartons, @totalPairs, @grossValue, @netValue, @status, @createdBy
+      @totalCartons, @totalPairs, @grossValue, @netValue, @dueDate, @createdBy
     )
   `);
   return result.recordset[0].bill_id;
@@ -106,7 +106,19 @@ async function findById(billId) {
     { billId: { type: sql.Int, value: billId } },
   );
 
-  return { ...bill, items: itemsResult.recordset };
+  return { ...bill, is_posted: await isPosted(billId), items: itemsResult.recordset };
+}
+
+// "Posted" is derived from ledger_entries existing for this bill, rather than a stored status
+// column (dropped — schema §6 update) — a bill is posted iff its ledger/stock rows are live.
+async function isPosted(billId) {
+  const result = await query(
+    `SELECT CASE WHEN EXISTS (
+       SELECT 1 FROM dbo.ledger_entries WHERE source_type = 'SALE_BILL' AND source_id = @billId
+     ) THEN 1 ELSE 0 END AS posted`,
+    { billId: { type: sql.Int, value: billId } },
+  );
+  return result.recordset[0].posted === 1;
 }
 
 // Bulk-inserts ledger_entries rows for a post (schema: exactly one of ac_id/ba_id per row).
@@ -182,6 +194,7 @@ async function updateHeader(transaction, billId, bill) {
     totalPairs: { type: sql.Int, value: bill.total_pairs },
     grossValue: { type: sql.Decimal(14, 2), value: bill.gross_value },
     netValue: { type: sql.Decimal(14, 2), value: bill.net_value },
+    dueDate: { type: sql.Date, value: bill.due_date ?? null },
   });
 
   await request.query(`
@@ -191,17 +204,9 @@ async function updateHeader(transaction, billId, bill) {
       delivery_address = @deliveryAddress, bill_no = @billNo, gp_no = @gpNo, bilty_no = @biltyNo,
       adda_id = @addaId, remarks = @remarks, invoice_discount = @invoiceDiscount,
       total_cartons = @totalCartons, total_pairs = @totalPairs, gross_value = @grossValue,
-      net_value = @netValue
+      net_value = @netValue, due_date = @dueDate
     WHERE bill_id = @billId
   `);
-}
-
-async function setStatus(transaction, billId, status) {
-  const request = requestWithParams(transaction, {
-    billId: { type: sql.Int, value: billId },
-    status: { type: sql.VarChar(10), value: status },
-  });
-  await request.query('UPDATE dbo.sale_bills SET status = @status WHERE bill_id = @billId');
 }
 
 async function deleteLedgerAndStock(transaction, billId) {
@@ -248,6 +253,6 @@ async function list(filters = {}) {
 }
 
 module.exports = {
-  getVariantPackings, insert, insertItems, findById, insertLedgerEntries, insertStockMovements,
-  deleteItems, updateHeader, setStatus, deleteLedgerAndStock, list,
+  getVariantPackings, insert, insertItems, findById, isPosted, insertLedgerEntries,
+  insertStockMovements, deleteItems, updateHeader, deleteLedgerAndStock, list,
 };

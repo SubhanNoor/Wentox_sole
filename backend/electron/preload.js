@@ -5,8 +5,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 // as a thin wrapper over ipcRenderer.invoke, without hand-listing every action for every feature.
 const FEATURES = [
   'auth', 'addas', 'businessAccounts', 'categories', 'chartAccounts', 'cities', 'customers',
-  'draftSaleBills', 'expenses', 'groupAccounts', 'products', 'receipts', 'reports', 'saleBills',
-  'saleReturns', 'stock', 'stores', 'subCustomers', 'vendors',
+  'draftSaleBills', 'draftSaleReturns', 'expenses', 'groupAccounts', 'products', 'receipts',
+  'reports', 'saleBills', 'saleReturns', 'stock', 'stores', 'subCustomers', 'vendors',
 ];
 
 // window.api.<feature> stays camelCase (normal JS property access); the wire channel name is

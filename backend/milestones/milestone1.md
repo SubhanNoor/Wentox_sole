@@ -19,7 +19,7 @@ this skeleton.
 - [x] `src/db/pool.js` — `mssql` `ConnectionPool` singleton + `query()` helper + `withTransaction()` helper (wraps an `mssql` `Transaction`/`Request` pair)
 - [x] `src/db/migrate.js` — migration runner: applies `database/schema.sql` first (repo-root source of truth, full T-SQL DDL generated from `System_architecture/database_schema_v4.3.md`, 39 tables), then any numbered files under `src/db/migrations/*.sql` in order, tracked in a `dbo.schema_migrations` table. Applying all tables up front means every later milestone's CRUD/transaction work has its tables available from day one, regardless of which screen milestone builds it in.
 - [x] Seed script (`src/db/seeds/run.js`) — admin user (bcrypt hash, with `role`), account classes/groups + reserved chart accounts (CUSTOMERS/VENDORS ACCOUNTS, CASH IN HAND, SALES, PURCHASES, COMMISSION ALLOWED, CHEQUES IN HAND, Payment Trail heads), default store — idempotent, safe to re-run
-- [ ] Verify: migration applies cleanly to a fresh local SQL Server database — **pending**: no SQL Server instance set up yet
+- [x] Verify: migration applies cleanly to a fresh local SQL Server database — confirmed against `wentox_db` (real instance) and again against a disposable scratch database created solely to validate a from-scratch `schema.sql`-only import (see Milestone 2 log)
 
 ## Module 1.3 — Auth (UC-02: Log in / log out, UC-03: Role-based access control)
 
@@ -33,4 +33,4 @@ equivalent of the old JWT middleware: any handler that needs a logged-in user ca
 - [x] `auth:login` — verify bcrypt hash, call `session.login(user)` (include `role` per UC-03)
 - [x] `auth:logout` — call `session.logout()`
 - [x] `auth:update-credentials` — requires session; supports changing **username and/or password** — verify `currentPassword`, check new username isn't taken (`UQ_users_name`) before updating, re-hash new password with bcrypt if provided (UC-04)
-- [ ] Verify: `auth:login` with seeded admin returns a session; a protected channel called with no prior login rejects via `requireSession()` — **pending**: no SQL Server instance / `npm install` (mssql) yet to run end-to-end
+- [x] Verify: `auth:login` with seeded admin returns a session; a protected channel called with no prior login rejects via `requireSession()` — confirmed live: correct login returns `{userId, username, role}`, wrong password rejected, `requireSession()` throws `Not logged in` after `logout()`

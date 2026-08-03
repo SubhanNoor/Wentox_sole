@@ -694,7 +694,7 @@ CREATE TABLE dbo.sale_bills (
   total_pairs      INT           NOT NULL CONSTRAINT DF_sb_pairs    DEFAULT (0),
   gross_value      DECIMAL(14,2) NOT NULL CONSTRAINT DF_sb_gross    DEFAULT (0),
   net_value        DECIMAL(14,2) NOT NULL CONSTRAINT DF_sb_net      DEFAULT (0),
-  status           VARCHAR(10)   NOT NULL CONSTRAINT DF_sb_status   DEFAULT ('DRAFT'),
+  due_date         DATE          NULL,                       -- post-v4.3: re-added for the payment-overdue notification feature
   created_by       INT           NULL,
   updated_by       INT           NULL,
   created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sb_created  DEFAULT (SYSUTCDATETIME()),
@@ -708,7 +708,6 @@ CREATE TABLE dbo.sale_bills (
   CONSTRAINT FK_sale_bills_user     FOREIGN KEY (created_by)      REFERENCES dbo.users(user_id),
   CONSTRAINT FK_sale_bills_upd      FOREIGN KEY (updated_by)      REFERENCES dbo.users(user_id),
   CONSTRAINT CK_sale_bills_deliv    CHECK (delivery_type IN ('SAME','CUSTOM')),
-  CONSTRAINT CK_sale_bills_status   CHECK (status IN ('CONFIRMED','DRAFT')),
   CONSTRAINT CK_sale_bills_custdlv  CHECK (delivery_type = 'SAME' OR sub_customer_id IS NOT NULL)
 );
 CREATE INDEX IX_sale_bills_date     ON dbo.sale_bills(bill_date);
@@ -855,7 +854,6 @@ CREATE TABLE dbo.sale_returns (
   total_pairs      INT           NOT NULL CONSTRAINT DF_sr_pairs   DEFAULT (0),
   gross_value      DECIMAL(14,2) NOT NULL CONSTRAINT DF_sr_gross   DEFAULT (0),
   net_value        DECIMAL(14,2) NOT NULL CONSTRAINT DF_sr_net     DEFAULT (0),
-  status           VARCHAR(10)   NOT NULL CONSTRAINT DF_sr_status  DEFAULT ('DRAFT'),
   created_by       INT           NULL,
   updated_by       INT           NULL,
   created_at       DATETIME2(0)  NOT NULL CONSTRAINT DF_sr_created DEFAULT (SYSUTCDATETIME()),
@@ -866,8 +864,7 @@ CREATE TABLE dbo.sale_returns (
   CONSTRAINT FK_sale_returns_subcust FOREIGN KEY (sub_customer_id) REFERENCES dbo.sub_customers(sub_customer_id),
   CONSTRAINT FK_sale_returns_adda    FOREIGN KEY (adda_id)         REFERENCES dbo.addas(adda_id),
   CONSTRAINT FK_sale_returns_user    FOREIGN KEY (created_by)      REFERENCES dbo.users(user_id),
-  CONSTRAINT FK_sale_returns_upd     FOREIGN KEY (updated_by)      REFERENCES dbo.users(user_id),
-  CONSTRAINT CK_sale_returns_status  CHECK (status IN ('CONFIRMED','DRAFT'))
+  CONSTRAINT FK_sale_returns_upd     FOREIGN KEY (updated_by)      REFERENCES dbo.users(user_id)
 );
 CREATE INDEX IX_sale_returns_date     ON dbo.sale_returns(return_date);
 CREATE INDEX IX_sale_returns_customer ON dbo.sale_returns(customer_id, return_date);
@@ -1610,7 +1607,10 @@ GO
    WHAT:  Snooze/dismiss state for derived alerts (cheque-due today; the
           payment-overdue alert this was originally built for no longer
           exists, since due_date was removed from sale_bills/purchases —
-          only the cheque-due alert survives).
+          only the cheque-due alert survives). POST-v4.3: due_date was
+          re-added to sale_bills (not purchases) for a planned notification
+          feature (details TBD) — this table's PAYMENT_OVERDUE alert_key
+          shape is kept ready for it, but that alert isn't wired up yet.
    WHY:   dismissed_until stays NULL in the current build (the UI dismisses
           permanently with a "Restore" action instead of a snooze); the
           column is kept for the eventual snooze without a later migration.
