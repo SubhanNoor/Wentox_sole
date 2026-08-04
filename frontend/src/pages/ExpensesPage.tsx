@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import type { Expense, ExpenseMode } from '@/types';
-import { Save, Wallet } from 'lucide-react';
+import { Save, Wallet, FileText } from 'lucide-react';
 import { getUnallocatedCheque } from '@/lib/cashbank';
 import SearchableSelect from '@/components/SearchableSelect';
 import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
@@ -16,6 +16,7 @@ export default function ExpensesPage() {
   const [activeTab, setActiveTab] = useState<'entry' | 'weekly' | 'monthly' | 'overall'>('entry');
 
   // Form State
+  const [expenseId, setExpenseId] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [businessAccountId, setBusinessAccountId] = useState('');
   const [amount, setAmount] = useState<number>(0);
@@ -26,6 +27,13 @@ export default function ExpensesPage() {
   const [issuedChequeDate, setIssuedChequeDate] = useState('');
   const [details, setDetails] = useState('');
   const [remarks, setRemarks] = useState('');
+
+  // Drafts state
+  const [drafts, setDrafts] = useState<Expense[]>(() => {
+    const saved = localStorage.getItem('wento_expense_drafts');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [selectedDraftId, setSelectedDraftId] = useState('');
 
   const bankOptions = useMemo(
     () => state.bankAccounts.map(b => ({ value: b.id, label: b.name })),
@@ -77,6 +85,57 @@ export default function ExpensesPage() {
     return state.vendors.find(v => v.baId === selectedBizAc.id);
   }, [isVendorPayment, selectedBizAc, state.vendors]);
 
+  const loadExpense = (exp: Expense) => {
+    setExpenseId(exp.id);
+    setDate(exp.date);
+    setBusinessAccountId(exp.businessAccountId);
+    setAmount(exp.amount || 0);
+    setPaymentMode(exp.paymentMode);
+    setBankId(exp.bankId || '');
+    setChequeId(exp.chequeId || '');
+    setIssuedChequeNo(exp.issuedChequeNo || '');
+    setIssuedChequeDate(exp.issuedChequeDate || '');
+    setDetails(exp.details || '');
+    setRemarks(exp.remarks || '');
+    setErrorMsg('');
+  };
+
+  const handleSaveDraft = () => {
+    const currentId = expenseId || 'exp_draft_' + Date.now();
+    const draftExpense: Expense = {
+      id: currentId,
+      date,
+      businessAccountId,
+      amount: amount || 0,
+      paymentMode,
+      bankId: (paymentMode === 'Online' || paymentMode === 'ChequeIssued') ? bankId : undefined,
+      chequeId: paymentMode === 'ChequeEndorsed' ? chequeId : undefined,
+      issuedChequeNo: paymentMode === 'ChequeIssued' ? issuedChequeNo.trim() : undefined,
+      issuedChequeDate: paymentMode === 'ChequeIssued' ? issuedChequeDate : undefined,
+      details,
+      remarks,
+      status: 'Unposted'
+    };
+
+    setDrafts(prev => {
+      const existingIdx = prev.findIndex(d => d.id === currentId);
+      let updated;
+      if (existingIdx !== -1) {
+        updated = [...prev];
+        updated[existingIdx] = draftExpense;
+      } else {
+        updated = [draftExpense, ...prev];
+      }
+      localStorage.setItem('wento_expense_drafts', JSON.stringify(updated));
+      return updated;
+    });
+
+    setExpenseId(currentId);
+    setSelectedDraftId(currentId);
+    setSuccessMsg('Expense saved to drafts cache.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
   const handleSaveExpense = (e: React.FormEvent) => {
     e.preventDefault();
     if (!date) return setErrorMsg('Please pick a date.');
@@ -101,7 +160,7 @@ export default function ExpensesPage() {
     }
 
     const newExpense: Expense = {
-      id: 'exp_' + Date.now(),
+      id: expenseId || ('exp_' + Date.now()),
       date,
       businessAccountId,
       amount,
@@ -111,10 +170,20 @@ export default function ExpensesPage() {
       issuedChequeNo: paymentMode === 'ChequeIssued' ? issuedChequeNo.trim() : undefined,
       issuedChequeDate: paymentMode === 'ChequeIssued' ? issuedChequeDate : undefined,
       details,
-      remarks
+      remarks,
+      status: 'Posted'
     };
 
     dispatch({ type: 'ADD_EXPENSE', expense: newExpense });
+
+    // Clean up draft from cache if saved/confirmed
+    setDrafts(prev => {
+      const updated = prev.filter(d => d.id !== expenseId && d.id !== selectedDraftId);
+      localStorage.setItem('wento_expense_drafts', JSON.stringify(updated));
+      return updated;
+    });
+    setSelectedDraftId('');
+    setExpenseId('');
 
     setSuccessMsg(
       isVendorPayment
@@ -195,25 +264,92 @@ export default function ExpensesPage() {
               <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
             )}
 
+            {/* Drafts Loader Panel */}
+            {drafts.length > 0 && (
+              <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-4 text-sm" data-no-print>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-slate-700">Saved Drafts:</span>
+                  <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
+                    {drafts.length} incomplete expense(s) cached
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <select
+                    value={selectedDraftId}
+                    onChange={e => {
+                      const draftId = e.target.value;
+                      setSelectedDraftId(draftId);
+                      const selected = drafts.find(d => d.id === draftId);
+                      if (selected) {
+                        loadExpense(selected);
+                      }
+                    }}
+                    className="soleria-input py-1 px-2.5 text-xs bg-white border cursor-pointer font-medium"
+                    style={{ width: '240px' }}
+                  >
+                    <option value="">Select a draft to load...</option>
+                    {drafts.map(d => {
+                      const bizAcName = state.businessAccounts.find(b => b.id === d.businessAccountId)?.name || 'Unnamed Account';
+                      return (
+                        <option key={d.id} value={d.id}>
+                          {bizAcName} - {formatCurrency(d.amount)} ({d.date})
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedDraftId) {
+                        setDrafts(prev => {
+                          const updated = prev.filter(d => d.id !== selectedDraftId);
+                          localStorage.setItem('wento_expense_drafts', JSON.stringify(updated));
+                          return updated;
+                        });
+                        setSelectedDraftId('');
+                        setExpenseId('');
+                        setBusinessAccountId('');
+                        setAmount(0);
+                        setDetails('');
+                        setRemarks('');
+                        resetModeFields('Cash');
+                        setSuccessMsg('Draft deleted successfully.');
+                        setTimeout(() => setSuccessMsg(''), 2000);
+                      } else {
+                        setErrorMsg('Please select a draft first.');
+                        setTimeout(() => setErrorMsg(''), 2000);
+                      }
+                    }}
+                    className="text-xs text-rose-600 hover:text-rose-800 font-semibold transition-colors"
+                  >
+                    Delete Selected Draft
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Entry Form Card */}
             <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print>
               <h3 className="font-lora font-semibold text-xl border-b pb-3 mb-5 text-slate-800 flex items-center gap-2">
-                <Wallet size={20} className="text-rose-600" /> New Expense (Kharch)
+                <Wallet size={20} className="text-[#B08D57]" /> Expense / Payment Entry (Kharch)
               </h3>
               
               <form onSubmit={handleSaveExpense} className="flex flex-col gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Expense Date</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
                   <input
                     type="date"
                     value={date}
                     onChange={e => setDate(e.target.value)}
-                    className="soleria-input"
+                    className="soleria-input font-semibold"
                   />
                 </div>
 
+                {/* Business Account Dropdown */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Select Ledger Account (Business A/C)</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    Select Account (Who to Pay) <span className="text-red-500 font-bold">*</span>
+                  </label>
                   <SearchableSelect
                     options={state.businessAccounts.map(b => ({
                       value: b.id,
@@ -221,38 +357,20 @@ export default function ExpensesPage() {
                     }))}
                     value={businessAccountId}
                     onChange={setBusinessAccountId}
-                    placeholder="Search & select business account..."
-                    searchPlaceholder="Type to search..."
+                    placeholder="Search account by name..."
                   />
                 </div>
 
+                {/* Display Parent Account Group */}
                 {selectedBizAc && (
-                  <div className={`flex flex-col gap-2.5 p-3.5 border rounded-lg text-xs ${isVendorPayment ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
-                    {isVendorPayment && (
-                      <div className="flex items-center gap-1.5 pb-2 border-b border-amber-200/70">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300">
-                          Vendor Payment
-                        </span>
-                        <span className="text-amber-700 font-medium">
-                          Counts toward {linkedVendor?.name || 'this vendor'}'s "Payment Paid" total in Vendor Report
-                        </span>
-                      </div>
-                    )}
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <span className="block text-slate-500 font-medium">Account Code:</span>
-                        <span className="font-semibold text-slate-700 font-mono">{selectedBizAc.id}</span>
-                      </div>
-                      <div>
-                        <span className="block text-slate-500 font-medium">Parent Class:</span>
-                        <span className="font-semibold text-slate-700">{bizParentAcName}</span>
-                      </div>
-                    </div>
+                  <div className="p-3 bg-amber-50/60 border border-amber-200/80 rounded-lg text-xs flex justify-between items-center">
+                    <span className="text-amber-900 font-medium">Control Account Head:</span>
+                    <span className="font-bold text-amber-950 uppercase tracking-wide">{bizParentAcName}</span>
                   </div>
                 )}
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Amount Spent (PKR)</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Amount Paid (PKR)</label>
                   <input
                     type="number"
                     min={0}
@@ -265,36 +383,42 @@ export default function ExpensesPage() {
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Payment Mode</label>
-                  {/*
-                    Four modes, not three. "Cheque" split in two because they
-                    take money from DIFFERENT places: endorsing hands on a
-                    customer's cheque out of Cheques in Hand, while issuing
-                    writes our own and draws on a bank.
-                  */}
-                  <div className="grid grid-cols-2 gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
-                    {([
-                      { m: 'Cash' as ExpenseMode, label: 'Cash', hint: 'from Petty Cash' },
-                      { m: 'Online' as ExpenseMode, label: 'Online', hint: 'from a bank' },
-                      { m: 'ChequeIssued' as ExpenseMode, label: 'Cheque — Issue', hint: 'we write it' },
-                      { m: 'ChequeEndorsed' as ExpenseMode, label: 'Cheque — Endorse', hint: 'hand on a received one' },
-                    ]).map(opt => (
-                      <button
-                        key={opt.m}
-                        type="button"
-                        onClick={() => resetModeFields(opt.m)}
-                        className={`py-2 px-1 rounded-md transition-colors leading-tight ${paymentMode === opt.m ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-                      >
-                        <span className="block">{opt.label}</span>
-                        <span className="block text-[10px] font-medium text-slate-400">{opt.hint}</span>
-                      </button>
-                    ))}
+                  <div className="grid grid-cols-4 gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
+                    <button
+                      type="button"
+                      onClick={() => resetModeFields('Cash')}
+                      className={`py-2 rounded-md transition-colors ${paymentMode === 'Cash' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                    >
+                      Cash
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => resetModeFields('ChequeEndorsed')}
+                      className={`py-2 rounded-md transition-colors ${paymentMode === 'ChequeEndorsed' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                    >
+                      Cheque Endorsed
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => resetModeFields('ChequeIssued')}
+                      className={`py-2 rounded-md transition-colors ${paymentMode === 'ChequeIssued' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                    >
+                      Cheque Issued
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => resetModeFields('Online')}
+                      className={`py-2 rounded-md transition-colors ${paymentMode === 'Online' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                    >
+                      Online
+                    </button>
                   </div>
                 </div>
 
                 {(paymentMode === 'Online' || paymentMode === 'ChequeIssued') && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      Paid From <span className="text-red-500 font-bold">*</span>
+                      Paid From Bank Account <span className="text-red-500 font-bold">*</span>
                     </label>
                     {state.bankAccounts.length === 0 ? (
                       <div className="soleria-input text-rose-600 text-sm flex items-center font-semibold">
@@ -312,22 +436,22 @@ export default function ExpensesPage() {
                 )}
 
                 {paymentMode === 'ChequeIssued' && (
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">
-                        Cheque No. <span className="text-red-500 font-bold">*</span>
+                        Issued Cheque No. <span className="text-red-500 font-bold">*</span>
                       </label>
                       <input
                         type="text"
                         value={issuedChequeNo}
                         onChange={e => setIssuedChequeNo(e.target.value)}
-                        placeholder="e.g. 441098"
+                        placeholder="e.g. 109283"
                         className="soleria-input font-mono"
                       />
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">
-                        Cheque Date <span className="text-red-500 font-bold">*</span>
+                        Date Written on Cheque <span className="text-red-500 font-bold">*</span>
                       </label>
                       <input
                         type="date"
@@ -336,17 +460,13 @@ export default function ExpensesPage() {
                         className="soleria-input"
                       />
                     </div>
-                    <p className="col-span-2 text-[10px] text-slate-400 -mt-1">
-                      The bank is reduced on the date the cheque is written, not when it clears —
-                      so this balance shows what you have committed, not what the bank would say today.
-                    </p>
                   </div>
                 )}
 
                 {paymentMode === 'ChequeEndorsed' && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      Which Received Cheque <span className="text-red-500 font-bold">*</span>
+                      Select Cheque to Hand Over <span className="text-red-500 font-bold">*</span>
                     </label>
                     {endorsableCheques.length === 0 ? (
                       <div className="soleria-input text-slate-400 text-sm flex items-center">
@@ -390,9 +510,21 @@ export default function ExpensesPage() {
                   />
                 </div>
 
-                <button type="submit" className="btn-gold w-full mt-2 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold">
-                  <Save size={16} /> Save Expense
-                </button>
+                <div className="flex gap-3 mt-2">
+                  <button
+                    type="button"
+                    onClick={handleSaveDraft}
+                    className="btn-outline flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
+                  >
+                    <FileText size={16} /> Save in Draft
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn-gold flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
+                  >
+                    <Save size={16} /> Save Expense
+                  </button>
+                </div>
               </form>
             </div>
           </div>

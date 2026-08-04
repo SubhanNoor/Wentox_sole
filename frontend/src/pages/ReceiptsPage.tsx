@@ -3,7 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import { getCustomerBalance } from '@/lib/cheques';
 import AppLayout from '@/components/AppLayout';
 import type { Receipt } from '@/types';
-import { Save, DollarSign, Search } from 'lucide-react';
+import { Save, DollarSign, Search, FileText } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
@@ -40,6 +40,7 @@ export default function ReceiptsPage() {
   }, [state.currentTab, state.currentUserRole]);
 
   // Form State
+  const [receiptId, setReceiptId] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [customerId, setCustomerId] = useState('');
   const [amount, setAmount] = useState<number>(0);
@@ -53,6 +54,13 @@ export default function ReceiptsPage() {
   const [chequeDate, setChequeDate] = useState('');
   const [chequeReceivedDate, setChequeReceivedDate] = useState('');
   const [remarks, setRemarks] = useState('');
+
+  // Drafts state
+  const [drafts, setDrafts] = useState<Receipt[]>(() => {
+    const saved = localStorage.getItem('wento_receipt_drafts');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [selectedDraftId, setSelectedDraftId] = useState('');
 
   // Dropdown search state
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -108,6 +116,62 @@ export default function ReceiptsPage() {
     };
   }, [customerId, state.saleBills, state.saleReturns, state.receipts, amount, commission]);
 
+  const loadReceipt = (r: Receipt) => {
+    setReceiptId(r.id);
+    setDate(r.date);
+    setCustomerId(r.customerId);
+    setAmount(r.amount || 0);
+    setCommission(r.commission || 0);
+    setPaymentMode(r.paymentMode);
+    setBankId(r.bankId || '');
+    setDetails(r.details || '');
+    setChequeNo(r.chequeNo || '');
+    setChequeDate(r.chequeDate || '');
+    setChequeReceivedDate(r.chequeReceivedDate || '');
+    setRemarks(r.remarks || '');
+    setErrorMsg('');
+  };
+
+  const handleSaveDraft = () => {
+    const currentId = receiptId || 'rc_draft_' + Date.now();
+    const draftReceipt: Receipt = {
+      id: currentId,
+      date,
+      customerId,
+      amount: amount || 0,
+      commission: commission || undefined,
+      paymentMode,
+      bankId: paymentMode === 'Online' ? bankId : undefined,
+      details,
+      ...(paymentMode === 'Cheque' ? {
+        chequeNo: chequeNo.trim(),
+        chequeDate,
+        chequeReceivedDate: chequeReceivedDate || date,
+        chequeStatus: 'PENDING' as const
+      } : {}),
+      remarks,
+      status: 'Unposted'
+    };
+
+    setDrafts(prev => {
+      const existingIdx = prev.findIndex(d => d.id === currentId);
+      let updated;
+      if (existingIdx !== -1) {
+        updated = [...prev];
+        updated[existingIdx] = draftReceipt;
+      } else {
+        updated = [draftReceipt, ...prev];
+      }
+      localStorage.setItem('wento_receipt_drafts', JSON.stringify(updated));
+      return updated;
+    });
+
+    setReceiptId(currentId);
+    setSelectedDraftId(currentId);
+    setSuccessMsg('Receipt saved to drafts cache.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
   const handleSaveReceipt = (e: React.FormEvent) => {
     e.preventDefault();
     if (!date) return setErrorMsg('Please pick a date.');
@@ -118,7 +182,7 @@ export default function ReceiptsPage() {
     if (paymentMode === 'Online' && !bankId) return setErrorMsg('Select which bank account received this money.');
 
     const newReceipt: Receipt = {
-      id: 'rc_' + Date.now(),
+      id: receiptId || ('rc_' + Date.now()),
       date,
       customerId,
       amount,
@@ -132,10 +196,20 @@ export default function ReceiptsPage() {
         chequeReceivedDate: chequeReceivedDate || date,
         chequeStatus: 'PENDING' as const
       } : {}),
-      remarks
+      remarks,
+      status: 'Posted'
     };
 
     dispatch({ type: 'ADD_RECEIPT', receipt: newReceipt });
+
+    // Clean up draft from cache if saved/confirmed
+    setDrafts(prev => {
+      const updated = prev.filter(d => d.id !== receiptId && d.id !== selectedDraftId);
+      localStorage.setItem('wento_receipt_drafts', JSON.stringify(updated));
+      return updated;
+    });
+    setSelectedDraftId('');
+    setReceiptId('');
 
     const commissionNote = commission > 0 ? ` (+ ${formatCurrency(commission)} commission)` : '';
     setSuccessMsg(`Receipt of ${formatCurrency(amount)}${commissionNote} saved successfully against customer!`);
@@ -171,7 +245,7 @@ export default function ReceiptsPage() {
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
               activeTab === 'entry'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                : 'bg-white border border-slate-200 text-[#111c2a] hover:bg-slate-50'
             }`}
           >
             Receipt Entry
@@ -235,7 +309,7 @@ export default function ReceiptsPage() {
                   : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
               }`}
             >
-              Cheques
+              Cheques Disposal
             </button>
           )}
         </div>
@@ -247,7 +321,7 @@ export default function ReceiptsPage() {
         {activeTab === 'cheques' && state.currentUserRole !== 'User' && <ChequesTab />}
 
         {activeTab === 'entry' && (
-          <div className="max-w-2xl mx-auto">
+          <div className="max-w-2xl mx-auto animate-fadeIn">
             {/* Banner Alerts */}
             {successMsg && (
               <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
@@ -256,96 +330,171 @@ export default function ReceiptsPage() {
               <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
             )}
 
+            {/* Drafts Loader Panel */}
+            {drafts.length > 0 && (
+              <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-4 text-sm" data-no-print>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-slate-700">Saved Drafts:</span>
+                  <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
+                    {drafts.length} incomplete receipt(s) cached
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <select
+                    value={selectedDraftId}
+                    onChange={e => {
+                      const draftId = e.target.value;
+                      setSelectedDraftId(draftId);
+                      const selected = drafts.find(d => d.id === draftId);
+                      if (selected) {
+                        loadReceipt(selected);
+                      }
+                    }}
+                    className="soleria-input py-1 px-2.5 text-xs bg-white border cursor-pointer font-medium"
+                    style={{ width: '240px' }}
+                  >
+                    <option value="">Select a draft to load...</option>
+                    {drafts.map(d => {
+                      const custName = state.customers.find(c => c.id === d.customerId)?.name || 'Unnamed Customer';
+                      return (
+                        <option key={d.id} value={d.id}>
+                          {custName} - {formatCurrency(d.amount)} ({d.date})
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedDraftId) {
+                        setDrafts(prev => {
+                          const updated = prev.filter(d => d.id !== selectedDraftId);
+                          localStorage.setItem('wento_receipt_drafts', JSON.stringify(updated));
+                          return updated;
+                        });
+                        setSelectedDraftId('');
+                        setReceiptId('');
+                        setCustomerId('');
+                        setAmount(0);
+                        setCommission(0);
+                        setDetails('');
+                        setChequeNo('');
+                        setChequeDate('');
+                        setChequeReceivedDate('');
+                        setRemarks('');
+                        setSuccessMsg('Draft deleted successfully.');
+                        setTimeout(() => setSuccessMsg(''), 2000);
+                      } else {
+                        setErrorMsg('Please select a draft first.');
+                        setTimeout(() => setErrorMsg(''), 2000);
+                      }
+                    }}
+                    className="text-xs text-rose-600 hover:text-rose-800 font-semibold transition-colors"
+                  >
+                    Delete Selected Draft
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Entry Form Card */}
             <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print>
               <h3 className="font-lora font-semibold text-xl border-b pb-3 mb-5 text-slate-800 flex items-center gap-2">
-                <DollarSign size={20} className="text-green-600" /> New Receipt (Jamma)
+                <DollarSign size={20} className="text-[#B08D57]" /> Customer Payment Receipt (Jamma)
               </h3>
               
               <form onSubmit={handleSaveReceipt} className="flex flex-col gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Receipt Date</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
                   <input
                     type="date"
                     value={date}
                     onChange={e => setDate(e.target.value)}
-                    className="soleria-input"
+                    className="soleria-input font-semibold"
                   />
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Select Customer</label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      placeholder="Search & select customer..."
-                      value={isDropdownOpen ? customerSearchQuery : (selectedCustomer ? selectedCustomer.name : '')}
-                      onChange={e => {
-                        setCustomerSearchQuery(e.target.value);
-                        setIsDropdownOpen(true);
-                      }}
-                      onFocus={() => {
-                        setIsDropdownOpen(true);
-                        setCustomerSearchQuery(selectedCustomer ? selectedCustomer.name : '');
-                      }}
-                      onBlur={() => {
-                        setTimeout(() => {
-                          setIsDropdownOpen(false);
-                        }, 200);
-                      }}
-                      className="soleria-input pr-10 font-semibold"
-                    />
-                    <div className="absolute right-3 top-2.5 flex items-center pointer-events-none text-slate-400">
-                      <Search size={16} />
-                    </div>
-                    {isDropdownOpen && (
-                      <div className="absolute z-50 left-0 right-0 mt-1 max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg">
+                {/* Customer Dropdown */}
+                <div className="relative">
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    Select Customer Account <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  <div
+                    onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                    className="soleria-input flex justify-between items-center cursor-pointer font-semibold bg-white"
+                  >
+                    <span className={selectedCustomer ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
+                      {selectedCustomer ? `${selectedCustomer.name} (${selectedCustomer.id})` : 'Search customer...'}
+                    </span>
+                    <span className="text-xs text-slate-400">▼</span>
+                  </div>
+
+                  {isDropdownOpen && (
+                    <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
+                      <div className="p-2 border-b sticky top-0 bg-white">
+                        <div className="relative">
+                          <input
+                            type="text"
+                            placeholder="Type to search..."
+                            value={customerSearchQuery}
+                            onChange={e => setCustomerSearchQuery(e.target.value)}
+                            className="w-full py-1.5 pl-8 pr-3 text-xs border rounded-md font-semibold"
+                            autoFocus
+                          />
+                          <Search size={14} className="absolute left-2.5 top-2.5 text-slate-400" />
+                        </div>
+                      </div>
+                      <div className="py-1">
                         {filteredDropdownCustomers.length === 0 ? (
-                          <div className="p-3 text-xs text-slate-400 italic">No customers found</div>
+                          <div className="p-3 text-xs text-slate-400 text-center font-medium">No matching customers</div>
                         ) : (
-                          filteredDropdownCustomers.map(c => (
-                            <button
-                              key={c.id}
-                              type="button"
-                              onMouseDown={() => {
-                                setCustomerId(c.id);
-                                setCustomerSearchQuery(c.name);
-                                setIsDropdownOpen(false);
-                              }}
-                              className={`w-full text-left px-4 py-2 text-sm hover:bg-slate-50 transition-colors border-b last:border-0 flex items-center justify-between ${customerId === c.id ? 'bg-slate-50 text-amber-600 font-semibold' : 'text-slate-700'}`}
-                              style={{ borderColor: 'var(--border-table)' }}
-                            >
-                              <span>{c.name}</span>
-                              <span className="font-mono text-xs text-slate-400">
-                                {state.regions.find(r => r.id === c.regionId)?.name || 'No Region'} · Code: {c.id}
-                              </span>
-                            </button>
-                          ))
+                          filteredDropdownCustomers.map(c => {
+                            const regName = state.regions.find(r => r.id === c.regionId)?.name || '';
+                            const ctName = state.cities.find(ct => ct.id === c.cityId)?.name || '';
+                            return (
+                              <div
+                                key={c.id}
+                                onClick={() => {
+                                  setCustomerId(c.id);
+                                  setIsDropdownOpen(false);
+                                  setCustomerSearchQuery('');
+                                }}
+                                className="px-3 py-2 hover:bg-slate-50 cursor-pointer flex items-center justify-between text-xs"
+                              >
+                                <div>
+                                  <span className="font-semibold text-slate-800">{c.name}</span>
+                                  <span className="text-slate-400 text-[10px] ml-2">({c.id})</span>
+                                </div>
+                                <div className="text-[10px] text-slate-500 font-medium">
+                                  {regName} {ctName ? `— ${ctName}` : ''}
+                                </div>
+                              </div>
+                            );
+                          })
                         )}
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
 
-                {selectedCustomer && customerBalanceDetails && (
-                  <div className="flex flex-col gap-2.5 p-3.5 bg-slate-50 border border-slate-200 rounded-lg text-xs">
-                    <div className="grid grid-cols-2 gap-2 pb-2.5 border-b border-slate-200/60">
-                      <div>
-                        <span className="block text-slate-500 font-medium">Customer Code:</span>
-                        <span className="font-semibold text-slate-700 font-mono">{selectedCustomer.id}</span>
-                      </div>
-                      <div>
-                        <span className="block text-slate-500 font-medium">Main A/C Group:</span>
-                        <span className="font-semibold text-slate-700">{customerMainAcName}</span>
-                      </div>
+                {/* Display Parent Account Group */}
+                {selectedCustomer && (
+                  <div className="p-3 bg-amber-50/60 border border-amber-200/80 rounded-lg text-xs flex justify-between items-center">
+                    <span className="text-amber-900 font-medium">Control Account Head:</span>
+                    <span className="font-bold text-amber-950 uppercase tracking-wide">{customerMainAcName}</span>
+                  </div>
+                )}
+
+                {/* Customer Outstanding Balance details */}
+                {customerBalanceDetails && (
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs flex flex-col gap-1.5">
+                    <div className="flex justify-between items-center font-semibold text-slate-700 border-b pb-1">
+                      <span>Current Outstanding Balance:</span>
+                      <span className={`font-mono text-sm ${customerBalanceDetails.currentBalance > 0 ? 'text-rose-700 font-bold' : customerBalanceDetails.currentBalance < 0 ? 'text-emerald-700 font-bold' : 'text-slate-600'}`}>
+                        {formatCurrency(customerBalanceDetails.currentBalance)}
+                      </span>
                     </div>
-                    <div className="grid grid-cols-2 gap-2 pt-0.5">
-                      <div>
-                        <span className="block text-slate-500 font-medium mb-0.5">Amount Due:</span>
-                        <span className={`font-bold font-mono text-sm ${customerBalanceDetails.currentBalance > 0 ? 'text-rose-700' : customerBalanceDetails.currentBalance < 0 ? 'text-emerald-700' : 'text-slate-600'}`}>
-                          {formatCurrency(customerBalanceDetails.currentBalance)}
-                        </span>
-                      </div>
+                    <div className="grid grid-cols-2 gap-2 text-[11px] pt-0.5">
                       {commission > 0 && (
                         <div>
                           <span className="block text-slate-500 font-medium mb-0.5">After Commission:</span>
@@ -512,9 +661,21 @@ export default function ReceiptsPage() {
                   />
                 </div>
 
-                <button type="submit" className="btn-gold w-full mt-2 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold">
-                  <Save size={16} /> Save Receipt
-                </button>
+                <div className="flex gap-3 mt-2">
+                  <button
+                    type="button"
+                    onClick={handleSaveDraft}
+                    className="btn-outline flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
+                  >
+                    <FileText size={16} /> Save in Draft
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn-gold flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
+                  >
+                    <Save size={16} /> Save Receipt
+                  </button>
+                </div>
               </form>
             </div>
           </div>
@@ -524,5 +685,3 @@ export default function ReceiptsPage() {
     </AppLayout>
   );
 }
-
-

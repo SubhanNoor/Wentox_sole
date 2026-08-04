@@ -1,6 +1,6 @@
 # Wentox Backend — Progress Log
 
-**Current milestone:** Milestone 5, Modules 5.1 (Current Stock & Stock/Production Entry) and 5.3 (Search & Bilty/Adda Updation) — code-complete and verified live, debugger review pending. **Module 5.2 (Reports) deliberately deferred**, not started, per explicit instruction. Milestone 4's Modules 4.1 (Receipts) and 4.2 (Expenses) also remain unbuilt from the prior session — Milestone 4 is still not fully done.
+**Current milestone:** Milestone 4 is now FULLY BUILT — Module 4.2 (Expenses / Kharch) is code-complete, extensively verified live, debugger review clean after fixing 4 issues (1 HIGH). All 7 of Milestone 4's modules (4.1–4.7) are now done. Milestone 5's Module 5.2 (Reports) remains deliberately deferred — the only backend gap left across Milestones 4–8 is Module 5.2 plus, everywhere, the frontend integration pass (Milestone 9.2).
 **Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10, later given a required `region_id` for Sale Bill/Return dropdown filtering); **Module 7.1 moved to Milestone 4 Module 4.5** (see 2026-08-19 entry below — it was never actually "blocked," `payroll.md` fully designs it). Milestone 8: **Module 8.1 complete and verified end-to-end** (Regions, Cities, Stores, Addas — including Addas' UC-14 delete-guard and its new required `region_id` — see below); Modules 8.2/8.3 (accounting hierarchy) not started. **Milestone 4 was expanded 2026-08-19** from Receipts/Expenses-only into also covering Bank Accounts, Transfer, and Payroll (Employees/Wage Run/Salary Run) — none of that is built yet, all newly planned. The Milestone 2/3 frontend wiring is also still pending. Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures. "Reactivate an inactive duplicate-named row instead of rejecting on create()" — no longer parked: implemented across every built entity — vendors (name+phone key), customers/sub-customers (name-only, never blocks on active match), regions/cities/stores/categories/addas (name-only, blocks on active match, matching their existing DB-level `UNIQUE(name)`), and products (name+vendor_id key, didn't have ANY duplicate check before this). Employees still has no CRUD built. See `System_architecture/soft_delete_and_duplicate_check.md`. **Module 4.3 (Bank Accounts) now built** — see the dated entry below; it now also uses the reactivate-instead-of-reject pattern (name+account_no key) from day one, rather than needing a later retrofit.
 
 Log every completed task here (newest first within its milestone). Format:
@@ -13,6 +13,271 @@ Log every completed task here (newest first within its milestone). Format:
 ```
 
 ---
+
+## Milestone 4, Module 4.2 — Expenses / Kharch — Milestone 4 now fully complete
+
+### 2026-08-04 — expenses/draftExpenses built, plus a user-requested "Cheque Return" feature, 5 real bugs found and fixed across 3 debugger rounds
+- **What:** The last piece of Milestone 4. `expenses` (CASH/ONLINE/CHEQUE_ISSUED/CHEQUE_ENDORSED),
+  `draftExpenses`, and — beyond the original checklist, at explicit user request — a "Cheque
+  Return" capability to undo one specific cheque endorsement without touching the rest of the
+  cheque or the underlying receipt.
+- **The core design decision, reached through back-and-forth with the user before coding:**
+  `CHEQUE_ENDORSED` (paying a vendor/expense with a cheque already sitting in Cheques in Hand) is
+  the *exact same real-world action* as Module 4.1's Cheques-page endorsement — so rather than
+  building a second, parallel ledger-writing mechanism, `expenses.service.js#post()` for this mode
+  delegates entirely to `cheques.service.js#endorseToExpense()` (already debugged clean). Only one
+  ledger trail per cheque disposal ever exists, regardless of which screen triggered it, and the
+  existing bounce/return-to-sender reversal (already built) handles it correctly with zero new
+  reversal code. The user specifically corrected a wrong assumption mid-discussion — that endorsing
+  a cheque protects it from later bouncing — with the design doc's own flagship example (bounce
+  *after* full endorsement, reversing both sides); that correction is what led directly to the
+  "reuse the same function" design instead of a bespoke one.
+  - CASH/ONLINE/CHEQUE_ISSUED post normally (`Dr ba_id / Cr <cash/bank>`, own `EXPENSE`-sourced
+    ledger rows). CHEQUE_ISSUED debits the same bank ONLINE would — deduct-on-write, the day the
+    cheque is written, no separate `cheques` row (that table is for cheques *received*).
+  - `unpost()` is deliberately BLOCKED for `CHEQUE_ENDORSED` (`USE_CHEQUE_REVERSAL`) — undoing a
+    cheque disposition only ever happens through the cheque's own reversal mechanisms.
+- **User-requested addition — "Cheque Return":** undo ONE `VENDOR_PAYMENT`/`EXPENSE_PAYMENT`
+  allocation (e.g. a vendor hands the cheque back) without touching the cheque's other allocations
+  or the receipt — narrower than `bounce()`/`returnToSender()` (which reverse *every* active
+  allocation on a receipt). New `cheques.service.js#reverseAllocation()` — rejects a `DEPOSIT`
+  (excluded on purpose, a different action), an already-`REVERSED` allocation, or a terminal
+  cheque; writes one reversing ledger pair; recomputes cheque status back toward `PENDING`/
+  `PARTIALLY_ENDORSED` (the mirror image of the existing forward-direction `recomputeStatus()`).
+  New `listEndorsedAllocations()` + `cheques:endorsed-allocations`/`cheques:reverse-allocation` IPC
+  channels.
+- **Four real bugs found and fixed this pass:**
+  1. `expenses.payment_mode`/`draft_expenses.payment_mode` were `VARCHAR(10)` — too narrow for
+     `CHEQUE_ENDORSED` (15 chars) / `CHEQUE_ISSUED` (13 chars), sized for the old single-word modes.
+     Widened via migration `005_expenses_payment_mode_width.sql` to `VARCHAR(20)` — but the FIRST
+     fix attempt only widened the DB column and missed that `expenses.repository.js`/
+     `draftExpenses.repository.js` ALSO declare the mssql parameter type width explicitly
+     (`sql.VarChar(10)`), which Tedious enforces independent of the actual column width. Caught by
+     a raw TDS protocol error on the very first CHEQUE_ISSUED test; had to fix both the column AND
+     every `sql.VarChar(10)` parameter declaration referencing it.
+  2. `draft_expenses` had drifted out of parity with `expenses` (documented as a "field-for-field
+     mirror," but still only allowed the pre-split `'CHEQUE'` value and had no
+     `issued_cheque_no`/`issued_cheque_date` columns at all). Fixed via migration
+     `004_draft_expenses_parity.sql` — added the two columns, updated the mode CHECK to the 4-value
+     set, added a `CK_draft_expenses_payment` mirroring `CK_expenses_payment`'s exact per-mode
+     shape rules. Also synced the parallel, even-more-stale copy of this table (and `expenses`
+     itself) in `database_schema_v4.3.md`, which still showed the pre-`cash_and_bank.md`-redesign
+     shape entirely (plain `'CHEQUE'`, no split, no issued-cheque columns) — a pre-existing
+     documentation drift from before this session, not something introduced now.
+  3. **HIGH** — `post()` on a `CHEQUE_ENDORSED` expense called `endorseToExpense()` (its own
+     committing transaction — real money movement) then flipped the expense's own `status` in a
+     SEPARATE transaction. A failure in that second step after the first had committed would leave
+     the expense stuck `DRAFT` with the cheque already genuinely disposed of; retrying `post()`
+     would call `endorseToExpense()` a second time, silently double-allocating the cheque, and
+     `draftExpenses.confirm()`'s compensating-delete safety net would then delete the expense row
+     outright, orphaning the real allocation. Fixed via migration
+     `006_cheque_allocations_expense_link_and_receipt_unique.sql`, adding a nullable
+     `cheque_allocations.expense_id` back-reference — `post()` now checks
+     `findAllocationByExpenseId()` before calling `endorseToExpense()` again, making it safely
+     idempotent on retry; `draftExpenses.confirm()`'s catch block does the same check before
+     deciding whether the compensating delete is safe. Found by the debugger (not by the extensive
+     happy-path manual testing, which structurally can't hit a failure in that exact window) —
+     re-verified live by explicitly simulating the failure: calling `endorseToExpense()` directly
+     without the status flip (as if the process crashed there), then confirming a real
+     `post()` retry detected the existing allocation, created no duplicate, and completed correctly
+     — total allocated amount confirmed unchanged, not doubled.
+  4. LOW — `dbo.cheques.receipt_id` had no DB-level uniqueness, only an app-level invariant (a
+     cheque row is only ever inserted once, in the same transaction as its receipt). Added
+     `UNIQUE INDEX UQ_cheques_receipt` in the same migration as fix 3, as defense in depth.
+  5. Also caught and fixed, unrelated to the above: neither `receipts.service.js#list()` nor
+     `expenses.service.js#list()` actually had the "Weekly/Monthly/Overall" `resolveDateRange()`
+     convenience despite an earlier progress-log entry claiming receipts already did — both were
+     thin `repository.list(filters)` pass-throughs with no shorthand resolution. Added to both,
+     matching the `saleBills.service.js`/`purchases.service.js` convention exactly.
+- **Frontend:** built `frontend/src/pages/ChequeReturnPage.tsx` — the "Endorsed Cheques" list +
+  return-confirmation dialog UI, styled consistently with the existing (pre-existing, already
+  demo-wired) `ChequesTab.tsx`. Per explicit instruction, **NOT connected** — "Confirm Return" does
+  not dispatch against `AppContext`'s demo reducer (no such action exists there) and does not call
+  the real backend; it shows a preview-only message and closes. Not added to navigation/routing.
+- **Verified live** against `wentox_db`, extensively: CASH/ONLINE-to-vendor/CHEQUE_ISSUED all
+  posted with correct ledger pairs (exact `ac_id`/`ba_id`/debit/credit checked); CHEQUE_ENDORSED
+  against a freshly-received-and-posted cheque resulted in zero `EXPENSE`-sourced ledger rows and
+  exactly the correct `CHEQUE_ALLOCATION`-sourced pair, cheque correctly `PARTIALLY_ENDORSED`;
+  unpost blocked (`USE_CHEQUE_REVERSAL`); `reverseAllocation()` correctly freed the cheque back to
+  `PENDING`, wrote the correct 2-row reversal, left the linked expense's status untouched
+  (`CONFIRMED`, never touched — same philosophy as a bounced receipt); double-reverse rejected; the
+  freed cheque was re-endorsed for its full amount (confirming the balance really was restored) and
+  successfully bounced afterward; draft CRUD + confirm for all 4 modes; the compensating-delete
+  safety net verified with a genuine failure (bad bank account, no allocation ever created —
+  correctly deleted). Full regression pass of the whole Module 4.1+4.2 suite re-ran clean after
+  every one of the 3 fix rounds. All test data cleaned up after.
+- **Debugger review round 2** (verifying round 1's HIGH fix) found a further gap:
+  `draftExpenses.confirm()` still minted a brand-new `expenses` row on EVERY call — so `post()`'s
+  new per-`expense_id` idempotency check (from round 1's fix) would never find a PRIOR attempt's
+  allocation, since a fresh `confirm()` retry always produces a fresh `expense_id`. This is the
+  realistic recovery path a real user takes (retrying via the Drafts UI after a failed confirm)
+  rather than a direct `expenses:post` retry, so it reopened the same double-disposal risk one
+  layer up. **Fix**: added `draft_expenses.pending_expense_id` (migration
+  `007_draft_expenses_pending_expense.sql`) — set on the draft right after `create()` succeeds but
+  BEFORE `post()` is attempted, so ANY later `confirm()` call on that draft resumes against the
+  SAME `expense_id` instead of minting another one. `confirm()`'s catch no longer deletes the
+  expense at all for `CHEQUE_ENDORSED` (the old existence-check was superseded — resuming is now
+  always possible via `pending_expense_id`, whether or not an allocation was actually created
+  yet). Added a matching guard on `remove()`: deleting a draft with an unresolved
+  `pending_expense_id` is now blocked (`PENDING_EXPENSE_UNRESOLVED`) — it would otherwise orphan a
+  real stuck expense with no way back to it. Re-verified live by directly simulating the exact
+  scenario (manually replicating `confirm()`'s first phase getting stuck — real expense created,
+  `pending_expense_id` set, real allocation created via `endorseToExpense()`, status-flip
+  deliberately skipped — then calling the real `confirm()` again on the same draft): correctly
+  skipped `create()`, resumed against the same `expense_id`, completed via the idempotent `post()`,
+  exactly 1 expense and 1 allocation existed throughout, draft deleted only on success.
+- **Debugger review round 3** (verifying round 2's fix): clean — confirmed every throw point inside
+  `post()`'s `CHEQUE_ENDORSED` branch is correctly covered by `pending_expense_id` resuming (not
+  just the one specific failure point that was manually tested), confirmed the FK/guard/IPC-layer
+  plumbing is all correct, and flagged one accepted residual risk (a narrower race between
+  `create()`'s commit and `setPendingExpenseId()`'s commit — strictly less harmful than the
+  original bug since nothing gets `post()`ed from that state, matches the same single-admin-
+  desktop-app threat model already accepted elsewhere in this codebase for a similar TOCTOU, e.g.
+  `milestones/milestone7.md`'s customer-duplicate-name check). One LOW finding: deleting a stuck
+  expense directly (via the Expenses screen, not the Drafts UI) would hit the new
+  `FK_draft_expenses_pending_expense` constraint with an opaque `INTERNAL` error, since raw SQL
+  errors aren't `ApiError`s. **Fixed**: added `draftExpensesRepository.findByPendingExpenseId()`
+  and a matching guard on `expenses.service.js#remove()` — throws a clear
+  `PENDING_DRAFT_UNRESOLVED` pointing at the specific stuck draft instead. Re-verified live:
+  direct-delete of a stuck expense correctly rejected with the clear message; resolving via
+  `confirm()` retry still works cleanly afterward. Full regression pass (all three test scripts —
+  the main Module 4.1+4.2 suite, the idempotent-`post()` simulation, and the `confirm()`-resume
+  simulation) re-ran clean with zero failures. This closes out Module 4.2 — no further debugger
+  rounds needed.
+- **Not done:** frontend not wired to real data (see above — matches every other module so far).
+- **Files:** `src/repositories/expenses.repository.js` (new), `src/services/expenses.service.js`
+  (new), `src/ipc/expenses.ipc.js` (filled in from TODO stub); `src/repositories/
+  draftExpenses.repository.js` (new), `src/services/draftExpenses.service.js` (new),
+  `src/ipc/draftExpenses.ipc.js` (new); `src/repositories/cheques.repository.js`/
+  `src/services/cheques.service.js`/`src/ipc/cheques.ipc.js` (extended — `findAllocationById`,
+  `listEndorsedAllocations`, `reverseOneAllocation`/`reverseAllocation`,
+  `findAllocationByExpenseId`, `insertAllocation`'s new `expense_id` param); `src/services/
+  receipts.service.js` (added the missing `resolveDateRange()`); `src/ipc/index.js` (registered
+  `draftExpenses`); `electron/preload.js` (FEATURES); `src/db/migrations/
+  004_draft_expenses_parity.sql`, `005_expenses_payment_mode_width.sql`,
+  `006_cheque_allocations_expense_link_and_receipt_unique.sql`,
+  `007_draft_expenses_pending_expense.sql` (all new, all applied); `database/schema.sql`,
+  `System_architecture/database_schema_v4.3.md` (all four migrations' end-states folded in, plus
+  the pre-existing `expenses`/`draft_expenses` doc drift fixed);
+  `frontend/src/pages/ChequeReturnPage.tsx` (new, unconnected); `backend/milestones/milestone4.md`
+  (checkboxes — Module 4.2 now fully checked off, Milestone 4 complete).
+
+## Milestone 4, Module 4.1 — Receipts / Jamma & Cheque Disposal
+
+### 2026-08-04 — receipts/cheques/draftReceipts built, extensively live-verified; two real schema bugs found and fixed
+- **What:** The largest, most interlocking module built this session: `receipts` (CASH/ONLINE/CHEQUE,
+  commission tracking), `cheques` (the received-cheque disposal lifecycle: deposit/endorse-to-
+  vendor/endorse-to-expense/mark-cleared/bounce), and `draftReceipts`. Plus a user-requested
+  addition beyond the original checklist: a "returned to sender" cheque disposition, distinct from
+  a bank bounce.
+- **How — Receipts:**
+  - Always created `DRAFT` explicitly (same discipline as transfers/wage_runs/salary_runs — never
+    relies on the column's own `DEFAULT('CONFIRMED')`).
+  - `resolveDebitSide(payment_mode, bank_id)` centralizes which account a receipt debits: CASH →
+    `CASH_IN_HAND` chart account (`ac_id`), ONLINE → the **specific bank's own linked
+    `business_accounts.ba_id`** (not the generic `BANK_ACCOUNTS` chart code — Module 4.3 built
+    earlier this session specifically gives each bank its own account for this reason), CHEQUE →
+    `CHEQUES_IN_HAND` chart account. This same function is reused by the bounce/return reversal
+    logic, so a reversal always lands back on the exact account the original posting used.
+  - Commission > 0 writes a wholly separate `Dr COMMISSION_ALLOWED / Cr customer BA` ledger pair —
+    the underlying sale bill is never retroactively touched (`database_schema_v4.3.md` §7).
+  - A CHEQUE-mode receipt auto-creates its linked `cheques` row (status `PENDING`) in the SAME
+    transaction as the receipt insert — the schema's own circular-FK note (`cheques.receipt_id` /
+    `receipts.cheque_id` reference each other) describes a 3-step dance: insert receipt with
+    `cheque_id` NULL, insert the cheque, link back. `update()`/`remove()` on a DRAFT receipt that
+    switches out of CHEQUE mode (or is deleted outright) correctly unlinks before deleting the
+    orphaned cheque row, in that order (breaking the FK the same way it was built).
+- **How — Cheques:**
+  - Once the underlying receipt is `CONFIRMED`, a cheque can be disposed of three ways, split across
+    multiple partial actions: **DEPOSIT** (no ledger entry at all — the customer was already
+    credited at receipt-post time; depositing only relocates the money to a specific bank for
+    balance-tracking, per `cash_and_bank.md` §10's derived-balance formula; enforced that one cheque
+    is never deposited into two different banks), **VENDOR_PAYMENT**/**EXPENSE_PAYMENT** (both DO
+    write `Dr target BA / Cr CHEQUES_IN_HAND` — handing a cheque to someone else actually moves
+    money out, unlike a deposit into your own bank). `recomputeStatus()` derives
+    `DEPOSITED`/`ENDORSED`/`PARTIALLY_ENDORSED` from the remaining un-allocated balance after each
+    action, computed via a transaction-aware sum (see bug #1 below). `markCleared()` is a
+    `DEPOSITED`-only pure status flip, no ledger effect.
+  - **User-requested addition**: `RETURNED` — a new cheque status distinct from `BOUNCED`, same
+    reverse-never-delete mechanics, own `returned_date`/`return_reason` columns, for a reason that
+    isn't a bank bounce (e.g. a due-date issue). Added via migration `002_cheques_returned_status.sql`.
+  - `reverseCheque()` — one shared function for both BOUNCE and RETURN: reverses every `ACTIVE`
+    `cheque_allocations` row for the receipt (flips to `REVERSED`, writes an opposite ledger pair),
+    then reverses the receipt's own ledger effect (only if it was `CONFIRMED`) using the same
+    `resolveDebitSide()` logic posting used — all dated the bounce/return date, all new rows,
+    nothing deleted (`database_schema_v4.3.md` §6.1).
+- **Two real bugs found and fixed mid-session, both caught by live testing, not just review:**
+  1. **`recomputeStatus()` read stale data.** It calls `sumActiveAllocations()` right after inserting
+     a new allocation in the same transaction — but the original `sumActiveAllocations()` used the
+     plain connection pool (a different DB connection than the transaction), which cannot see an
+     uncommitted insert from another connection. Added a transaction-aware
+     `sumActiveAllocationsInTransaction()` variant and switched `recomputeStatus()` to use it. Caught
+     by re-deriving the logic during implementation, before the first live test run.
+  2. **Reversing a DEPOSIT allocation crashed.** `reverseCheque()` originally tried to write a
+     reversal ledger pair for EVERY reversed allocation — but `DEPOSIT` allocations never had a
+     ledger entry to begin with (that's the whole point of the deposit-has-no-ledger-effect design),
+     so the attempted reversal row had neither `ac_id` nor `ba_id` set, violating
+     `CK_ledger_entries_one`. This one WAS only caught by the first live test run (bouncing a cheque
+     that had both a partial deposit and a vendor endorsement on it) — fixed by skipping `DEPOSIT`
+     allocations in the reversal loop (their status still flips to `REVERSED` via
+     `reverseAllocations()`, just no ledger write), re-verified live.
+  3. **Found and fixed a genuine schema bug, not just an app bug**: `CK_receipts_cheque` as
+     originally written (`payment_mode='CHEQUE' AND cheque_id IS NOT NULL`) is literally impossible
+     to satisfy given the schema's own documented two-step insert plan — SQL Server checks `CHECK`
+     constraints per-statement, not deferred to commit, so step 1 (`insert receipts with cheque_id
+     NULL`) would always violate it immediately. This surfaced as a real `CK_receipts_cheque`
+     violation on the very first CHEQUE-receipt test. Relaxed via migration
+     `003_receipts_cheque_check_relax.sql` to `(payment_mode <> 'CHEQUE' AND cheque_id IS NULL) OR
+     (payment_mode = 'CHEQUE')` — still catches a non-cheque receipt ever carrying a `cheque_id`
+     (the bug class actually worth a DB-level guard), while allowing the transient NULL the insert
+     plan requires. The "every CHEQUE receipt eventually gets a real `cheque_id`" guarantee now
+     lives at the application layer (`receipts.service.js#create()` always does both inserts in one
+     `withTransaction`). Both `database_schema_v4.3.md` and `database/schema.sql` updated to match.
+- **How — draftReceipts:** CASH/ONLINE only — `dbo.draft_receipts` carries a `cheque_id` FK for
+  shape-symmetry with `dbo.receipts` but has no `cheque_no`/`cheque_date` columns of its own, so a
+  genuinely useful draft CHEQUE receipt isn't representable; rejected with a message pointing at
+  `receipts:create` instead. `confirm()` = create the real receipt + post it, as two sequential
+  transactions (not one shared transaction like `draftPurchases.confirm()`) — acceptable since a
+  receipt has no line items to keep atomic alongside posting, unlike a purchase.
+- **Verified live** against `wentox_db`, extensively (two full runs, the first caught bug #3 above):
+  CASH receipt posted with correct ledger pair; ONLINE + commission posted with correct 4 rows
+  (exact `ac_id`/`ba_id`/debit/credit checked on each); CHEQUE receipt created `PENDING`;
+  deposit-before-posting rejected (`RECEIPT_NOT_POSTED`); partial deposit (12000/20000) →
+  `PARTIALLY_ENDORSED`, zero new ledger rows; cross-bank deposit rejected; remaining balance
+  endorsed to a vendor → `ENDORSED`, exactly 2 correct ledger rows; separate cheque fully deposited
+  → `DEPOSITED` → `markCleared()` → `CLEARED`; double-clear rejected (`NOT_DEPOSITED`); bouncing the
+  partially-deposited-then-fully-endorsed cheque correctly reversed BOTH allocations to `REVERSED`,
+  wrote exactly ONE reversal ledger pair (vendor endorsement only, confirming bug #2's fix), and
+  reversed the receipt's original 2 rows with 2 new rows dated the bounce date, landing on the exact
+  same accounts, debit/credit swapped, originals completely unchanged; double-bounce rejected
+  (`CHEQUE_TERMINAL`); unposting a receipt with an already-disposed cheque rejected
+  (`CHEQUE_IN_USE`); return-to-sender on a fresh cheque correctly stored a reason and reversed
+  correctly; draft receipt CRUD, CHEQUE-mode draft rejection, `confirm()`, and
+  update-while-DRAFT/blocked-while-CONFIRMED all verified. All test data cleaned up after.
+- **Debugger review:** found 2 issues (thorough pass given this module's size). **Moderate**:
+  `draftReceipts.confirm()` ran `create()`+`post()` as two separate transactions — a failure in
+  `post()` after `create()` had committed left an orphaned DRAFT receipt AND the draft itself
+  intact, so retrying `confirm()` would call `create()` again and produce a duplicate real receipt.
+  Fixed by refactoring `receipts.service.js` into transaction-scoped building blocks
+  (`insertReceipt()`, `postWithinTransaction()`) that both `create()`/`post()` and
+  `draftReceipts.confirm()` now share, so confirm is genuinely one atomic transaction. Re-verified
+  live with a forced mid-transaction failure (a customer with `ba_id` temporarily nulled): 0
+  orphaned receipts, draft still present and safely retryable, exactly 1 receipt (not 2) after
+  fixing the cause and retrying. **Minor**: `cheques.service.js#reverseCheque()`'s commission-
+  reversal branch was missing the same `if (!commissionAccount) throw ...` guard every other
+  reserved-account lookup in this module has — added for consistency (low real-world risk, seeding
+  guarantees the row exists, but would've thrown an opaque error instead of the clear diagnostic
+  used everywhere else).
+- **Not done:** no frontend page for Receipts/Cheques exists yet.
+- **Files:** `src/repositories/receipts.repository.js` (new), `src/services/receipts.service.js`
+  (new), `src/ipc/receipts.ipc.js` (filled in from TODO stub); `src/repositories/cheques.repository.js`
+  (new), `src/services/cheques.service.js` (new), `src/ipc/cheques.ipc.js` (new);
+  `src/repositories/draftReceipts.repository.js` (new), `src/services/draftReceipts.service.js`
+  (new), `src/ipc/draftReceipts.ipc.js` (new); `src/ipc/index.js` (registered both new features);
+  `electron/preload.js` (FEATURES); `src/db/migrations/002_cheques_returned_status.sql`,
+  `src/db/migrations/003_receipts_cheque_check_relax.sql` (both new, applied); `database/schema.sql`,
+  `System_architecture/database_schema_v4.3.md` (both migrations' end-states folded in);
+  `backend/milestones/milestone4.md` (checkboxes).
 
 ## Milestone 5, Modules 5.1 & 5.3 — Current Stock/Production, Search & Bilty/Adda Updation
 

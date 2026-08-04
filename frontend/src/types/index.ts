@@ -323,6 +323,7 @@ export interface Receipt {
   bouncedDate?: string; // date the bounce was recorded — reversing entries are dated here
   returnedDate?: string; // date the cheque was returned to the sender — reversing entries are dated here
   remarks: string;
+  status?: 'Posted' | 'Unposted';
 }
 
 // §13 — a received cheque is a pool of value allocated across one or more
@@ -392,6 +393,7 @@ export interface Expense {
   issuedChequeDate?: string;
   details: string;
   remarks: string;
+  status?: 'Posted' | 'Unposted';
 }
 
 export interface PurchaseItem {
@@ -528,6 +530,7 @@ export type NavPage =
   | 'wage-run'
   | 'salary-run'
   | 'transfer'
+  | 'cheque-return'
   | 'setup-bank'
   | 'setup-product'
   | 'setup-category'

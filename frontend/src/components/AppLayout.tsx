@@ -4,7 +4,7 @@ import {
   ShoppingCart, Receipt, Package, FileText, Layers,
   Settings, LogOut, Lock, Menu, X, ChevronDown, MapPin, Home,
   Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search, HardHat,
-  BadgeDollarSign, ArrowLeftRight, Landmark, Pin, BookmarkPlus, Trash2, GripHorizontal, ArrowDownToLine, Warehouse
+  BadgeDollarSign, ArrowLeftRight, Landmark, Pin, BookmarkPlus, Trash2, GripHorizontal, ArrowDownToLine, Warehouse, RotateCcw
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
@@ -41,6 +41,7 @@ const navSections: NavSection[] = [
       { page: 'wage-run', label: 'Wage Run (Piece Rate)', icon: HardHat },
       { page: 'salary-run', label: 'Salary Run (Monthly)', icon: BadgeDollarSign },
       { page: 'transfer', label: 'Transfer (Cash ↔ Bank)', icon: ArrowLeftRight, adminOnly: true },
+      { page: 'cheque-return', label: 'Cheque Return', icon: RotateCcw },
     ]
   },
   {

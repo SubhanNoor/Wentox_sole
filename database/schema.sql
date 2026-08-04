@@ -1254,18 +1254,29 @@ CREATE TABLE dbo.cheques (
   cheque_received_date DATE          NULL,                      -- date WentoX physically received it
   cheque_status        VARCHAR(20)   NOT NULL CONSTRAINT DF_cheques_status DEFAULT ('PENDING'),
   bounced_date         DATE          NULL,                      -- §13/§6.1: the date every reversal is posted on
+  -- RETURNED is deliberately distinct from BOUNCED — same reverse-never-delete mechanics (customer
+  -- credited back, any allocations reversed), but for a reason that is NOT a bank bounce (e.g. a
+  -- due-date issue) — return_reason is freeform, always shown alongside the cheque in the ledger.
+  returned_date        DATE          NULL,
+  return_reason        NVARCHAR(500) NULL,
   created_at           DATETIME2(0)  NOT NULL CONSTRAINT DF_cheques_created DEFAULT (SYSUTCDATETIME()),
   updated_at           DATETIME2(0)  NOT NULL CONSTRAINT DF_cheques_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_cheques         PRIMARY KEY (cheque_id),
   CONSTRAINT FK_cheques_bank    FOREIGN KEY (bank_id)    REFERENCES dbo.bank_accounts(bank_id),
   -- FK to receipts is added by ALTER after dbo.receipts exists (circular pair)
   CONSTRAINT CK_cheques_status  CHECK (cheque_status IN
-        ('PENDING','DEPOSITED','ENDORSED','PARTIALLY_ENDORSED','CLEARED','BOUNCED')),
+        ('PENDING','DEPOSITED','ENDORSED','PARTIALLY_ENDORSED','CLEARED','BOUNCED','RETURNED')),
   -- bounced_date exists if and only if the cheque actually bounced (moved here from `receipts`, v4.1)
   CONSTRAINT CK_cheques_bounced CHECK (
         (bounced_date IS NULL     AND cheque_status <> 'BOUNCED')
-     OR (bounced_date IS NOT NULL AND cheque_status =  'BOUNCED'))
+     OR (bounced_date IS NOT NULL AND cheque_status =  'BOUNCED')),
+  CONSTRAINT CK_cheques_returned CHECK (
+        (returned_date IS NULL     AND cheque_status <> 'RETURNED')
+     OR (returned_date IS NOT NULL AND cheque_status =  'RETURNED'))
 );
+-- One cheque per receipt — the app-level invariant cheques.repository.js#insert() relies on,
+-- now DB-enforced too (defense in depth, found missing during Module 4.2's debugger review).
+CREATE UNIQUE INDEX UQ_cheques_receipt ON dbo.cheques(receipt_id);
 CREATE INDEX IX_cheques_no          ON dbo.cheques(cheque_no);              -- join key from receipts/expenses
 CREATE INDEX IX_cheques_endorsable  ON dbo.cheques(cheque_status)           -- Expense screen's cheque picker
        WHERE cheque_status IN ('PENDING','DEPOSITED');
@@ -1319,10 +1330,15 @@ CREATE TABLE dbo.receipts (
   CONSTRAINT CK_receipts_comm   CHECK (commission >= 0),
   CONSTRAINT CK_receipts_mode   CHECK (payment_mode IN ('CASH','CHEQUE','ONLINE')),
   CONSTRAINT CK_receipts_status CHECK (status IN ('CONFIRMED','DRAFT')),
-  -- a cheque receipt must carry its cheque identity; a non-cheque receipt must not
+  -- A non-cheque receipt must never carry a cheque_id. A CHEQUE receipt's cheque_id is allowed to
+  -- be NULL only momentarily, inside the insert transaction, before the linking UPDATE below runs
+  -- (SQL Server checks CHECK constraints per-statement, not deferred to commit, so a stricter
+  -- "cheque_id IS NOT NULL whenever payment_mode='CHEQUE'" version can never be satisfied by the
+  -- two-step insert this note itself describes). The "every CHEQUE receipt eventually gets a real
+  -- cheque_id" guarantee is enforced at the application layer instead — see receipts.service.js.
   CONSTRAINT CK_receipts_cheque CHECK (
-        (payment_mode =  'CHEQUE' AND cheque_id IS NOT NULL)
-     OR (payment_mode <> 'CHEQUE' AND cheque_id IS NULL)),
+        (payment_mode <> 'CHEQUE' AND cheque_id IS NULL)
+     OR (payment_mode =  'CHEQUE')),
   CONSTRAINT CK_receipts_bank   CHECK (
         (payment_mode = 'ONLINE' AND bank_id IS NOT NULL)
      OR (payment_mode <> 'ONLINE' AND bank_id IS NULL))
@@ -1401,7 +1417,9 @@ CREATE TABLE dbo.expenses (
   expense_date DATE          NOT NULL,
   ba_id        INT           NOT NULL,                        -- expense head / vendor account
   amount       DECIMAL(14,2) NOT NULL,
-  payment_mode VARCHAR(10)   NOT NULL,
+  -- VARCHAR(20), not (10) — 'CHEQUE_ENDORSED'/'CHEQUE_ISSUED' are 15/13 chars, wider than the old
+  -- single-word modes this column was originally sized for (see 005_expenses_payment_mode_width.sql).
+  payment_mode VARCHAR(20)   NOT NULL,
   details      NVARCHAR(200) NULL,
   cheque_id    INT           NULL,                             -- CHEQUE_ENDORSED only: the received cheque being handed on
   bank_id      INT           NULL,                             -- ONLINE and CHEQUE_ISSUED: which of our accounts it leaves
@@ -1467,11 +1485,19 @@ CREATE TABLE dbo.draft_expenses (
   expense_date DATE          NOT NULL,
   ba_id        INT           NOT NULL,
   amount       DECIMAL(14,2) NOT NULL,
-  payment_mode VARCHAR(10)   NOT NULL,
+  payment_mode VARCHAR(20)   NOT NULL,
   details      NVARCHAR(200) NULL,
   cheque_id    INT           NULL,
   bank_id      INT           NULL,
+  issued_cheque_no   VARCHAR(50) NULL,
+  issued_cheque_date DATE        NULL,
   remarks      NVARCHAR(500) NULL,
+  -- Set right after confirm() creates the real expense, BEFORE attempting to post it — so a later
+  -- confirm() retry (e.g. the user clicking "Confirm" again after a failed attempt) resumes
+  -- against this SAME expense_id (whose post() is idempotent for CHEQUE_ENDORSED, migration 006)
+  -- instead of minting a second expense and double-disposing the cheque. Only meaningful for
+  -- CHEQUE_ENDORSED, whose post() is not a single atomic transaction — see draftExpenses.service.js.
+  pending_expense_id INT NULL,
   created_by   INT           NULL,
   updated_by   INT           NULL,
   created_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_dexp_created DEFAULT (SYSUTCDATETIME()),
@@ -1480,10 +1506,27 @@ CREATE TABLE dbo.draft_expenses (
   CONSTRAINT FK_draft_expenses_ba     FOREIGN KEY (ba_id)      REFERENCES dbo.business_accounts(ba_id),
   CONSTRAINT FK_draft_expenses_cheque FOREIGN KEY (cheque_id)  REFERENCES dbo.cheques(cheque_id),
   CONSTRAINT FK_draft_expenses_bank   FOREIGN KEY (bank_id)    REFERENCES dbo.bank_accounts(bank_id),
+  CONSTRAINT FK_draft_expenses_pending_expense FOREIGN KEY (pending_expense_id) REFERENCES dbo.expenses(expense_id),
   CONSTRAINT FK_draft_expenses_user   FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
   CONSTRAINT FK_draft_expenses_upd    FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id),
   CONSTRAINT CK_draft_expenses_amount CHECK (amount > 0),
-  CONSTRAINT CK_draft_expenses_mode   CHECK (payment_mode IN ('CASH','CHEQUE','ONLINE'))
+  -- 'CHEQUE' split the same way as expenses (§6) — kept in sync via migration
+  -- 004_draft_expenses_parity.sql (this table had drifted out of parity with expenses).
+  CONSTRAINT CK_draft_expenses_mode   CHECK (payment_mode IN
+        ('CASH','CHEQUE_ENDORSED','CHEQUE_ISSUED','ONLINE')),
+  CONSTRAINT CK_draft_expenses_payment CHECK (
+        (payment_mode = 'CASH'
+             AND bank_id IS NULL AND cheque_id IS NULL
+             AND issued_cheque_no IS NULL AND issued_cheque_date IS NULL)
+     OR (payment_mode = 'ONLINE'
+             AND bank_id IS NOT NULL AND cheque_id IS NULL
+             AND issued_cheque_no IS NULL AND issued_cheque_date IS NULL)
+     OR (payment_mode = 'CHEQUE_ENDORSED'
+             AND cheque_id IS NOT NULL AND bank_id IS NULL
+             AND issued_cheque_no IS NULL AND issued_cheque_date IS NULL)
+     OR (payment_mode = 'CHEQUE_ISSUED'
+             AND bank_id IS NOT NULL AND cheque_id IS NULL
+             AND issued_cheque_no IS NOT NULL AND issued_cheque_date IS NOT NULL))
 );
 CREATE INDEX IX_draft_expenses_date ON dbo.draft_expenses(expense_date);
 CREATE INDEX IX_draft_expenses_ba   ON dbo.draft_expenses(ba_id, expense_date);
@@ -1679,6 +1722,12 @@ CREATE TABLE dbo.cheque_allocations (
   disposition_type   VARCHAR(20)   NOT NULL,                  -- DEPOSIT | VENDOR_PAYMENT | EXPENSE_PAYMENT
   target_vendor_id   INT           NULL,                      -- set only for VENDOR_PAYMENT
   target_ba_id       INT           NULL,                      -- set only for EXPENSE_PAYMENT
+  -- Module 4.2: set only when this allocation was created by a CHEQUE_ENDORSED expense (via
+  -- expenses.service.js#post() delegating to cheques.service.js#endorseToExpense()) rather than
+  -- directly from the Cheques page. Lets post() detect "did THIS expense already create an
+  -- allocation?" before retrying, so a failure between endorseToExpense()'s commit and the
+  -- expense's own status flip can't cause a silent double-disposal on retry.
+  expense_id         INT           NULL,
   amount             DECIMAL(14,2) NOT NULL,
   allocation_date    DATE          NOT NULL,                  -- Cash Book dates the outflow by THIS date
   remarks            NVARCHAR(500) NULL,
@@ -1691,6 +1740,7 @@ CREATE TABLE dbo.cheque_allocations (
   CONSTRAINT FK_cheque_allocations_receipt FOREIGN KEY (receipt_id)       REFERENCES dbo.receipts(receipt_id),
   CONSTRAINT FK_cheque_allocations_vendor  FOREIGN KEY (target_vendor_id) REFERENCES dbo.vendors(vendor_id),
   CONSTRAINT FK_cheque_allocations_ba      FOREIGN KEY (target_ba_id)     REFERENCES dbo.business_accounts(ba_id),
+  CONSTRAINT FK_cheque_allocations_expense FOREIGN KEY (expense_id)       REFERENCES dbo.expenses(expense_id),
   CONSTRAINT FK_cheque_allocations_user    FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
   CONSTRAINT FK_cheque_allocations_upd     FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id),
   CONSTRAINT CK_cheque_allocations_amount  CHECK (amount > 0),
