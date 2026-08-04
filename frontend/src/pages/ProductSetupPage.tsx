@@ -4,6 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import type { Product, ProductCosts, CostFieldKey } from '@/types';
 import { COST_FIELDS } from '@/types';
 import { Plus, Trash2, Edit2, Hammer, Settings, Search, ArrowLeft } from 'lucide-react';
+import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
 
 /** All twelve stage costs at zero — used to reset the form and to read a product in. */
 const emptyCosts = (): ProductCosts =>
@@ -21,6 +22,10 @@ export default function ProductSetupPage() {
 
   // Selected product for edit
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+
+  // Duplicate Check Modal state
+  const [dupMatch, setDupMatch] = useState<Product | null>(null);
+  const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
   // Form State
   const [id, setId] = useState('');
@@ -62,8 +67,8 @@ export default function ProductSetupPage() {
     setId(nextCode);
     setName('');
     setColor('');
-    setCategoryId(state.categories[0]?.id || '');
-    setVendorId(state.vendors[0]?.id || '');
+    setCategoryId(state.categories.find(c => c.isActive !== false)?.id || '');
+    setVendorId(state.vendors.find(v => v.isActive !== false)?.id || '');
     setBatchNo(nextBatchNo);
     setPacking(0);
     setSalePrice(0);
@@ -90,14 +95,15 @@ export default function ProductSetupPage() {
 
   const handleSaveProduct = (e: React.FormEvent) => {
     e.preventDefault();
+    const typedName = name.trim();
     if (!id.trim()) return setErrorMsg('Product / Article Code is required.');
-    if (!name.trim()) return setErrorMsg('Product Article Name is required.');
+    if (!typedName) return setErrorMsg('Product Article Name is required.');
     if (!categoryId) return setErrorMsg('Category is required. Please select a category.');
     if (!vendorId) return setErrorMsg('Vendor Partner is required. Please select a vendor partner.');
 
     const savedProduct: Product = {
       id: id.trim(),
-      name: name.trim(),
+      name: typedName,
       color: color.trim() || undefined,
       categoryId,
       vendorId,
@@ -119,11 +125,55 @@ export default function ProductSetupPage() {
       if (state.products.some(p => p.id === id.trim())) {
         return setErrorMsg('A product with this code already exists.');
       }
+
+      // Flow A duplicate check (name + vendorId)
+      const match = state.products.find(p =>
+        p.name.toLowerCase() === typedName.toLowerCase() &&
+        p.vendorId === vendorId
+      );
+
+      if (match) {
+        if (match.isActive !== false) {
+          return setErrorMsg('A product with this name already exists.');
+        } else {
+          setDupMatch(match);
+          setIsDupModalOpen(true);
+          return;
+        }
+      }
+
       dispatch({ type: 'ADD_PRODUCT', product: savedProduct });
       setSuccessMsg('New product article registered successfully.');
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
+    setSelectedProductId(null);
+    setErrorMsg('');
+    setActiveTab('list');
+  };
+
+  const handleActivateDuplicate = (pId: string) => {
+    const match = state.products.find(p => p.id === pId);
+    if (match) {
+      dispatch({
+        type: 'UPDATE_PRODUCT',
+        product: {
+          ...match,
+          name: name.trim() || match.name,
+          color: color.trim() || match.color,
+          categoryId: categoryId || match.categoryId,
+          vendorId: vendorId || match.vendorId,
+          packing: packing || match.packing,
+          salePrice: salePrice || match.salePrice,
+          ...costs,
+          isActive: true
+        }
+      });
+      setSuccessMsg('Product reactivated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+    }
+    setIsDupModalOpen(false);
+    setDupMatch(null);
     setSelectedProductId(null);
     setErrorMsg('');
     setActiveTab('list');
@@ -150,9 +200,10 @@ export default function ProductSetupPage() {
   };
 
   const filteredProducts = useMemo(() => {
-    if (!productSearch.trim()) return state.products;
+    const activeProducts = state.products.filter(prod => prod.isActive !== false);
+    if (!productSearch.trim()) return activeProducts;
     const q = productSearch.toLowerCase();
-    return state.products.filter(prod => {
+    return activeProducts.filter(prod => {
       const cat = state.categories.find(c => c.id === prod.categoryId)?.name || '';
       const vend = state.vendors.find(v => v.id === prod.vendorId)?.name || '';
       return (
@@ -163,6 +214,14 @@ export default function ProductSetupPage() {
       );
     });
   }, [state.products, productSearch, state.categories, state.vendors]);
+
+  const activeCategories = useMemo(() => {
+    return state.categories.filter(c => c.isActive !== false);
+  }, [state.categories]);
+
+  const activeVendors = useMemo(() => {
+    return state.vendors.filter(v => v.isActive !== false);
+  }, [state.vendors]);
 
   return (
     <AppLayout pageTitle="Product Detail Info Setup">
@@ -371,7 +430,7 @@ export default function ProductSetupPage() {
                       className="soleria-input cursor-pointer font-semibold"
                     >
                       <option value="">Select Category...</option>
-                      {state.categories.map(c => (
+                      {activeCategories.map(c => (
                         <option key={c.id} value={c.id}>{c.name}</option>
                       ))}
                     </select>
@@ -384,7 +443,7 @@ export default function ProductSetupPage() {
                       className="soleria-input cursor-pointer font-semibold"
                     >
                       <option value="">Select Vendor...</option>
-                      {state.vendors.map(v => (
+                      {activeVendors.map(v => (
                         <option key={v.id} value={v.id}>{v.name}</option>
                       ))}
                     </select>
@@ -467,6 +526,24 @@ export default function ProductSetupPage() {
             </form>
           </div>
         )}
+
+        <DuplicateNamePromptModal
+          isOpen={isDupModalOpen}
+          entityLabel="product"
+          status="inactive"
+          matches={dupMatch ? [{
+            id: dupMatch.id,
+            name: dupMatch.name,
+            phone: state.vendors.find(v => v.id === dupMatch.vendorId)?.name
+          }] : []}
+          allowCreateOnActive={false}
+          onActivate={handleActivateDuplicate}
+          onCreateNew={() => {}}
+          onCancel={() => {
+            setIsDupModalOpen(false);
+            setDupMatch(null);
+          }}
+        />
 
       </div>
     </AppLayout>

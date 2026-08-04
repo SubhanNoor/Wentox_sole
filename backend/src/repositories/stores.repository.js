@@ -16,9 +16,10 @@ async function findById(storeId) {
   return result.recordset[0] || null;
 }
 
+// Case-insensitive on purpose (explicit LOWER(), not relying on DB collation).
 async function findByName(name) {
   const result = await query(
-    'SELECT * FROM dbo.stores WHERE name = @name',
+    'SELECT * FROM dbo.stores WHERE LOWER(name) = LOWER(@name)',
     { name: { type: sql.NVarChar(100), value: name } },
   );
   return result.recordset[0] || null;

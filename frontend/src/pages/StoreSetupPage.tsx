@@ -2,6 +2,8 @@ import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2, Warehouse } from 'lucide-react';
+import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
+import type { Store } from '@/types';
 
 export default function StoreSetupPage() {
   const { state, dispatch } = useApp();
@@ -12,6 +14,10 @@ export default function StoreSetupPage() {
 
   // Editing state
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
+
+  // Duplicate Check Modal state
+  const [dupMatch, setDupMatch] = useState<Store | null>(null);
+  const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
   // Form State
   const [storeName, setStoreName] = useState('');
@@ -34,7 +40,8 @@ export default function StoreSetupPage() {
 
   const handleSaveStore = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!storeName.trim()) return setErrorMsg('Please enter a Store name.');
+    const typed = storeName.trim();
+    if (!typed) return setErrorMsg('Please enter a Store name.');
 
     if (selectedStoreId) {
       // Edit mode
@@ -42,24 +49,54 @@ export default function StoreSetupPage() {
         type: 'UPDATE_STORE',
         store: {
           id: selectedStoreId,
-          name: storeName.trim()
+          name: typed
         }
       });
       setSuccessMsg('Store details updated successfully.');
     } else {
+      // Add mode - Flow A duplicate check
+      const match = state.stores.find(s => s.name.toLowerCase() === typed.toLowerCase());
+      if (match) {
+        if (match.isActive !== false) {
+          return setErrorMsg('A store with this name already exists.');
+        } else {
+          setDupMatch(match);
+          setIsDupModalOpen(true);
+          return;
+        }
+      }
+
       // Add mode - auto generate Store ID
       const newId = 'st_' + Date.now();
       dispatch({
         type: 'ADD_STORE',
         store: {
           id: newId,
-          name: storeName.trim()
+          name: typed
         }
       });
       setSuccessMsg('New Store registered successfully.');
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
+    setStoreName('');
+    setSelectedStoreId(null);
+    setErrorMsg('');
+    setActiveTab('list');
+  };
+
+  const handleActivateDuplicate = (id: string) => {
+    const match = state.stores.find(s => s.id === id);
+    if (match) {
+      dispatch({
+        type: 'UPDATE_STORE',
+        store: { ...match, isActive: true }
+      });
+      setSuccessMsg('Store reactivated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+    }
+    setIsDupModalOpen(false);
+    setDupMatch(null);
     setStoreName('');
     setSelectedStoreId(null);
     setErrorMsg('');
@@ -84,9 +121,10 @@ export default function StoreSetupPage() {
   };
 
   const filteredStores = useMemo(() => {
-    if (!searchQuery.trim()) return state.stores;
+    const activeStores = state.stores.filter(s => s.isActive !== false);
+    if (!searchQuery.trim()) return activeStores;
     const q = searchQuery.toLowerCase();
-    return state.stores.filter(s =>
+    return activeStores.filter(s =>
       s.name.toLowerCase().includes(q) ||
       s.id.toLowerCase().includes(q)
     );
@@ -293,6 +331,20 @@ export default function StoreSetupPage() {
             </form>
           </div>
         )}
+
+        <DuplicateNamePromptModal
+          isOpen={isDupModalOpen}
+          entityLabel="store"
+          status="inactive"
+          matches={dupMatch ? [{ id: dupMatch.id, name: dupMatch.name }] : []}
+          allowCreateOnActive={false}
+          onActivate={handleActivateDuplicate}
+          onCreateNew={() => {}}
+          onCancel={() => {
+            setIsDupModalOpen(false);
+            setDupMatch(null);
+          }}
+        />
 
       </div>
     </AppLayout>

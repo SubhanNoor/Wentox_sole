@@ -2,6 +2,8 @@ import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
+import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
+import type { Region } from '@/types';
 
 export default function RegionSetupPage() {
   const { state, dispatch } = useApp();
@@ -12,6 +14,10 @@ export default function RegionSetupPage() {
 
   // Editing state
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
+
+  // Duplicate Check Modal state
+  const [dupMatch, setDupMatch] = useState<Region | null>(null);
+  const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
   // Form State
   const [regionName, setRegionName] = useState('');
@@ -34,7 +40,8 @@ export default function RegionSetupPage() {
 
   const handleSaveRegion = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!regionName.trim()) {
+    const typed = regionName.trim();
+    if (!typed) {
       return setErrorMsg('Region name is required.');
     }
 
@@ -42,15 +49,26 @@ export default function RegionSetupPage() {
       // Edit mode
       dispatch({
         type: 'UPDATE_REGION',
-        region: { id: selectedRegionId, name: regionName.trim() }
+        region: { id: selectedRegionId, name: typed }
       });
       setSuccessMsg('Region details updated successfully.');
     } else {
-      // Add mode
+      // Add mode - duplicate check
+      const match = state.regions.find(r => r.name.toLowerCase() === typed.toLowerCase());
+      if (match) {
+        if (match.isActive !== false) {
+          return setErrorMsg('A region with this name already exists.');
+        } else {
+          setDupMatch(match);
+          setIsDupModalOpen(true);
+          return;
+        }
+      }
+
       const newId = 'rg_' + Date.now();
       dispatch({
         type: 'ADD_REGION',
-        region: { id: newId, name: regionName.trim() }
+        region: { id: newId, name: typed }
       });
       setSuccessMsg('New region registered successfully.');
     }
@@ -62,8 +80,26 @@ export default function RegionSetupPage() {
     setActiveTab('list');
   };
 
+  const handleActivateDuplicate = (id: string) => {
+    const match = state.regions.find(r => r.id === id);
+    if (match) {
+      dispatch({
+        type: 'UPDATE_REGION',
+        region: { ...match, isActive: true }
+      });
+      setSuccessMsg('Region reactivated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+    }
+    setIsDupModalOpen(false);
+    setDupMatch(null);
+    setRegionName('');
+    setSelectedRegionId(null);
+    setErrorMsg('');
+    setActiveTab('list');
+  };
+
   const handleDeleteRegion = (id: string) => {
-    const customerCount = state.customers.filter(c => c.regionId === id).length;
+    const customerCount = state.customers.filter(c => c.regionId === id && c.isActive !== false).length;
     if (customerCount > 0) {
       alert(`Cannot delete this region. It is currently assigned to ${customerCount} registered customers.`);
       return;
@@ -79,9 +115,10 @@ export default function RegionSetupPage() {
   };
 
   const filteredRegions = useMemo(() => {
-    if (!regionSearch.trim()) return state.regions;
+    const activeRegions = state.regions.filter(r => r.isActive !== false);
+    if (!regionSearch.trim()) return activeRegions;
     const q = regionSearch.toLowerCase();
-    return state.regions.filter(r =>
+    return activeRegions.filter(r =>
       r.name.toLowerCase().includes(q) ||
       r.id.toLowerCase().includes(q)
     );
@@ -275,6 +312,20 @@ export default function RegionSetupPage() {
             </form>
           </div>
         )}
+
+        <DuplicateNamePromptModal
+          isOpen={isDupModalOpen}
+          entityLabel="region"
+          status="inactive"
+          matches={dupMatch ? [{ id: dupMatch.id, name: dupMatch.name }] : []}
+          allowCreateOnActive={false}
+          onActivate={handleActivateDuplicate}
+          onCreateNew={() => {}}
+          onCancel={() => {
+            setIsDupModalOpen(false);
+            setDupMatch(null);
+          }}
+        />
 
       </div>
     </AppLayout>

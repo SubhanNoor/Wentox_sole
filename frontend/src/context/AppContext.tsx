@@ -981,7 +981,7 @@ function reducer(state: State, action: Action): State {
         products: state.products.map(p => p.id === action.product.id ? action.product : p)
       };
     case 'DELETE_PRODUCT':
-      return { ...state, products: state.products.filter(p => p.id !== action.id) };
+      return { ...state, products: state.products.map(p => p.id === action.id ? { ...p, isActive: false } : p) };
     case 'ADD_CATEGORY':
       return { ...state, categories: [...state.categories, action.category] };
     case 'UPDATE_CATEGORY':
@@ -992,7 +992,7 @@ function reducer(state: State, action: Action): State {
     case 'DELETE_CATEGORY':
       return {
         ...state,
-        categories: state.categories.filter(c => c.id !== action.id)
+        categories: state.categories.map(c => c.id === action.id ? { ...c, isActive: false } : c)
       };
     case 'ADD_VENDOR':
       return { ...state, vendors: [...state.vendors, action.vendor] };
@@ -1008,7 +1008,7 @@ function reducer(state: State, action: Action): State {
       const deletedVendor = state.vendors.find(v => v.id === action.id);
       return {
         ...state,
-        vendors: state.vendors.filter(v => v.id !== action.id),
+        vendors: state.vendors.map(v => v.id === action.id ? { ...v, isActive: false } : v),
         businessAccounts: deletedVendor
           ? state.businessAccounts.filter(b => b.id !== deletedVendor.baId)
           : state.businessAccounts
@@ -1078,7 +1078,7 @@ function reducer(state: State, action: Action): State {
     case 'DELETE_CITY':
       return {
         ...state,
-        cities: state.cities.filter(c => c.id !== action.id)
+        cities: state.cities.map(c => c.id === action.id ? { ...c, isActive: false } : c)
       };
     case 'ADD_REGION':
       return { ...state, regions: [...state.regions, action.region] };
@@ -1090,7 +1090,7 @@ function reducer(state: State, action: Action): State {
     case 'DELETE_REGION':
       return {
         ...state,
-        regions: state.regions.filter(r => r.id !== action.id)
+        regions: state.regions.map(r => r.id === action.id ? { ...r, isActive: false } : r)
       };
     case 'ADD_SUB_CUSTOMER':
       return { ...state, subCustomers: [...state.subCustomers, action.subCust] };
@@ -1102,7 +1102,7 @@ function reducer(state: State, action: Action): State {
     case 'DELETE_SUB_CUSTOMER':
       return {
         ...state,
-        subCustomers: state.subCustomers.filter(sc => sc.id !== action.id)
+        subCustomers: state.subCustomers.map(sc => sc.id === action.id ? { ...sc, isActive: false } : sc)
       };
     case 'ADD_CUSTOMER':
       return { ...state, customers: [...state.customers, action.customer] };
@@ -1117,7 +1117,7 @@ function reducer(state: State, action: Action): State {
     case 'DELETE_CUSTOMER':
       return {
         ...state,
-        customers: state.customers.filter(c => c.id !== action.id),
+        customers: state.customers.map(c => c.id === action.id ? { ...c, isActive: false } : c),
         businessAccounts: state.businessAccounts.filter(b => b.id !== action.id)
       };
     case 'ADD_ADDA':
@@ -1130,7 +1130,7 @@ function reducer(state: State, action: Action): State {
     case 'DELETE_ADDA':
       return {
         ...state,
-        addas: state.addas.filter(a => a.id !== action.id)
+        addas: state.addas.map(a => a.id === action.id ? { ...a, isActive: false } : a)
       };
     case 'ADD_STORE':
       return { ...state, stores: [...state.stores, action.store] };
@@ -1142,7 +1142,7 @@ function reducer(state: State, action: Action): State {
     case 'DELETE_STORE':
       return {
         ...state,
-        stores: state.stores.filter(s => s.id !== action.id)
+        stores: state.stores.map(s => s.id === action.id ? { ...s, isActive: false } : s)
       };
 
     /* ──── Account Handlers ──── */

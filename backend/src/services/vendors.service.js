@@ -28,8 +28,23 @@ async function create(payload) {
   validate(payload);
   const name = payload.name.trim();
 
-  const existing = await repository.findByName(name);
-  if (existing) throw ApiError.conflict('A vendor with this name already exists', 'DUPLICATE_NAME');
+  // Duplicate = same name (case-insensitive) AND same phone — two vendors CAN share just a name
+  // (e.g. two different "Ali Traders" with different numbers), so name alone can't be the key.
+  // An ACTIVE match blocks creation outright; an INACTIVE match (soft-deleted earlier) offers the
+  // frontend a choice instead of silently failing or creating a confusing second row — the id/name
+  // of the colliding row rides on `details` so the popup can call vendors:reactivate directly.
+  const phone = payload.phone ?? null;
+  const existing = await repository.findByNameAndPhone(name, phone);
+  if (existing) {
+    if (existing.is_active) {
+      throw ApiError.conflict('A vendor with this name and phone already exists', 'DUPLICATE_NAME');
+    }
+    throw ApiError.conflict(
+      'An inactive vendor with this name and phone already exists',
+      'INACTIVE_DUPLICATE',
+      { vendor_id: existing.vendor_id, name: existing.name, phone: existing.phone },
+    );
+  }
 
   const id = await withTransaction(async (transaction) => {
     const baId = await businessAccountsService.createUnderChartCode(transaction, CODES.VENDORS_ACCOUNTS, name, {
@@ -48,9 +63,10 @@ async function update(vendorId, payload) {
   validate(payload);
   const name = payload.name.trim();
 
-  const duplicate = await repository.findByName(name);
+  const phone = payload.phone ?? null;
+  const duplicate = await repository.findByNameAndPhone(name, phone);
   if (duplicate && duplicate.vendor_id !== vendorId) {
-    throw ApiError.conflict('A vendor with this name already exists', 'DUPLICATE_NAME');
+    throw ApiError.conflict('A vendor with this name and phone already exists', 'DUPLICATE_NAME');
   }
 
   await repository.update(vendorId, { ...payload, name });
@@ -69,4 +85,14 @@ async function remove(vendorId) {
   return { ok: true };
 }
 
-module.exports = { list, getById, create, update, remove };
+// Frontend calls this instead of create() when the user confirms "reactivate the existing one"
+// off an INACTIVE_DUPLICATE conflict. findById (not getById) skips the active check on purpose —
+// we're reactivating something that's currently inactive.
+async function reactivate(vendorId) {
+  const vendor = await repository.findById(vendorId);
+  if (!vendor) throw ApiError.notFound('Vendor not found');
+  await repository.setActive(vendorId, true);
+  return repository.findById(vendorId);
+}
+
+module.exports = { list, getById, create, update, remove, reactivate };

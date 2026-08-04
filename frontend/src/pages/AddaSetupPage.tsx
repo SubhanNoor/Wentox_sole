@@ -2,6 +2,8 @@ import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
+import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
+import type { Adda } from '@/types';
 
 export default function AddaSetupPage() {
   const { state, dispatch } = useApp();
@@ -12,6 +14,10 @@ export default function AddaSetupPage() {
 
   // Editing state
   const [selectedAddaId, setSelectedAddaId] = useState<string | null>(null);
+
+  // Duplicate Check Modal state
+  const [dupMatch, setDupMatch] = useState<Adda | null>(null);
+  const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
   // Form State
   const [addaName, setAddaName] = useState('');
@@ -40,7 +46,8 @@ export default function AddaSetupPage() {
 
   const handleSaveAdda = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!addaName.trim()) {
+    const typed = addaName.trim();
+    if (!typed) {
       return setErrorMsg('Adda name is required.');
     }
     if (!cityId) {
@@ -53,20 +60,31 @@ export default function AddaSetupPage() {
         type: 'UPDATE_ADDA',
         adda: {
           id: selectedAddaId,
-          name: addaName.trim(),
+          name: typed,
           regionId: regionId || undefined,
           cityId: cityId
         }
       });
       setSuccessMsg('Adda details updated successfully.');
     } else {
-      // Add mode
+      // Add mode - Flow A duplicate check
+      const match = state.addas.find(a => a.name.toLowerCase() === typed.toLowerCase());
+      if (match) {
+        if (match.isActive !== false) {
+          return setErrorMsg('An adda with this name already exists.');
+        } else {
+          setDupMatch(match);
+          setIsDupModalOpen(true);
+          return;
+        }
+      }
+
       const newId = 'ad_' + Date.now();
       dispatch({
         type: 'ADD_ADDA',
         adda: {
           id: newId,
-          name: addaName.trim(),
+          name: typed,
           regionId: regionId || undefined,
           cityId: cityId
         }
@@ -75,6 +93,31 @@ export default function AddaSetupPage() {
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
+    setAddaName('');
+    setRegionId('');
+    setCityId('');
+    setSelectedAddaId(null);
+    setErrorMsg('');
+    setActiveTab('list');
+  };
+
+  const handleActivateDuplicate = (id: string) => {
+    const match = state.addas.find(a => a.id === id);
+    if (match) {
+      dispatch({
+        type: 'UPDATE_ADDA',
+        adda: {
+          ...match,
+          isActive: true,
+          regionId: regionId || match.regionId,
+          cityId: cityId || match.cityId
+        }
+      });
+      setSuccessMsg('Transport Adda reactivated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+    }
+    setIsDupModalOpen(false);
+    setDupMatch(null);
     setAddaName('');
     setRegionId('');
     setCityId('');
@@ -101,13 +144,22 @@ export default function AddaSetupPage() {
   };
 
   const filteredAddas = useMemo(() => {
-    if (!addaSearch.trim()) return state.addas;
+    const activeAddas = state.addas.filter(a => a.isActive !== false);
+    if (!addaSearch.trim()) return activeAddas;
     const q = addaSearch.toLowerCase();
-    return state.addas.filter(a =>
+    return activeAddas.filter(a =>
       a.name.toLowerCase().includes(q) ||
       a.id.toLowerCase().includes(q)
     );
   }, [state.addas, addaSearch]);
+
+  const activeRegions = useMemo(() => {
+    return state.regions.filter(r => r.isActive !== false);
+  }, [state.regions]);
+
+  const activeCities = useMemo(() => {
+    return state.cities.filter(c => c.isActive !== false);
+  }, [state.cities]);
 
   return (
     <AppLayout pageTitle="Transport Adda Setup">
@@ -301,7 +353,7 @@ export default function AddaSetupPage() {
                       className="soleria-input font-semibold"
                     >
                       <option value="">Select Region (Optional)</option>
-                      {state.regions.map(r => (
+                      {activeRegions.map(r => (
                         <option key={r.id} value={r.id}>{r.name} ({r.id})</option>
                       ))}
                     </select>
@@ -314,7 +366,7 @@ export default function AddaSetupPage() {
                       className="soleria-input font-semibold"
                     >
                       <option value="">Select City</option>
-                      {state.cities
+                      {activeCities
                         .filter(c => !regionId || c.regionId === regionId)
                         .map(c => (
                           <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
@@ -345,6 +397,25 @@ export default function AddaSetupPage() {
             </div>
           </div>
         )}
+
+        <DuplicateNamePromptModal
+          isOpen={isDupModalOpen}
+          entityLabel="adda"
+          status="inactive"
+          matches={dupMatch ? [{
+            id: dupMatch.id,
+            name: dupMatch.name,
+            regionName: dupMatch.regionId ? state.regions.find(r => r.id === dupMatch.regionId)?.name : undefined,
+            cityName: dupMatch.cityId ? state.cities.find(c => c.id === dupMatch.cityId)?.name : undefined
+          }] : []}
+          allowCreateOnActive={false}
+          onActivate={handleActivateDuplicate}
+          onCreateNew={() => {}}
+          onCancel={() => {
+            setIsDupModalOpen(false);
+            setDupMatch(null);
+          }}
+        />
 
       </div>
     </AppLayout>

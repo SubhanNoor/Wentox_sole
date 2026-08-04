@@ -2,16 +2,19 @@ export interface City {
   id: string; // Code
   name: string;
   regionId?: string;
+  isActive?: boolean;
 }
 
 export interface Region {
   id: string; // Code
   name: string;
+  isActive?: boolean;
 }
 
 export interface Store {
   id: string; // Auto-generated code
   name: string;
+  isActive?: boolean;
 }
 
 export interface Adda {
@@ -19,6 +22,7 @@ export interface Adda {
   name: string;
   regionId?: string;
   cityId: string;
+  isActive?: boolean;
 }
 
 export interface Vendor {
@@ -28,6 +32,7 @@ export interface Vendor {
   city?: string;
   regionId?: string;
   baId: string; // linked Business Account under the "Vendors" chart account
+  isActive?: boolean;
 }
 
 export type EmployeeType = 'WORKER' | 'SALARIED';
@@ -65,6 +70,7 @@ export interface Employee {
 export interface ProductCategory {
   id: string;
   name: string;
+  isActive?: boolean;
 }
 
 // The 12 manufacturing stages, in the order they appear on the form.
@@ -108,6 +114,7 @@ export interface Product extends ProductCosts {
   // costs above. Used wherever the product is sold.
   salePrice: number;
   stock?: number; // Read-only current stock helper
+  isActive?: boolean;
 }
 
 export interface GroupAccount {
@@ -209,6 +216,7 @@ export interface Customer {
   baId?: string;
   regionId: string; // primary identification, checked before City
   cityId: string;
+  isActive?: boolean;
 }
 
 export interface SubCustomer {
@@ -216,6 +224,7 @@ export interface SubCustomer {
   name: string;
   regionId: string;
   cityId: string;
+  isActive?: boolean;
 }
 
 export interface SaleBillItem {

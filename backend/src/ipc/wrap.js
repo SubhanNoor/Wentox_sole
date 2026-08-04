@@ -15,7 +15,7 @@ function wrap(handler) {
       return { ok: true, data };
     } catch (err) {
       if (err instanceof ApiError) {
-        return { ok: false, error: { message: err.message, code: err.code } };
+        return { ok: false, error: { message: err.message, code: err.code, details: err.details } };
       }
       // Not a business error we threw on purpose (e.g. a raw mssql/Tedious driver error) — log the
       // full detail here, but never let it reach the renderer: driver errors carry their own .code

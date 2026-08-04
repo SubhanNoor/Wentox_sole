@@ -5,6 +5,7 @@ import { Plus, Search, Printer, Download, MapPin, Edit2, Trash2, FileDown, Arrow
 import { exportToPDF } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import type { Customer } from '@/types';
+import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
 
 interface ProductLedgerRow {
   date: string;
@@ -33,6 +34,12 @@ export default function CustomerSetupPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
+  // Duplicate Check Modal state (Flow B)
+  const [dupMatches, setDupMatches] = useState<Customer[]>([]);
+  const [dupStatus, setDupStatus] = useState<'active' | 'inactive'>('active');
+  const [isDupModalOpen, setIsDupModalOpen] = useState(false);
+  const [pendingCustomer, setPendingCustomer] = useState<{ name: string; regionId: string; cityId: string } | null>(null);
+
   // Ledger detail filters
   const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(getTodayDate());
@@ -42,14 +49,26 @@ export default function CustomerSetupPage() {
     return state.customers.find(c => c.id === selectedCustomerId);
   }, [selectedCustomerId, state.customers]);
 
+  const activeCustomers = useMemo(() => {
+    return state.customers.filter(c => c.isActive !== false);
+  }, [state.customers]);
+
   const filteredCustomers = useMemo(() => {
-    if (!searchQuery.trim()) return state.customers;
+    if (!searchQuery.trim()) return activeCustomers;
     const q = searchQuery.toLowerCase();
-    return state.customers.filter(c =>
+    return activeCustomers.filter(c =>
       c.name.toLowerCase().includes(q) ||
       c.id.toLowerCase().includes(q)
     );
-  }, [state.customers, searchQuery]);
+  }, [activeCustomers, searchQuery]);
+
+  const activeRegions = useMemo(() => {
+    return state.regions.filter(r => r.isActive !== false);
+  }, [state.regions]);
+
+  const activeCities = useMemo(() => {
+    return state.cities.filter(c => c.isActive !== false);
+  }, [state.cities]);
 
   // FOUR-digit serial — two digits caps a chart account at 99 children, and
   // the client's legacy data already holds 200+ accounts under one head.
@@ -66,7 +85,7 @@ export default function CustomerSetupPage() {
   const handleOpenAdd = () => {
     setEditingCustomerId(null);
     setNewCustomerName('');
-    setNewCustomerRegionId(state.regions[0]?.id || '');
+    setNewCustomerRegionId(state.regions.find(r => r.isActive !== false)?.id || '');
     setNewCustomerCityId('');
     setErrorMsg('');
     setActiveTab('form');
@@ -81,9 +100,47 @@ export default function CustomerSetupPage() {
     setActiveTab('form');
   };
 
+  const executeAddCustomer = (data: { name: string; regionId: string; cityId: string }) => {
+    const regionName = state.regions.find(r => r.id === data.regionId)?.name || 'LOCAL';
+    const newId = getNextCustomerCode();
+
+    dispatch({
+      type: 'ADD_BUSINESS_ACCOUNT',
+      account: {
+        id: newId,
+        name: data.name,
+        controlId: '110001',
+        linkCode: 'A',
+        region: regionName,
+        status: 'Active'
+      }
+    });
+
+    dispatch({
+      type: 'ADD_CUSTOMER',
+      customer: {
+        id: newId,
+        name: data.name,
+        acId: '110001',
+        regionId: data.regionId,
+        cityId: data.cityId
+      }
+    });
+
+    setSuccessMsg('New customer added successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    setActiveTab('list');
+    setEditingCustomerId(null);
+    setNewCustomerName('');
+    setNewCustomerRegionId('');
+    setNewCustomerCityId('');
+    setErrorMsg('');
+  };
+
   const handleSaveCustomer = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCustomerName.trim()) return setErrorMsg('Customer name is required.');
+    const typed = newCustomerName.trim();
+    if (!typed) return setErrorMsg('Customer name is required.');
     if (!newCustomerRegionId) return setErrorMsg('Region is required.');
     if (!newCustomerCityId) return setErrorMsg('City is required.');
 
@@ -92,49 +149,78 @@ export default function CustomerSetupPage() {
         type: 'UPDATE_CUSTOMER',
         customer: {
           id: editingCustomerId,
-          name: newCustomerName.trim(),
+          name: typed,
           acId: '110001',
           regionId: newCustomerRegionId,
           cityId: newCustomerCityId
         }
       });
       setSuccessMsg('Customer details updated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+      setActiveTab('list');
+      setEditingCustomerId(null);
+      setNewCustomerName('');
+      setNewCustomerRegionId('');
+      setNewCustomerCityId('');
+      setErrorMsg('');
     } else {
-      const regionName = state.regions.find(r => r.id === newCustomerRegionId)?.name || 'LOCAL';
-      const newId = getNextCustomerCode();
-
-      dispatch({
-        type: 'ADD_BUSINESS_ACCOUNT',
-        account: {
-          id: newId,
-          name: newCustomerName.trim(),
-          controlId: '110001',
-          linkCode: 'A',
-          region: regionName,
-          status: 'Active'
-        }
-      });
-
-      dispatch({
-        type: 'ADD_CUSTOMER',
-        customer: {
-          id: newId,
-          name: newCustomerName.trim(),
-          acId: '110001',
-          regionId: newCustomerRegionId,
-          cityId: newCustomerCityId
-        }
-      });
-      setSuccessMsg('New customer added successfully.');
+      // Flow B duplicate check
+      const matches = state.customers.filter(c => c.name.toLowerCase() === typed.toLowerCase());
+      if (matches.length === 0) {
+        executeAddCustomer({ name: typed, regionId: newCustomerRegionId, cityId: newCustomerCityId });
+      } else {
+        const hasInactive = matches.some(c => c.isActive === false);
+        const modalMatches = hasInactive ? matches.filter(c => c.isActive === false) : matches;
+        setDupMatches(modalMatches);
+        setDupStatus(hasInactive ? 'inactive' : 'active');
+        setPendingCustomer({ name: typed, regionId: newCustomerRegionId, cityId: newCustomerCityId });
+        setIsDupModalOpen(true);
+      }
     }
+  };
 
+  const handleActivateDuplicate = (id: string) => {
+    const match = state.customers.find(c => c.id === id);
+    if (match) {
+      if (!state.businessAccounts.some(b => b.id === match.id)) {
+        const regionName = state.regions.find(r => r.id === match.regionId)?.name || 'LOCAL';
+        dispatch({
+          type: 'ADD_BUSINESS_ACCOUNT',
+          account: {
+            id: match.id,
+            name: match.name,
+            controlId: '110001',
+            linkCode: 'A',
+            region: regionName,
+            status: 'Active'
+          }
+        });
+      }
+      dispatch({
+        type: 'UPDATE_CUSTOMER',
+        customer: { ...match, isActive: true }
+      });
+      setSuccessMsg('Customer reactivated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+    }
+    setIsDupModalOpen(false);
+    setDupMatches([]);
+    setPendingCustomer(null);
     setActiveTab('list');
     setEditingCustomerId(null);
     setNewCustomerName('');
     setNewCustomerRegionId('');
     setNewCustomerCityId('');
     setErrorMsg('');
-    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
+  const handleCreateNewAnyway = () => {
+    if (pendingCustomer) {
+      executeAddCustomer(pendingCustomer);
+    }
+    setIsDupModalOpen(false);
+    setDupMatches([]);
+    setPendingCustomer(null);
   };
 
   const handleDeleteCustomer = (id: string) => {
@@ -317,7 +403,7 @@ export default function CustomerSetupPage() {
                         required
                       >
                         <option value="">Select Region...</option>
-                        {state.regions.map(rg => (
+                        {activeRegions.map(rg => (
                           <option key={rg.id} value={rg.id}>{rg.name}</option>
                         ))}
                       </select>
@@ -332,7 +418,7 @@ export default function CustomerSetupPage() {
                         required
                       >
                         <option value="">Select City...</option>
-                        {state.cities
+                        {activeCities
                           .filter(ct => !newCustomerRegionId || ct.regionId === newCustomerRegionId)
                           .map(ct => (
                             <option key={ct.id} value={ct.id}>{ct.name}</option>
@@ -573,6 +659,26 @@ export default function CustomerSetupPage() {
             </div>
           </>
         )}
+
+        <DuplicateNamePromptModal
+          isOpen={isDupModalOpen}
+          entityLabel="customer"
+          status={dupStatus}
+          matches={dupMatches.map(m => ({
+            id: m.id,
+            name: m.name,
+            regionName: state.regions.find(r => r.id === m.regionId)?.name,
+            cityName: state.cities.find(ct => ct.id === m.cityId)?.name
+          }))}
+          allowCreateOnActive={true}
+          onActivate={handleActivateDuplicate}
+          onCreateNew={handleCreateNewAnyway}
+          onCancel={() => {
+            setIsDupModalOpen(false);
+            setDupMatches([]);
+            setPendingCustomer(null);
+          }}
+        />
 
       </div>
     </AppLayout>

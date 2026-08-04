@@ -523,7 +523,8 @@ CREATE TABLE dbo.vendors (
   created_at DATETIME2(0) NOT NULL CONSTRAINT DF_vendors_created DEFAULT (SYSUTCDATETIME()),
   updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_vendors_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_vendors        PRIMARY KEY (vendor_id),
-  CONSTRAINT UQ_vendors_name   UNIQUE (name),
+  -- No UNIQUE(name): two vendors may legitimately share a name (e.g. two different "Ali
+  -- Traders"); duplicate detection is name+phone together, service-layer only (findByNameAndPhone).
   CONSTRAINT FK_vendors_ba     FOREIGN KEY (ba_id)     REFERENCES dbo.business_accounts(ba_id),
   CONSTRAINT FK_vendors_region FOREIGN KEY (region_id) REFERENCES dbo.regions(region_id),
   CONSTRAINT FK_vendors_city   FOREIGN KEY (city_id)   REFERENCES dbo.cities(city_id)
@@ -567,7 +568,7 @@ CREATE TABLE dbo.sub_customers (                              -- TASK-06: NO par
   created_at      DATETIME2(0) NOT NULL CONSTRAINT DF_subcust_created DEFAULT (SYSUTCDATETIME()),
   updated_at      DATETIME2(0) NOT NULL CONSTRAINT DF_subcust_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_sub_customers        PRIMARY KEY (sub_customer_id),
-  CONSTRAINT UQ_sub_customers_name   UNIQUE (name),
+  -- No UNIQUE(name): real people can share a name; duplicate handling is app-level (checkName()).
   CONSTRAINT FK_sub_customers_region FOREIGN KEY (region_id) REFERENCES dbo.regions(region_id),
   CONSTRAINT FK_sub_customers_city   FOREIGN KEY (city_id)   REFERENCES dbo.cities(city_id)
 );

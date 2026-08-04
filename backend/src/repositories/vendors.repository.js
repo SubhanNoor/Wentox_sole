@@ -36,10 +36,19 @@ async function findById(vendorId) {
   return result.recordset[0] || null;
 }
 
-async function findByName(name) {
+// Two vendors CAN share a name (two different "Ali Traders") — so "is this a duplicate" is
+// name + phone together, not name alone. Name compare is case-insensitive (explicit LOWER(), not
+// relying on DB collation); phone compares NULL-safe so two vendors with no phone on file still
+// collide (otherwise every no-phone vendor named the same would look "different").
+async function findByNameAndPhone(name, phone) {
   const result = await query(
-    'SELECT * FROM dbo.vendors WHERE name = @name',
-    { name: { type: sql.NVarChar(100), value: name } },
+    `SELECT * FROM dbo.vendors
+     WHERE LOWER(name) = LOWER(@name)
+       AND ((phone IS NULL AND @phone IS NULL) OR phone = @phone)`,
+    {
+      name: { type: sql.NVarChar(100), value: name },
+      phone: { type: sql.VarChar(30), value: phone ?? null },
+    },
   );
   return result.recordset[0] || null;
 }
@@ -85,4 +94,4 @@ async function setActive(vendorId, isActive) {
   );
 }
 
-module.exports = { list, findById, findByName, insert, update, setActive };
+module.exports = { list, findById, findByNameAndPhone, insert, update, setActive };

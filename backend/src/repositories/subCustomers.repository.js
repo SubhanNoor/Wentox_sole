@@ -43,12 +43,28 @@ async function findById(subCustomerId) {
   return result.recordset[0] || null;
 }
 
+// Case-insensitive on purpose (explicit LOWER(), not relying on DB collation).
 async function findByName(name) {
   const result = await query(
-    'SELECT * FROM dbo.sub_customers WHERE name = @name',
+    'SELECT * FROM dbo.sub_customers WHERE LOWER(name) = LOWER(@name)',
     { name: { type: sql.NVarChar(150), value: name } },
   );
   return result.recordset[0] || null;
+}
+
+// Sub-customers legitimately share names (real people) — checkName() needs every match, not just
+// one, to tell "one inactive match" apart from "three active people already have this name."
+async function findAllByName(name) {
+  const result = await query(
+    `SELECT sc.*, r.name AS region_name, ci.name AS city_name
+     FROM dbo.sub_customers sc
+     JOIN dbo.regions r ON r.region_id = sc.region_id
+     LEFT JOIN dbo.cities ci ON ci.city_id = sc.city_id
+     WHERE LOWER(sc.name) = LOWER(@name)
+     ORDER BY sc.is_active DESC, sc.sub_customer_id`,
+    { name: { type: sql.NVarChar(150), value: name } },
+  );
+  return result.recordset;
 }
 
 async function insert(subCustomer) {
@@ -91,4 +107,4 @@ async function setActive(subCustomerId, isActive) {
   );
 }
 
-module.exports = { list, findById, findByName, insert, update, setActive };
+module.exports = { list, findById, findByName, findAllByName, insert, update, setActive };

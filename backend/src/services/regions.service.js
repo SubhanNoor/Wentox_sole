@@ -17,12 +17,24 @@ async function getById(regionId) {
   return region;
 }
 
+// Case-insensitive name collision. ACTIVE match blocks creation outright; INACTIVE match
+// (soft-deleted earlier) throws INACTIVE_DUPLICATE with the existing row's id/name in `details`,
+// so the frontend can offer "reactivate?" instead of creating a confusing second row.
 async function create(payload) {
   validate(payload);
   const name = payload.name.trim();
 
   const existing = await repository.findByName(name);
-  if (existing) throw ApiError.conflict('A region with this name already exists', 'DUPLICATE_NAME');
+  if (existing) {
+    if (existing.is_active) {
+      throw ApiError.conflict('A region with this name already exists', 'DUPLICATE_NAME');
+    }
+    throw ApiError.conflict(
+      'An inactive region with this name already exists',
+      'INACTIVE_DUPLICATE',
+      { region_id: existing.region_id, name: existing.name },
+    );
+  }
 
   const id = await repository.insert({ name });
   return repository.findById(id);
@@ -50,4 +62,13 @@ async function remove(regionId) {
   return { ok: true };
 }
 
-module.exports = { list, getById, create, update, remove };
+// Frontend calls this instead of create() when the user confirms "reactivate the existing one"
+// off an INACTIVE_DUPLICATE conflict.
+async function reactivate(regionId) {
+  const region = await repository.findById(regionId);
+  if (!region) throw ApiError.notFound('Region not found');
+  await repository.setActive(regionId, true);
+  return repository.findById(regionId);
+}
+
+module.exports = { list, getById, create, update, remove, reactivate };

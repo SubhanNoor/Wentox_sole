@@ -3,6 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2, Phone, MapPin, ChevronRight, X } from 'lucide-react';
 import type { Vendor } from '@/types';
+import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
 
 export default function VendorSetupPage() {
   const { state, dispatch } = useApp();
@@ -14,6 +15,10 @@ export default function VendorSetupPage() {
 
   // Editing state
   const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
+
+  // Duplicate Check Modal state
+  const [dupMatch, setDupMatch] = useState<Vendor | null>(null);
+  const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
   // Drill-down: clicking a vendor card opens a details window showing that
   // vendor's purchase history, instead of jumping straight to edit.
@@ -59,7 +64,10 @@ export default function VendorSetupPage() {
 
   const handleSaveVendor = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!vendorName.trim()) {
+    const typedName = vendorName.trim();
+    const typedPhone = vendorPhone.trim();
+
+    if (!typedName) {
       return setErrorMsg('Vendor name is required.');
     }
 
@@ -68,8 +76,8 @@ export default function VendorSetupPage() {
       const existingVendor = state.vendors.find(v => v.id === selectedVendorId);
       const savedVendor: Vendor = {
         id: selectedVendorId,
-        name: vendorName.trim(),
-        phone: vendorPhone.trim() || undefined,
+        name: typedName,
+        phone: typedPhone || undefined,
         city: vendorCity.trim() || undefined,
         baId: existingVendor?.baId || ''
       };
@@ -79,6 +87,22 @@ export default function VendorSetupPage() {
       });
       setSuccessMsg('Vendor details updated successfully.');
     } else {
+      // Add mode — Flow A duplicate check (name + phone)
+      const match = state.vendors.find(v =>
+        v.name.toLowerCase() === typedName.toLowerCase() &&
+        (v.phone || '').trim() === typedPhone
+      );
+
+      if (match) {
+        if (match.isActive !== false) {
+          return setErrorMsg('A vendor with this name already exists.');
+        } else {
+          setDupMatch(match);
+          setIsDupModalOpen(true);
+          return;
+        }
+      }
+
       // Add mode — auto-create the linked Business Account under "Vendors"
       const newId = 'v_' + Date.now();
       const baId = getNextVendorAccountCode();
@@ -87,7 +111,7 @@ export default function VendorSetupPage() {
         type: 'ADD_BUSINESS_ACCOUNT',
         account: {
           id: baId,
-          name: `${vendorName.trim()} A/C`,
+          name: `${typedName} A/C`,
           controlId: '210001',
           linkCode: 'A',
           region: 'LOCAL',
@@ -97,8 +121,8 @@ export default function VendorSetupPage() {
 
       const savedVendor: Vendor = {
         id: newId,
-        name: vendorName.trim(),
-        phone: vendorPhone.trim() || undefined,
+        name: typedName,
+        phone: typedPhone || undefined,
         city: vendorCity.trim() || undefined,
         baId
       };
@@ -118,9 +142,42 @@ export default function VendorSetupPage() {
     setActiveTab('list');
   };
 
+  const handleActivateDuplicate = (id: string) => {
+    const match = state.vendors.find(v => v.id === id);
+    if (match) {
+      if (!state.businessAccounts.some(b => b.id === match.baId)) {
+        dispatch({
+          type: 'ADD_BUSINESS_ACCOUNT',
+          account: {
+            id: match.baId,
+            name: `${match.name} A/C`,
+            controlId: '210001',
+            linkCode: 'A',
+            region: 'LOCAL',
+            status: 'Active'
+          }
+        });
+      }
+      dispatch({
+        type: 'UPDATE_VENDOR',
+        vendor: { ...match, isActive: true }
+      });
+      setSuccessMsg('Vendor reactivated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+    }
+    setIsDupModalOpen(false);
+    setDupMatch(null);
+    setVendorName('');
+    setVendorPhone('');
+    setVendorCity('');
+    setSelectedVendorId(null);
+    setErrorMsg('');
+    setActiveTab('list');
+  };
+
   const handleDeleteVendor = (id: string) => {
     // Check if vendor is used by any products
-    const productCount = state.products.filter(p => p.vendorId === id).length;
+    const productCount = state.products.filter(p => p.vendorId === id && p.isActive !== false).length;
     if (productCount > 0) {
       alert(`Cannot delete this vendor. It is currently linked to ${productCount} registered product articles.`);
       return;
@@ -135,19 +192,23 @@ export default function VendorSetupPage() {
     }
   };
 
-  // Compile list of unique city names entered on existing vendors
+  const activeVendors = useMemo(() => {
+    return state.vendors.filter(v => v.isActive !== false);
+  }, [state.vendors]);
+
+  // Compile list of unique city names entered on existing active vendors
   const uniqueCitiesList = useMemo(() => {
     const cities = new Set<string>();
-    state.vendors.forEach(v => {
+    activeVendors.forEach(v => {
       if (v.city && v.city.trim()) {
         cities.add(v.city.trim());
       }
     });
     return Array.from(cities).sort((a, b) => a.localeCompare(b));
-  }, [state.vendors]);
+  }, [activeVendors]);
 
   const filteredVendors = useMemo(() => {
-    return state.vendors.filter(v => {
+    return activeVendors.filter(v => {
       // 1. Filter by search query
       if (vendorSearch.trim()) {
         const q = vendorSearch.toLowerCase();
@@ -166,7 +227,7 @@ export default function VendorSetupPage() {
 
       return true;
     });
-  }, [state.vendors, vendorSearch, selectedCityFilter]);
+  }, [activeVendors, vendorSearch, selectedCityFilter]);
 
   return (
     <AppLayout pageTitle="Vendor Setup">
@@ -251,7 +312,7 @@ export default function VendorSetupPage() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredVendors.map(vendor => {
-                  const productCount = state.products.filter(p => p.vendorId === vendor.id).length;
+                  const productCount = state.products.filter(p => p.vendorId === vendor.id && p.isActive !== false).length;
                   const initialLetter = vendor.name.charAt(0).toUpperCase();
                   const cityName = vendor.city || 'Local / Other';
                   const purchaseCount = state.purchases.filter(p => p.vendorId === vendor.id).length;
@@ -473,6 +534,20 @@ export default function VendorSetupPage() {
           </div>
         );
       })()}
+
+      <DuplicateNamePromptModal
+        isOpen={isDupModalOpen}
+        entityLabel="vendor"
+        status="inactive"
+        matches={dupMatch ? [{ id: dupMatch.id, name: dupMatch.name, phone: dupMatch.phone, cityName: dupMatch.city }] : []}
+        allowCreateOnActive={false}
+        onActivate={handleActivateDuplicate}
+        onCreateNew={() => {}}
+        onCancel={() => {
+          setIsDupModalOpen(false);
+          setDupMatch(null);
+        }}
+      />
     </AppLayout>
   );
 }

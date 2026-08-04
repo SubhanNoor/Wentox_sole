@@ -17,12 +17,24 @@ async function getById(storeId) {
   return store;
 }
 
+// Case-insensitive name collision. ACTIVE match blocks creation outright; INACTIVE match
+// (soft-deleted earlier) throws INACTIVE_DUPLICATE with the existing row's id/name in `details`,
+// so the frontend can offer "reactivate?" instead of creating a confusing second row.
 async function create(payload) {
   validate(payload);
   const name = payload.name.trim();
 
   const existing = await repository.findByName(name);
-  if (existing) throw ApiError.conflict('A store with this name already exists', 'DUPLICATE_NAME');
+  if (existing) {
+    if (existing.is_active) {
+      throw ApiError.conflict('A store with this name already exists', 'DUPLICATE_NAME');
+    }
+    throw ApiError.conflict(
+      'An inactive store with this name already exists',
+      'INACTIVE_DUPLICATE',
+      { store_id: existing.store_id, name: existing.name },
+    );
+  }
 
   const id = await repository.insert({ name });
   return repository.findById(id);
@@ -52,4 +64,11 @@ async function remove(storeId) {
   return { ok: true };
 }
 
-module.exports = { list, getById, create, update, remove };
+async function reactivate(storeId) {
+  const store = await repository.findById(storeId);
+  if (!store) throw ApiError.notFound('Store not found');
+  await repository.setActive(storeId, true);
+  return repository.findById(storeId);
+}
+
+module.exports = { list, getById, create, update, remove, reactivate };

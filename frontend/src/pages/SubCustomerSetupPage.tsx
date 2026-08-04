@@ -2,6 +2,8 @@ import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
+import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
+import type { SubCustomer } from '@/types';
 
 export default function SubCustomerSetupPage() {
   const { state, dispatch } = useApp();
@@ -13,6 +15,12 @@ export default function SubCustomerSetupPage() {
   // Editing state
   const [selectedSubId, setSelectedSubId] = useState<string | null>(null);
 
+  // Duplicate Check Modal state (Flow B)
+  const [dupMatches, setDupMatches] = useState<SubCustomer[]>([]);
+  const [dupStatus, setDupStatus] = useState<'active' | 'inactive'>('active');
+  const [isDupModalOpen, setIsDupModalOpen] = useState(false);
+  const [pendingSubCustomer, setPendingSubCustomer] = useState<{ name: string; regionId: string; cityId: string } | null>(null);
+
   // Form State
   const [subName, setSubName] = useState('');
   const [regionId, setRegionId] = useState('');
@@ -23,7 +31,7 @@ export default function SubCustomerSetupPage() {
   const handleAddNew = () => {
     setSelectedSubId(null);
     setSubName('');
-    setRegionId(state.regions[0]?.id || '');
+    setRegionId(state.regions.find(r => r.isActive !== false)?.id || '');
     setCityId('');
     setErrorMsg('');
     setActiveTab('form');
@@ -38,9 +46,31 @@ export default function SubCustomerSetupPage() {
     setActiveTab('form');
   };
 
+  const executeAddSubCustomer = (data: { name: string; regionId: string; cityId: string }) => {
+    const newId = 'sub_' + Date.now();
+    dispatch({
+      type: 'ADD_SUB_CUSTOMER',
+      subCust: {
+        id: newId,
+        name: data.name,
+        regionId: data.regionId,
+        cityId: data.cityId
+      }
+    });
+    setSuccessMsg('New Sub Customer registered successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    setSubName('');
+    setRegionId('');
+    setCityId('');
+    setSelectedSubId(null);
+    setErrorMsg('');
+    setActiveTab('list');
+  };
+
   const handleSaveSubCustomer = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!subName.trim()) return setErrorMsg('Please enter a Sub Customer name.');
+    const typed = subName.trim();
+    if (!typed) return setErrorMsg('Please enter a Sub Customer name.');
     if (!regionId) return setErrorMsg('Region selection is required.');
     if (!cityId) return setErrorMsg('City selection is required.');
 
@@ -49,33 +79,63 @@ export default function SubCustomerSetupPage() {
         type: 'UPDATE_SUB_CUSTOMER',
         subCust: {
           id: selectedSubId,
-          name: subName.trim(),
+          name: typed,
           regionId: regionId,
           cityId: cityId
         }
       });
       setSuccessMsg('Sub Customer details updated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+      setSubName('');
+      setRegionId('');
+      setCityId('');
+      setSelectedSubId(null);
+      setErrorMsg('');
+      setActiveTab('list');
     } else {
-      const newId = 'sub_' + Date.now();
-      dispatch({
-        type: 'ADD_SUB_CUSTOMER',
-        subCust: {
-          id: newId,
-          name: subName.trim(),
-          regionId: regionId,
-          cityId: cityId
-        }
-      });
-      setSuccessMsg('New Sub Customer registered successfully.');
+      // Flow B duplicate check
+      const matches = state.subCustomers.filter(sc => sc.name.toLowerCase() === typed.toLowerCase());
+      if (matches.length === 0) {
+        executeAddSubCustomer({ name: typed, regionId, cityId });
+      } else {
+        const hasInactive = matches.some(sc => sc.isActive === false);
+        const modalMatches = hasInactive ? matches.filter(sc => sc.isActive === false) : matches;
+        setDupMatches(modalMatches);
+        setDupStatus(hasInactive ? 'inactive' : 'active');
+        setPendingSubCustomer({ name: typed, regionId, cityId });
+        setIsDupModalOpen(true);
+      }
     }
+  };
 
-    setTimeout(() => setSuccessMsg(''), 3000);
+  const handleActivateDuplicate = (id: string) => {
+    const match = state.subCustomers.find(sc => sc.id === id);
+    if (match) {
+      dispatch({
+        type: 'UPDATE_SUB_CUSTOMER',
+        subCust: { ...match, isActive: true }
+      });
+      setSuccessMsg('Sub Customer reactivated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+    }
+    setIsDupModalOpen(false);
+    setDupMatches([]);
+    setPendingSubCustomer(null);
     setSubName('');
     setRegionId('');
     setCityId('');
     setSelectedSubId(null);
     setErrorMsg('');
     setActiveTab('list');
+  };
+
+  const handleCreateNewAnyway = () => {
+    if (pendingSubCustomer) {
+      executeAddSubCustomer(pendingSubCustomer);
+    }
+    setIsDupModalOpen(false);
+    setDupMatches([]);
+    setPendingSubCustomer(null);
   };
 
   const handleDeleteSubCustomer = (id: string) => {
@@ -88,14 +148,26 @@ export default function SubCustomerSetupPage() {
     }
   };
 
+  const activeSubCustomers = useMemo(() => {
+    return state.subCustomers.filter(sc => sc.isActive !== false);
+  }, [state.subCustomers]);
+
   const filteredSubCustomers = useMemo(() => {
-    if (!searchQuery.trim()) return state.subCustomers;
+    if (!searchQuery.trim()) return activeSubCustomers;
     const q = searchQuery.toLowerCase();
-    return state.subCustomers.filter(sc =>
+    return activeSubCustomers.filter(sc =>
       sc.name.toLowerCase().includes(q) ||
       sc.id.toLowerCase().includes(q)
     );
-  }, [state.subCustomers, searchQuery]);
+  }, [activeSubCustomers, searchQuery]);
+
+  const activeRegions = useMemo(() => {
+    return state.regions.filter(r => r.isActive !== false);
+  }, [state.regions]);
+
+  const activeCities = useMemo(() => {
+    return state.cities.filter(c => c.isActive !== false);
+  }, [state.cities]);
 
   return (
     <AppLayout pageTitle="Sub Customer Setup">
@@ -283,7 +355,7 @@ export default function SubCustomerSetupPage() {
                         required
                       >
                         <option value="">Select Region...</option>
-                        {state.regions.map(r => (
+                        {activeRegions.map(r => (
                           <option key={r.id} value={r.id}>{r.name} ({r.id})</option>
                         ))}
                       </select>
@@ -297,7 +369,7 @@ export default function SubCustomerSetupPage() {
                         required
                       >
                         <option value="">Select City...</option>
-                        {state.cities
+                        {activeCities
                           .filter(c => !regionId || c.regionId === regionId)
                           .map(c => (
                             <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
@@ -330,6 +402,26 @@ export default function SubCustomerSetupPage() {
             </form>
           </div>
         )}
+
+        <DuplicateNamePromptModal
+          isOpen={isDupModalOpen}
+          entityLabel="sub-customer"
+          status={dupStatus}
+          matches={dupMatches.map(m => ({
+            id: m.id,
+            name: m.name,
+            regionName: state.regions.find(r => r.id === m.regionId)?.name,
+            cityName: state.cities.find(c => c.id === m.cityId)?.name
+          }))}
+          allowCreateOnActive={true}
+          onActivate={handleActivateDuplicate}
+          onCreateNew={handleCreateNewAnyway}
+          onCancel={() => {
+            setIsDupModalOpen(false);
+            setDupMatches([]);
+            setPendingSubCustomer(null);
+          }}
+        />
 
       </div>
     </AppLayout>

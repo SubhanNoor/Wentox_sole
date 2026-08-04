@@ -25,12 +25,12 @@ async function getById(customerId) {
 // ACCOUNTS chart account and links it via customers.ba_id — same pattern as UC-08 for vendors.
 // Both writes share one transaction (see vendors.service.js:create() for the reasoning — a
 // debugger review on the Vendors module caught this exact gap).
+// Unlike vendors, a same-name ACTIVE customer never blocks create() — real people share names.
+// The frontend is expected to call checkName() first and show its own "already exists, continue?"
+// / "reactivate the inactive one instead?" prompt; create() itself just creates.
 async function create(payload) {
   validate(payload);
   const name = payload.name.trim();
-
-  const existing = await repository.findByName(name);
-  if (existing) throw ApiError.conflict('A customer with this name already exists', 'DUPLICATE_NAME');
 
   const id = await withTransaction(async (transaction) => {
     const baId = await businessAccountsService.createUnderChartCode(transaction, CODES.CUSTOMERS_ACCOUNTS, name, {
@@ -70,4 +70,32 @@ async function remove(customerId) {
   return { ok: true };
 }
 
-module.exports = { list, getById, create, update, remove };
+// Frontend calls this BEFORE create() so it can show the right prompt:
+//  - 'none'      → no name match at all, create() straight away.
+//  - 'active'    → one or more active customers already have this name — advisory only
+//                  ("this name already exists, continue anyway?"), never blocks.
+//  - 'inactive'  → one or more inactive (soft-deleted) customers have this name — frontend
+//                  offers "activate one of these" (call reactivate(id)) or "create new anyway"
+//                  (call create()).
+// `inactive` wins over `active` when both exist, since it's the only status needing a decision.
+async function checkName(name) {
+  if (!name || !name.trim()) throw ApiError.badRequest('name is required');
+  const matches = await repository.findAllByName(name.trim());
+  if (matches.length === 0) return { status: 'none', matches: [] };
+
+  const inactive = matches.filter((m) => !m.is_active);
+  if (inactive.length > 0) return { status: 'inactive', matches: inactive };
+
+  return { status: 'active', matches };
+}
+
+// Frontend calls this instead of create() when the user picks "reactivate" off a checkName()
+// 'inactive' result. findById (not getById) skips the active check on purpose.
+async function reactivate(customerId) {
+  const customer = await repository.findById(customerId);
+  if (!customer) throw ApiError.notFound('Customer not found');
+  await repository.setActive(customerId, true);
+  return repository.findById(customerId);
+}
+
+module.exports = { list, getById, create, update, remove, checkName, reactivate };

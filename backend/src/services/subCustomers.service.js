@@ -23,12 +23,11 @@ async function getById(subCustomerId) {
 // the selected customer's region (list({ region_id }) — see subCustomers.repository.js). Also
 // reachable from the Sale Bill form's inline "+ Add Sub-Customer" flow (same channel, no
 // customer-scoping needed since there's no parent to scope under).
+// Same as customers.service.js#create: an ACTIVE same-name match never blocks — real people share
+// names. Frontend is expected to call checkName() first for its own prompt; create() just creates.
 async function create(payload) {
   validate(payload);
   const name = payload.name.trim();
-
-  const existing = await repository.findByName(name);
-  if (existing) throw ApiError.conflict('A sub-customer with this name already exists', 'DUPLICATE_NAME');
 
   const id = await repository.insert({ ...payload, name });
   return repository.findById(id);
@@ -56,4 +55,23 @@ async function remove(subCustomerId) {
   return { ok: true };
 }
 
-module.exports = { list, getById, create, update, remove };
+// See customers.service.js#checkName for the status meanings — identical rule set here.
+async function checkName(name) {
+  if (!name || !name.trim()) throw ApiError.badRequest('name is required');
+  const matches = await repository.findAllByName(name.trim());
+  if (matches.length === 0) return { status: 'none', matches: [] };
+
+  const inactive = matches.filter((m) => !m.is_active);
+  if (inactive.length > 0) return { status: 'inactive', matches: inactive };
+
+  return { status: 'active', matches };
+}
+
+async function reactivate(subCustomerId) {
+  const subCustomer = await repository.findById(subCustomerId);
+  if (!subCustomer) throw ApiError.notFound('Sub-customer not found');
+  await repository.setActive(subCustomerId, true);
+  return repository.findById(subCustomerId);
+}
+
+module.exports = { list, getById, create, update, remove, checkName, reactivate };

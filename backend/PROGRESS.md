@@ -1,7 +1,7 @@
 # Wentox Backend — Progress Log
 
 **Current milestone:** Milestone 8 — System Setup: City Creation & Accounts Hierarchy (pulled forward ahead of Milestone 4, same as Milestones 6/7 — see rationale below)
-**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10, later given a required `region_id` for Sale Bill/Return dropdown filtering); **Module 7.1 moved to Milestone 4 Module 4.5** (see 2026-08-19 entry below — it was never actually "blocked," `payroll.md` fully designs it). Milestone 8: **Module 8.1 complete and verified end-to-end** (Regions, Cities, Stores, Addas — including Addas' UC-14 delete-guard and its new required `region_id` — see below); Modules 8.2/8.3 (accounting hierarchy) not started. **Milestone 4 was expanded 2026-08-19** from Receipts/Expenses-only into also covering Bank Accounts, Transfer, and Payroll (Employees/Wage Run/Salary Run) — none of that is built yet, all newly planned. The Milestone 2/3 frontend wiring is also still pending. Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures. **Parked for later discussion:** "reactivate an inactive duplicate-named row instead of rejecting on create()" — raised mid-Milestone-8, explicitly deferred; every entity built so far still does flat duplicate-name rejection.
+**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10, later given a required `region_id` for Sale Bill/Return dropdown filtering); **Module 7.1 moved to Milestone 4 Module 4.5** (see 2026-08-19 entry below — it was never actually "blocked," `payroll.md` fully designs it). Milestone 8: **Module 8.1 complete and verified end-to-end** (Regions, Cities, Stores, Addas — including Addas' UC-14 delete-guard and its new required `region_id` — see below); Modules 8.2/8.3 (accounting hierarchy) not started. **Milestone 4 was expanded 2026-08-19** from Receipts/Expenses-only into also covering Bank Accounts, Transfer, and Payroll (Employees/Wage Run/Salary Run) — none of that is built yet, all newly planned. The Milestone 2/3 frontend wiring is also still pending. Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures. "Reactivate an inactive duplicate-named row instead of rejecting on create()" — no longer parked: implemented across every built entity — vendors (name+phone key), customers/sub-customers (name-only, never blocks on active match), regions/cities/stores/categories/addas (name-only, blocks on active match, matching their existing DB-level `UNIQUE(name)`), and products (name+vendor_id key, didn't have ANY duplicate check before this). Bank accounts and employees have no CRUD built yet (Milestone 4, still empty stub files) so the pattern has nothing to attach to there. See `System_architecture/soft_delete_and_duplicate_check.md`.
 
 Log every completed task here (newest first within its milestone). Format:
 
@@ -13,6 +13,43 @@ Log every completed task here (newest first within its milestone). Format:
 ```
 
 ---
+
+## Cross-cutting — Reactivate-instead-of-reject duplicate handling
+
+### 2026-08-04 — Rolled out to every built entity (vendors, customers, sub-customers, regions, cities, stores, categories, addas, products)
+- **What:** Replaced flat "reject on any name match" duplicate checks with reactivate-aware ones,
+  everywhere that entity actually has CRUD code today. Two branches (see
+  `System_architecture/soft_delete_and_duplicate_check.md` for full reasoning):
+  - **Unique-by-nature** (vendors, regions, cities, stores, categories, addas, products) — ACTIVE
+    match still blocks `create()` (`DUPLICATE_NAME`, 409); INACTIVE match now throws
+    `INACTIVE_DUPLICATE` with the existing row's id/name in `ApiError`'s new `details` field
+    (threaded through `wrap.js`), and a new `<feature>:reactivate` channel flips it back to active.
+    Vendors and products key on name+phone / name+vendor_id (a second field, since those two can
+    legitimately repeat a name); regions/cities/stores/categories/addas key on name alone, matching
+    their existing DB-level `UNIQUE(name)` constraints, which were left in place.
+  - **Non-blocking** (customers, sub-customers) — real people share names, so an ACTIVE match never
+    blocks `create()`. New `checkName(name)` fn + `<feature>:checkName` channel the frontend is
+    expected to call *before* `create()`, returning `{status:'none'|'active'|'inactive', matches:[]}`;
+    only `'inactive'` needs a decision (reactivate one of the matches, or create new anyway).
+  - **Products** had no duplicate-name check of any kind before this — added key = name+vendor_id.
+  - Dropped two stray DB-level `UNIQUE(name)` constraints that would have silently overridden the
+    non-blocking branch: `vendors.name`, `sub_customers.name` (`customers.name` never had one).
+  - **Not done:** bank accounts and employees — both are still empty stub files (Milestone 4, no
+    CRUD written yet), so there's nothing to attach this pattern to there.
+- **Frontend:** Built `frontend/src/components/DuplicateNamePromptModal.tsx`, a reusable prompt
+  covering both branches (`allowCreateOnActive` toggles which). **Not wired into any page** —
+  every setup page for these entities (`RegionSetupPage.tsx`, `CitySetupPage.tsx`,
+  `StoreSetupPage.tsx`, `CategorySetupPage.tsx`, `AddaSetupPage.tsx`, `VendorSetupPage.tsx`,
+  `ProductSetupPage.tsx`, `CustomerSetupPage.tsx`, `SubCustomerSetupPage.tsx`) still runs on the
+  old in-memory `useReducer` demo state (`AppContext.tsx`), not real `window.api` IPC calls —
+  wiring the modal in for real means switching each page off demo data first, which hasn't been
+  done.
+- **Files:** `errors/ApiError.js`, `ipc/wrap.js`; `repositories/{vendors,customers,subCustomers,
+  regions,cities,stores,categories,addas,products}.repository.js`; `services/` (same list);
+  `ipc/{vendors,customers,subCustomers,regions,cities,stores,categories,addas,products}.ipc.js`;
+  `database_schema_v4.3.md`/`database/schema.sql` (dropped the two stray constraints, plus earlier
+  in this session: dropped `customers.phone`/`sub_customers.phone`, `vendors.address`);
+  `frontend/src/components/DuplicateNamePromptModal.tsx` (new, unwired).
 
 ## Milestone 4 — planning only (no code yet)
 
@@ -716,11 +753,39 @@ _Not started._
   `database/schema.sql` (schema.sql not yet applied, edited directly rather than via migration).
   Dropped `phone` param/column from `customers.repository.js` and `subCustomers.repository.js`
   insert/update queries. No service-layer or vendor changes — vendors keep `phone`.
+- Implemented the non-blocking duplicate-name flow for customers and sub-customers (name-only key,
+  case-insensitive — neither table carries phone). `create()` no longer rejects same-name ACTIVE
+  rows at all (real people share names); it just creates. New `checkName(name)` service fn +
+  `<feature>:checkName` IPC channel returns `{status:'none'|'active'|'inactive', matches:[...]}` —
+  frontend is expected to call it before create() and show its own prompt, using `'inactive'`'s
+  matches to offer per-row reactivate. New `reactivate(id)` fn + `<feature>:reactivate` channel
+  flips a row back to active. Also dropped the stray `UQ_sub_customers_name UNIQUE(name)` DB
+  constraint (customers never had one) — it would have hard-blocked legitimate same-name
+  sub-customers regardless of the app-level check.
+- Built (not wired) `frontend/src/components/DuplicateNamePromptModal.tsx` — reusable modal for the
+  checkName() result: informational-only on an active match for customers/sub-customers-style
+  entities (`allowCreateOnActive`), blocking-with-activate-option on an inactive match either way.
+  Not yet imported into `CustomerSetupPage.tsx`/`SubCustomerSetupPage.tsx` or any save flow —
+  scaffolding only, per explicit "don't connect it yet" instruction. Note: those pages currently
+  run on the old in-memory `useReducer` demo state (`AppContext.tsx`), not real IPC calls to the
+  backend at all yet — wiring this up for real also means switching those pages off demo data.
 
 ## Milestone 6 — System Setup: Products, Categories, Vendors
 - Removed `address` column from `vendors` in `database_schema_v4.3.md` and `database/schema.sql`
   (edited directly, not yet applied). Dropped `address` param/column from
   `vendors.repository.js` insert/update queries. `vendors.phone` untouched.
+- Added duplicate handling for `vendors.create()`/`update()` keyed on **name + phone together**
+  (not name alone — corrected after review, since two real vendors can share a business name):
+  case-insensitive name + NULL-safe exact phone match. Active match blocks (`DUPLICATE_NAME`),
+  inactive match throws `INACTIVE_DUPLICATE` with the existing row's id/name/phone in a new
+  `ApiError.details` field (threaded through `wrap.js`), and a new `vendors:reactivate`
+  channel/service fn lets the frontend flip that row back to active instead of creating a
+  duplicate. Also dropped the stray `UNIQUE(name)` DB constraint on `vendors.name` in
+  `database_schema_v4.3.md`/`database/schema.sql` — it would have silently blocked legitimate
+  same-name vendors regardless of the app-level check. Reference implementation for the same
+  pattern on regions/cities/stores/products/employees, and a variant (non-blocking active match,
+  list-of-matches on inactive match) for customers/sub-customers — write-up in
+  `System_architecture/soft_delete_and_duplicate_check.md`.
 
 ## Milestone 8 — System Setup: Cities & Accounts Hierarchy
 _Not started._

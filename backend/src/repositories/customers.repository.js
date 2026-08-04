@@ -45,12 +45,31 @@ async function findById(customerId) {
   return result.recordset[0] || null;
 }
 
+// Kept for the update() rename-collision check (single-row is fine there — a rename either hits
+// itself or one specific other row). Case-insensitive on purpose (explicit LOWER(), not relying on
+// DB collation).
 async function findByName(name) {
   const result = await query(
-    'SELECT * FROM dbo.customers WHERE name = @name',
+    'SELECT * FROM dbo.customers WHERE LOWER(name) = LOWER(@name)',
     { name: { type: sql.NVarChar(150), value: name } },
   );
   return result.recordset[0] || null;
+}
+
+// Customers legitimately share names (real people), so unlike vendors this returns every match,
+// not just one — checkName() needs the full list to tell "one inactive match" apart from "three
+// active people already have this name."
+async function findAllByName(name) {
+  const result = await query(
+    `SELECT c.*, r.name AS region_name, ci.name AS city_name
+     FROM dbo.customers c
+     JOIN dbo.regions r ON r.region_id = c.region_id
+     LEFT JOIN dbo.cities ci ON ci.city_id = c.city_id
+     WHERE LOWER(c.name) = LOWER(@name)
+     ORDER BY c.is_active DESC, c.customer_id`,
+    { name: { type: sql.NVarChar(150), value: name } },
+  );
+  return result.recordset;
 }
 
 // Takes the caller's transaction — always called in the same withTransaction block as the
@@ -94,4 +113,4 @@ async function setActive(customerId, isActive) {
   );
 }
 
-module.exports = { list, findById, findByName, insert, update, setActive };
+module.exports = { list, findById, findByName, findAllByName, insert, update, setActive };

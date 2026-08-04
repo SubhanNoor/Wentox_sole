@@ -2,6 +2,8 @@ import { Fragment, useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Trash2, Edit2, Search, ArrowLeft, Settings, Save, ChevronDown, ChevronRight } from 'lucide-react';
+import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
+import type { ProductCategory } from '@/types';
 
 export default function CategorySetupPage() {
   const { state, dispatch } = useApp();
@@ -12,6 +14,10 @@ export default function CategorySetupPage() {
 
   // Editing state
   const [selectedCatId, setSelectedCatId] = useState<string | null>(null);
+
+  // Duplicate Check Modal state
+  const [dupMatch, setDupMatch] = useState<ProductCategory | null>(null);
+  const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
   // Drill-down: clicking a category row expands it to show every product
   // registered under that category, instead of jumping straight to edit.
@@ -38,7 +44,8 @@ export default function CategorySetupPage() {
 
   const handleSaveCategory = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!catName.trim()) {
+    const typed = catName.trim();
+    if (!typed) {
       return setErrorCat('Category name is required.');
     }
 
@@ -46,15 +53,26 @@ export default function CategorySetupPage() {
       // Edit mode
       dispatch({
         type: 'UPDATE_CATEGORY',
-        category: { id: selectedCatId, name: catName.trim() }
+        category: { id: selectedCatId, name: typed }
       });
       setSuccessCat('Category details updated successfully.');
     } else {
-      // Add mode
+      // Add mode - Flow A duplicate check
+      const match = state.categories.find(c => c.name.toLowerCase() === typed.toLowerCase());
+      if (match) {
+        if (match.isActive !== false) {
+          return setErrorCat('A category with this name already exists.');
+        } else {
+          setDupMatch(match);
+          setIsDupModalOpen(true);
+          return;
+        }
+      }
+
       const newId = 'cat_' + Date.now();
       dispatch({
         type: 'ADD_CATEGORY',
-        category: { id: newId, name: catName.trim() }
+        category: { id: newId, name: typed }
       });
       setSuccessCat('New product category registered successfully.');
     }
@@ -66,9 +84,27 @@ export default function CategorySetupPage() {
     setActiveTab('list');
   };
 
+  const handleActivateDuplicate = (id: string) => {
+    const match = state.categories.find(c => c.id === id);
+    if (match) {
+      dispatch({
+        type: 'UPDATE_CATEGORY',
+        category: { ...match, isActive: true }
+      });
+      setSuccessCat('Category reactivated successfully.');
+      setTimeout(() => setSuccessCat(''), 3000);
+    }
+    setIsDupModalOpen(false);
+    setDupMatch(null);
+    setCatName('');
+    setSelectedCatId(null);
+    setErrorCat('');
+    setActiveTab('list');
+  };
+
   const handleDeleteCategory = (id: string) => {
-    // Check if category is used by any products
-    const productCount = state.products.filter(p => p.categoryId === id).length;
+    // Check if category is used by any active products
+    const productCount = state.products.filter(p => p.categoryId === id && p.isActive !== false).length;
     if (productCount > 0) {
       alert(`Cannot delete this category. It is currently assigned to ${productCount} registered products.`);
       return;
@@ -84,9 +120,10 @@ export default function CategorySetupPage() {
   };
 
   const filteredCategories = useMemo(() => {
-    if (!categorySearch.trim()) return state.categories;
+    const activeCategories = state.categories.filter(c => c.isActive !== false);
+    if (!categorySearch.trim()) return activeCategories;
     const q = categorySearch.toLowerCase();
-    return state.categories.filter(c => 
+    return activeCategories.filter(c => 
       c.name.toLowerCase().includes(q) || 
       c.id.toLowerCase().includes(q)
     );
@@ -174,7 +211,7 @@ export default function CategorySetupPage() {
                     </tr>
                   ) : (
                     filteredCategories.map(cat => {
-                      const associatedProducts = state.products.filter(p => p.categoryId === cat.id);
+                      const associatedProducts = state.products.filter(p => p.categoryId === cat.id && p.isActive !== false);
                       const isExpanded = expandedCatId === cat.id;
 
                       return (
@@ -313,6 +350,20 @@ export default function CategorySetupPage() {
             </form>
           </div>
         )}
+
+        <DuplicateNamePromptModal
+          isOpen={isDupModalOpen}
+          entityLabel="product category"
+          status="inactive"
+          matches={dupMatch ? [{ id: dupMatch.id, name: dupMatch.name }] : []}
+          allowCreateOnActive={false}
+          onActivate={handleActivateDuplicate}
+          onCreateNew={() => {}}
+          onCancel={() => {
+            setIsDupModalOpen(false);
+            setDupMatch(null);
+          }}
+        />
 
       </div>
     </AppLayout>

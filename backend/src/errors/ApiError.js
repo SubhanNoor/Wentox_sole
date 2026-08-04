@@ -1,9 +1,10 @@
 // Throw from services with a proper HTTP status; errorHandler middleware formats it.
 class ApiError extends Error {
-  constructor(status, message, code) {
+  constructor(status, message, code, details) {
     super(message);
     this.status = status;
     this.code = code || 'ERROR';
+    this.details = details;
   }
 
   static badRequest(message, code = 'VALIDATION') {
@@ -18,8 +19,10 @@ class ApiError extends Error {
     return new ApiError(404, message, 'NOT_FOUND');
   }
 
-  static conflict(message, code = 'CONFLICT') {
-    return new ApiError(409, message, code);
+  // details: optional plain data the frontend needs to act on the conflict (e.g. the id/name of
+  // the inactive row it's colliding with, so it can offer "reactivate this one?").
+  static conflict(message, code = 'CONFLICT', details) {
+    return new ApiError(409, message, code, details);
   }
 }
 

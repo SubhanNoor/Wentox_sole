@@ -18,12 +18,24 @@ async function getById(cityId) {
 }
 
 // UC-11: region_id is optional ("optionally attach it to a region").
+// Case-insensitive name collision. ACTIVE match blocks creation outright; INACTIVE match
+// (soft-deleted earlier) throws INACTIVE_DUPLICATE with the existing row's id/name in `details`,
+// so the frontend can offer "reactivate?" instead of creating a confusing second row.
 async function create(payload) {
   validate(payload);
   const name = payload.name.trim();
 
   const existing = await repository.findByName(name);
-  if (existing) throw ApiError.conflict('A city with this name already exists', 'DUPLICATE_NAME');
+  if (existing) {
+    if (existing.is_active) {
+      throw ApiError.conflict('A city with this name already exists', 'DUPLICATE_NAME');
+    }
+    throw ApiError.conflict(
+      'An inactive city with this name already exists',
+      'INACTIVE_DUPLICATE',
+      { city_id: existing.city_id, name: existing.name },
+    );
+  }
 
   const id = await repository.insert({ name, region_id: payload.region_id });
   return repository.findById(id);
@@ -51,4 +63,11 @@ async function remove(cityId) {
   return { ok: true };
 }
 
-module.exports = { list, getById, create, update, remove };
+async function reactivate(cityId) {
+  const city = await repository.findById(cityId);
+  if (!city) throw ApiError.notFound('City not found');
+  await repository.setActive(cityId, true);
+  return repository.findById(cityId);
+}
+
+module.exports = { list, getById, create, update, remove, reactivate };

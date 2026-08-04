@@ -29,4 +29,9 @@ module.exports = function register() {
     requireSession();
     return service.remove(payload.id);
   }));
+
+  ipcMain.handle('categories:reactivate', wrap((payload) => {
+    requireSession();
+    return service.reactivate(payload.id);
+  }));
 };

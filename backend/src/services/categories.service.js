@@ -13,14 +13,27 @@ async function getById(categoryId) {
   return category;
 }
 
+// Case-insensitive name collision. ACTIVE match blocks creation outright; INACTIVE match
+// (soft-deleted earlier) throws INACTIVE_DUPLICATE with the existing row's id/name in `details`,
+// so the frontend can offer "reactivate?" instead of creating a confusing second row.
 async function create(payload) {
   if (!payload.name || !payload.name.trim()) {
     throw ApiError.badRequest('name is required');
   }
-  const existing = await repository.findByName(payload.name.trim());
-  if (existing) throw ApiError.conflict('A category with this name already exists', 'DUPLICATE_NAME');
+  const name = payload.name.trim();
+  const existing = await repository.findByName(name);
+  if (existing) {
+    if (existing.is_active) {
+      throw ApiError.conflict('A category with this name already exists', 'DUPLICATE_NAME');
+    }
+    throw ApiError.conflict(
+      'An inactive category with this name already exists',
+      'INACTIVE_DUPLICATE',
+      { category_id: existing.category_id, name: existing.name },
+    );
+  }
 
-  const id = await repository.insert({ name: payload.name.trim() });
+  const id = await repository.insert({ name });
   return repository.findById(id);
 }
 
@@ -45,4 +58,11 @@ async function remove(categoryId) {
   return { ok: true };
 }
 
-module.exports = { list, getById, create, update, remove };
+async function reactivate(categoryId) {
+  const category = await repository.findById(categoryId);
+  if (!category) throw ApiError.notFound('Category not found');
+  await repository.setActive(categoryId, true);
+  return repository.findById(categoryId);
+}
+
+module.exports = { list, getById, create, update, remove, reactivate };

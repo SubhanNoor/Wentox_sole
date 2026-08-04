@@ -48,6 +48,21 @@ async function list(filters = {}) {
   return result.recordset;
 }
 
+// Products had no duplicate-name check at all before this — added now, keyed on name + vendor_id
+// (not name alone: the same product name legitimately recurs across different vendors/suppliers,
+// batch_no is already scoped per-vendor for the same reason). Case-insensitive on name via
+// explicit LOWER(), not relying on DB collation.
+async function findByNameAndVendor(name, vendorId) {
+  const result = await query(
+    'SELECT * FROM dbo.articles WHERE LOWER(name) = LOWER(@name) AND vendor_id = @vendorId',
+    {
+      name: { type: sql.NVarChar(150), value: name },
+      vendorId: { type: sql.Int, value: vendorId },
+    },
+  );
+  return result.recordset[0] || null;
+}
+
 async function findById(articleId) {
   const result = await query(
     `SELECT a.*, c.name AS category_name, v.name AS vendor_name
@@ -146,4 +161,4 @@ async function setActive(articleId, isActive) {
   );
 }
 
-module.exports = { list, findById, nextCode, nextBatchNo, insert, update, setActive };
+module.exports = { list, findById, findByNameAndVendor, nextCode, nextBatchNo, insert, update, setActive };
