@@ -1,6 +1,6 @@
 # Wentox Backend — Progress Log
 
-**Current milestone:** Milestone 4, Modules 4.3–4.7 (Bank Accounts, Transfer, Employees/Stages, Wage Run, Salary Run) all code-complete and debugged clean this session. **Modules 4.1 (Receipts) and 4.2 (Expenses) are still unbuilt** — their repository/service/ipc files are still empty stubs, unlike 4.3–4.7. Milestone 4 is NOT fully done until those two are built too.
+**Current milestone:** Milestone 5, Modules 5.1 (Current Stock & Stock/Production Entry) and 5.3 (Search & Bilty/Adda Updation) — code-complete and verified live, debugger review pending. **Module 5.2 (Reports) deliberately deferred**, not started, per explicit instruction. Milestone 4's Modules 4.1 (Receipts) and 4.2 (Expenses) also remain unbuilt from the prior session — Milestone 4 is still not fully done.
 **Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10, later given a required `region_id` for Sale Bill/Return dropdown filtering); **Module 7.1 moved to Milestone 4 Module 4.5** (see 2026-08-19 entry below — it was never actually "blocked," `payroll.md` fully designs it). Milestone 8: **Module 8.1 complete and verified end-to-end** (Regions, Cities, Stores, Addas — including Addas' UC-14 delete-guard and its new required `region_id` — see below); Modules 8.2/8.3 (accounting hierarchy) not started. **Milestone 4 was expanded 2026-08-19** from Receipts/Expenses-only into also covering Bank Accounts, Transfer, and Payroll (Employees/Wage Run/Salary Run) — none of that is built yet, all newly planned. The Milestone 2/3 frontend wiring is also still pending. Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures. "Reactivate an inactive duplicate-named row instead of rejecting on create()" — no longer parked: implemented across every built entity — vendors (name+phone key), customers/sub-customers (name-only, never blocks on active match), regions/cities/stores/categories/addas (name-only, blocks on active match, matching their existing DB-level `UNIQUE(name)`), and products (name+vendor_id key, didn't have ANY duplicate check before this). Employees still has no CRUD built. See `System_architecture/soft_delete_and_duplicate_check.md`. **Module 4.3 (Bank Accounts) now built** — see the dated entry below; it now also uses the reactivate-instead-of-reject pattern (name+account_no key) from day one, rather than needing a later retrofit.
 
 Log every completed task here (newest first within its milestone). Format:
@@ -13,6 +13,59 @@ Log every completed task here (newest first within its milestone). Format:
 ```
 
 ---
+
+## Milestone 5, Modules 5.1 & 5.3 — Current Stock/Production, Search & Bilty/Adda Updation
+
+### 2026-08-04 — stock/reports/bilty-search built, live-verified; Module 5.2 (Reports) deliberately skipped
+- **What:** Two of Milestone 5's three modules, per explicit instruction to skip 5.2 (Reports) for
+  later. No schema changes — `dbo.stock_movements`/`dbo.article_colors` already existed; Module
+  5.3 extends the existing `saleBills` module rather than creating a new one.
+- **How:**
+  - **5.1 (`stock`, `reports:stock`/`reports:production`):** stock is tracked per VARIANT
+    (article+color), not per article — `stock:log-production` resolves/auto-creates the variant via
+    `productColorsService.resolveOrCreate()` (UC-28, pre-existing helper from an earlier
+    milestone), then normalizes an operator-typed CARTONS or PAIRS quantity into `qty_pairs` using
+    the variant's effective packing (`COALESCE(article_colors.packing, articles.packing)`),
+    snapshotting that packing onto the row regardless of which unit was typed. `stock:adjust`
+    handles OPENING/ADJUSTMENT (signed qty, no packing/input_qty/input_unit — those are
+    PRODUCTION-only columns per the schema's own comments); a zero `qty_pairs` is rejected as a
+    friendly 400 even though the DB itself doesn't forbid it. `reports:stock` (Current Stock tab)
+    is a thin pass-through to `stock.service.js#currentStock()` rather than a separate
+    implementation — kept as its own channel per the milestone's naming. `reports:production`
+    filters to PRODUCTION-only movements with the same daily/weekly/monthly/overall date-range
+    convention as `saleBills.service.js`/`purchases.service.js`.
+  - **5.3 (`sale-bills:bilty-search`/`sale-bills:update-bilty`):** `updateBiltyInfo()` touches only
+    `bilty_no`/`adda_id` — never `ledger_entries`/`stock_movements`/any other header field — so
+    unlike the full `update()` (which reverses+reapplies ledger/stock when editing an
+    already-posted bill) it doesn't check or care about posted status at all, matching "allowed on
+    POSTED bills; non-financial." `biltySearch()` reuses the same filter shape as the pre-existing
+    `list()` but joins in customer/sub-customer/adda display names for the search screen.
+- **Verified live** against `wentox_db`: production logged in CARTONS against a brand-new color
+  auto-created the variant and normalized correctly (5×12=60 pairs); a second production log in
+  PAIRS against the same color resolved to the SAME variant, not a duplicate; an ADJUSTMENT of -3
+  recorded; movement history returned all 3 rows; current stock correctly showed 65 total pairs →
+  5 cartons + 5 extra pairs; production report with a date range correctly excluded the ADJUSTMENT;
+  invalid `input_unit` and zero-`qty_pairs` adjustment both rejected. Bilty: search by customer_id
+  and by bill_no both returned correct joined rows; `update-bilty` changed `bilty_no`/`adda_id`
+  while `is_posted` was confirmed unchanged before/after; missing `bilty_no` rejected; original
+  value restored after the test. All test rows cleaned up after.
+- **Debugger review:** clean, no bugs found (packing fallback, sign-constraint safety, `GROUP BY`
+  correctness, cross-service conventions, `updateBiltyInfo()` genuinely ledger/stock-free — all
+  confirmed). Noted one pre-existing quirk, not a regression: `resolveDateRange()`'s `'daily'`
+  range value isn't explicitly handled anywhere in the codebase (falls through to no date filter)
+  — true of the original `saleBills.service.js` version this was copied from too.
+- **Not done:** Module 5.2 (Reports — 9 more
+  `reports:*` channels: product-ledger, vendor-stock, sale-analysis, sale-report, vendor-report,
+  payment-trail, account-ledger, business-ledger, cash-book) deliberately not started, per explicit
+  instruction to leave it for later. No frontend page for Current Stock/Production or Search &
+  Bilty Updation exists yet.
+- **Files:** `src/repositories/stock.repository.js`, `src/services/stock.service.js`,
+  `src/ipc/stock.ipc.js` (all replaced empty/TODO stubs); `src/repositories/reports.repository.js`,
+  `src/services/reports.service.js`, `src/ipc/reports.ipc.js` (same — only `stock`/`production`
+  built, the rest of Module 5.2 left as empty exports); `src/repositories/saleBills.repository.js`,
+  `src/services/saleBills.service.js`, `src/ipc/saleBills.ipc.js` (extended, not rewritten — new
+  `biltySearch`/`updateBiltyInfo` functions and two new IPC handlers appended);
+  `backend/milestones/milestone5.md` (checkboxes).
 
 ## Milestone 4, Module 4.7 — Salary Run
 

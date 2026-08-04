@@ -5,10 +5,18 @@ const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
 
 module.exports = function register() {
-  // TODO(milestone): register channels, e.g.:
-  // ipcMain.handle('stock:list', wrap((payload) => { requireSession(); return service.list(payload); }));
-  // ipcMain.handle('stock:get', wrap((payload) => { requireSession(); return service.getById(payload.id); }));
-  // ipcMain.handle('stock:create', wrap((payload) => { requireSession(); return service.create(payload); }));
-  // ipcMain.handle('stock:update', wrap((payload) => { requireSession(); return service.update(payload.id, payload); }));
-  // ipcMain.handle('stock:remove', wrap((payload) => { requireSession(); return service.remove(payload.id); }));
+  ipcMain.handle('stock:log-production', wrap((payload) => {
+    const session = requireSession();
+    return service.logProduction(payload, session.userId);
+  }));
+
+  ipcMain.handle('stock:adjust', wrap((payload) => {
+    const session = requireSession();
+    return service.adjust(payload, session.userId);
+  }));
+
+  ipcMain.handle('stock:movements', wrap((payload) => {
+    requireSession();
+    return service.movements(payload);
+  }));
 };

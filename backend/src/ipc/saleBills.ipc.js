@@ -66,4 +66,22 @@ module.exports = function register() {
       return service.unpost(payload.id);
     }),
   );
+
+  // UC-20: Search & Bilty/Adda Updation.
+  ipcMain.handle(
+    'sale-bills:bilty-search',
+    wrap((payload) => {
+      requireSession();
+      return service.biltySearch(payload);
+    }),
+  );
+
+  // bilty_no + adda_id only, non-financial — no password guard, works regardless of posted status.
+  ipcMain.handle(
+    'sale-bills:update-bilty',
+    wrap((payload) => {
+      requireSession();
+      return service.updateBiltyInfo(payload.id, payload);
+    }),
+  );
 };

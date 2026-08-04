@@ -252,7 +252,63 @@ async function list(filters = {}) {
   return result.recordset;
 }
 
+// UC-20: Search & Bilty/Adda Updation — same filter set as list() but with the display fields
+// that screen needs (customer/sub-customer/adda names), so results are readable without a
+// separate lookup per row.
+async function biltySearch(filters = {}) {
+  const conditions = [];
+  const params = {};
+
+  if (filters.customer_id) {
+    conditions.push('sb.customer_id = @customerId');
+    params.customerId = { type: sql.Int, value: filters.customer_id };
+  }
+  if (filters.sub_customer_id) {
+    conditions.push('sb.sub_customer_id = @subCustomerId');
+    params.subCustomerId = { type: sql.Int, value: filters.sub_customer_id };
+  }
+  if (filters.bill_no) {
+    conditions.push('sb.bill_no = @billNo');
+    params.billNo = { type: sql.VarChar(30), value: filters.bill_no };
+  }
+  if (filters.date_from) {
+    conditions.push('sb.bill_date >= @dateFrom');
+    params.dateFrom = { type: sql.Date, value: filters.date_from };
+  }
+  if (filters.date_to) {
+    conditions.push('sb.bill_date <= @dateTo');
+    params.dateTo = { type: sql.Date, value: filters.date_to };
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const result = await query(
+    `SELECT sb.*, c.name AS customer_name, sc.name AS sub_customer_name, ad.name AS adda_name
+     FROM dbo.sale_bills sb
+     JOIN dbo.customers c ON c.customer_id = sb.customer_id
+     LEFT JOIN dbo.sub_customers sc ON sc.sub_customer_id = sb.sub_customer_id
+     JOIN dbo.addas ad ON ad.adda_id = sb.adda_id
+     ${where}
+     ORDER BY sb.bill_date DESC, sb.bill_id DESC`,
+    params,
+  );
+  return result.recordset;
+}
+
+// bilty_no + adda_id ONLY — non-financial, so unlike updateHeader() this never touches
+// ledger/stock and is allowed regardless of posted status (UC-20).
+async function updateBiltyInfo(billId, { bilty_no, adda_id }) {
+  await query(
+    'UPDATE dbo.sale_bills SET bilty_no = @biltyNo, adda_id = @addaId WHERE bill_id = @billId',
+    {
+      billId: { type: sql.Int, value: billId },
+      biltyNo: { type: sql.VarChar(30), value: bilty_no },
+      addaId: { type: sql.Int, value: adda_id },
+    },
+  );
+}
+
 module.exports = {
   getVariantPackings, insert, insertItems, findById, isPosted, insertLedgerEntries,
   insertStockMovements, deleteItems, updateHeader, deleteLedgerAndStock, list,
+  biltySearch, updateBiltyInfo,
 };

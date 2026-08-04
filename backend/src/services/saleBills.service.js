@@ -232,6 +232,29 @@ async function getById(billId) {
   return bill;
 }
 
+// UC-20 — same filter shape as list() but with display fields for the search screen.
+function biltySearch(filters = {}) {
+  return repository.biltySearch({
+    customer_id: filters.customer_id,
+    sub_customer_id: filters.sub_customer_id,
+    bill_no: filters.bill_no,
+    ...resolveDateRange(filters),
+  });
+}
+
+// bilty_no + adda_id ONLY, non-financial — allowed on a POSTED bill, unlike the full update()
+// above which is blocked from touching items/totals once posted, this never even checks
+// is_posted, since it never writes to ledger_entries/stock_movements.
+async function updateBiltyInfo(billId, payload) {
+  await getById(billId); // 404s if the bill doesn't exist
+  if (!payload.bilty_no) throw ApiError.badRequest('bilty_no is required');
+  if (!payload.adda_id) throw ApiError.badRequest('adda_id is required');
+
+  await repository.updateBiltyInfo(billId, { bilty_no: payload.bilty_no, adda_id: payload.adda_id });
+  return getById(billId);
+}
+
 module.exports = {
   create, list, getById, update, post, unpost, postLedgerAndStock, insertConfirmed,
+  biltySearch, updateBiltyInfo,
 };
