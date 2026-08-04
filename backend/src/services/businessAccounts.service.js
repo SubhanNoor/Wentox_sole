@@ -2,6 +2,15 @@
 // Throw ApiError for expected failures; use withTransaction for multi-write ops.
 const repository = require('../repositories/businessAccounts.repository');
 const chartAccountsRepository = require('../repositories/chartAccounts.repository');
+const ApiError = require('../errors/ApiError');
+
+// Cross-feature reads go through here rather than another feature reaching into
+// businessAccounts.repository.js directly (e.g. transfers.service.js validating from_ba_id/to_ba_id).
+async function getById(baId) {
+  const account = await repository.findById(baId);
+  if (!account) throw ApiError.notFound('Business account not found');
+  return account;
+}
 
 // Auto-creates a business_accounts row under a reserved chart account (UC-08/UC-09 pattern: a
 // vendor/customer/bank never exposes a separate account-setup step — one row appears here,
@@ -25,4 +34,4 @@ function renameLinked(baId, name) {
   return repository.updateName(baId, name);
 }
 
-module.exports = { createUnderChartCode, renameLinked };
+module.exports = { createUnderChartCode, renameLinked, getById };

@@ -4,6 +4,7 @@ const bcrypt = require('bcrypt');
 const sql = require('mssql');
 const config = require('../../config');
 const CODES = require('../../constants/reservedAccounts');
+const STAGES = require('../../constants/stages');
 
 async function ensureGroupAccount(pool, { code, name, classCode }) {
   const existing = await pool.request()
@@ -89,7 +90,7 @@ async function seed() {
   await ensureChartAccount(pool, { code: CODES.VENDORS_ACCOUNTS, name: 'VENDORS ACCOUNTS', groupId: liabilityGroup });
   await ensureChartAccount(pool, { code: CODES.CASH_IN_HAND, name: 'CASH IN HAND', groupId: assetsGroup });
   await ensureChartAccount(pool, {
-    code: CODES.CASH_AT_BANKS, name: 'Cash at Banks', groupId: assetsGroup, isRestricted: true,
+    code: CODES.BANK_ACCOUNTS, name: 'BANK ACCOUNTS', groupId: assetsGroup, isRestricted: true,
   });
   await ensureChartAccount(pool, { code: CODES.SALES, name: 'SALES', groupId: incomeGroup });
   await ensureChartAccount(pool, { code: CODES.PURCHASES, name: 'PURCHASES', groupId: expensesGroup });
@@ -105,6 +106,29 @@ async function seed() {
   });
   await ensureChartAccount(pool, { code: CODES.EMPLOYEES, name: 'Employees', groupId: expensesGroup });
   await ensureChartAccount(pool, { code: CODES.VENDORS_SUPPLIERS, name: 'Vendors - Suppliers', groupId: liabilityGroup });
+
+  // --- Payroll chart accounts (Module 4.5 — payroll.md §6) ---
+  await ensureChartAccount(pool, { code: CODES.WORKER_WAGES, name: 'WORKER WAGES', groupId: liabilityGroup });
+  await ensureChartAccount(pool, { code: CODES.SALARIES_PAYABLE, name: 'SALARIES PAYABLE', groupId: liabilityGroup });
+  await ensureChartAccount(pool, { code: CODES.WAGES_EXPENSE, name: 'WAGES EXPENSE', groupId: expensesGroup });
+  await ensureChartAccount(pool, { code: CODES.SALARIES_EXPENSE, name: 'SALARIES EXPENSE', groupId: expensesGroup });
+
+  // --- Stages (payroll.md §4) — the 12 manufacturing stages, defined once as data ---
+  for (const [index, stage] of STAGES.entries()) {
+    const exists = await pool.request()
+      .input('stageKey', sql.VarChar, stage.stage_key)
+      .query('SELECT 1 FROM dbo.stages WHERE stage_key = @stageKey');
+    if (!exists.recordset.length) {
+      await pool.request()
+        .input('stageKey', sql.VarChar, stage.stage_key)
+        .input('formLabel', sql.NVarChar, stage.form_label)
+        .input('workerLabel', sql.NVarChar, stage.worker_label)
+        .input('costColumn', sql.VarChar, stage.cost_column)
+        .input('sortOrder', sql.Int, index + 1)
+        .query(`INSERT INTO dbo.stages (stage_key, form_label, worker_label, cost_column, sort_order)
+                VALUES (@stageKey, @formLabel, @workerLabel, @costColumn, @sortOrder)`);
+    }
+  }
 
   // --- Default store ---
   const storeExists = await pool.request()

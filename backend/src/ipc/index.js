@@ -3,6 +3,7 @@
 // every channel exists before the renderer can invoke one.
 const registerAuth = require('./auth.ipc');
 const registerAddas = require('./addas.ipc');
+const registerBankAccounts = require('./bankAccounts.ipc');
 const registerBusinessAccounts = require('./businessAccounts.ipc');
 const registerCategories = require('./categories.ipc');
 const registerChartAccounts = require('./chartAccounts.ipc');
@@ -12,6 +13,7 @@ const registerDraftPurchases = require('./draftPurchases.ipc');
 const registerDraftPurchaseReturns = require('./draftPurchaseReturns.ipc');
 const registerDraftSaleBills = require('./draftSaleBills.ipc');
 const registerDraftSaleReturns = require('./draftSaleReturns.ipc');
+const registerEmployees = require('./employees.ipc');
 const registerExpenses = require('./expenses.ipc');
 const registerGroupAccounts = require('./groupAccounts.ipc');
 const registerProducts = require('./products.ipc');
@@ -21,16 +23,21 @@ const registerPurchaseReturns = require('./purchaseReturns.ipc');
 const registerReceipts = require('./receipts.ipc');
 const registerRegions = require('./regions.ipc');
 const registerReports = require('./reports.ipc');
+const registerSalaryRuns = require('./salaryRuns.ipc');
 const registerSaleBills = require('./saleBills.ipc');
 const registerSaleReturns = require('./saleReturns.ipc');
+const registerStages = require('./stages.ipc');
 const registerStock = require('./stock.ipc');
 const registerStores = require('./stores.ipc');
 const registerSubCustomers = require('./subCustomers.ipc');
+const registerTransfers = require('./transfers.ipc');
 const registerVendors = require('./vendors.ipc');
+const registerWageRuns = require('./wageRuns.ipc');
 
 module.exports = function registerIpcHandlers() {
   registerAuth();
   registerAddas();
+  registerBankAccounts();
   registerBusinessAccounts();
   registerCategories();
   registerChartAccounts();
@@ -40,6 +47,7 @@ module.exports = function registerIpcHandlers() {
   registerDraftPurchaseReturns();
   registerDraftSaleBills();
   registerDraftSaleReturns();
+  registerEmployees();
   registerExpenses();
   registerGroupAccounts();
   registerProducts();
@@ -49,10 +57,14 @@ module.exports = function registerIpcHandlers() {
   registerReceipts();
   registerRegions();
   registerReports();
+  registerSalaryRuns();
   registerSaleBills();
   registerSaleReturns();
+  registerStages();
   registerStock();
   registerStores();
   registerSubCustomers();
+  registerTransfers();
   registerVendors();
+  registerWageRuns();
 };

@@ -1150,12 +1150,15 @@ CREATE INDEX IX_draft_purchase_return_items_material ON dbo.draft_purchase_retur
 CREATE TABLE dbo.bank_accounts (                              -- §12 Q3/Q9: real party, mirrors vendors/customers
   bank_id    INT IDENTITY(1,1) NOT NULL,
   name       NVARCHAR(100) NOT NULL,                          -- e.g. 'Bank Alfalah A/C - 0124'
-  ba_id      INT           NULL,   -- auto-created under CASH AT BANKS chart account on bank create
+  account_no NVARCHAR(50)  NULL,
+  branch     NVARCHAR(100) NULL,
+  ba_id      INT           NULL,   -- auto-created under BANK ACCOUNTS chart account (CODES.BANK_ACCOUNTS, 100003) on bank create
   is_active  BIT          NOT NULL CONSTRAINT DF_bankacc_active  DEFAULT (1),
   created_at DATETIME2(0) NOT NULL CONSTRAINT DF_bankacc_created DEFAULT (SYSUTCDATETIME()),
   updated_at DATETIME2(0) NOT NULL CONSTRAINT DF_bankacc_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_bank_accounts PRIMARY KEY (bank_id),
-  CONSTRAINT UQ_bank_accounts_name UNIQUE (name),
+  -- No UNIQUE(name): two bank accounts can share a bank name with a different account_no;
+  -- duplicate handling is name+account_no, service-layer only (see soft_delete_and_duplicate_check.md).
   CONSTRAINT FK_bank_accounts_ba   FOREIGN KEY (ba_id) REFERENCES dbo.business_accounts(ba_id)
 );
 -- Filtered unique: one bank account per business account, but many may await backfill (NULL).

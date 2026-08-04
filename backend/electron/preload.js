@@ -4,10 +4,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 // '<feature>:<action>' (see src/ipc/*.ipc.js). This exposes window.api.<feature>.<action>(payload)
 // as a thin wrapper over ipcRenderer.invoke, without hand-listing every action for every feature.
 const FEATURES = [
-  'auth', 'addas', 'businessAccounts', 'categories', 'chartAccounts', 'cities', 'customers',
-  'draftPurchases', 'draftPurchaseReturns', 'draftSaleBills', 'draftSaleReturns', 'expenses',
+  'auth', 'addas', 'bankAccounts', 'businessAccounts', 'categories', 'chartAccounts', 'cities', 'customers',
+  'draftPurchases', 'draftPurchaseReturns', 'draftSaleBills', 'draftSaleReturns', 'employees', 'expenses',
   'groupAccounts', 'products', 'productColors', 'purchases', 'purchaseReturns', 'receipts',
-  'regions', 'reports', 'saleBills', 'saleReturns', 'stock', 'stores', 'subCustomers', 'vendors',
+  'regions', 'reports', 'salaryRuns', 'saleBills', 'saleReturns', 'stages', 'stock', 'stores',
+  'subCustomers', 'transfers', 'vendors', 'wageRuns',
 ];
 
 // window.api.<feature> stays camelCase (normal JS property access); the wire channel name is

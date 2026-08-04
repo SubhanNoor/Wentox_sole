@@ -5,7 +5,7 @@ module.exports = {
   CUSTOMERS_ACCOUNTS: '100001',
   VENDORS_ACCOUNTS: '200001',
   CASH_IN_HAND: '100002',
-  CASH_AT_BANKS: '100003',
+  BANK_ACCOUNTS: '100003', // renamed from CASH_AT_BANKS — see cash_and_bank.md §11 item 6 (naming correction)
   SALES: '300001',
   PURCHASES: '400001',
   COMMISSION_ALLOWED: '400002',
@@ -14,4 +14,11 @@ module.exports = {
   DIRECTORS_DRAWINGS: '400004',
   EMPLOYEES: '400005',
   VENDORS_SUPPLIERS: '200002',
+  // Module 4.5 (payroll.md §6) — two heads per staff type: what's owed (LIABILITY) and the cost of
+  // paying it (EXPENSES). WORKER_WAGES/WAGES_EXPENSE were already referenced in the frontend demo
+  // seed; SALARIES_PAYABLE/SALARIES_EXPENSE are new.
+  WORKER_WAGES: '220001',
+  SALARIES_PAYABLE: '220002',
+  WAGES_EXPENSE: '410001',
+  SALARIES_EXPENSE: '410002',
 };

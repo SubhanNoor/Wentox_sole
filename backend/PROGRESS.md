@@ -1,7 +1,7 @@
 # Wentox Backend — Progress Log
 
-**Current milestone:** Milestone 8 — System Setup: City Creation & Accounts Hierarchy (pulled forward ahead of Milestone 4, same as Milestones 6/7 — see rationale below)
-**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10, later given a required `region_id` for Sale Bill/Return dropdown filtering); **Module 7.1 moved to Milestone 4 Module 4.5** (see 2026-08-19 entry below — it was never actually "blocked," `payroll.md` fully designs it). Milestone 8: **Module 8.1 complete and verified end-to-end** (Regions, Cities, Stores, Addas — including Addas' UC-14 delete-guard and its new required `region_id` — see below); Modules 8.2/8.3 (accounting hierarchy) not started. **Milestone 4 was expanded 2026-08-19** from Receipts/Expenses-only into also covering Bank Accounts, Transfer, and Payroll (Employees/Wage Run/Salary Run) — none of that is built yet, all newly planned. The Milestone 2/3 frontend wiring is also still pending. Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures. "Reactivate an inactive duplicate-named row instead of rejecting on create()" — no longer parked: implemented across every built entity — vendors (name+phone key), customers/sub-customers (name-only, never blocks on active match), regions/cities/stores/categories/addas (name-only, blocks on active match, matching their existing DB-level `UNIQUE(name)`), and products (name+vendor_id key, didn't have ANY duplicate check before this). Bank accounts and employees have no CRUD built yet (Milestone 4, still empty stub files) so the pattern has nothing to attach to there. See `System_architecture/soft_delete_and_duplicate_check.md`.
+**Current milestone:** Milestone 4, Modules 4.3–4.7 (Bank Accounts, Transfer, Employees/Stages, Wage Run, Salary Run) all code-complete and debugged clean this session. **Modules 4.1 (Receipts) and 4.2 (Expenses) are still unbuilt** — their repository/service/ipc files are still empty stubs, unlike 4.3–4.7. Milestone 4 is NOT fully done until those two are built too.
+**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10, later given a required `region_id` for Sale Bill/Return dropdown filtering); **Module 7.1 moved to Milestone 4 Module 4.5** (see 2026-08-19 entry below — it was never actually "blocked," `payroll.md` fully designs it). Milestone 8: **Module 8.1 complete and verified end-to-end** (Regions, Cities, Stores, Addas — including Addas' UC-14 delete-guard and its new required `region_id` — see below); Modules 8.2/8.3 (accounting hierarchy) not started. **Milestone 4 was expanded 2026-08-19** from Receipts/Expenses-only into also covering Bank Accounts, Transfer, and Payroll (Employees/Wage Run/Salary Run) — none of that is built yet, all newly planned. The Milestone 2/3 frontend wiring is also still pending. Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures. "Reactivate an inactive duplicate-named row instead of rejecting on create()" — no longer parked: implemented across every built entity — vendors (name+phone key), customers/sub-customers (name-only, never blocks on active match), regions/cities/stores/categories/addas (name-only, blocks on active match, matching their existing DB-level `UNIQUE(name)`), and products (name+vendor_id key, didn't have ANY duplicate check before this). Employees still has no CRUD built. See `System_architecture/soft_delete_and_duplicate_check.md`. **Module 4.3 (Bank Accounts) now built** — see the dated entry below; it now also uses the reactivate-instead-of-reject pattern (name+account_no key) from day one, rather than needing a later retrofit.
 
 Log every completed task here (newest first within its milestone). Format:
 
@@ -13,6 +13,252 @@ Log every completed task here (newest first within its milestone). Format:
 ```
 
 ---
+
+## Milestone 4, Module 4.7 — Salary Run
+
+### 2026-08-04 — salaryRuns CRUD + post/unpost built, live-verified, debugged clean
+- **What:** One run per calendar month, covering every ACTIVE salaried employee automatically —
+  unlike Wage Run, the caller never enumerates lines, only supplies optional per-employee
+  `overrides`. No schema changes — `dbo.salary_runs`/`dbo.salary_run_items` already existed.
+- **How:**
+  - `buildLines()` is server-authoritative: queries `employeesRepository.list({employee_type:
+    'SALARIED'})` fresh every time (create AND update), builds one line per active employee.
+    `salary_amount` is always a fresh snapshot of `employees.monthly_salary`, never trusted from
+    any override; `amount` defaults to `salary_amount` unless an override for that `employee_id`
+    supplies one — matching payroll.md §11's two-column design (snapshot vs. what was credited)
+    exactly. Unlike `wage_run_items.amount`, `salary_run_items.amount`/`salary_amount` are plain
+    columns, not DB-computed — nothing to derive, both written explicitly.
+  - `normalizeMonth()` truncates whatever date the caller sends down to that month's 1st
+    (UTC-safe), matching `CK_salary_runs_month`, so the caller never has to get the day right.
+  - One CONFIRMED run per month enforced twice: `assertMonthNotConfirmed()` at both `create()` time
+    and again at `post()` time (a DRAFT built before a sibling DRAFT for the same month got
+    confirmed first would otherwise slip through the create()-time check alone), backstopped by the
+    DB's own filtered `UQ_salary_runs_month` (CONFIRMED-only — DRAFTs for the same month are
+    unconstrained by design, "a correction can be built alongside").
+  - Post writes 1 debit (SALARIES EXPENSE, `410002`, the run's total) + N credit rows, one per
+    line, against each employee's own `ba_id` for their own (possibly overridden) `amount` — not a
+    single Dr/Cr pair like Wage Run or Transfer.
+  - Lifecycle otherwise mirrors Wage Run exactly: always created DRAFT explicitly; update()/
+    remove() blocked while CONFIRMED; update() rebuilds the roster fresh (delete-then-reinsert,
+    never patched); unpost is audited the same way (`unposted_at`/`unposted_by`/`amount_before`,
+    cleared back to `NULL` on every re-post).
+  - Mid-session fix: initially had no guard against creating a run when zero active salaried
+    employees exist — caught while re-checking the milestone's own verify checklist line ("create a
+    run for a month with no active salaried employees → empty/rejected appropriately"), which
+    hadn't actually been tested yet. Added a clean `ApiError.badRequest` in both `create()` and
+    `update()`, re-verified live before the debugger pass.
+  - Registered `ipc/salaryRuns.ipc.js` in `src/ipc/index.js`; added `'salaryRuns'` to
+    `electron/preload.js`'s `FEATURES` array.
+- **Verified live** against `wentox_db` (two throwaway SALARIED employees, salaries 50000/40000,
+  any other pre-existing active salaried employees temporarily deactivated so the test roster was
+  exact): create with no overrides → both included, total=90000; second DRAFT for same month
+  allowed; update with a deduction override (emp2 → amount=35000, remarks) → total=85000,
+  `salary_amount` stayed 40000 on that line; post → ledger confirmed as exactly 1 debit
+  (85000) + 2 credits (35000, 50000) against the right `ba_id`s; second run for the now-confirmed
+  month rejected (`MONTH_ALREADY_CONFIRMED` with the existing run's id); double-post blocked;
+  update-while-posted blocked; unpost → `amount_before`=85000, ledger rows removed, month usable
+  again afterward; remove-while-draft succeeded; empty-roster create correctly rejected. All test
+  rows cleaned up after. Debugger review: clean, no bugs found — also independently confirmed the
+  `update()`-skips-month-recheck design is safe, since `post()` always re-checks regardless.
+- **Not done:** no frontend page for Salary Run exists yet.
+- **Files:** `src/repositories/salaryRuns.repository.js` (new), `src/services/salaryRuns.service.js`
+  (new), `src/ipc/salaryRuns.ipc.js` (new), `src/ipc/index.js` (registered), `electron/preload.js`
+  (FEATURES), `backend/milestones/milestone4.md` (checkboxes).
+
+**Milestone 4 status:** Modules 4.3–4.7 are now all code-complete and debugged clean across this
+session. Modules 4.1 (Receipts) and 4.2 (Expenses) remain unbuilt (empty stub files) — Milestone 4
+is not finished until those are done too, even though the harder/newer payroll and cash-and-bank
+scope (4.3-4.7) is now ahead of the originally-planned 4.1/4.2.
+
+## Milestone 4, Module 4.6 — Wage Run
+
+### 2026-08-04 — wageRuns CRUD + post/unpost built, live-verified with real arithmetic
+- **What:** One settlement = one worker + one stage + many article lines, reading `dbo.articles`'
+  12 stage-cost columns (write-only until now) and writing `ledger_entries` only — no stock
+  movement. No schema changes — `dbo.wage_runs`/`dbo.wage_run_items` already existed and were
+  already applied.
+- **How:**
+  - `validateEmployeeStage()` fetches the worker via `employeesService.getById()` and checks the
+    requested `stage_key` is actually one of that worker's trades before anything else runs — this
+    is the real enforcement of "the stage list on create must filter to the chosen worker's trades
+    only" (the frontend filters visually, this is where it's actually guaranteed); the composite FK
+    `(employee_id, employee_type)` pinned to `'WORKER'` backstops it at the DB level regardless.
+  - `resolveLines()` snapshots `rate`/`packing` from the article's CURRENT figures at the moment a
+    line is (re-)added, using `src/constants/stages.js`'s stage_key→cost_column map (built in
+    Module 4.5) to know which of the 12 columns to read. `rate` can be overridden by a
+    caller-supplied value (operator can type over the auto-filled rate, per payroll.md §7);
+    `packing` never can — always `article.packing`, ignoring anything the caller supplies for it.
+  - `buildTotal()` computes `total_amount` in JS using the exact same formula
+    (`rate * cartons * packing`) as `wage_run_items.amount`'s DB-side `PERSISTED` computed column,
+    confirmed matching exactly in the live test (1200 for 5×20×12, 2400 for 10×20×12) — no drift.
+  - Lifecycle mirrors transfers/purchases: always created `DRAFT` explicitly; `update()`/`remove()`
+    blocked while `CONFIRMED` (unpost first); `update()` always deletes-then-reinserts items rather
+    than patching, matching payroll.md §8's "an edit is a fresh statement of what happened."
+  - Post: `Dr WAGES EXPENSE (410001) / Cr worker.ba_id`, `source_type='WAGE_RUN'`.
+  - Unpost is audited (payroll.md §8): `unposted_at`/`unposted_by`/`amount_before` are set on every
+    unpost. Note: `CK_wage_runs_unpost` at the DB level only actually requires `unposted_at IS NOT
+    NULL` when any of the three are set — not true all-or-nothing, despite the milestone checklist's
+    original "enforces all-or-nothing" phrasing (checked schema.sql directly to confirm). The
+    service sets all three together regardless, which is the intended behavior either way.
+    `markPosted()` clears all three back to `NULL` on every post, so a stale audit trail from an
+    earlier unpost cycle never lingers on a run that's since been reposted.
+  - No duplicate-settlement guard, by design (payroll.md §5) — `recentRuns()`/`wage-runs:recent`
+    returns that worker's last 3 runs for the selected stage (any status) instead.
+  - Registered `ipc/wageRuns.ipc.js` in `src/ipc/index.js`; added `'wageRuns'` to
+    `electron/preload.js`'s `FEATURES` array.
+- **Verified live** against `wentox_db` (throwaway WORKER with a 'cutting' trade, throwaway article
+  with cutting rate=20/packing=12): stage-not-in-worker's-trades rejected; create with 5 cartons →
+  `total_amount=1200`, correct rate/cartons/packing snapshot on the item; `recentRuns` returned 1
+  row; post → `CONFIRMED` with correct Dr(ac_id)/Cr(ba_id) ledger pair; double-post blocked
+  (`ALREADY_POSTED`); update-while-posted blocked (`POSTED_LOCK`); unpost → `DRAFT`,
+  `unposted_by`/`amount_before`/`unposted_at` all correctly set, ledger rows removed; edit-while-
+  draft re-snapshotted with 10 cartons → `total_amount=2400`; remove-while-draft succeeded. All
+  test rows cleaned up after.
+- **Not done:** debugger review still running as of this entry. No frontend page for Wage Run
+  exists yet. The full `getEmployeeBalance()` helper from payroll.md §6 (BAQAYA/BANAM/NET BALANCE)
+  was deliberately NOT built here — it needs Expenses (payments) data, which doesn't exist yet;
+  revisit when Expenses is built or this becomes a reports concern.
+- **Files:** `src/repositories/wageRuns.repository.js` (new), `src/services/wageRuns.service.js`
+  (new), `src/ipc/wageRuns.ipc.js` (new), `src/ipc/index.js` (registered), `electron/preload.js`
+  (FEATURES), `backend/milestones/milestone4.md` (checkboxes).
+
+## Milestone 4, Module 4.5 — Employees, Stages & Worker Trades
+
+### 2026-08-04 — employees/stages CRUD built, live-verified against payroll.md's exact checklist
+- **What:** `employees` (WORKER/SALARIED, one table per payroll.md §2) and `stages` (read-only, the
+  12 manufacturing stages). No schema changes — `dbo.employees`/`dbo.stages`/`dbo.worker_stages`
+  already existed and were already applied.
+- **How:**
+  - New `src/constants/stages.js` — single source of truth for the 12 stages' seed data (stage_key/
+    form_label/worker_label/cost_column, sort_order = array index+1), seeded into `dbo.stages` by
+    `src/db/seeds/run.js`. Frontend's `COST_FIELDS` (`types/index.ts`) is the only other copy —
+    different runtime, left alone, not a third duplicate of the same data.
+  - 4 new reserved chart-account codes added to `reservedAccounts.js` and seeded: `WORKER_WAGES`
+    (`220001`), `SALARIES_PAYABLE` (`220002`) — both LIABILITY, since baqaya/net-balance is a debt,
+    not an expense, per payroll.md §3 — and `WAGES_EXPENSE` (`410001`)/`SALARIES_EXPENSE`
+    (`410002`), both EXPENSES, for Module 4.6/4.7's posting later.
+  - `employees.service.js:validate(payload, employeeType)` takes the type as an explicit param
+    rather than reading `payload.employee_type` internally — this is what lets `update()` validate
+    against the row's real, existing type instead of trusting whatever the payload claims.
+  - `employee_type` immutability (payroll.md §7): `update()` rejects outright
+    (`payload.employee_type !== existing.employee_type` → `TYPE_IMMUTABLE`, 400) before anything
+    else runs; every type-dependent field afterward (`monthly_salary`, whether trades apply) is
+    derived from `existing.employee_type`, never the payload — so omitting `employee_type` from an
+    update call can't accidentally slip a type change through a gap in the explicit check.
+  - `create()` auto-links a `business_accounts` row under the correct head via
+    `createUnderChartCode` (same transaction-safety pattern as vendors/customers/bankAccounts); a
+    WORKER's trades are written via `replaceTrades()` (delete-all-then-reinsert) inside the same
+    transaction.
+  - Mid-session fix: `employees.repository.js:update()` was originally a plain non-transactional
+    `query()` call (copy-pasted from the vendors reference pattern before this module's specific
+    need became clear) — changed to accept a `transaction` param so it commits/rolls back together
+    with `replaceTrades()` in `update()`'s single `withTransaction` block, catching a would-be gap
+    before it was ever run live.
+  - Duplicate-name handling: same reactivate-instead-of-reject pattern as vendors (name+phone key),
+    built in from day one.
+  - Registered `ipc/employees.ipc.js`/`ipc/stages.ipc.js` in `src/ipc/index.js`; added
+    `'employees'`/`'stages'` to `electron/preload.js`'s `FEATURES` array.
+- **Verified live** against `wentox_db`, matching payroll.md's/milestone4.md's exact verify
+  checklist: 0-trade worker rejected; invalid `stage_key` rejected; worker with 1 trade created →
+  linked BA confirmed under chart code `220001`; salaried employee with no salary rejected →
+  linked BA confirmed under `220002`; `employee_type` change on update rejected; worker's trade set
+  successfully replaced (remove one, add another) via `update()`; active-duplicate rejected;
+  soft-delete → inactive-duplicate correctly flagged with reactivate `details`; `reactivate()`
+  restores `is_active`. All test rows cleaned up after.
+- **Debugger review:** clean, no critical/high-severity bugs (monthly_salary correctness,
+  replaceTrades() WORKER-only gating, TYPE_IMMUTABLE bypass check, transaction safety, IPC/preload
+  wiring, stages read-only-ness, SQL injection — all confirmed correct). One low-severity gap
+  found and fixed same-pass: `validate()` didn't dedupe `payload.stages`, so a duplicate
+  `stage_key` (e.g. `['cutting','cutting']`) would hit `PK_worker_stages` and surface a raw SQL
+  error instead of a clean 400 — added a `Set` size check, re-verified live.
+- **Not done:** no frontend page for Employees exists yet (same gap as everywhere else). Module
+  4.6/4.7 (Wage Run/Salary Run posting, which is what actually reads the trades/salary this module
+  writes) not started.
+- **Files:** `src/constants/stages.js` (new), `src/constants/reservedAccounts.js` (4 new codes),
+  `src/db/seeds/run.js` (seed logic), `src/repositories/employees.repository.js` (new),
+  `src/services/employees.service.js` (new), `src/ipc/employees.ipc.js` (new),
+  `src/repositories/stages.repository.js` (new), `src/services/stages.service.js` (new),
+  `src/ipc/stages.ipc.js` (new), `src/ipc/index.js` (registered both), `electron/preload.js`
+  (FEATURES), `backend/milestones/milestone4.md` (checkboxes).
+
+## Milestone 4, Module 4.4 — Transfer
+
+### 2026-08-04 — transfers CRUD + post/unpost built, live-verified
+- **What:** `transfers` — moves money between two of WentoX's own `business_accounts` rows (cash↔
+  bank, bank↔bank). No schema changes needed — `dbo.transfers` and `TRANSFER` in
+  `CK_ledger_entries_src` already existed in `database/schema.sql`.
+- **How:**
+  - `dbo.transfers` has a real stored `status` column (`DRAFT`/`CONFIRMED`), unlike sale_bills/
+    purchases which derive "posted" from `ledger_entries` existence — so this module's `isPosted`
+    equivalent is just reading `status` directly, not a derived query. `create()` explicitly inserts
+    `'DRAFT'` regardless of the column's `DEFAULT ('CONFIRMED')` — only `post()` moves it to
+    `CONFIRMED` and writes the ledger pair; `unpost()` deletes the ledger pair and reverts to
+    `DRAFT`. Same create-as-DRAFT-then-post shape as `purchases.service.js`.
+  - Post writes exactly one ledger pair per transfer: `Dr to_ba_id` / `Cr from_ba_id`,
+    `source_type='TRANSFER'` (`cash_and_bank.md` §7) — verified live the debit lands on the
+    destination and credit on the source, not swapped.
+  - `from_ba_id === to_ba_id` validated in the service (`ApiError.badRequest`, clean 400) ahead of
+    the DB's own `CK_transfers_distinct`, which still backstops it.
+  - `update()`/`remove()` blocked while `status === 'CONFIRMED'` (unpost first) — same rule as
+    `purchases.service.js:update()`. `remove()` is a hard `DELETE`, not soft-delete — `transfers` is
+    a transaction table, and schema.sql's own top-of-file convention note says soft-delete
+    (`is_active`) is for lookup/setup tables only, transactions "live in DRAFT or get edited."
+    (`dbo.transfers` has no `is_active` column at all, confirming this.)
+  - Added `businessAccountsService.getById()` (didn't exist — only `createUnderChartCode`/
+    `renameLinked` were exported) so `transfers.service.js` validates `from_ba_id`/`to_ba_id`
+    actually exist (404s otherwise) through the proper service layer instead of reaching into
+    `businessAccounts.repository.js` directly from another feature.
+  - Registered `ipc/transfers.ipc.js` in `src/ipc/index.js`; added `'transfers'` to
+    `electron/preload.js`'s `FEATURES` array.
+- **Verified live** against `wentox_db`: create → DRAFT; same-account rejected; post → `CONFIRMED`
+  with correct Dr/Cr ledger pair; double-post blocked (`ALREADY_POSTED`); update-while-posted
+  blocked (`POSTED_LOCK`); unpost → ledger rows gone, back to `DRAFT`; remove works while `DRAFT`.
+  Two throwaway bank accounts (via `bankAccounts.service.js`) stood in for the two sides; all test
+  rows cleaned up after. Debugger review: clean, no bugs found.
+- **Not done:** report-level exclusion of `TRANSFER` from Cash Book/income/expense totals
+  (`cash_and_bank.md` §11 item 13) — no reports exist at all yet (Milestone 5). No frontend screen.
+- **Files:** `src/repositories/transfers.repository.js` (new), `src/services/transfers.service.js`
+  (new), `src/ipc/transfers.ipc.js` (new), `src/ipc/index.js` (registered), `electron/preload.js`
+  (FEATURES), `src/services/businessAccounts.service.js` (added `getById`),
+  `backend/milestones/milestone4.md` (checkboxes).
+
+## Milestone 4, Module 4.3 — Bank Accounts
+
+### 2026-08-04 — bankAccounts CRUD built (repository/service/ipc), reactivate pattern from day one
+- **What:** First code for Module 4.3. `bankAccounts` party pattern, same shape as vendors/customers
+  — own `bank_id` PK plus a linked `business_accounts` row under the reserved BANK ACCOUNTS chart
+  account, both writes in one transaction.
+- **How:**
+  - Schema: added `account_no`/`branch` columns to `dbo.bank_accounts` (the table only had `name`
+    before this — milestone spec calls for name/account_no/branch/opening_balance/opening_date, but
+    opening_balance/opening_date deliberately live on the linked `business_accounts` row instead,
+    per `cash_and_bank.md` §3's explicit reasoning, not on `bank_accounts` itself). Dropped the
+    table's `UNIQUE(name)` constraint — two bank accounts can share a bank name with a different
+    account_no (e.g. two "Meezan Bank" accounts), so uniqueness is name+account_no, service-layer
+    only, same shape as vendors' name+phone.
+  - `CODES.CASH_AT_BANKS` renamed to `CODES.BANK_ACCOUNTS` — this reserved chart account (code
+    `100003`) already existed and was already seeded, just under its stale pre-correction name
+    "Cash at Banks"; `cash_and_bank.md` §11 item 6 explicitly calls for this rename. Seed name
+    corrected to `'BANK ACCOUNTS'` in `src/db/seeds/run.js`. Note: `ensureChartAccount()` in that
+    seed script is insert-only (no-op if the code already exists), so this rename only takes effect
+    on a fresh `npm run seed` — not an issue right now since `database/schema.sql` hasn't been
+    applied to a real DB in this environment yet, but flag it if this is ever run against a DB that
+    was seeded before this change.
+  - Built the reactivate-instead-of-reject duplicate pattern (see the Cross-cutting section below)
+    into `create()`/`update()` from the start, rather than needing a later retrofit like every other
+    entity did: name+account_no key, ACTIVE match blocks (`DUPLICATE_NAME`), INACTIVE match throws
+    `INACTIVE_DUPLICATE` with `details`, new `bank-accounts:reactivate` IPC channel.
+  - Registered `ipc/bankAccounts.ipc.js` in `src/ipc/index.js`; added `'bankAccounts'` to
+    `electron/preload.js`'s `FEATURES` array — it was missing, so the channel wouldn't have been
+    reachable from the renderer even once the handler existed.
+- **Not done:** not run against a live `wentox_db` yet (code untested end-to-end — no migrate/seed/
+  manual IPC call verification this pass). No frontend page for Bank Accounts exists at all yet
+  (same "backend real, frontend still on demo data" state as every other entity).
+- **Files:** `database_schema_v4.3.md`, `database/schema.sql` (bank_accounts columns/constraint);
+  `src/constants/reservedAccounts.js`, `src/db/seeds/run.js` (rename); `src/repositories/
+  bankAccounts.repository.js` (new), `src/services/bankAccounts.service.js` (filled in from empty
+  stub), `src/ipc/bankAccounts.ipc.js` (new), `src/ipc/index.js` (registered); `electron/
+  preload.js` (added to FEATURES); `backend/milestones/milestone4.md` (checkboxes).
 
 ## Cross-cutting — Reactivate-instead-of-reject duplicate handling
 
