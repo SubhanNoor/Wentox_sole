@@ -44,4 +44,424 @@ async function productionLog(filters = {}) {
   return result.recordset;
 }
 
-module.exports = { productionLog };
+// UC-29/UC-38 Product Ledger — same shape as productionLog() above but across EVERY movement
+// type (PRODUCTION, SALE, SALE_RETURN, OPENING, ADJUSTMENT), plus a company/vendor filter
+// (a.vendor_id) that productionLog() never needed. Debit(IN)/Credit(OUT) split happens in the
+// service — this just returns the signed qty_pairs rows, same as stock.repository.js#movements().
+async function productLedger(filters = {}) {
+  const conditions = [];
+  const params = {};
+
+  if (filters.article_id) {
+    conditions.push('a.article_id = @articleId');
+    params.articleId = { type: sql.Int, value: filters.article_id };
+  }
+  if (filters.category_id) {
+    conditions.push('a.category_id = @categoryId');
+    params.categoryId = { type: sql.Int, value: filters.category_id };
+  }
+  if (filters.vendor_id) {
+    conditions.push('a.vendor_id = @vendorId');
+    params.vendorId = { type: sql.Int, value: filters.vendor_id };
+  }
+  if (filters.search) {
+    conditions.push('(a.name LIKE @search OR a.code LIKE @search)');
+    params.search = { type: sql.NVarChar(150), value: `%${filters.search}%` };
+  }
+  if (filters.date_from) {
+    conditions.push('sm.movement_date >= @dateFrom');
+    params.dateFrom = { type: sql.Date, value: filters.date_from };
+  }
+  if (filters.date_to) {
+    conditions.push('sm.movement_date <= @dateTo');
+    params.dateTo = { type: sql.Date, value: filters.date_to };
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const result = await query(
+    `SELECT sm.*, ac.color, a.article_id, a.code AS article_code, a.name AS article_name,
+            c.name AS category_name, v.name AS vendor_name
+     FROM dbo.stock_movements sm
+     JOIN dbo.article_colors ac ON ac.variant_id = sm.variant_id
+     JOIN dbo.articles a ON a.article_id = ac.article_id
+     JOIN dbo.product_categories c ON c.category_id = a.category_id
+     JOIN dbo.vendors v ON v.vendor_id = a.vendor_id
+     ${where}
+     ORDER BY sm.movement_date, sm.movement_id`,
+    params,
+  );
+  return result.recordset;
+}
+
+// UC-30 Vendor Stock — on-hand raw material per vendor+material+unit, purchases in minus returns/
+// consumption out. Matches the exact query schema.sql's own "USED BY" comment on
+// vendor_stock_movements specifies.
+async function vendorStock() {
+  const result = await query(
+    `SELECT v.vendor_id, v.name AS vendor_name, m.material_id, m.name AS material_name,
+            vsm.unit, SUM(vsm.qty) AS on_hand
+     FROM dbo.vendor_stock_movements AS vsm
+     JOIN dbo.vendors   AS v ON v.vendor_id   = vsm.vendor_id
+     JOIN dbo.materials AS m ON m.material_id = vsm.material_id
+     GROUP BY v.vendor_id, v.name, m.material_id, m.name, vsm.unit
+     HAVING SUM(vsm.qty) <> 0
+     ORDER BY v.name, m.name`,
+  );
+  return result.recordset;
+}
+
+// ── Shared ledger helper ────────────────────────────────────────────────────────────────────
+// UC-35 Khaata's exact row shape, backing 4 reports: account-ledger, business-ledger,
+// overall-trail's drill-down, and overall-search's drill-down. Exactly one of ba_id/ac_id is
+// passed (mirrors CK_ledger_entries_one). Joins back to whichever source document produced each
+// row — the join only ever matches for the one LEFT JOIN whose table le.source_type selects, the
+// rest stay NULL — so a single pass over ledger_entries gets every report's narration/reference
+// columns without N+1 lookups.
+async function ledgerRows(filters = {}) {
+  if (!filters.ba_id && !filters.ac_id) {
+    throw new Error('ledgerRows requires ba_id or ac_id');
+  }
+  const conditions = [];
+  const params = {};
+
+  if (filters.ba_id) {
+    conditions.push('le.ba_id = @baId');
+    params.baId = { type: sql.Int, value: filters.ba_id };
+  } else {
+    conditions.push('le.ac_id = @acId');
+    params.acId = { type: sql.Int, value: filters.ac_id };
+  }
+  if (filters.date_from) {
+    conditions.push('le.entry_date >= @dateFrom');
+    params.dateFrom = { type: sql.Date, value: filters.date_from };
+  }
+  if (filters.date_to) {
+    conditions.push('le.entry_date <= @dateTo');
+    params.dateTo = { type: sql.Date, value: filters.date_to };
+  }
+
+  const result = await query(
+    `SELECT
+       le.entry_id, le.entry_date, le.source_type, le.source_id, le.debit, le.credit,
+       le.pairs, le.narration,
+       sb.bill_id AS sb_inv_no, sb.bill_no AS sb_bill_no,
+       sr.return_id AS sr_inv_no, sr.bill_no AS sr_bill_no,
+       rc.receipt_id AS rc_id, rc.payment_mode AS rc_payment_mode, rc.remarks AS rc_remarks,
+       rc.details AS rc_details, rc_cust.name AS rc_customer_name,
+       ch.cheque_no, ch.cheque_date, ch.cheque_received_date,
+       ex.expense_id AS ex_id, ex.remarks AS ex_remarks, ex_ba.name AS ex_ba_name,
+       wr.wage_run_id AS wr_id, wr.stage_key AS wr_stage_key,
+       sar.salary_run_id AS sar_id, sar.period_month AS sar_period_month,
+       tr.transfer_id AS tr_id, tr.remarks AS tr_remarks,
+       tr_from.name AS tr_from_name, tr_to.name AS tr_to_name
+     FROM dbo.ledger_entries le
+     LEFT JOIN dbo.sale_bills sb    ON le.source_type = 'SALE_BILL'    AND sb.bill_id = le.source_id
+     LEFT JOIN dbo.sale_returns sr  ON le.source_type = 'SALE_RETURN'  AND sr.return_id = le.source_id
+     LEFT JOIN dbo.receipts rc      ON le.source_type IN ('RECEIPT','COMMISSION') AND rc.receipt_id = le.source_id
+     LEFT JOIN dbo.customers rc_cust ON rc_cust.customer_id = rc.customer_id
+     LEFT JOIN dbo.cheques ch       ON rc.cheque_id = ch.cheque_id
+     LEFT JOIN dbo.expenses ex      ON le.source_type = 'EXPENSE'      AND ex.expense_id = le.source_id
+     LEFT JOIN dbo.business_accounts ex_ba ON ex_ba.ba_id = ex.ba_id
+     LEFT JOIN dbo.wage_runs wr     ON le.source_type = 'WAGE_RUN'     AND wr.wage_run_id = le.source_id
+     LEFT JOIN dbo.salary_runs sar  ON le.source_type = 'SALARY_RUN'   AND sar.salary_run_id = le.source_id
+     LEFT JOIN dbo.transfers tr     ON le.source_type = 'TRANSFER'     AND tr.transfer_id = le.source_id
+     LEFT JOIN dbo.business_accounts tr_from ON tr_from.ba_id = tr.from_ba_id
+     LEFT JOIN dbo.business_accounts tr_to   ON tr_to.ba_id   = tr.to_ba_id
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY le.entry_date, le.entry_id`,
+    params,
+  );
+  return result.recordset;
+}
+
+// Net balance up to (and including, unless exclusive) a given date — business_accounts' own
+// opening_balance/opening_date (a stored INPUT, never itself a ledger_entries row — see the
+// column's own schema.sql comment) plus every ledger_entries row up to that date. Chart accounts
+// have no opening_balance column, so ac_id skips straight to the ledger sum.
+async function netBalance({ ba_id, ac_id, up_to_date, exclusive = false }) {
+  const cmp = exclusive ? '<' : '<=';
+  if (ba_id) {
+    const result = await query(
+      `SELECT
+         (SELECT CASE WHEN opening_balance IS NOT NULL AND opening_date ${cmp} @upToDate
+                      THEN opening_balance ELSE 0 END
+          FROM dbo.business_accounts WHERE ba_id = @baId) AS opening,
+         (SELECT ISNULL(SUM(debit), 0) - ISNULL(SUM(credit), 0)
+          FROM dbo.ledger_entries WHERE ba_id = @baId AND entry_date ${cmp} @upToDate) AS ledger_net`,
+      { baId: { type: sql.Int, value: ba_id }, upToDate: { type: sql.Date, value: up_to_date } },
+    );
+    const row = result.recordset[0];
+    return Number(row.opening) + Number(row.ledger_net);
+  }
+  const result = await query(
+    `SELECT ISNULL(SUM(debit), 0) - ISNULL(SUM(credit), 0) AS ledger_net
+     FROM dbo.ledger_entries WHERE ac_id = @acId AND entry_date ${cmp} @upToDate`,
+    { acId: { type: sql.Int, value: ac_id }, upToDate: { type: sql.Date, value: up_to_date } },
+  );
+  return Number(result.recordset[0].ledger_net);
+}
+
+// UC-31/32 Sale Analysis & Sale Report share one grouped aggregation — one row per customer,
+// joined to region for the Region Wise grouping (done in the service, not here: this always
+// returns per-customer rows, the service rolls them into region buckets when asked).
+async function saleAggregateByCustomer(filters = {}) {
+  const params = {};
+  const billDate = [];
+  const returnDate = [];
+  const receiptDate = [];
+
+  if (filters.date_from) {
+    billDate.push('bill_date >= @dateFrom');
+    returnDate.push('return_date >= @dateFrom');
+    receiptDate.push('receipt_date >= @dateFrom');
+    params.dateFrom = { type: sql.Date, value: filters.date_from };
+  }
+  if (filters.date_to) {
+    billDate.push('bill_date <= @dateTo');
+    returnDate.push('return_date <= @dateTo');
+    receiptDate.push('receipt_date <= @dateTo');
+    params.dateTo = { type: sql.Date, value: filters.date_to };
+  }
+  const billWhere = billDate.length ? `WHERE ${billDate.join(' AND ')}` : '';
+  const returnWhere = returnDate.length ? `WHERE ${returnDate.join(' AND ')}` : '';
+  const receiptWhere = receiptDate.length ? `WHERE ${receiptDate.join(' AND ')}` : '';
+
+  const result = await query(
+    `SELECT
+       c.customer_id, c.name AS customer_name, c.region_id, r.name AS region_name,
+       ISNULL(sb.total_sales, 0) AS total_sales, ISNULL(sb.total_cartons, 0) AS total_cartons,
+       ISNULL(sr.total_returns, 0) AS total_returns,
+       ISNULL(rc.total_payment, 0) AS total_payment, ISNULL(rc.total_commission, 0) AS total_commission
+     FROM dbo.customers c
+     JOIN dbo.regions r ON r.region_id = c.region_id
+     LEFT JOIN (
+       SELECT customer_id, SUM(net_value) AS total_sales, SUM(total_cartons) AS total_cartons
+       FROM dbo.sale_bills ${billWhere} GROUP BY customer_id
+     ) sb ON sb.customer_id = c.customer_id
+     LEFT JOIN (
+       SELECT customer_id, SUM(net_value) AS total_returns
+       FROM dbo.sale_returns ${returnWhere} GROUP BY customer_id
+     ) sr ON sr.customer_id = c.customer_id
+     LEFT JOIN (
+       SELECT customer_id, SUM(amount) AS total_payment, SUM(commission) AS total_commission
+       FROM dbo.receipts ${receiptWhere ? receiptWhere + " AND status = 'CONFIRMED'" : "WHERE status = 'CONFIRMED'"}
+       GROUP BY customer_id
+     ) rc ON rc.customer_id = c.customer_id
+     WHERE sb.total_sales IS NOT NULL OR sr.total_returns IS NOT NULL OR rc.total_payment IS NOT NULL
+     ORDER BY r.name, c.name`,
+    params,
+  );
+  return result.recordset;
+}
+
+// UC-33 Vendor Report — Total Purchase / Purchase Return / Payment Paid (expenses against the
+// vendor's ba_id, PLUS cheque_allocations endorsed straight to the vendor via target_vendor_id —
+// distinct from target_ba_id, which is only set for EXPENSE_PAYMENT allocations, see
+// cheque_allocations' own CK_cheque_allocations_target).
+async function vendorReportRows(filters = {}) {
+  const params = {};
+  const purchaseDate = [];
+  const returnDate = [];
+  const expenseDate = [];
+  const allocDate = [];
+
+  if (filters.vendor_id) {
+    purchaseDate.push('vendor_id = @vendorId');
+    returnDate.push('vendor_id = @vendorId');
+    params.vendorId = { type: sql.Int, value: filters.vendor_id };
+  }
+  if (filters.date_from) {
+    purchaseDate.push('purchase_date >= @dateFrom');
+    returnDate.push('return_date >= @dateFrom');
+    expenseDate.push('expense_date >= @dateFrom');
+    allocDate.push('allocation_date >= @dateFrom');
+    params.dateFrom = { type: sql.Date, value: filters.date_from };
+  }
+  if (filters.date_to) {
+    purchaseDate.push('purchase_date <= @dateTo');
+    returnDate.push('return_date <= @dateTo');
+    expenseDate.push('expense_date <= @dateTo');
+    allocDate.push('allocation_date <= @dateTo');
+    params.dateTo = { type: sql.Date, value: filters.date_to };
+  }
+  const purchaseWhere = purchaseDate.length ? `WHERE ${purchaseDate.join(' AND ')}` : '';
+  const returnWhere = returnDate.length ? `WHERE ${returnDate.join(' AND ')}` : '';
+  const expenseWhere = expenseDate.length ? `WHERE ${expenseDate.join(' AND ')}` : '';
+  const allocWhere = [...allocDate, "disposition_type = 'VENDOR_PAYMENT'", "status = 'ACTIVE'"].join(' AND ');
+
+  const vendorFilter = filters.vendor_id ? 'WHERE v.vendor_id = @vendorId' : '';
+  const result = await query(
+    `SELECT
+       v.vendor_id, v.name AS vendor_name,
+       ISNULL(p.total_purchase, 0) AS total_purchase,
+       ISNULL(pr.total_return, 0) AS total_return,
+       ISNULL(ex.total_expense_payment, 0) + ISNULL(al.total_alloc_payment, 0) AS total_payment
+     FROM dbo.vendors v
+     LEFT JOIN (
+       SELECT vendor_id, SUM(total_value) AS total_purchase FROM dbo.purchases ${purchaseWhere} GROUP BY vendor_id
+     ) p ON p.vendor_id = v.vendor_id
+     LEFT JOIN (
+       SELECT vendor_id, SUM(total_value) AS total_return FROM dbo.purchase_returns ${returnWhere} GROUP BY vendor_id
+     ) pr ON pr.vendor_id = v.vendor_id
+     LEFT JOIN (
+       SELECT ba.ba_id, SUM(e.amount) AS total_expense_payment
+       FROM dbo.expenses e JOIN dbo.business_accounts ba ON ba.ba_id = e.ba_id
+       ${expenseWhere ? expenseWhere + " AND e.status = 'CONFIRMED'" : "WHERE e.status = 'CONFIRMED'"}
+       GROUP BY ba.ba_id
+     ) ex ON ex.ba_id = v.ba_id
+     LEFT JOIN (
+       SELECT target_vendor_id, SUM(amount) AS total_alloc_payment
+       FROM dbo.cheque_allocations WHERE ${allocWhere} GROUP BY target_vendor_id
+     ) al ON al.target_vendor_id = v.vendor_id
+     ${vendorFilter}
+     ORDER BY v.name`,
+    params,
+  );
+  return result.recordset;
+}
+
+// UC-34 Payment Trail — 5 fixed buckets. Vendor payments post against a vendor's OWN business
+// account (created under VENDORS_ACCOUNTS, 200001 — see vendors.service.js), not the separate
+// VENDORS_SUPPLIERS (200002) code, and employee payments post against WORKER_WAGES/
+// SALARIES_PAYABLE (each employee's own ba, per employee_type), not the separate EMPLOYEES
+// (400005) code — so each bucket is defined by which chart accounts real money actually flows
+// through, not by the single reserved code whose NAME matches the bucket label most literally.
+async function paymentTrailRows(filters = {}) {
+  const conditions = ["e.status = 'CONFIRMED'"];
+  const params = {};
+  if (filters.date_from) {
+    conditions.push('e.expense_date >= @dateFrom');
+    params.dateFrom = { type: sql.Date, value: filters.date_from };
+  }
+  if (filters.date_to) {
+    conditions.push('e.expense_date <= @dateTo');
+    params.dateTo = { type: sql.Date, value: filters.date_to };
+  }
+
+  const result = await query(
+    `SELECT ca.code, ca.name, ca.is_restricted, SUM(e.amount) AS total
+     FROM dbo.expenses e
+     JOIN dbo.business_accounts ba ON ba.ba_id = e.ba_id
+     JOIN dbo.chart_of_accounts ca ON ca.ac_id = ba.ac_id
+     WHERE ${conditions.join(' AND ')}
+     GROUP BY ca.code, ca.name, ca.is_restricted`,
+    params,
+  );
+  return result.recordset;
+}
+
+// UC-36 Business Accounts Ledger listing — Code/Description/Main Account/City, plus the resolved
+// party category (Customer/Vendor/Employee/Bank/generic) for Overall Trail's grouping (§ new
+// report). One business_accounts row is claimed by at most one party table, so the CASE below is
+// unambiguous; a row nothing claims is a generic head (e.g. Business Running Expenses, Directors
+// Drawings) shown under its own chart-account name.
+async function businessAccountsWithCategory() {
+  const result = await query(
+    `SELECT
+       ba.ba_id, ba.code, ba.name, ba.city_id, ci.name AS city_name,
+       ca.ac_id, ca.code AS ac_code, ca.name AS ac_name,
+       CASE
+         WHEN cu.customer_id IS NOT NULL THEN 'CUSTOMER'
+         WHEN ve.vendor_id   IS NOT NULL THEN 'VENDOR'
+         WHEN em.employee_id IS NOT NULL THEN 'EMPLOYEE'
+         WHEN bk.bank_id     IS NOT NULL THEN 'BANK'
+         ELSE 'BUSINESS_ACCOUNT'
+       END AS category,
+       em.employee_type
+     FROM dbo.business_accounts ba
+     JOIN dbo.chart_of_accounts ca ON ca.ac_id = ba.ac_id
+     LEFT JOIN dbo.cities ci        ON ci.city_id = ba.city_id
+     LEFT JOIN dbo.customers cu     ON cu.ba_id = ba.ba_id
+     LEFT JOIN dbo.vendors ve       ON ve.ba_id = ba.ba_id
+     LEFT JOIN dbo.employees em     ON em.ba_id = ba.ba_id
+     LEFT JOIN dbo.bank_accounts bk ON bk.ba_id = ba.ba_id
+     WHERE ba.status = 'ACTIVE'
+     ORDER BY ca.code, ba.code`,
+  );
+  return result.recordset;
+}
+
+// Balance-as-of for EVERY business account in one pass (used by Business Ledger's summary mode
+// and Overall Trail, which both need every account's balance rather than one at a time — avoids
+// an N+1 netBalance() call per account).
+async function businessAccountBalancesAsOf(asOfDate) {
+  const result = await query(
+    `SELECT ba.ba_id,
+       CASE WHEN ba.opening_balance IS NOT NULL AND ba.opening_date <= @asOf
+            THEN ba.opening_balance ELSE 0 END
+       + ISNULL(le.debit_sum, 0) - ISNULL(le.credit_sum, 0) AS balance
+     FROM dbo.business_accounts ba
+     LEFT JOIN (
+       SELECT ba_id, SUM(debit) AS debit_sum, SUM(credit) AS credit_sum
+       FROM dbo.ledger_entries WHERE ba_id IS NOT NULL AND entry_date <= @asOf GROUP BY ba_id
+     ) le ON le.ba_id = ba.ba_id`,
+    { asOf: { type: sql.Date, value: asOfDate } },
+  );
+  return new Map(result.recordset.map((r) => [r.ba_id, Number(r.balance)]));
+}
+
+// Same, for chart accounts posted to directly (no opening_balance column there).
+async function chartAccountBalancesAsOf(asOfDate) {
+  const result = await query(
+    `SELECT ac_id, SUM(debit) - SUM(credit) AS balance
+     FROM dbo.ledger_entries WHERE ac_id IS NOT NULL AND entry_date <= @asOf GROUP BY ac_id`,
+    { asOf: { type: sql.Date, value: asOfDate } },
+  );
+  return new Map(result.recordset.map((r) => [r.ac_id, Number(r.balance)]));
+}
+
+// Overall Trail's "direct chart account" rows — heads that ledger_entries posts to via ac_id
+// rather than through a business_accounts row (SALES, PURCHASES, CASH IN HAND, COMMISSION
+// ALLOWED, CHEQUES IN HAND, WAGES/SALARIES EXPENSE, ...). Only accounts with at least one posted
+// entry are returned — an account nothing has ever posted to isn't worth a trial-balance row.
+async function chartAccountsWithActivity() {
+  const result = await query(
+    `SELECT DISTINCT ca.ac_id, ca.code, ca.name, ca.is_restricted
+     FROM dbo.chart_of_accounts ca
+     JOIN dbo.ledger_entries le ON le.ac_id = ca.ac_id
+     ORDER BY ca.code`,
+  );
+  return result.recordset;
+}
+
+// UC-37 Cash Book — CASH_IN_HAND account's ledger rows for a date/month, reusing ledgerRows()'s
+// join set so cheque-allocation and expense narrations come along for free.
+function cashBookRows(cashAcId, filters) {
+  return ledgerRows({ ac_id: cashAcId, date_from: filters.date_from, date_to: filters.date_to });
+}
+
+// New "Overall Searching" (UC-none — user-requested) — backed by the migration 008 VIEW so it
+// stays current with customers/vendors/employees/sub_customers/business_accounts automatically,
+// no app-side UNION to keep in sync by hand.
+async function overallDirectory(searchQuery, entityType) {
+  const conditions = [];
+  const params = {};
+  if (searchQuery) {
+    conditions.push('(name LIKE @search OR CAST(entity_id AS VARCHAR(20)) LIKE @search)');
+    params.search = { type: sql.NVarChar(150), value: `%${searchQuery}%` };
+  }
+  if (entityType) {
+    conditions.push('entity_type = @entityType');
+    params.entityType = { type: sql.VarChar(20), value: entityType };
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const result = await query(`SELECT * FROM dbo.vw_overall_directory ${where} ORDER BY name`, params);
+  return result.recordset;
+}
+
+module.exports = {
+  productionLog,
+  productLedger,
+  vendorStock,
+  ledgerRows,
+  netBalance,
+  saleAggregateByCustomer,
+  vendorReportRows,
+  paymentTrailRows,
+  businessAccountsWithCategory,
+  businessAccountBalancesAsOf,
+  chartAccountBalancesAsOf,
+  chartAccountsWithActivity,
+  cashBookRows,
+  overallDirectory,
+};

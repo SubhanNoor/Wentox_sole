@@ -13,16 +13,21 @@ here writes financial data.
 - [x] Verify: production in CARTONS auto-creates a new color and normalizes correctly (5 cartons × packing 12 = 60 pairs); a second production log in PAIRS against the same color resolves to the same variant, not a duplicate; an ADJUSTMENT of -3 recorded; movement history returns all 3 rows for the article; current stock correctly shows 65 total pairs → 5 cartons + 5 extra pairs (packing 12); production report with a date range correctly excludes the ADJUSTMENT (PRODUCTION-only); invalid `input_unit` and zero-`qty_pairs` adjustment both rejected — all run live against `wentox_db`, debugger review clean
 
 ## Module 5.2 — Reports
-**Deliberately deferred — not built this pass**, per explicit instruction. All 9 items below remain untouched:
-- [ ] `reports:product-ledger` — per-product movement history (UC-29, UC-38)
-- [ ] `reports:vendor-stock` — stock movements against vendor-supplied goods (UC-30)
-- [ ] `reports:sale-analysis` — analytical sale breakdown (UC-31)
-- [ ] `reports:sale-report` — sale bill listing/report (UC-32)
-- [ ] `reports:vendor-report` — vendor purchase/payment summary (UC-33)
-- [ ] `reports:payment-trail` — receipt/payment history per account (UC-34)
-- [ ] `reports:account-ledger` — chart-account ledger (Khaata): date range, Summary / Detail / Customer views, opening balance + running balance (UC-35)
-- [ ] `reports:business-ledger` — business accounts ledger: Code / Description / Main Account / City (City comes from `business_accounts.city_id` directly, not inherited from a customer) (UC-36)
-- [ ] `reports:cash-book` — per-date cash summary from CASH-account ledger entries: receipts in, expenses out, opening/closing balance (UC-37)
+All 9 originally-deferred items now built, plus 2 new user-requested reports beyond the original
+list. Everything reads `dbo.ledger_entries` directly via a shared `reports.repository.js#ledgerRows()`
+helper rather than recomputing from source documents — see the 2026-08-04 PROGRESS.md entry.
+- [x] `reports:product-ledger` — per-product movement history, every `stock_movements` type (not just PRODUCTION), Debit(IN)=PRODUCTION+SALE_RETURN/Credit(OUT)=SALE via the row's own signed `qty_pairs`, plus a company/vendor filter (UC-29, UC-38)
+- [x] `reports:vendor-stock` (read) + `stock:reduce-vendor-stock` (write, lives in the `stock` module — the one non-read-only exception UC-30 itself calls for) — per-vendor material on-hand, reduction rejected if it would go negative (UC-30)
+- [x] `reports:sale-analysis` — Total Sales/Returns/Payment, Customer Wise (flat) or Region Wise (region → its customers) (UC-31)
+- [x] `reports:sale-report` — Sales/Cartons/Commission/Return/Net Sales/Payment, same grouping (UC-32)
+- [x] `reports:vendor-report` + `reports:vendor-ledger` — Total Purchase/Return/Net/Payment Paid (expenses + cheque-endorsement allocations via `target_vendor_id`) per vendor, plus a standard ledger view (UC-33)
+- [x] `reports:payment-trail` — 5 fixed buckets from `expenses` grouped by the paying business account's parent chart account; the 2 `is_restricted` buckets (Cash at Banks, Directors Drawings) hidden and excluded from the grand total for non-ADMIN sessions — the first place `is_restricted` is read outside the seed script (UC-34)
+- [x] `reports:account-ledger` — chart-account/business-account Khaata: opening balance, running balance, Inv#/Bill#, 3 cheque sub-columns, separate red payment rows, date range or overall (UC-35)
+- [x] `reports:business-ledger` — Code/Description/Main Account/City; Summary (every account's closing balance in one query, not N+1) or Detail (one account's full ledger) (UC-36)
+- [x] `reports:cash-book` — CASH IN HAND account's own ledger for a date or month; Opening Cash/Cash Received (Jamma)/Total Cash/Cash Paid (Naam)/Cash In Hand (UC-37)
+- [x] `reports:overall-trail` (NEW — user-requested, not in the original 9) — full trial balance across every business account (resolved to Customer/Vendor/Employee/Bank/generic via its owning party table) plus every directly-posted chart account, "as on" a date, grouped with subtotals; verified live that grand total debit == grand total credit. Sub-customers carry no `ba_id` so they never appear here (delivery-address-only, never financially responsible for a bill)
+- [x] `reports:overall-search` + `reports:overall-search-ledger` (NEW — user-requested) — type a name, get back every matching customer/vendor/employee/sub-customer/business account, backed by `dbo.vw_overall_directory` (migration 008, a SQL VIEW so it auto-reflects source-table changes) rather than an app-side merge; drill-down reuses the same ledger helper, sub-customers return `{ has_account: false }` instead of a fabricated balance
+- [x] Verify: all 11 run live against `wentox_db` via the service layer — Overall Trail balances exactly; a real bounce-reversal ledger row's narration correctly overrides the receipt's own remarks (a genuine bug found and fixed during this pass, not by the debugger); vendor-stock reduce accepts a valid reduction and rejects an over-reduction; payment-trail restriction verified for both ADMIN and USER roles; overall-search directory row counts verified against source-table counts with no double-listing. Debugger review clean (parameterization, boundary/date-range handling, N+1s, restricted-bucket leakage, IPC session guards) bar one PLAUSIBLE gap: `vw_overall_directory` had no dedicated `BANK` branch, so a bank account would've shown as generic `BUSINESS_ACCOUNT` in Overall Search instead of `BANK` (inconsistent with Overall Trail's own 5-way categorization) — fixed via migration `009_overall_directory_bank_branch.sql`, re-verified live
 
 ## Module 5.3 — Search & Bilty/Adda Updation (UC-20)
 - [x] `sale-bills:bilty-search` — filters: date range, customer, sub-customer, bill no (no "Without Bilty/Adda" option — every bill has both from creation); added to the existing `saleBills` module rather than a new feature, with joined customer/sub-customer/adda display names

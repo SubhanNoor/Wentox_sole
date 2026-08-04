@@ -1,6 +1,6 @@
 # Wentox Backend — Progress Log
 
-**Current milestone:** Milestone 4 is now FULLY BUILT — Module 4.2 (Expenses / Kharch) is code-complete, extensively verified live, debugger review clean after fixing 4 issues (1 HIGH). All 7 of Milestone 4's modules (4.1–4.7) are now done. Milestone 5's Module 5.2 (Reports) remains deliberately deferred — the only backend gap left across Milestones 4–8 is Module 5.2 plus, everywhere, the frontend integration pass (Milestone 9.2).
+**Current milestone:** Milestone 5 is now FULLY BUILT — Module 5.2 (Reports) is code-complete: all 9 originally-deferred report channels plus 2 new user-requested reports (Overall Trail / Overall Searching), live-verified against `wentox_db`. Milestone 4 (all 7 modules) and Milestone 5 (5.1–5.3) are now both complete. The only backend gap left across Milestones 4–8 is Milestones 8.2/8.3 (accounting hierarchy setup) plus, everywhere, the frontend integration pass (Milestone 9.2) — no page in the app is wired to real `window.api` calls yet.
 **Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10, later given a required `region_id` for Sale Bill/Return dropdown filtering); **Module 7.1 moved to Milestone 4 Module 4.5** (see 2026-08-19 entry below — it was never actually "blocked," `payroll.md` fully designs it). Milestone 8: **Module 8.1 complete and verified end-to-end** (Regions, Cities, Stores, Addas — including Addas' UC-14 delete-guard and its new required `region_id` — see below); Modules 8.2/8.3 (accounting hierarchy) not started. **Milestone 4 was expanded 2026-08-19** from Receipts/Expenses-only into also covering Bank Accounts, Transfer, and Payroll (Employees/Wage Run/Salary Run) — none of that is built yet, all newly planned. The Milestone 2/3 frontend wiring is also still pending. Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures. "Reactivate an inactive duplicate-named row instead of rejecting on create()" — no longer parked: implemented across every built entity — vendors (name+phone key), customers/sub-customers (name-only, never blocks on active match), regions/cities/stores/categories/addas (name-only, blocks on active match, matching their existing DB-level `UNIQUE(name)`), and products (name+vendor_id key, didn't have ANY duplicate check before this). Employees still has no CRUD built. See `System_architecture/soft_delete_and_duplicate_check.md`. **Module 4.3 (Bank Accounts) now built** — see the dated entry below; it now also uses the reactivate-instead-of-reject pattern (name+account_no key) from day one, rather than needing a later retrofit.
 
 Log every completed task here (newest first within its milestone). Format:
@@ -11,6 +11,97 @@ Log every completed task here (newest first within its milestone). Format:
 - **How:** approach, key decisions, gotchas
 - **Files:** paths touched
 ```
+
+---
+
+## Milestone 5, Module 5.2 — Reports — Milestone 5 now fully complete
+
+### 2026-08-04 — All 11 reports built in one pass (9 originally-deferred + 2 new user-requested), backed directly by `ledger_entries`
+- **What:** Every report in the sidebar's Reports Hub, plus a new "Overall Trail" (a full trial
+  balance across every account) and a new "Overall Searching" directory (type a name, get back
+  the matching customer/vendor/employee/sub-customer/business account, backed by a SQL VIEW per
+  explicit user request so it auto-reflects source-table changes with no app-side merge code).
+  Both new reports came from the user attaching screenshots of an already-built demo frontend page
+  (`OverallTrailContent.tsx`, `OverallSearchPage.tsx`) and asking for the real backend behind it.
+- **Core design decision:** rather than recomputing balances from source documents the way the
+  demo frontend does (client-side, filtering arrays), everything here reads `dbo.ledger_entries`
+  directly — the single double-entry journal every CONFIRMED document already posts to. This is
+  what `database_schema_v4.3.md`'s own comments on `ledger_entries`/`chart_of_accounts` describe as
+  the intended query shape ("Trial Balance report (GROUP BY ac_id/ba_id, SUM(debit), SUM(credit))"),
+  and it means the Overall Trail's grand total genuinely balances (verified live: total debit ==
+  total credit across every account) rather than being an approximation.
+- **Shared building block:** `reports.repository.js#ledgerRows()` — one query per account (ba_id
+  or ac_id) that LEFT JOINs `ledger_entries` back to whichever source doc produced each row based
+  on `source_type` (sale_bills, sale_returns, receipts→cheques, expenses→business_accounts,
+  wage_runs, salary_runs, transfers→business_accounts). Backs 4 of the 11 reports: Account Ledger
+  (Khaata), Business Ledger's detail view, Overall Trail's drill-down, and Overall Search's
+  drill-down. `netBalance()`/`businessAccountBalancesAsOf()`/`chartAccountBalancesAsOf()` compute
+  balance-as-of-a-date the same way everywhere: `business_accounts.opening_balance` (a stored
+  INPUT, if `opening_date` is on/before the date) + every ledger row up to that date — chart
+  accounts have no opening_balance column, so they skip straight to the ledger sum.
+- **A real bug caught during live testing, not by the debugger:** the first version of
+  `formatLedgerRow()` always preferred `receipts.remarks` over `ledger_entries.narration` for
+  `RECEIPT`-sourced rows — correct for a normal receipt (UC-35's own spec: narration = the
+  receipt's free text), but WRONG for a bounce/return reversal, which deliberately reuses
+  `source_type='RECEIPT'` on the same `receipt_id` (reverse-never-erase, §6.1) with its own
+  narration like `"BOUNCED reversal of receipt #18"`. Found by manually inspecting real leftover
+  test data from an earlier session's bounce test — the reversal row was silently showing the
+  original receipt's remarks instead of "BOUNCED reversal...". Fixed with a targeted check
+  (`/reversal/i` in the ledger row's own narration wins over the receipt's remarks).
+- **Two chart-account mapping judgment calls, made from the actual posting code rather than the
+  reserved-code names alone** (documented inline in `reports.repository.js#paymentTrailRows()`):
+  Payment Trail's "Vendors – Suppliers" bucket maps to `VENDORS_ACCOUNTS` (200001 — where
+  `vendors.service.js` actually creates a vendor's `ba_id`), not the separately-reserved but
+  never-used `VENDORS_SUPPLIERS` (200002); "Employees" maps to `WORKER_WAGES`+`SALARIES_PAYABLE`
+  (220001/220002 — where `employees.service.js` actually creates an employee's `ba_id`), not the
+  unused `EMPLOYEES` (400005). A generic "create a business account directly under an arbitrary
+  chart account" feature (`businessAccounts.ipc.js`) is still an unbuilt TODO stub, so
+  `BUSINESS_RUNNING_EXPENSES`/`DIRECTORS_DRAWINGS` buckets will correctly show 0 until that's built
+  — not a report bug, a real current-data gap.
+- **`reports:payment-trail` restricted-bucket filtering (UC-34):** `BANK_ACCOUNTS`/
+  `DIRECTORS_DRAWINGS` are `is_restricted` in `chart_of_accounts` (seeded, TASK-14/§8) but nothing
+  in the backend enforced that restriction anywhere before now — `paymentTrail()` hides those two
+  buckets entirely for non-ADMIN sessions and excludes them from `grand_total`, the first place
+  `is_restricted` is actually read outside the seed script.
+- **UC-30 Vendor Stock is the one write inside "Reports":** `reports:vendor-stock` (read, listing
+  on-hand material per vendor) stays in the `reports` module per the milestone's own naming, but
+  the write side (UC-30 step 2, "this much material has been used") went into `stock.service.js`
+  as `stock:reduce-vendor-stock` instead — Reports is otherwise strictly read-only, and this is the
+  one documented exception, so it lives with the rest of the stock-writing surface. Rejects a
+  reduction that would take on-hand negative (`INSUFFICIENT_STOCK`), verified live.
+- **`dbo.vw_overall_directory` (migration 008):** `UNION ALL`s customers/vendors/employees/
+  sub_customers/business_accounts. The business_accounts branch excludes rows already owned by a
+  customer/vendor/employee (`NOT EXISTS` against each), so only "generic" accounts (banks, expense
+  heads) show up under their own name — verified live that the directory's row count matches
+  `customers + vendors + employees + sub_customers + (business_accounts not claimed by any of
+  those)` with no double-listing. Sub-customers carry no `ba_id` (delivery-address-only party,
+  never financially responsible for a bill) so they always search-match by name but their
+  drill-down returns `{ has_account: false, message: "..." }` instead of a fabricated balance.
+- **Verified live against `wentox_db`:** every one of the 11 report functions run end-to-end
+  through the service layer (bypassing IPC, same as prior milestones' smoke tests) — Overall
+  Trail's grand total debit/credit balances exactly; the reversal-narration fix confirmed against
+  real leftover bounce-test data; vendor-stock reduce accepted a valid reduction and correctly
+  rejected an over-reduction; payment-trail correctly hides the 2 restricted buckets for a `USER`
+  role and includes them for `ADMIN`; business-ledger summary (all accounts, one balance query
+  each via `businessAccountBalancesAsOf()`, not N+1) and detail (one account's full ledger) both
+  checked; overall-search directory counts matched expectations with no double-listing.
+- **Debugger review:** clean overall — SQL injection, N+1s, date-range boundaries, restricted-
+  bucket leakage, and IPC session guards all checked and confirmed sound. One PLAUSIBLE finding:
+  `vw_overall_directory` (migration 008) excluded rows already claimed by customers/vendors/
+  employees from its generic branch but had no exclusion — or own branch — for `bank_accounts`, so
+  a bank account would show up mislabeled as generic `BUSINESS_ACCOUNT` in Overall Search instead
+  of `BANK`, inconsistent with `businessAccountsWithCategory()`'s 5-way categorization already used
+  by Overall Trail. Unobservable in the live DB at review time (no bank accounts existed yet) but
+  would surface as soon as one was created. Fixed via `009_overall_directory_bank_branch.sql`
+  (adds the `BANK` branch, sourced through `bank_accounts.ba_id` → `business_accounts.city_id`
+  since `bank_accounts` has no `city_id` of its own), re-verified live post-migration.
+- **Files:** `reports.repository.js`/`reports.service.js`/`reports.ipc.js` (all heavily
+  rewritten), `stock.repository.js`/`stock.service.js`/`stock.ipc.js` (vendor-stock
+  read+write added), `materials.repository.js` (added `findById`), migrations
+  `008_overall_directory_view.sql` and `009_overall_directory_bank_branch.sql`.
+- **Not done:** frontend wiring (both `OverallTrailContent.tsx`/`OverallSearchPage.tsx` and the
+  other 8 report tabs already exist on the demo frontend, untouched this pass, still running on
+  demo in-memory data per the session's established "don't connect it" pattern).
 
 ---
 

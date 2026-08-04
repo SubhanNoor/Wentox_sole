@@ -3,6 +3,8 @@
 const repository = require('../repositories/stock.repository');
 const productColorsService = require('../services/productColors.service');
 const productsService = require('./products.service');
+const vendorsService = require('./vendors.service');
+const materialsRepository = require('../repositories/materials.repository');
 const ApiError = require('../errors/ApiError');
 
 // Resolves a variant either directly (variant_id) or by article_id+color (creating the color the
@@ -88,4 +90,34 @@ async function currentStock(filters = {}) {
   });
 }
 
-module.exports = { logProduction, adjust, movements, currentStock };
+// UC-30 step 2 — records that some quantity of a vendor's material has been used, as a negative
+// CONSUMPTION row (source_type NULL — manual, not tied to a purchase/return document). Rejected
+// if it would take on-hand negative, same guard a real stock count would need.
+async function reduceVendorStock(payload, userId) {
+  if (!payload.vendor_id) throw ApiError.badRequest('vendor_id is required');
+  if (!payload.material_id) throw ApiError.badRequest('material_id is required');
+  if (!payload.unit) throw ApiError.badRequest('unit is required');
+  if (!payload.qty || payload.qty <= 0) throw ApiError.badRequest('qty must be > 0');
+  if (!payload.movement_date) throw ApiError.badRequest('movement_date is required');
+
+  await vendorsService.getById(payload.vendor_id); // 404s if it doesn't exist
+  const material = await materialsRepository.findById(payload.material_id);
+  if (!material) throw ApiError.notFound('Material not found');
+
+  const onHand = await repository.vendorMaterialOnHand(payload.vendor_id, payload.material_id, payload.unit);
+  if (payload.qty > onHand) {
+    throw ApiError.conflict(`Only ${onHand} ${payload.unit} on hand for this vendor/material`, 'INSUFFICIENT_STOCK');
+  }
+
+  const movementId = await repository.insertVendorStockConsumption({
+    vendor_id: payload.vendor_id,
+    material_id: payload.material_id,
+    unit: payload.unit,
+    qty: -payload.qty,
+    movement_date: payload.movement_date,
+    created_by: userId,
+  });
+  return { movement_id: movementId };
+}
+
+module.exports = { logProduction, adjust, movements, currentStock, reduceVendorStock };

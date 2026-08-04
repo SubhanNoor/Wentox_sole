@@ -19,4 +19,9 @@ module.exports = function register() {
     requireSession();
     return service.movements(payload);
   }));
+
+  ipcMain.handle('stock:reduce-vendor-stock', wrap((payload) => {
+    const session = requireSession();
+    return service.reduceVendorStock(payload, session.userId);
+  }));
 };

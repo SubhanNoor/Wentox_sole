@@ -119,4 +119,48 @@ async function currentStock(filters = {}) {
   return result.recordset;
 }
 
-module.exports = { getEffectivePacking, insertMovement, movements, currentStock };
+// UC-30's manual reduction — current on-hand for one vendor+material+unit, so the service can
+// reject a reduction that would take it negative before writing the CONSUMPTION row.
+async function vendorMaterialOnHand(vendorId, materialId, unit) {
+  const result = await query(
+    `SELECT ISNULL(SUM(qty), 0) AS on_hand FROM dbo.vendor_stock_movements
+     WHERE vendor_id = @vendorId AND material_id = @materialId AND unit = @unit`,
+    {
+      vendorId: { type: sql.Int, value: vendorId },
+      materialId: { type: sql.Int, value: materialId },
+      unit: { type: sql.NVarChar(30), value: unit },
+    },
+  );
+  return Number(result.recordset[0].on_hand);
+}
+
+// UC-30 step 2 — "this much material has been used", logged as its own negative CONSUMPTION
+// movement (source_type NULL — a manual reduction, not tied to a purchase/return document) so the
+// history stays complete, per vendor_stock_movements' own schema.sql comment.
+async function insertVendorStockConsumption(movement) {
+  const result = await query(
+    `INSERT INTO dbo.vendor_stock_movements (
+       vendor_id, material_id, unit, qty, movement_date, movement_type, source_type, source_id, created_by
+     )
+     OUTPUT inserted.movement_id
+     VALUES (@vendorId, @materialId, @unit, @qty, @movementDate, 'CONSUMPTION', NULL, NULL, @createdBy)`,
+    {
+      vendorId: { type: sql.Int, value: movement.vendor_id },
+      materialId: { type: sql.Int, value: movement.material_id },
+      unit: { type: sql.NVarChar(30), value: movement.unit },
+      qty: { type: sql.Decimal(14, 3), value: movement.qty }, // negative — CK_vendor_stock_movements_sign
+      movementDate: { type: sql.Date, value: movement.movement_date },
+      createdBy: { type: sql.Int, value: movement.created_by ?? null },
+    },
+  );
+  return result.recordset[0].movement_id;
+}
+
+module.exports = {
+  getEffectivePacking,
+  insertMovement,
+  movements,
+  currentStock,
+  vendorMaterialOnHand,
+  insertVendorStockConsumption,
+};

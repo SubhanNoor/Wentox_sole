@@ -1,6 +1,14 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams } = require('../db/pool');
+
+async function findById(materialId) {
+  const result = await query(
+    'SELECT material_id, name, default_unit, is_active FROM dbo.materials WHERE material_id = @materialId',
+    { materialId: { type: sql.Int, value: materialId } },
+  );
+  return result.recordset[0] || null;
+}
 
 // Self-building material lookup (schema §4.3) — resolves an existing material by name (default
 // collation is case-insensitive, so 'pu sheet roll' matches 'PU Sheet Roll') or auto-registers a
@@ -27,4 +35,4 @@ async function resolveOrCreate(transaction, name, defaultUnit) {
   return inserted.recordset[0].material_id;
 }
 
-module.exports = { resolveOrCreate };
+module.exports = { resolveOrCreate, findById };
