@@ -407,7 +407,6 @@ CREATE TABLE dbo.vendors (
   vendor_id  INT IDENTITY(1,1) NOT NULL,
   name       NVARCHAR(100) NOT NULL,
   phone      VARCHAR(30)   NULL,
-  address    NVARCHAR(200) NULL,
   region_id  INT           NULL,
   city_id    INT           NULL,
   ba_id      INT           NULL,   -- §10 gap 2: auto-created under VENDORS ACCOUNTS on vendor create
@@ -521,7 +520,6 @@ CREATE TABLE dbo.customers (
   ba_id       INT           NULL,   -- NULL is exactly TASK-05's "Please add customer account first"
   region_id   INT           NOT NULL,                         -- §11: primary search key
   city_id     INT           NULL,                             -- §11: secondary search key
-  phone       VARCHAR(30)   NULL,
   address     NVARCHAR(200) NULL,
   is_active   BIT          NOT NULL CONSTRAINT DF_customers_active  DEFAULT (1),
   created_at  DATETIME2(0) NOT NULL CONSTRAINT DF_customers_created DEFAULT (SYSUTCDATETIME()),
@@ -559,7 +557,6 @@ CREATE TABLE dbo.sub_customers (
   name            NVARCHAR(150) NOT NULL,
   region_id       INT           NOT NULL,
   city_id         INT           NULL,
-  phone           VARCHAR(30)   NULL,
   address         NVARCHAR(200) NULL,
   is_active       BIT          NOT NULL CONSTRAINT DF_subcust_active  DEFAULT (1),
   created_at      DATETIME2(0) NOT NULL CONSTRAINT DF_subcust_created DEFAULT (SYSUTCDATETIME()),

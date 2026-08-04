@@ -2,6 +2,17 @@
 
 **Version 4.3 — tentative, for review before the migration script is written.**
 
+> **Tables this file does NOT describe, but that ARE fully designed and applied in
+> `database/schema.sql` (found 2026-08-19 — see `backend/milestones/milestone4.md`'s 2026-08-19
+> update for the full story):** `bank_accounts`, `cheques`, `transfers`, `employees`, `stages`,
+> `worker_stages`, `wage_runs`/`wage_run_items`, `salary_runs`/`salary_run_items`. These were
+> designed in two dedicated, complete docs that were simply never folded back into this file —
+> **`System_architecture/cash_and_bank.md`** (Bank Accounts, cheque routing, Transfer) and
+> **`System_architecture/payroll.md`** (Employees, Wage Run, Salary Run) are the actual source of
+> truth for this scope, not this file. Read them before touching any of these tables/screens. This
+> is also why Milestone 7's old "Workers — blocked, no definition exists" note was wrong: it only
+> checked this file and `use_cases.md`, not `payroll.md`.
+>
 > **Post-v4.3 amendments (folded directly into `database/schema.sql` — a fresh import needs only
 > that one file, no separate migrations; see `backend/CLAUDE.md`):** `due_date` re-added to
 > `sale_bills` (nullable) — deliberately reverses the v4.3 removal below, per explicit client
@@ -505,7 +516,6 @@ CREATE TABLE dbo.vendors (
   vendor_id  INT IDENTITY(1,1) NOT NULL,
   name       NVARCHAR(100) NOT NULL,
   phone      VARCHAR(30)   NULL,
-  address    NVARCHAR(200) NULL,
   region_id  INT           NULL,
   city_id    INT           NULL,
   ba_id      INT           NULL,   -- §10 gap 2: auto-created under VENDORS ACCOUNTS on vendor create
@@ -527,7 +537,6 @@ CREATE TABLE dbo.customers (
   ba_id       INT           NULL,   -- NULL is exactly TASK-05's "Please add customer account first"
   region_id   INT           NOT NULL,                         -- §11: primary search key
   city_id     INT           NULL,                             -- §11: secondary search key
-  phone       VARCHAR(30)   NULL,
   address     NVARCHAR(200) NULL,
   is_active   BIT          NOT NULL CONSTRAINT DF_customers_active  DEFAULT (1),
   created_at  DATETIME2(0) NOT NULL CONSTRAINT DF_customers_created DEFAULT (SYSUTCDATETIME()),
@@ -553,7 +562,6 @@ CREATE TABLE dbo.sub_customers (                              -- TASK-06: NO par
   name            NVARCHAR(150) NOT NULL,
   region_id       INT           NOT NULL,
   city_id         INT           NULL,
-  phone           VARCHAR(30)   NULL,
   address         NVARCHAR(200) NULL,
   is_active       BIT          NOT NULL CONSTRAINT DF_subcust_active  DEFAULT (1),
   created_at      DATETIME2(0) NOT NULL CONSTRAINT DF_subcust_created DEFAULT (SYSUTCDATETIME()),

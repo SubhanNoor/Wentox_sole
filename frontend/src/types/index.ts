@@ -209,8 +209,6 @@ export interface Customer {
   baId?: string;
   regionId: string; // primary identification, checked before City
   cityId: string;
-  phone?: string;
-  address?: string;
 }
 
 export interface SubCustomer {
@@ -218,8 +216,6 @@ export interface SubCustomer {
   name: string;
   regionId: string;
   cityId: string;
-  phone?: string;
-  address?: string;
 }
 
 export interface SaleBillItem {

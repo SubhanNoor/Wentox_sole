@@ -53,14 +53,13 @@ async function findByName(name) {
 
 async function insert(subCustomer) {
   const result = await query(
-    `INSERT INTO dbo.sub_customers (name, region_id, city_id, phone, address)
+    `INSERT INTO dbo.sub_customers (name, region_id, city_id, address)
      OUTPUT inserted.sub_customer_id
-     VALUES (@name, @regionId, @cityId, @phone, @address)`,
+     VALUES (@name, @regionId, @cityId, @address)`,
     {
       name: { type: sql.NVarChar(150), value: subCustomer.name },
       regionId: { type: sql.Int, value: subCustomer.region_id },
       cityId: { type: sql.Int, value: subCustomer.city_id ?? null },
-      phone: { type: sql.VarChar(30), value: subCustomer.phone ?? null },
       address: { type: sql.NVarChar(200), value: subCustomer.address ?? null },
     },
   );
@@ -70,14 +69,13 @@ async function insert(subCustomer) {
 async function update(subCustomerId, subCustomer) {
   await query(
     `UPDATE dbo.sub_customers SET
-       name = @name, region_id = @regionId, city_id = @cityId, phone = @phone, address = @address
+       name = @name, region_id = @regionId, city_id = @cityId, address = @address
      WHERE sub_customer_id = @subCustomerId`,
     {
       subCustomerId: { type: sql.Int, value: subCustomerId },
       name: { type: sql.NVarChar(150), value: subCustomer.name },
       regionId: { type: sql.Int, value: subCustomer.region_id },
       cityId: { type: sql.Int, value: subCustomer.city_id ?? null },
-      phone: { type: sql.VarChar(30), value: subCustomer.phone ?? null },
       address: { type: sql.NVarChar(200), value: subCustomer.address ?? null },
     },
   );

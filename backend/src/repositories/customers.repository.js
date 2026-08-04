@@ -62,13 +62,12 @@ async function insert(transaction, customer) {
     baId: { type: sql.Int, value: customer.ba_id ?? null },
     regionId: { type: sql.Int, value: customer.region_id },
     cityId: { type: sql.Int, value: customer.city_id ?? null },
-    phone: { type: sql.VarChar(30), value: customer.phone ?? null },
     address: { type: sql.NVarChar(200), value: customer.address ?? null },
   });
   const result = await request.query(`
-    INSERT INTO dbo.customers (name, ba_id, region_id, city_id, phone, address)
+    INSERT INTO dbo.customers (name, ba_id, region_id, city_id, address)
     OUTPUT inserted.customer_id
-    VALUES (@name, @baId, @regionId, @cityId, @phone, @address)
+    VALUES (@name, @baId, @regionId, @cityId, @address)
   `);
   return result.recordset[0].customer_id;
 }
@@ -76,14 +75,13 @@ async function insert(transaction, customer) {
 async function update(customerId, customer) {
   await query(
     `UPDATE dbo.customers SET
-       name = @name, region_id = @regionId, city_id = @cityId, phone = @phone, address = @address
+       name = @name, region_id = @regionId, city_id = @cityId, address = @address
      WHERE customer_id = @customerId`,
     {
       customerId: { type: sql.Int, value: customerId },
       name: { type: sql.NVarChar(150), value: customer.name },
       regionId: { type: sql.Int, value: customer.region_id },
       cityId: { type: sql.Int, value: customer.city_id ?? null },
-      phone: { type: sql.VarChar(30), value: customer.phone ?? null },
       address: { type: sql.NVarChar(200), value: customer.address ?? null },
     },
   );

@@ -1,7 +1,7 @@
 # Wentox Backend — Progress Log
 
 **Current milestone:** Milestone 8 — System Setup: City Creation & Accounts Hierarchy (pulled forward ahead of Milestone 4, same as Milestones 6/7 — see rationale below)
-**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10, later given a required `region_id` for Sale Bill/Return dropdown filtering); **Module 7.1 (Workers) is blocked** — no definition exists in `use_cases.md`/`database_schema_v4.3.md`, needs the user's input before any schema/CRUD work. Milestone 8: **Module 8.1 complete and verified end-to-end** (Regions, Cities, Stores, Addas — including Addas' UC-14 delete-guard and its new required `region_id` — see below); Modules 8.2/8.3 (accounting hierarchy) not started. Milestone 4 (Receipts/Expenses) and the Milestone 2/3 frontend wiring are still pending — Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures. **Parked for later discussion:** "reactivate an inactive duplicate-named row instead of rejecting on create()" — raised mid-Milestone-8, explicitly deferred; every entity built so far still does flat duplicate-name rejection.
+**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10, later given a required `region_id` for Sale Bill/Return dropdown filtering); **Module 7.1 moved to Milestone 4 Module 4.5** (see 2026-08-19 entry below — it was never actually "blocked," `payroll.md` fully designs it). Milestone 8: **Module 8.1 complete and verified end-to-end** (Regions, Cities, Stores, Addas — including Addas' UC-14 delete-guard and its new required `region_id` — see below); Modules 8.2/8.3 (accounting hierarchy) not started. **Milestone 4 was expanded 2026-08-19** from Receipts/Expenses-only into also covering Bank Accounts, Transfer, and Payroll (Employees/Wage Run/Salary Run) — none of that is built yet, all newly planned. The Milestone 2/3 frontend wiring is also still pending. Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures. **Parked for later discussion:** "reactivate an inactive duplicate-named row instead of rejecting on create()" — raised mid-Milestone-8, explicitly deferred; every entity built so far still does flat duplicate-name rejection.
 
 Log every completed task here (newest first within its milestone). Format:
 
@@ -13,6 +13,59 @@ Log every completed task here (newest first within its milestone). Format:
 ```
 
 ---
+
+## Milestone 4 — planning only (no code yet)
+
+### 2026-08-19 — Found and planned: Bank Accounts, Transfer, Payroll (Employees/Wage/Salary Run)
+- **What:** User pointed out the frontend sidebar has screens (Employees/Workers, Bank Accounts,
+  Transfer, Wage Run, Salary Run) with no corresponding milestone module — screenshots showed the
+  live UI for Bank Accounts and the Transactions sidebar section listing Wage Run/Salary Run/
+  Transfer. Investigated and found these are NOT actually undefined: `database/schema.sql` already
+  has complete, applied tables for all of them (`bank_accounts`, `cheques`, `transfers`,
+  `employees`, `stages`, `worker_stages`, `wage_runs`/`wage_run_items`, `salary_runs`/
+  `salary_run_items`), and two dedicated, thorough design docs exist —
+  `System_architecture/cash_and_bank.md` (Bank Accounts, cheque routing, Transfer) and
+  `System_architecture/payroll.md` (Employees, Wage Run, Salary Run) — neither of which had been
+  folded into `database_schema_v4.3.md`/`use_cases.md` or referenced by any milestone file. This is
+  exactly why Milestone 7's Module 7.1 ("Workers — blocked, no definition exists") was wrong: that
+  check only looked in the two files that don't cover this scope.
+- **How:** No code was written this pass — purely planning/documentation, per explicit user
+  instruction to add these to the milestones and update the schema doc before continuing backend
+  work (session was about to clear context). `backend/milestones/milestone4.md` rewritten: renamed
+  from "Receipts (Jamma) & Expenses (Kharch)" to "Receipts, Expenses, Bank Accounts, Transfer,
+  Payroll," keeping the original Modules 4.1/4.2 verbatim and adding four new modules — **4.3 Bank
+  Accounts** (party pattern, same `createUnderChartCode` helper as Vendors/Customers, under chart
+  code `120002`), **4.4 Transfer** (debit `to_ba_id`/credit `from_ba_id`, must be excluded from
+  income/expense report totals), **4.5 Employees** (moved from Milestone 7 Module 7.1 — type-first
+  form, Worker requires ≥1 trade, Salaried requires `monthly_salary`, `employee_type` immutable
+  after creation, auto-links a BA under `220001`/`220002` depending on type), **4.6 Wage Run**
+  (reads `dbo.articles`' stage-cost columns but only writes `ledger_entries`; `rate`/`packing`
+  snapshotted per line; deliberately has no duplicate-settlement guard — the frontend instead shows
+  the worker's last 3 runs for the chosen stage; unpost is audited via `unposted_at`/
+  `unposted_by`/`amount_before`, not silent), **4.7 Salary Run** (one run per calendar month,
+  every active salaried employee pre-filled and editable per-line, one credit line per employee on
+  post, blocked from a second CONFIRMED run in the same month by `UQ_salary_runs_month`).
+  `backend/milestones/milestone7.md`'s Module 7.1 replaced with a pointer to Milestone 4 Module
+  4.5, explaining why the old "blocked" note was wrong. `System_architecture/database_schema_v4.3.md`
+  got a new top-of-file note listing exactly which tables it doesn't describe and pointing at
+  `cash_and_bank.md`/`payroll.md` as the actual source of truth for them, so this gap can't recur
+  the same way — matches the existing "Post-v4.3 amendments" pointer-note pattern already used
+  there rather than copying hundreds of lines of DDL that already live correctly elsewhere.
+- **Not done / still open:** none of Modules 4.3–4.7 have any code yet — repository/service/ipc
+  files for `bankAccounts`, `transfers`, `employees`, `stages`, `wageRuns`, `salaryRuns` are all
+  still TODO stubs or don't exist. Reserved chart-account codes referenced by the new docs
+  (`120002` BANK ACCOUNTS, `220001` WORKER WAGES, `220002` SALARIES PAYABLE, `410001` WAGES
+  EXPENSE, `410002` SALARIES EXPENSE) are NOT yet in `backend/src/constants/reservedAccounts.js`
+  or seeded in `backend/src/db/seeds/run.js` — check both before starting Module 4.3 or 4.5, since
+  `createUnderChartCode` will 404 without them. `cash_and_bank.md` §11 also lists several *schema*
+  changes beyond just adding the new tables (e.g. splitting `expenses.payment_mode` into
+  `CHEQUE_ENDORSED`/`CHEQUE_ISSUED`, adding `issued_cheque_no`/`issued_cheque_date` to `expenses`,
+  relaxing `CK_cheque_allocations_target`) — re-read that doc's §11 in full before building Module
+  4.1's cheque-deposit-bank piece or Module 4.2, since some of those may already be applied in
+  `schema.sql` and some may not be (not independently re-verified this pass — check column-by-column
+  against the live `expenses`/`cheque_allocations` tables before assuming either way).
+- **Files:** `backend/milestones/milestone4.md`, `backend/milestones/milestone7.md`,
+  `System_architecture/database_schema_v4.3.md`
 
 ## Milestone 6 — System Setup: Product Details, Categories, Vendors (follow-up)
 
@@ -659,6 +712,15 @@ _Not started._
 
 ## Milestone 7 — System Setup: Workers, Customers, Sub-Customers
 _Not started._
+- Removed `phone` column from `customers` and `sub_customers` in `database_schema_v4.3.md` and
+  `database/schema.sql` (schema.sql not yet applied, edited directly rather than via migration).
+  Dropped `phone` param/column from `customers.repository.js` and `subCustomers.repository.js`
+  insert/update queries. No service-layer or vendor changes — vendors keep `phone`.
+
+## Milestone 6 — System Setup: Products, Categories, Vendors
+- Removed `address` column from `vendors` in `database_schema_v4.3.md` and `database/schema.sql`
+  (edited directly, not yet applied). Dropped `address` param/column from
+  `vendors.repository.js` insert/update queries. `vendors.phone` untouched.
 
 ## Milestone 8 — System Setup: Cities & Accounts Hierarchy
 _Not started._

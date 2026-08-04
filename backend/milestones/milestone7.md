@@ -1,15 +1,20 @@
-# Milestone 7 — System Setup: Workers, Customers, Sub-Customers
+# Milestone 7 — System Setup: Employees, Customers, Sub-Customers
 
 **Goal:** The next three sidebar SYSTEM SETUP entries.
 
-## Module 7.1 — Workers
-- [ ] **Blocked on definition:** `Workers` appears in the frontend sidebar but has no entry in
-      `use_cases.md` or `database_schema_v4.3.md` — confirm with the user what a worker record needs
-      (fields, whether it drives payroll/expense heads, relation to `business_accounts`) before
-      writing schema or CRUD for it. Do not invent fields.
+## Module 7.1 — Employees (Workers + Salaried) — MOVED to Milestone 4 Module 4.5
+**Unblocked 2026-08-19.** This was previously marked "blocked, no definition exists" — that was
+wrong. `System_architecture/payroll.md` is a complete, reasoned design doc for Employees (the
+sidebar label changes from "Workers" to "Employees"), `stages`, and `worker_stages`, and all three
+tables are already fully specced and applied in `database/schema.sql`. Since Employees is tightly
+coupled to the Wage Run / Salary Run transaction screens it feeds (same posting-account pattern,
+same "type-first" design), the whole Employees/Payroll scope was consolidated into
+**Milestone 4 Module 4.5** (`backend/milestones/milestone4.md`) alongside Wage Run (4.6) and
+Salary Run (4.7) rather than split across two milestone files. See that file for the actual task
+list — do not build Employees here.
 
 ## Module 7.2 — Customers (UC-09)
-- [x] `customers` (ipc handler/service/repository) CRUD — `name`, `region_id` (required per schema), `city_id`, `phone`, `address`; `create()` auto-creates a linked `business_accounts` row under the reserved CUSTOMERS ACCOUNTS chart account (same §3.2 pattern/helper as Vendors — `businessAccountsService.createUnderChartCode`) and links it via `customers.ba_id`, both writes in one transaction
+- [x] `customers` (ipc handler/service/repository) CRUD — `name`, `region_id` (required per schema), `city_id`, `address`; `create()` auto-creates a linked `business_accounts` row under the reserved CUSTOMERS ACCOUNTS chart account (same §3.2 pattern/helper as Vendors — `businessAccountsService.createUnderChartCode`) and links it via `customers.ba_id`, both writes in one transaction
 - [x] List endpoint returns linked account + city names — joins `regions` (INNER, `region_id` is `NOT NULL`) and `cities` (LEFT, `city_id` nullable); ordered Region-first/City-second per §11 search rule
 - [x] Renaming a customer keeps the linked account's name in sync
 - [x] Verify: missing `region_id` rejected → create (linked account `100001XXXX`) → duplicate name rejected → update renames both → list/soft-delete (linked account stays `ACTIVE`) — all run live against `wentox_db`

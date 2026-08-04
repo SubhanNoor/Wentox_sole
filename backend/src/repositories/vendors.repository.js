@@ -51,15 +51,14 @@ async function insert(transaction, vendor) {
   const request = requestWithParams(transaction, {
     name: { type: sql.NVarChar(100), value: vendor.name },
     phone: { type: sql.VarChar(30), value: vendor.phone ?? null },
-    address: { type: sql.NVarChar(200), value: vendor.address ?? null },
     regionId: { type: sql.Int, value: vendor.region_id ?? null },
     cityId: { type: sql.Int, value: vendor.city_id ?? null },
     baId: { type: sql.Int, value: vendor.ba_id ?? null },
   });
   const result = await request.query(`
-    INSERT INTO dbo.vendors (name, phone, address, region_id, city_id, ba_id)
+    INSERT INTO dbo.vendors (name, phone, region_id, city_id, ba_id)
     OUTPUT inserted.vendor_id
-    VALUES (@name, @phone, @address, @regionId, @cityId, @baId)
+    VALUES (@name, @phone, @regionId, @cityId, @baId)
   `);
   return result.recordset[0].vendor_id;
 }
@@ -67,13 +66,12 @@ async function insert(transaction, vendor) {
 async function update(vendorId, vendor) {
   await query(
     `UPDATE dbo.vendors SET
-       name = @name, phone = @phone, address = @address, region_id = @regionId, city_id = @cityId
+       name = @name, phone = @phone, region_id = @regionId, city_id = @cityId
      WHERE vendor_id = @vendorId`,
     {
       vendorId: { type: sql.Int, value: vendorId },
       name: { type: sql.NVarChar(100), value: vendor.name },
       phone: { type: sql.VarChar(30), value: vendor.phone ?? null },
-      address: { type: sql.NVarChar(200), value: vendor.address ?? null },
       regionId: { type: sql.Int, value: vendor.region_id ?? null },
       cityId: { type: sql.Int, value: vendor.city_id ?? null },
     },

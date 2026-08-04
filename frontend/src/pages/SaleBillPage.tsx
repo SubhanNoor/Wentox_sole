@@ -66,8 +66,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   const [newSubCustomerName, setNewSubCustomerName] = useState('');
   const [newSubCustomerRegionId, setNewSubCustomerRegionId] = useState('');
   const [newSubCustomerCityId, setNewSubCustomerCityId] = useState('');
-  const [newSubCustomerPhone, setNewSubCustomerPhone] = useState('');
-  const [newSubCustomerAddress, setNewSubCustomerAddress] = useState('');
   const [isPrintingSingle, setIsPrintingSingle] = useState(false);
 
   // Add new customer modal state
@@ -75,8 +73,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerRegionId, setNewCustomerRegionId] = useState('');
   const [newCustomerCityId, setNewCustomerCityId] = useState('');
-  const [newCustomerPhone, setNewCustomerPhone] = useState('');
-  const [newCustomerAddress, setNewCustomerAddress] = useState('');
 
   // Customer search: Primary = Region, Secondary = City
   const customerOptions = useMemo(() => {
@@ -136,14 +132,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       alert('City is required.');
       return;
     }
-    if (!newCustomerPhone.trim()) {
-      alert('Phone number is required.');
-      return;
-    }
-    if (!newCustomerAddress.trim()) {
-      alert('Address is required.');
-      return;
-    }
     const regionName = state.regions.find(r => r.id === newCustomerRegionId)?.name || 'LOCAL';
     const newId = getNextCustomerCode();
 
@@ -168,9 +156,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         name: newCustomerName.trim(),
         acId: '110001',
         regionId: newCustomerRegionId,
-        cityId: newCustomerCityId,
-        phone: newCustomerPhone.trim(),
-        address: newCustomerAddress.trim()
+        cityId: newCustomerCityId
       }
     });
 
@@ -187,8 +173,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setNewCustomerName('');
     setNewCustomerRegionId('');
     setNewCustomerCityId('');
-    setNewCustomerPhone('');
-    setNewCustomerAddress('');
 
     setSuccessMsg('New customer added successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
@@ -1556,36 +1540,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  Phone Number <span className="text-red-500 font-bold">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={newSubCustomerPhone}
-                  onChange={e => setNewSubCustomerPhone(e.target.value)}
-                  placeholder="e.g. 0300-9876543"
-                  className="soleria-input font-semibold"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  Address / Location <span className="text-red-500 font-bold">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={newSubCustomerAddress}
-                  onChange={e => setNewSubCustomerAddress(e.target.value)}
-                  placeholder="e.g. Shah Alam Market, Lahore"
-                  className="soleria-input font-semibold"
-                  required
-                />
-              </div>
-            </div>
-
             {/* Actions */}
             <div className="flex justify-end gap-2 text-sm font-semibold">
               <button
@@ -1595,8 +1549,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   setNewSubCustomerName('');
                   setNewSubCustomerRegionId('');
                   setNewSubCustomerCityId('');
-                  setNewSubCustomerPhone('');
-                  setNewSubCustomerAddress('');
                 }}
                 className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
               >
@@ -1617,14 +1569,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                     alert('City selection is required.');
                     return;
                   }
-                  if (!newSubCustomerPhone.trim()) {
-                    alert('Phone number is required.');
-                    return;
-                  }
-                  if (!newSubCustomerAddress.trim()) {
-                    alert('Address is required.');
-                    return;
-                  }
                   const newId = 'sc_' + Date.now();
                   dispatch({
                     type: 'ADD_SUB_CUSTOMER',
@@ -1632,9 +1576,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       id: newId,
                       name: newSubCustomerName.trim(),
                       regionId: newSubCustomerRegionId,
-                      cityId: newSubCustomerCityId,
-                      phone: newSubCustomerPhone.trim(),
-                      address: newSubCustomerAddress.trim()
+                      cityId: newSubCustomerCityId
                     }
                   });
                   setSubCustomerId(newId);
@@ -1642,8 +1584,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   setNewSubCustomerName('');
                   setNewSubCustomerRegionId('');
                   setNewSubCustomerCityId('');
-                  setNewSubCustomerPhone('');
-                  setNewSubCustomerAddress('');
                   setSuccessMsg('Sub-customer added successfully.');
                   setTimeout(() => setSuccessMsg(''), 3000);
                 }}
@@ -1722,37 +1662,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               </div>
             </div>
 
-            {/* Phone + Address side by side */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  Phone Number <span className="text-red-500 font-bold">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={newCustomerPhone}
-                  onChange={e => setNewCustomerPhone(e.target.value)}
-                  placeholder="e.g. 0300-1234567"
-                  className="soleria-input font-semibold"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  Address / Location <span className="text-red-500 font-bold">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={newCustomerAddress}
-                  onChange={e => setNewCustomerAddress(e.target.value)}
-                  placeholder="e.g. Main Market, Lahore"
-                  className="soleria-input font-semibold"
-                  required
-                />
-              </div>
-            </div>
-
             {/* Actions */}
             <div className="flex justify-end gap-2 text-sm font-semibold">
               <button
@@ -1762,8 +1671,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   setNewCustomerName('');
                   setNewCustomerRegionId('');
                   setNewCustomerCityId('');
-                  setNewCustomerPhone('');
-                  setNewCustomerAddress('');
                 }}
                 className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
               >

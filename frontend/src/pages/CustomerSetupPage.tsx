@@ -30,8 +30,6 @@ export default function CustomerSetupPage() {
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerRegionId, setNewCustomerRegionId] = useState('');
   const [newCustomerCityId, setNewCustomerCityId] = useState('');
-  const [newCustomerPhone, setNewCustomerPhone] = useState('');
-  const [newCustomerAddress, setNewCustomerAddress] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
@@ -70,8 +68,6 @@ export default function CustomerSetupPage() {
     setNewCustomerName('');
     setNewCustomerRegionId(state.regions[0]?.id || '');
     setNewCustomerCityId('');
-    setNewCustomerPhone('');
-    setNewCustomerAddress('');
     setErrorMsg('');
     setActiveTab('form');
   };
@@ -81,8 +77,6 @@ export default function CustomerSetupPage() {
     setNewCustomerName(c.name);
     setNewCustomerRegionId(c.regionId);
     setNewCustomerCityId(c.cityId);
-    setNewCustomerPhone(c.phone || '');
-    setNewCustomerAddress(c.address || '');
     setErrorMsg('');
     setActiveTab('form');
   };
@@ -101,9 +95,7 @@ export default function CustomerSetupPage() {
           name: newCustomerName.trim(),
           acId: '110001',
           regionId: newCustomerRegionId,
-          cityId: newCustomerCityId,
-          phone: newCustomerPhone.trim() || undefined,
-          address: newCustomerAddress.trim() || undefined
+          cityId: newCustomerCityId
         }
       });
       setSuccessMsg('Customer details updated successfully.');
@@ -130,9 +122,7 @@ export default function CustomerSetupPage() {
           name: newCustomerName.trim(),
           acId: '110001',
           regionId: newCustomerRegionId,
-          cityId: newCustomerCityId,
-          phone: newCustomerPhone.trim() || undefined,
-          address: newCustomerAddress.trim() || undefined
+          cityId: newCustomerCityId
         }
       });
       setSuccessMsg('New customer added successfully.');
@@ -143,8 +133,6 @@ export default function CustomerSetupPage() {
     setNewCustomerName('');
     setNewCustomerRegionId('');
     setNewCustomerCityId('');
-    setNewCustomerPhone('');
-    setNewCustomerAddress('');
     setErrorMsg('');
     setTimeout(() => setSuccessMsg(''), 3000);
   };
@@ -352,30 +340,6 @@ export default function CustomerSetupPage() {
                       </select>
                     </div>
                   </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Phone Number</label>
-                      <input
-                        type="text"
-                        value={newCustomerPhone}
-                        onChange={e => setNewCustomerPhone(e.target.value)}
-                        placeholder="e.g. 0300-1234567"
-                        className="soleria-input font-semibold"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Address / Location</label>
-                      <input
-                        type="text"
-                        value={newCustomerAddress}
-                        onChange={e => setNewCustomerAddress(e.target.value)}
-                        placeholder="e.g. Main Market, Lahore"
-                        className="soleria-input font-semibold"
-                      />
-                    </div>
-                  </div>
                 </div>
               </div>
 
@@ -389,8 +353,6 @@ export default function CustomerSetupPage() {
                     setNewCustomerName('');
                     setNewCustomerRegionId('');
                     setNewCustomerCityId('');
-                    setNewCustomerPhone('');
-                    setNewCustomerAddress('');
                     setErrorMsg('');
                   }}
                   className="btn-outline px-5 py-2"

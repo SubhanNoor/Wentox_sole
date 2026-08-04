@@ -17,8 +17,6 @@ export default function SubCustomerSetupPage() {
   const [subName, setSubName] = useState('');
   const [regionId, setRegionId] = useState('');
   const [cityId, setCityId] = useState('');
-  const [phone, setPhone] = useState('');
-  const [address, setAddress] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -27,19 +25,15 @@ export default function SubCustomerSetupPage() {
     setSubName('');
     setRegionId(state.regions[0]?.id || '');
     setCityId('');
-    setPhone('');
-    setAddress('');
     setErrorMsg('');
     setActiveTab('form');
   };
 
-  const handleSelectSubCustomer = (sub: { id: string; name: string; regionId: string; cityId: string; phone?: string; address?: string }) => {
+  const handleSelectSubCustomer = (sub: { id: string; name: string; regionId: string; cityId: string }) => {
     setSelectedSubId(sub.id);
     setSubName(sub.name);
     setRegionId(sub.regionId);
     setCityId(sub.cityId);
-    setPhone(sub.phone || '');
-    setAddress(sub.address || '');
     setErrorMsg('');
     setActiveTab('form');
   };
@@ -57,9 +51,7 @@ export default function SubCustomerSetupPage() {
           id: selectedSubId,
           name: subName.trim(),
           regionId: regionId,
-          cityId: cityId,
-          phone: phone.trim() || undefined,
-          address: address.trim() || undefined
+          cityId: cityId
         }
       });
       setSuccessMsg('Sub Customer details updated successfully.');
@@ -71,9 +63,7 @@ export default function SubCustomerSetupPage() {
           id: newId,
           name: subName.trim(),
           regionId: regionId,
-          cityId: cityId,
-          phone: phone.trim() || undefined,
-          address: address.trim() || undefined
+          cityId: cityId
         }
       });
       setSuccessMsg('New Sub Customer registered successfully.');
@@ -83,8 +73,6 @@ export default function SubCustomerSetupPage() {
     setSubName('');
     setRegionId('');
     setCityId('');
-    setPhone('');
-    setAddress('');
     setSelectedSubId(null);
     setErrorMsg('');
     setActiveTab('list');
@@ -315,29 +303,6 @@ export default function SubCustomerSetupPage() {
                             <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
                           ))}
                       </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Phone Number</label>
-                      <input
-                        type="text"
-                        value={phone}
-                        onChange={e => setPhone(e.target.value)}
-                        placeholder="e.g. 0300-9876543"
-                        className="soleria-input font-semibold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Address / Note</label>
-                      <input
-                        type="text"
-                        value={address}
-                        onChange={e => setAddress(e.target.value)}
-                        placeholder="e.g. Shah Alam Market, Lahore"
-                        className="soleria-input font-semibold"
-                      />
                     </div>
                   </div>
                 </div>
