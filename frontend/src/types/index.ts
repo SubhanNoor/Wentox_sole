@@ -391,6 +391,15 @@ export interface Expense {
    */
   issuedChequeNo?: string;
   issuedChequeDate?: string;
+  /**
+   * ChequeIssued only — bounce/return lifecycle for a cheque WE wrote (mirrors Receipt's
+   * chequeStatus/bouncedDate/returnedDate, kept on this row since a cheque we write is never a
+   * dbo.cheques row). Undefined/'Pending' means still outstanding and returnable.
+   */
+  issuedChequeStatus?: 'Pending' | 'Bounced' | 'Returned';
+  issuedChequeBouncedDate?: string;
+  issuedChequeReturnedDate?: string;
+  issuedChequeReturnReason?: string;
   details: string;
   remarks: string;
   status?: 'Posted' | 'Unposted';
@@ -549,4 +558,5 @@ export type NavPage =
   | 'reports'
   | 'bilty-update'
   | 'overall-search'
-  | 'settings';
+  | 'settings'
+  | 'check-updates';

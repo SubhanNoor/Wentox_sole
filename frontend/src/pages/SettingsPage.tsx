@@ -9,7 +9,7 @@ export default function SettingsPage() {
   const [username, setUsername] = useState(state.settings.username);
   const [password, setPassword] = useState(state.settings.password);
   const [confirmPassword, setConfirmPassword] = useState('');
-  
+
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -33,7 +33,7 @@ export default function SettingsPage() {
   return (
     <AppLayout pageTitle="System Settings">
       <div className="mx-auto" style={{ maxWidth: 600 }}>
-        
+
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
         )}
@@ -45,7 +45,7 @@ export default function SettingsPage() {
           <h3 className="font-lora font-semibold text-lg border-b pb-2 mb-4 text-slate-800 flex items-center gap-2">
             <Lock size={18} className="text-amber-600" /> Admin Credentials Configuration
           </h3>
-          
+
           <form onSubmit={handleUpdateSettings} className="flex flex-col gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">

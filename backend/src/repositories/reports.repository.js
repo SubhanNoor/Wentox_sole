@@ -124,7 +124,16 @@ async function ledgerRows(filters = {}) {
   const conditions = [];
   const params = {};
 
-  if (filters.ba_id) {
+  // cashBook() passes BOTH — Cash uniquely posts across two dimensions (CASH receipts/expenses go
+  // straight to the CASH_IN_HAND chart account's ac_id, same as always; a cash<->bank transfer
+  // posts via the Cash business account's ba_id, same as every other transfer party) — an OR, not
+  // CK_ledger_entries_one's usual "exactly one," which is a per-row constraint and unaffected by
+  // this query matching rows from either dimension. Every other caller still passes exactly one.
+  if (filters.ba_id && filters.ac_id) {
+    conditions.push('(le.ba_id = @baId OR le.ac_id = @acId)');
+    params.baId = { type: sql.Int, value: filters.ba_id };
+    params.acId = { type: sql.Int, value: filters.ac_id };
+  } else if (filters.ba_id) {
     conditions.push('le.ba_id = @baId');
     params.baId = { type: sql.Int, value: filters.ba_id };
   } else {
@@ -180,6 +189,21 @@ async function ledgerRows(filters = {}) {
 // have no opening_balance column, so ac_id skips straight to the ledger sum.
 async function netBalance({ ba_id, ac_id, up_to_date, exclusive = false }) {
   const cmp = exclusive ? '<' : '<=';
+  // cashBook() only — same both-dimensions case as ledgerRows() above. Opening balance still comes
+  // only from the business_accounts side (chart accounts have no opening_balance column at all).
+  if (ba_id && ac_id) {
+    const result = await query(
+      `SELECT
+         (SELECT CASE WHEN opening_balance IS NOT NULL AND opening_date ${cmp} @upToDate
+                      THEN opening_balance ELSE 0 END
+          FROM dbo.business_accounts WHERE ba_id = @baId) AS opening,
+         (SELECT ISNULL(SUM(debit), 0) - ISNULL(SUM(credit), 0)
+          FROM dbo.ledger_entries WHERE (ba_id = @baId OR ac_id = @acId) AND entry_date ${cmp} @upToDate) AS ledger_net`,
+      { baId: { type: sql.Int, value: ba_id }, acId: { type: sql.Int, value: ac_id }, upToDate: { type: sql.Date, value: up_to_date } },
+    );
+    const row = result.recordset[0];
+    return Number(row.opening) + Number(row.ledger_net);
+  }
   if (ba_id) {
     const result = await query(
       `SELECT

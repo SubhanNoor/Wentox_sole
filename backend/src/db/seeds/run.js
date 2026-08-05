@@ -26,6 +26,28 @@ async function ensureGroupAccount(pool, { code, name, classCode }) {
   return inserted.recordset[0].group_id;
 }
 
+// Cash needs a business_accounts row exactly like every bank does — schema.sql's own comment on
+// business_accounts.opening_balance says so ("cash needs one, every bank needs one"), and
+// cash_and_bank.md §9 decisions 4/5 require it (single Petty Cash account, opening balance lives
+// on business_accounts). Never seeded until now — without it, dbo.transfers (FK to
+// business_accounts only) has no row to reference for a cash<->bank transfer at all. One row only,
+// code = chartCode + '0001' (§3.2 composition, same as every other reserved-account party).
+async function ensureCashBusinessAccount(pool, cashAcId, chartCode) {
+  const existing = await pool.request()
+    .input('acId', sql.Int, cashAcId)
+    .query('SELECT ba_id FROM dbo.business_accounts WHERE ac_id = @acId');
+  if (existing.recordset.length) return existing.recordset[0].ba_id;
+
+  const code = chartCode + '0001';
+  const inserted = await pool.request()
+    .input('code', sql.VarChar, code)
+    .input('name', sql.NVarChar, 'CASH IN HAND')
+    .input('acId', sql.Int, cashAcId)
+    .query(`INSERT INTO dbo.business_accounts (code, name, ac_id)
+            OUTPUT inserted.ba_id VALUES (@code, @name, @acId)`);
+  return inserted.recordset[0].ba_id;
+}
+
 async function ensureChartAccount(pool, { code, name, groupId, isRestricted = false }) {
   const existing = await pool.request()
     .input('code', sql.VarChar, code)
@@ -88,7 +110,8 @@ async function seed() {
   // --- Reserved chart accounts (§8) ---
   await ensureChartAccount(pool, { code: CODES.CUSTOMERS_ACCOUNTS, name: 'CUSTOMERS ACCOUNTS', groupId: assetsGroup });
   await ensureChartAccount(pool, { code: CODES.VENDORS_ACCOUNTS, name: 'VENDORS ACCOUNTS', groupId: liabilityGroup });
-  await ensureChartAccount(pool, { code: CODES.CASH_IN_HAND, name: 'CASH IN HAND', groupId: assetsGroup });
+  const cashAcId = await ensureChartAccount(pool, { code: CODES.CASH_IN_HAND, name: 'CASH IN HAND', groupId: assetsGroup });
+  await ensureCashBusinessAccount(pool, cashAcId, CODES.CASH_IN_HAND);
   await ensureChartAccount(pool, {
     code: CODES.BANK_ACCOUNTS, name: 'BANK ACCOUNTS', groupId: assetsGroup, isRestricted: true,
   });
