@@ -3,6 +3,7 @@
 const repository = require('../repositories/reports.repository');
 const stockService = require('./stock.service');
 const vendorsService = require('./vendors.service');
+const businessAccountsService = require('./businessAccounts.service');
 const ApiError = require('../errors/ApiError');
 const CODES = require('../constants/reservedAccounts');
 const { findByCode } = require('../repositories/chartAccounts.repository');
@@ -322,14 +323,20 @@ async function businessLedger(filters = {}) {
   }));
 }
 
-// UC-37 Cash Book of the Day — CASH IN HAND account's own ledger for a date or month. Strictly
-// the CASH IN HAND chart account (not cheque_allocations, which post against CHEQUES IN HAND, a
-// separate account — folding those in here would double an amount that already appears on that
-// account's own ledger). Opening Cash / Jamma / Naam / Cash In Hand map directly onto
-// accountLedger()'s opening/total_debit/total_credit/closing_balance.
+// UC-37 Cash Book of the Day — CASH IN HAND's own ledger for a date or month. Strictly cash money
+// (not cheque_allocations, which post against CHEQUES IN HAND, a separate account — folding those
+// in here would double an amount that already appears on that account's own ledger). Reads BOTH
+// dimensions cash posts across: the CASH_IN_HAND chart account's ac_id (every CASH receipt/expense,
+// unchanged since day one) AND the Cash business account's ba_id (a cash<->bank Transfer, which —
+// like every transfer — posts against its parties' ba_id, never a chart account directly). Without
+// both, a transfer to/from cash would silently vanish from this report (cash_and_bank.md §10's own
+// balance(cash) formula explicitly includes "+ Σ transfers TO cash − Σ transfers FROM cash").
+// Opening Cash / Jamma / Naam / Cash In Hand map directly onto accountLedger()'s opening/
+// total_debit/total_credit/closing_balance.
 async function cashBook(filters = {}) {
   const cash = await findByCode(CODES.CASH_IN_HAND);
   if (!cash) throw new Error(`Reserved chart account CASH IN HAND (code ${CODES.CASH_IN_HAND}) not found — run npm run seed`);
+  const cashBa = await businessAccountsService.getCashAccount();
 
   let range;
   if (filters.month) {
@@ -343,7 +350,7 @@ async function cashBook(filters = {}) {
     range = { date_from: todayISO(), date_to: todayISO() };
   }
 
-  const ledger = await accountLedger({ ac_id: cash.ac_id }, range);
+  const ledger = await accountLedger({ ac_id: cash.ac_id, ba_id: cashBa.ba_id }, range);
   return {
     opening_cash: ledger.opening_balance,
     cash_received: ledger.total_debit,

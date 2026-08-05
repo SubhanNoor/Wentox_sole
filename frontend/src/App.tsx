@@ -38,6 +38,7 @@ import OverallSearchPage from '@/pages/OverallSearchPage';
 
 // Settings
 import SettingsPage from '@/pages/SettingsPage';
+import CheckForUpdatesPage from '@/pages/CheckForUpdatesPage';
 import './App.css';
 
 export default function App() {
@@ -125,6 +126,8 @@ export default function App() {
 
     case 'settings':
       return <SettingsPage />;
+    case 'check-updates':
+      return <CheckForUpdatesPage />;
 
     default:
       return <HomePage />;

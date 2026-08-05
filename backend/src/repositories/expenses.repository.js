@@ -150,6 +150,62 @@ async function deleteLedgerEntries(transaction, expenseId) {
   );
 }
 
+async function markIssuedChequeBounced(transaction, expenseId, bouncedDate) {
+  const request = requestWithParams(transaction, {
+    expenseId: { type: sql.Int, value: expenseId },
+    bouncedDate: { type: sql.Date, value: bouncedDate },
+  });
+  await request.query(
+    `UPDATE dbo.expenses SET issued_cheque_status = 'BOUNCED', issued_cheque_bounced_date = @bouncedDate
+     WHERE expense_id = @expenseId`,
+  );
+}
+
+// RETURNED — distinct from BOUNCED (a due-date issue or any other non-bounce reason), same
+// reverse-never-delete mechanics, own date/reason columns (see cheques.repository.js#markReturned).
+async function markIssuedChequeReturned(transaction, expenseId, returnedDate, reason) {
+  const request = requestWithParams(transaction, {
+    expenseId: { type: sql.Int, value: expenseId },
+    returnedDate: { type: sql.Date, value: returnedDate },
+    reason: { type: sql.NVarChar(500), value: reason ?? null },
+  });
+  await request.query(
+    `UPDATE dbo.expenses SET issued_cheque_status = 'RETURNED', issued_cheque_returned_date = @returnedDate,
+       issued_cheque_return_reason = @reason
+     WHERE expense_id = @expenseId`,
+  );
+}
+
+// "Cheque Return" page's issued-cheque list — CONFIRMED CHEQUE_ISSUED rows still PENDING (mirrors
+// cheques.repository.js#listEndorsedAllocations, but for a cheque WE wrote instead of one we
+// endorsed on).
+async function listReturnableIssuedCheques(filters = {}) {
+  const conditions = ["e.status = 'CONFIRMED'", "e.payment_mode = 'CHEQUE_ISSUED'", "e.issued_cheque_status = 'PENDING'"];
+  const params = {};
+
+  if (filters.date_from) {
+    conditions.push('e.expense_date >= @dateFrom');
+    params.dateFrom = { type: sql.Date, value: filters.date_from };
+  }
+  if (filters.date_to) {
+    conditions.push('e.expense_date <= @dateTo');
+    params.dateTo = { type: sql.Date, value: filters.date_to };
+  }
+
+  const where = `WHERE ${conditions.join(' AND ')}`;
+  const result = await query(
+    `SELECT e.*, ba.name AS ba_name, b.name AS bank_name
+     FROM dbo.expenses e
+     JOIN dbo.business_accounts ba ON ba.ba_id = e.ba_id
+     LEFT JOIN dbo.bank_accounts b ON b.bank_id = e.bank_id
+     ${where}
+     ORDER BY e.expense_date DESC, e.expense_id DESC`,
+    params,
+  );
+  return result.recordset;
+}
+
 module.exports = {
   insert, findById, list, updateHeader, setStatus, remove, insertLedgerEntries, deleteLedgerEntries,
+  markIssuedChequeBounced, markIssuedChequeReturned, listReturnableIssuedCheques,
 };

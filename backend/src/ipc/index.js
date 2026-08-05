@@ -1,6 +1,9 @@
 // Central IPC registrar (mirrors the old routes/index.js): each feature module registers its own
 // ipcMain.handle channels. Called once from electron/main.js before the BrowserWindow loads, so
 // every channel exists before the renderer can invoke one.
+const registerAccounts = require('./accounts.ipc');
+const registerAccountClasses = require('./accountClasses.ipc');
+const registerAlerts = require('./alerts.ipc');
 const registerAuth = require('./auth.ipc');
 const registerAddas = require('./addas.ipc');
 const registerBankAccounts = require('./bankAccounts.ipc');
@@ -34,10 +37,14 @@ const registerStock = require('./stock.ipc');
 const registerStores = require('./stores.ipc');
 const registerSubCustomers = require('./subCustomers.ipc');
 const registerTransfers = require('./transfers.ipc');
+const registerUpdates = require('./updates.ipc');
 const registerVendors = require('./vendors.ipc');
 const registerWageRuns = require('./wageRuns.ipc');
 
 module.exports = function registerIpcHandlers() {
+  registerAccounts();
+  registerAccountClasses();
+  registerAlerts();
   registerAuth();
   registerAddas();
   registerBankAccounts();
@@ -71,6 +78,7 @@ module.exports = function registerIpcHandlers() {
   registerStores();
   registerSubCustomers();
   registerTransfers();
+  registerUpdates();
   registerVendors();
   registerWageRuns();
 };

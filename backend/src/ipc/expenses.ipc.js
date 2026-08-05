@@ -41,4 +41,23 @@ module.exports = function register() {
     requireSession();
     return service.unpost(payload.id);
   }));
+
+  // "Cheque Return" page — a cheque WE wrote (CHEQUE_ISSUED) bouncing or being handed back unpaid.
+  // Action names stay camelCase to match window.api.expenses.bounceIssuedCheque(...) /
+  // .returnIssuedCheque(...) / .returnableIssuedCheques(...) exactly (only the feature prefix gets
+  // camelToKebab'd — see preload.js).
+  ipcMain.handle('expenses:bounceIssuedCheque', wrap((payload) => {
+    const session = requireSession();
+    return service.bounceIssuedCheque(payload.id, payload, session.userId);
+  }));
+
+  ipcMain.handle('expenses:returnIssuedCheque', wrap((payload) => {
+    const session = requireSession();
+    return service.returnIssuedCheque(payload.id, payload, session.userId);
+  }));
+
+  ipcMain.handle('expenses:returnableIssuedCheques', wrap((payload) => {
+    requireSession();
+    return service.listReturnableIssuedCheques(payload);
+  }));
 };
