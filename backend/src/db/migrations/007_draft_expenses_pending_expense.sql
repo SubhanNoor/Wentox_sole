@@ -7,7 +7,11 @@
 -- pending_expense_id lets confirm() record which real expense it already created for this draft
 -- BEFORE attempting to post it, so any later confirm() call on the same draft resumes against that
 -- SAME expense_id (whose post() is already idempotent) instead of creating another one.
-ALTER TABLE dbo.draft_expenses ADD pending_expense_id INT NULL;
+--
+-- Guarded: schema.sql already includes all of this directly, so this is a no-op on a fresh DB.
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.draft_expenses') AND name = 'pending_expense_id')
+  ALTER TABLE dbo.draft_expenses ADD pending_expense_id INT NULL;
 GO
-ALTER TABLE dbo.draft_expenses ADD CONSTRAINT FK_draft_expenses_pending_expense
-      FOREIGN KEY (pending_expense_id) REFERENCES dbo.expenses(expense_id);
+IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID('dbo.FK_draft_expenses_pending_expense'))
+  ALTER TABLE dbo.draft_expenses ADD CONSTRAINT FK_draft_expenses_pending_expense
+        FOREIGN KEY (pending_expense_id) REFERENCES dbo.expenses(expense_id);

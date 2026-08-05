@@ -9,9 +9,15 @@
 -- cheque_id" guarantee moves to the application layer — receipts.service.js#create() always does
 -- both inserts + the link update in one withTransaction, so no CHEQUE receipt is ever left
 -- unlinked once the transaction commits.
-
-ALTER TABLE dbo.receipts DROP CONSTRAINT CK_receipts_cheque;
-GO
-ALTER TABLE dbo.receipts ADD CONSTRAINT CK_receipts_cheque CHECK (
-      (payment_mode <> 'CHEQUE' AND cheque_id IS NULL)
-   OR (payment_mode =  'CHEQUE'));
+--
+-- Guarded: schema.sql already has the relaxed form directly, so this is a no-op on a fresh DB.
+IF EXISTS (
+  SELECT 1 FROM sys.check_constraints
+  WHERE object_id = OBJECT_ID('dbo.CK_receipts_cheque') AND definition NOT LIKE '%<>%'
+)
+BEGIN
+  ALTER TABLE dbo.receipts DROP CONSTRAINT CK_receipts_cheque;
+  ALTER TABLE dbo.receipts ADD CONSTRAINT CK_receipts_cheque CHECK (
+        (payment_mode <> 'CHEQUE' AND cheque_id IS NULL)
+     OR (payment_mode =  'CHEQUE'));
+END

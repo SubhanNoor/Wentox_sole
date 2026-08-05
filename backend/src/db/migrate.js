@@ -22,8 +22,13 @@ async function migrate() {
   const laterMigrations = fs.existsSync(dir)
     ? fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).map((f) => path.join(dir, f))
     : [];
-  const files = [schemaFile, ...laterMigrations]
+  // schema.sql must always run FIRST regardless of filename — sorting it in
+  // alphabetically breaks on a fresh database, since numbered migrations like
+  // "001_..." sort before "schema.sql" ('0' < 's'), and would try to ALTER
+  // tables schema.sql hasn't created yet.
+  const sortedMigrations = laterMigrations
     .sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
+  const files = [schemaFile, ...sortedMigrations];
 
   for (const filePath of files) {
     const file = path.basename(filePath);
