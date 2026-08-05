@@ -1,7 +1,6 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import type { SaleReturn, SaleReturnItem, SaleBill } from '@/types';
 import WeeklyReturnTab from '@/components/WeeklyReturnTab';
 import MonthlyReturnTab from '@/components/MonthlyReturnTab';
 import OverallReturnTab from '@/components/OverallReturnTab';
@@ -10,22 +9,100 @@ import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit } from 'lu
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
+import * as api from '@/lib/api';
+import type {
+  CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
+  SaleReturnRow, SaleReturnCreateInput, SaleReturnItemInput
+} from '@/lib/api';
+
+interface UiItem {
+  uid: string;
+  articleId: number | null;
+  variantId: number | null;
+  label: string;
+  packing: number;
+  cartons: number;
+  pairs: number;
+  rate: number;
+  discountPercent: number;
+  discountValue: number;
+  value: number;
+}
+
+function newUiItem(): UiItem {
+  return {
+    uid: 'row_' + Date.now() + '_' + Math.random().toString(36).slice(2),
+    articleId: null,
+    variantId: null,
+    label: '',
+    packing: 0,
+    cartons: 0,
+    pairs: 0,
+    rate: 0,
+    discountPercent: 0,
+    discountValue: 0,
+    value: 0
+  };
+}
+
+function recalcItem(item: UiItem): UiItem {
+  const pairs = item.cartons * item.packing;
+  const gross = pairs * item.rate;
+  const discountValue = Math.round(gross * (item.discountPercent / 100));
+  const value = Math.max(0, gross - discountValue);
+  return { ...item, pairs, discountValue, value };
+}
 
 export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?: 'return' | 'weekly' | 'monthly' | 'overall' | 'find' }) {
-  const { state, dispatch } = useApp();
+  const { state } = useApp();
 
   const [activeTab, setActiveTab] = useState<'return' | 'weekly' | 'monthly' | 'overall' | 'find'>(initialTab);
+
+  // ── Real lookup data ──
+  const [customers, setCustomers] = useState<CustomerRow[]>([]);
+  const [subCustomers, setSubCustomers] = useState<SubCustomerRow[]>([]);
+  const [products, setProducts] = useState<ProductRow[]>([]);
+  const [stores, setStores] = useState<StoreRow[]>([]);
+  const [addas, setAddas] = useState<AddaRow[]>([]);
+  const [variantsByArticle, setVariantsByArticle] = useState<Record<number, ProductVariantRow[]>>({});
+  const [lookupError, setLookupError] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      const [c, sc, p, st, ad] = await Promise.all([
+        api.listCustomers(), api.listSubCustomers(), api.listProducts(), api.listStores(), api.listAddas()
+      ]);
+      const failures: string[] = [];
+      if (c.ok) setCustomers(c.data); else failures.push(c.error.message);
+      if (sc.ok) setSubCustomers(sc.data); else failures.push(sc.error.message);
+      if (p.ok) setProducts(p.data); else failures.push(p.error.message);
+      if (st.ok) setStores(st.data); else failures.push(st.error.message);
+      if (ad.ok) setAddas(ad.data); else failures.push(ad.error.message);
+      if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
+    })();
+  }, []);
+
+  const fetchVariants = useCallback(async (articleId: number) => {
+    if (variantsByArticle[articleId]) return variantsByArticle[articleId];
+    const res = await api.listProductVariants(articleId);
+    if (res.ok) {
+      setVariantsByArticle(prev => ({ ...prev, [articleId]: res.data }));
+      return res.data;
+    }
+    setErrorMsg('Failed to load color variants: ' + res.error.message);
+    return [];
+  }, [variantsByArticle]);
 
   // Mode: 'view' | 'edit' | 'new'
   const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');
 
   // Password Modal Protection State
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
-  const [passwordActionType, setPasswordActionType] = useState<'edit_return' | 'save_return' | null>(null);
-  const [targetReturnToEdit, setTargetReturnToEdit] = useState<SaleReturn | null>(null);
+  const [passwordActionType, setPasswordActionType] = useState<'edit_return' | 'save_return' | 'save_and_post' | 'post_return' | null>(null);
 
   // Form State
-  const [returnId, setReturnId] = useState('');
+  const [returnId, setReturnId] = useState<number | null>(null);
+  const [currentReturnIsPosted, setCurrentReturnIsPosted] = useState(false);
   const [date, setDate] = useState('');
   const [storeId, setStoreId] = useState('');
   const [customerId, setCustomerId] = useState('');
@@ -33,116 +110,142 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   const [billNo, setBillNo] = useState('');
   const [gpNo, setGpNo] = useState('');
   const [biltyNo, setBiltyNo] = useState('');
+  const [addaId, setAddaId] = useState('');
   const [remarks, setRemarks] = useState('');
-  const [status, setStatus] = useState<'Posted' | 'Unposted'>('Posted');
   const [invoiceDiscount, setInvoiceDiscount] = useState(0);
-  
+
   // Line items state
-  const [items, setItems] = useState<SaleReturnItem[]>([]);
+  const [items, setItems] = useState<UiItem[]>([]);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [isPrintingSingle, setIsPrintingSingle] = useState(false);
 
-  const selectedCustomer = useMemo(() => {
-    return state.customers.find(c => c.id === customerId);
-  }, [customerId, state.customers]);
+  const selectedCustomer = useMemo(() => customers.find(c => c.customer_id === Number(customerId)), [customers, customerId]);
 
-  const customerMainAcName = useMemo(() => {
-    if (!selectedCustomer) return '';
-    return state.chartAccounts.find(a => a.id === selectedCustomer.acId)?.name || 'CUSTOMERS ACCOUNTS';
-  }, [selectedCustomer, state.chartAccounts]);
+  const sortedCustomers = useMemo(() => [...customers].sort((a, b) => a.name.localeCompare(b.name)), [customers]);
 
-  // Sub Customers are an independent flat list (no parent Customer link)
-  const filteredSubCustomers = state.subCustomers;
+  // Drafts
+  const [drafts, setDrafts] = useState<SaleReturnRow[]>([]);
+  const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
 
-  // Customer search: Primary = Region, Secondary = City
-  const sortedCustomers = useMemo(() => {
-    const regionName = (id: string) => state.regions.find(r => r.id === id)?.name || '';
-    const cityName = (id: string) => state.cities.find(ct => ct.id === id)?.name || '';
-    return [...state.customers].sort((a, b) => {
-      const regionCmp = regionName(a.regionId).localeCompare(regionName(b.regionId));
-      if (regionCmp !== 0) return regionCmp;
-      return cityName(a.cityId).localeCompare(cityName(b.cityId));
-    });
-  }, [state.customers, state.regions, state.cities]);
+  const refreshDrafts = useCallback(async () => {
+    const res = await api.draftSaleReturns.list();
+    if (res.ok) setDrafts(res.data);
+  }, []);
 
-  // Drafts state loaded from local cache
-  const [drafts, setDrafts] = useState<SaleReturn[]>(() => {
-    const saved = localStorage.getItem('wento_sale_return_drafts');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [selectedDraftId, setSelectedDraftId] = useState('');
+  useEffect(() => { refreshDrafts(); }, [refreshDrafts]);
 
-  // Check if all necessary fields are filled to toggle Confirm button shade
   const isNecessaryFieldsFilled = useMemo(() => {
     if (!customerId) return false;
     if (!date) return false;
     if (!storeId) return false;
     if (!billNo) return false;
     if (items.length === 0) return false;
-    if (items.some(it => !it.productId || it.cartons <= 0 || it.rate <= 0)) return false;
+    if (items.some(it => !it.variantId || it.cartons <= 0 || it.rate <= 0)) return false;
     return true;
   }, [customerId, date, storeId, billNo, items]);
 
-  // Load a return into form fields
-  const loadReturn = (ret: SaleReturn) => {
-    setReturnId(ret.id);
-    setDate(ret.date);
-    setStoreId(ret.storeId);
-    setCustomerId(ret.customerId);
-    setSubCustomerId(ret.subCustomerId || 'sub-same');
-    setBillNo(ret.billNo);
-    setGpNo(ret.gpNo || '');
-    setBiltyNo(ret.biltyNo || '');
-    setRemarks(ret.remarks || '');
-    setStatus(ret.status);
-    setInvoiceDiscount(ret.invoiceDiscount || 0);
-    setItems(ret.items);
+  const loadReturnRow = async (rowIn: SaleReturnRow) => {
+    // list() rows never carry items (only get() does) — the tabs pass those straight through,
+    // so re-fetch the full record whenever items are missing.
+    let row = rowIn;
+    if (!row.items) {
+      const res = await api.saleReturns.get(row.return_id);
+      if (!res.ok) {
+        setErrorMsg('Failed to load return: ' + res.error.message);
+        return;
+      }
+      row = res.data;
+    }
+
+    setReturnId(row.return_id);
+    setCurrentReturnIsPosted(row.is_posted);
+    setDate(row.return_date.slice(0, 10));
+    setStoreId(row.store_id != null ? String(row.store_id) : '');
+    setCustomerId(String(row.customer_id));
+    setSubCustomerId(row.sub_customer_id != null ? String(row.sub_customer_id) : '');
+    setBillNo(row.bill_no);
+    setGpNo(row.gp_no || '');
+    setBiltyNo(row.bilty_no || '');
+    setAddaId(String(row.adda_id));
+    setRemarks(row.remarks || '');
+    setInvoiceDiscount(row.invoice_discount || 0);
+
+    const loadedItems: UiItem[] = row.items.map(it => {
+      const article = products.find(p => p.code === it.article_code);
+      return {
+        uid: 'row_' + it.item_id,
+        articleId: article?.article_id ?? null,
+        variantId: it.variant_id,
+        label: `${it.article_name || it.article_code || 'Article'} — ${it.color || ''}`,
+        packing: it.pairs && it.cartons ? it.pairs / it.cartons : 0,
+        cartons: it.cartons,
+        pairs: it.pairs,
+        rate: it.rate,
+        discountPercent: it.discount_percent,
+        discountValue: it.discount_value,
+        value: it.value
+      };
+    });
+    setItems(loadedItems.length ? loadedItems : [newUiItem()]);
+    loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
     setErrorMsg('');
   };
 
-  // Pre-fill a return from a Sale Bill
-  const prefillFromSaleBill = (bill: SaleBill) => {
-    setStoreId(bill.storeId);
-    setCustomerId(bill.customerId);
-    setSubCustomerId(bill.subCustomerId || 'sub-same');
-    setGpNo(bill.gpNo || '');
-    setBiltyNo(bill.biltyNo || '');
-    setRemarks(`Return from Sale Bill No. ${bill.billNo}`);
-    setInvoiceDiscount(bill.invoiceDiscount || 0);
-    const mappedItems: SaleReturnItem[] = bill.items.map((it, idx) => ({
-      id: `ret-item-${Date.now()}-${idx}`,
-      productId: it.productId,
-      productName: it.productName,
-      packing: it.packing,
-      cartons: it.cartons,
-      pairs: it.pairs,
-      rate: it.rate,
-      discountPercent: it.discountPercent,
-      discountValue: it.discountValue,
-      value: it.value
-    }));
-    setItems(mappedItems);
-    setSuccessMsg(`Prefilled return items from Sale Bill No. ${bill.billNo}`);
+  // Pre-fill a return from an existing posted Sale Bill, matched by its manual bill number.
+  const prefillFromSaleBill = async (matchedBillNo: string) => {
+    const res = await api.saleBills.list({ bill_no: matchedBillNo });
+    if (!res.ok || res.data.length === 0) return;
+    const bill = res.data[0];
+    setStoreId(bill.store_id != null ? String(bill.store_id) : '');
+    setCustomerId(String(bill.customer_id));
+    setSubCustomerId(bill.sub_customer_id != null ? String(bill.sub_customer_id) : '');
+    setGpNo(bill.gp_no || '');
+    setBiltyNo(bill.bilty_no || '');
+    setAddaId(String(bill.adda_id));
+    setRemarks(`Return from Sale Bill No. ${bill.bill_no}`);
+    setInvoiceDiscount(bill.invoice_discount || 0);
+
+    const mappedItems: UiItem[] = bill.items.map(it => {
+      const article = products.find(p => p.code === it.article_code);
+      const uiItem = recalcItem({
+        uid: 'row_' + Date.now() + '_' + it.item_id,
+        articleId: article?.article_id ?? null,
+        variantId: it.variant_id,
+        label: `${it.article_name || it.article_code || 'Article'} — ${it.color || ''}`,
+        packing: it.pairs && it.cartons ? it.pairs / it.cartons : 0,
+        cartons: it.cartons,
+        pairs: it.pairs,
+        rate: it.rate,
+        discountPercent: it.discount_percent,
+        discountValue: it.discount_value,
+        value: it.value
+      });
+      return uiItem;
+    });
+    setItems(mappedItems.length ? mappedItems : [newUiItem()]);
+    mappedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
+    setSuccessMsg(`Prefilled return items from Sale Bill No. ${bill.bill_no}`);
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
-  const handleEditSpecificReturn = (ret: SaleReturn) => {
-    const isConfirmed = state.saleReturns.some(r => r.id === ret.id);
-    if (isConfirmed) {
-      setTargetReturnToEdit(ret);
+  const pendingEditRow = useRef<SaleReturnRow | null>(null);
+
+  const handleEditSpecificReturn = async (ret: SaleReturnRow) => {
+    if (ret.is_posted) {
       setPasswordActionType('edit_return');
       setIsPasswordModalOpen(true);
+      pendingEditRow.current = ret;
     } else {
-      loadReturn(ret);
+      await loadReturnRow(ret);
       setMode('edit');
       setActiveTab('return');
     }
   };
 
-  const handlePrintSpecificReturn = (ret: SaleReturn) => {
-    loadReturn(ret);
+  const handlePrintSpecificReturn = async (ret: SaleReturnRow) => {
+    await loadReturnRow(ret);
     setIsPrintingSingle(true);
     setTimeout(() => {
       window.print();
@@ -152,289 +255,331 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   // Initialize new return if mode is new and not set
   useEffect(() => {
-    if (activeTab === 'return' && mode === 'new' && !returnId) {
+    if (activeTab === 'return' && mode === 'new' && returnId === null && stores.length > 0 && addas.length > 0) {
       handleNew();
     }
-  }, [activeTab, mode, returnId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, mode, returnId, stores, addas]);
 
   // Calculations
-  const totalCartons = useMemo(() => {
-    return items.reduce((sum, item) => sum + (item.cartons || 0), 0);
-  }, [items]);
-
-  const totalPairs = useMemo(() => {
-    return items.reduce((sum, item) => sum + (item.pairs || 0), 0);
-  }, [items]);
-
-  const itemsTotalValue = useMemo(() => {
-    return items.reduce((sum, item) => sum + (item.value || 0), 0);
-  }, [items]);
-
-  const finalTotalValue = useMemo(() => {
-    return Math.max(0, itemsTotalValue - invoiceDiscount);
-  }, [itemsTotalValue, invoiceDiscount]);
+  const totalCartons = useMemo(() => items.reduce((sum, item) => sum + (item.cartons || 0), 0), [items]);
+  const totalPairs = useMemo(() => items.reduce((sum, item) => sum + (item.pairs || 0), 0), [items]);
+  const itemsTotalValue = useMemo(() => items.reduce((sum, item) => sum + (item.value || 0), 0), [items]);
+  const finalTotalValue = useMemo(() => Math.max(0, itemsTotalValue - invoiceDiscount), [itemsTotalValue, invoiceDiscount]);
 
   // Toolbar Actions
   const handleNew = () => {
     setMode('new');
-    setSelectedDraftId('');
-    setReturnId('sr_' + Date.now());
+    setSelectedDraftId(null);
+    setReturnId(null);
+    setCurrentReturnIsPosted(false);
     setDate(new Date().toISOString().split('T')[0]);
-    setStoreId(state.stores[0]?.id || '');
+    setStoreId(stores[0] ? String(stores[0].store_id) : '');
     setCustomerId('');
-    setSubCustomerId('sub-same');
+    setSubCustomerId('');
     setBillNo('RET-' + (Math.floor(Math.random() * 9000) + 1000).toString());
     setGpNo('');
     setBiltyNo('');
+    setAddaId(addas[0] ? String(addas[0].adda_id) : '');
     setRemarks('');
-    setStatus('Posted');
     setInvoiceDiscount(0);
-    setItems([{
-      id: 'sri_' + Date.now() + '_0',
-      productId: '',
-      productName: '',
-      packing: 0,
-      cartons: 0,
-      pairs: 0,
-      rate: 0,
-      discountPercent: 0,
-      discountValue: 0,
-      value: 0
-    }]);
+    setItems([newUiItem()]);
     setErrorMsg('');
   };
 
-  const executeSaveReturn = () => {
-    const savedReturn: SaleReturn = {
-      id: returnId,
-      date,
-      storeId,
-      customerId,
-      subCustomerId: subCustomerId === 'sub-same' ? null : subCustomerId,
-      billNo,
-      gpNo,
-      biltyNo,
-      remarks,
-      status: 'Posted',
-      invoiceDiscount,
-      items
-    };
-
-    if (mode === 'new') {
-      dispatch({ type: 'ADD_SALE_RETURN', returnObj: savedReturn });
-      setSuccessMsg('New sale return confirmed & posted successfully.');
-    } else {
-      dispatch({ type: 'UPDATE_SALE_RETURN', returnId, returnObj: savedReturn });
-      setSuccessMsg('Sale return updated & posted successfully.');
-    }
-
-    // Clean up draft from cache if saved/confirmed
-    setDrafts(prev => {
-      const updated = prev.filter(d => d.id !== returnId && d.id !== selectedDraftId);
-      localStorage.setItem('wento_sale_return_drafts', JSON.stringify(updated));
-      return updated;
-    });
-    setSelectedDraftId('');
-
-    setStatus('Posted');
-    setTimeout(() => setSuccessMsg(''), 3000);
-    setMode('view');
-    setErrorMsg('');
-  };
-
-  const handleSave = () => {
-    // Validations
-    if (!date) return setErrorMsg('Date is required.');
-    if (!storeId) return setErrorMsg('Store is required.');
-    if (!customerId) return setErrorMsg('Customer is required.');
-    if (!billNo) return setErrorMsg('Return Bill No. is required.');
-    if (items.length === 0) return setErrorMsg('At least one product item is required.');
+  const buildPayload = (): SaleReturnCreateInput | null => {
+    if (!date) { setErrorMsg('Date is required.'); return null; }
+    if (!storeId) { setErrorMsg('Store is required.'); return null; }
+    if (!customerId) { setErrorMsg('Customer is required.'); return null; }
+    if (!billNo) { setErrorMsg('Return Bill No. is required.'); return null; }
+    if (!gpNo) { setErrorMsg('GP No. is required.'); return null; }
+    if (!biltyNo) { setErrorMsg('Bilty No. is required.'); return null; }
+    if (!addaId) { setErrorMsg('Transport Adda is required.'); return null; }
+    if (items.length === 0) { setErrorMsg('At least one product item is required.'); return null; }
 
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
-      if (!it.productId) return setErrorMsg(`Product is required at row ${i + 1}.`);
-      if (it.cartons <= 0) return setErrorMsg(`Cartons must be greater than 0 at row ${i + 1}.`);
-      if (it.rate <= 0) return setErrorMsg(`Rate must be greater than 0 at row ${i + 1}.`);
+      if (!it.variantId) { setErrorMsg(`Article/color is required at row ${i + 1}.`); return null; }
+      if (it.cartons <= 0) { setErrorMsg(`Cartons must be greater than 0 at row ${i + 1}.`); return null; }
+      if (it.rate <= 0) { setErrorMsg(`Rate must be greater than 0 at row ${i + 1}.`); return null; }
     }
 
-    if (mode === 'edit') {
+    const itemsPayload: SaleReturnItemInput[] = items.map(it => ({
+      variant_id: it.variantId!,
+      cartons: it.cartons,
+      rate: it.rate,
+      discount_percent: it.discountPercent
+    }));
+
+    return {
+      customer_id: Number(customerId),
+      sub_customer_id: subCustomerId ? Number(subCustomerId) : null,
+      store_id: Number(storeId),
+      return_date: date,
+      bill_no: billNo,
+      gp_no: gpNo,
+      bilty_no: biltyNo,
+      adda_id: Number(addaId),
+      remarks: remarks || undefined,
+      invoice_discount: invoiceDiscount,
+      items: itemsPayload
+    };
+  };
+
+  const executeSave = async (password?: string): Promise<SaleReturnRow | null> => {
+    const payload = buildPayload();
+    if (!payload) return null;
+
+    const result = mode === 'edit' && returnId != null
+      ? await api.saleReturns.update(returnId, password ? { ...payload, password } : payload)
+      : await api.saleReturns.create(payload);
+
+    if (!result.ok) {
+      setErrorMsg('Failed to save return: ' + result.error.message);
+      return null;
+    }
+
+    setReturnId(result.data.return_id);
+    setCurrentReturnIsPosted(result.data.is_posted);
+    setSuccessMsg(mode === 'edit' ? 'Sale return updated successfully.' : 'New sale return saved successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    setMode('view');
+    setErrorMsg('');
+    refreshDrafts();
+    return result.data;
+  };
+
+  const handleSave = () => {
+    if (mode === 'edit' && currentReturnIsPosted) {
       setPasswordActionType('save_return');
       setIsPasswordModalOpen(true);
     } else {
-      executeSaveReturn();
+      executeSave();
     }
   };
 
-  const handlePasswordSuccess = () => {
-    setIsPasswordModalOpen(false);
-    if (passwordActionType === 'edit_return' && targetReturnToEdit) {
-      loadReturn(targetReturnToEdit);
-      setMode('edit');
-      setActiveTab('return');
-      setSuccessMsg(`Password verified for user '${state.currentUsername || 'user'}'. Return editing unlocked.`);
-      setTimeout(() => setSuccessMsg(''), 3000);
-    } else if (passwordActionType === 'save_return') {
-      executeSaveReturn();
-    }
-    setPasswordActionType(null);
-    setTargetReturnToEdit(null);
+  const handleSaveAndPost = () => {
+    setPasswordActionType('save_and_post');
+    setIsPasswordModalOpen(true);
   };
 
-  const handleSaveDraft = () => {
-    const draftReturn: SaleReturn = {
-      id: returnId || 'sr_draft_' + Date.now(),
-      date,
-      storeId,
-      customerId,
-      subCustomerId: subCustomerId === 'sub-same' ? null : subCustomerId,
-      billNo,
-      gpNo,
-      biltyNo,
-      remarks,
-      invoiceDiscount,
-      status: 'Unposted',
-      items
-    };
+  const handlePostCurrentReturn = () => {
+    setPasswordActionType('post_return');
+    setIsPasswordModalOpen(true);
+  };
 
-    setDrafts(prev => {
-      const existingIdx = prev.findIndex(d => d.id === draftReturn.id);
-      let updated;
-      if (existingIdx !== -1) {
-        updated = [...prev];
-        updated[existingIdx] = draftReturn;
-      } else {
-        updated = [draftReturn, ...prev];
-      }
-      localStorage.setItem('wento_sale_return_drafts', JSON.stringify(updated));
-      return updated;
-    });
-
-    setSuccessMsg('Return saved to drafts cache.');
+  const handleUnpostCurrentReturn = async () => {
+    if (returnId == null) return;
+    const res = await api.saleReturns.unpost(returnId);
+    if (!res.ok) {
+      setErrorMsg('Failed to unpost return: ' + res.error.message);
+      return;
+    }
+    setCurrentReturnIsPosted(false);
+    setSuccessMsg('Return unposted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
-  // Line Items Helper Actions
-  const handleAddItemRow = () => {
-    setItems([
-      ...items,
-      {
-        id: 'sri_' + Date.now() + '_' + items.length,
-        productId: '',
-        productName: '',
-        packing: 0,
-        cartons: 0,
-        pairs: 0,
-        rate: 0,
-        discountPercent: 0,
-        discountValue: 0,
-        value: 0
-      }
-    ]);
+  const handleEditCurrentReturn = () => {
+    if (currentReturnIsPosted) {
+      setPasswordActionType('edit_return');
+      setIsPasswordModalOpen(true);
+    } else {
+      setMode('edit');
+    }
   };
+
+  const handlePasswordSuccess = async (password: string) => {
+    setIsPasswordModalOpen(false);
+    if (passwordActionType === 'edit_return') {
+      if (pendingEditRow.current) {
+        await loadReturnRow(pendingEditRow.current);
+        pendingEditRow.current = null;
+        setActiveTab('return');
+      }
+      setMode('edit');
+      setSuccessMsg(`Password verified. Return editing unlocked.`);
+      setTimeout(() => setSuccessMsg(''), 3000);
+    } else if (passwordActionType === 'save_return') {
+      await executeSave(password);
+    } else if (passwordActionType === 'save_and_post') {
+      const saved = await executeSave();
+      if (saved) {
+        const postRes = await api.saleReturns.post(saved.return_id, password);
+        if (!postRes.ok) {
+          setErrorMsg('Return was saved, but posting failed: ' + postRes.error.message);
+        } else {
+          setCurrentReturnIsPosted(true);
+          setSuccessMsg('Return saved & posted successfully.');
+          setTimeout(() => setSuccessMsg(''), 3000);
+        }
+      }
+    } else if (passwordActionType === 'post_return') {
+      if (returnId != null) {
+        const res = await api.saleReturns.post(returnId, password);
+        if (!res.ok) {
+          setErrorMsg('Failed to post return: ' + res.error.message);
+        } else {
+          setCurrentReturnIsPosted(true);
+          setSuccessMsg('Return posted successfully.');
+          setTimeout(() => setSuccessMsg(''), 3000);
+        }
+      }
+    }
+    setPasswordActionType(null);
+  };
+
+  const handleSaveDraft = async () => {
+    const payload: Partial<SaleReturnCreateInput> = {
+      customer_id: customerId ? Number(customerId) : undefined,
+      sub_customer_id: subCustomerId ? Number(subCustomerId) : null,
+      store_id: storeId ? Number(storeId) : undefined,
+      return_date: date || undefined,
+      bill_no: billNo,
+      gp_no: gpNo,
+      bilty_no: biltyNo,
+      adda_id: addaId ? Number(addaId) : undefined,
+      remarks: remarks || undefined,
+      invoice_discount: invoiceDiscount,
+      items: items.filter(it => it.variantId).map(it => ({
+        variant_id: it.variantId!,
+        cartons: it.cartons,
+        rate: it.rate,
+        discount_percent: it.discountPercent
+      }))
+    };
+
+    if (selectedDraftId != null) {
+      await api.draftSaleReturns.remove(selectedDraftId);
+    }
+    const res = await api.draftSaleReturns.create(payload);
+    if (!res.ok) {
+      setErrorMsg('Failed to save draft: ' + res.error.message);
+      return;
+    }
+    setSelectedDraftId(res.data.return_id);
+    setSuccessMsg('Return saved to drafts.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    refreshDrafts();
+  };
+
+  const handleConfirmDraft = async () => {
+    if (selectedDraftId == null) {
+      setErrorMsg('Please select a draft first.');
+      setTimeout(() => setErrorMsg(''), 2000);
+      return;
+    }
+    const res = await api.draftSaleReturns.confirm(selectedDraftId);
+    if (!res.ok) {
+      setErrorMsg('Failed to confirm draft: ' + res.error.message);
+      return;
+    }
+    setSelectedDraftId(null);
+    await loadReturnRow(res.data);
+    setMode('view');
+    setSuccessMsg('Draft confirmed & posted successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    refreshDrafts();
+  };
+
+  // Line Items Helper Actions
+  const handleAddItemRow = () => setItems([...items, newUiItem()]);
 
   const handleRemoveItemRow = (idx: number) => {
     if (items.length <= 1) return;
     setItems(items.filter((_, i) => i !== idx));
   };
 
-  // TASK-12: products previously purchased by the selected customer (from their posted Sale Bills)
-  // — used to auto-fill a line item; does not change how the return is manually entered.
-  const customerPurchaseHistory = useMemo(() => {
-    if (!customerId) return [];
-    const seen = new Map<string, string>(); // productId -> productName
-    state.saleBills
-      .filter(b => b.customerId === customerId && b.status === 'Posted')
-      .forEach(bill => {
-        bill.items.forEach(it => {
-          if (it.productId && !seen.has(it.productId)) {
-            seen.set(it.productId, it.productName);
-          }
-        });
-      });
-    return Array.from(seen.entries()).map(([productId, productName]) => ({ productId, productName }));
-  }, [customerId, state.saleBills]);
-
-  const handleQuickAddFromHistory = (productId: string) => {
-    if (!productId) return;
-    const product = state.products.find(p => p.id === productId);
-    if (!product) return;
-
-    const filledItem: SaleReturnItem = {
-      id: 'sri_' + Date.now() + '_' + items.length,
-      productId: product.id,
-      productName: product.name,
-      packing: product.packing,
-      cartons: 0,
-      pairs: 0,
-      rate: product.salePrice,
-      discountPercent: 0,
-      discountValue: 0,
-      value: 0
-    };
-
-    // Fill the last row if it's still empty, otherwise append a new one
-    const lastIdx = items.length - 1;
-    if (items.length > 0 && !items[lastIdx].productId) {
-      setItems(items.map((it, i) => i === lastIdx ? filledItem : it));
-    } else {
-      setItems([...items, filledItem]);
-    }
+  const handleArticleChange = async (idx: number, articleIdStr: string) => {
+    const articleId = articleIdStr ? Number(articleIdStr) : null;
+    const product = articleId != null ? products.find(p => p.article_id === articleId) : undefined;
+    setItems(prev => prev.map((it, i) => i === idx ? recalcItem({
+      ...it,
+      articleId,
+      variantId: null,
+      label: product?.name || '',
+      packing: product?.packing || 0
+    }) : it));
+    if (articleId != null) await fetchVariants(articleId);
   };
 
-  const updateItemField = (idx: number, field: keyof SaleReturnItem, val: any) => {
-    const updated = items.map((item, i) => {
+  const handleVariantChange = (idx: number, variantIdStr: string) => {
+    const item = items[idx];
+    if (item.articleId == null) return;
+    const variantId = variantIdStr ? Number(variantIdStr) : null;
+    const variant = variantsByArticle[item.articleId]?.find(v => v.variant_id === variantId);
+    const product = products.find(p => p.article_id === item.articleId);
+    setItems(prev => prev.map((it, i) => i === idx ? recalcItem({
+      ...it,
+      variantId,
+      label: variant ? `${product?.name || ''} — ${variant.color}` : (product?.name || ''),
+      packing: variant?.packing ?? product?.packing ?? it.packing,
+      rate: product?.sale_price ?? it.rate
+    }) : it));
+  };
+
+  const updateNumericField = (idx: number, field: 'cartons' | 'rate' | 'discountPercent' | 'discountValue', val: number) => {
+    setItems(prev => prev.map((item, i) => {
       if (i !== idx) return item;
-
-      const newItem = { ...item, [field]: val };
-
-      // If product changes, load properties
-      if (field === 'productId') {
-        const product = state.products.find(p => p.id === val);
-        if (product) {
-          newItem.productName = product.name;
-          newItem.packing = product.packing;
-          newItem.rate = product.salePrice;
-          newItem.pairs = newItem.cartons * product.packing;
-        } else {
-          newItem.productName = '';
-          newItem.packing = 0;
-          newItem.pairs = 0;
-        }
+      let next = { ...item, [field]: val };
+      const gross = next.cartons * next.packing * next.rate;
+      if (field === 'discountValue') {
+        next.discountPercent = gross > 0 ? parseFloat(((val / gross) * 100).toFixed(1)) : 0;
       }
-
-      // Re-calculate pairs
-      if (field === 'cartons' || field === 'productId') {
-        newItem.pairs = newItem.cartons * newItem.packing;
-      }
-
-      // Re-calculate values
-      const grossValue = newItem.pairs * newItem.rate;
-
-      if (field === 'discountPercent') {
-        newItem.discountValue = Math.round(grossValue * (newItem.discountPercent / 100));
-      } else if (field === 'discountValue') {
-        newItem.discountPercent = grossValue > 0 ? parseFloat(((newItem.discountValue / grossValue) * 100).toFixed(1)) : 0;
-      } else {
-        // Recalculate discount value from percent
-        newItem.discountValue = Math.round(grossValue * (newItem.discountPercent / 100));
-      }
-
-      newItem.value = Math.max(0, grossValue - newItem.discountValue);
-
-      return newItem;
-    });
-    setItems(updated);
+      return recalcItem(next);
+    }));
   };
+
+  // Products this customer previously bought — derived from any posted Sale Bill lookup by
+  // customer. Kept simple: only fires when the user explicitly searches by bill_no via prefill;
+  // no bulk customer-history fetch endpoint exists yet.
 
   const isViewMode = mode === 'view';
 
+  const handleCreateSubCustomer = async () => {
+    if (!newSubCustomerName.trim()) { setErrorMsg('Sub-customer name is required.'); return; }
+    if (!newSubCustomerRegionId) { setErrorMsg('Region is required.'); return; }
+    const res = await api.createSubCustomer({
+      name: newSubCustomerName.trim(),
+      region_id: Number(newSubCustomerRegionId),
+      city_id: newSubCustomerCityId ? Number(newSubCustomerCityId) : undefined
+    });
+    if (!res.ok) {
+      setErrorMsg('Failed to create sub-customer: ' + res.error.message);
+      return;
+    }
+    setSubCustomers(prev => [...prev, res.data]);
+    setSubCustomerId(String(res.data.sub_customer_id));
+    setIsAddSubCustomerOpen(false);
+    setNewSubCustomerName('');
+    setNewSubCustomerRegionId('');
+    setNewSubCustomerCityId('');
+    setSuccessMsg('Sub-customer added successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
+  // Regions/cities are only needed here for the inline "+ Add Sub-Customer" modal.
+  const [regions, setRegions] = useState<{ region_id: number; name: string }[]>([]);
+  const [cities, setCities] = useState<{ city_id: number; name: string; region_id: number | null }[]>([]);
+  useEffect(() => {
+    (async () => {
+      const [rg, ct] = await Promise.all([api.listRegions(), api.listCities()]);
+      if (rg.ok) setRegions(rg.data);
+      if (ct.ok) setCities(ct.data);
+    })();
+  }, []);
+
+  const [isAddSubCustomerOpen, setIsAddSubCustomerOpen] = useState(false);
+  const [newSubCustomerName, setNewSubCustomerName] = useState('');
+  const [newSubCustomerRegionId, setNewSubCustomerRegionId] = useState('');
+  const [newSubCustomerCityId, setNewSubCustomerCityId] = useState('');
+
   if (isPrintingSingle) {
-    const customerObj = state.customers.find(c => c.id === customerId);
+    const customerObj = customers.find(c => c.customer_id === Number(customerId));
     const customerName = customerObj ? customerObj.name : (customerId || 'N/A');
-    const storeObj = state.stores.find(s => s.id === storeId);
+    const storeObj = stores.find(s => s.store_id === Number(storeId));
     const storeName = storeObj ? storeObj.name : (storeId || 'N/A');
-    const returnAcId = customerObj ? customerObj.acId : '';
-    const mainAcName = state.chartAccounts.find(c => c.id === returnAcId)?.name || 'CUSTOMERS ACCOUNTS';
+    const statusLabel = currentReturnIsPosted ? 'Posted' : 'Unposted';
 
     return (
       <div className="excel-print-container" style={{
@@ -464,7 +609,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           </div>
           <div style={{ textAlign: 'right' }}>
             <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>SALE RETURN INVOICE</h2>
-            <p style={{ margin: 0, fontSize: '11px', color: '#555555' }}>Status: {status}</p>
+            <p style={{ margin: 0, fontSize: '11px', color: '#555555' }}>Status: {statusLabel}</p>
           </div>
         </div>
 
@@ -477,7 +622,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
         }}>
           <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>System ID</label>
-            <span>{returnId}</span>
+            <span>{returnId ?? 'Unsaved'}</span>
           </div>
           <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Date</label>
@@ -496,11 +641,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Customer Name</label>
             <span>{customerName}</span>
           </div>
-          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Account Group</label>
-            <span>{mainAcName}</span>
-          </div>
-          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px', gridColumn: 'span 2' }}>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px', gridColumn: 'span 3' }}>
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Remarks</label>
             <span>{remarks || 'N/A'}</span>
           </div>
@@ -526,18 +667,16 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           </thead>
           <tbody>
             {items.map((item, idx) => {
-              const product = state.products.find(p => p.id === item.productId);
-              const productName = product ? product.name : (item.productId || 'N/A');
-              const discountText = item.discountPercent > 0 
-                ? `${item.discountPercent}%` 
-                : item.discountValue > 0 
-                  ? `${item.discountValue.toLocaleString()}` 
+              const discountText = item.discountPercent > 0
+                ? `${item.discountPercent}%`
+                : item.discountValue > 0
+                  ? `${item.discountValue.toLocaleString()}`
                   : '-';
-              
+
               return (
-                <tr key={item.id}>
+                <tr key={item.uid}>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{productName}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{item.label || 'N/A'}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.packing}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.cartons}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.pairs}</td>
@@ -565,8 +704,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               </tr>
             )}
 
-            <tr className="excel-print-total-row excel-print-double-bottom" style={{ 
-              fontWeight: 'bold', 
+            <tr className="excel-print-total-row excel-print-double-bottom" style={{
+              fontWeight: 'bold',
               backgroundColor: '#f2f2f2',
               fontSize: '12px'
             }}>
@@ -595,18 +734,13 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   return (
     <AppLayout pageTitle="Sale Return">
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
-        
+
         {/* Top Tab Bar */}
         <div className="flex gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           <button
-            onClick={() => {
-              setActiveTab('return');
-              handleNew();
-            }}
+            onClick={() => { setActiveTab('return'); handleNew(); }}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'return'
-                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border text-slate-600 hover:bg-slate-50'
+              activeTab === 'return' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
             }`}
           >
             New Sale Return
@@ -614,9 +748,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           <button
             onClick={() => setActiveTab('weekly')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'weekly'
-                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border text-slate-600 hover:bg-slate-50'
+              activeTab === 'weekly' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
             }`}
           >
             Weekly Records
@@ -624,9 +756,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           <button
             onClick={() => setActiveTab('monthly')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'monthly'
-                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border text-slate-600 hover:bg-slate-50'
+              activeTab === 'monthly' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
             }`}
           >
             Monthly Records
@@ -634,9 +764,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           <button
             onClick={() => setActiveTab('overall')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'overall'
-                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border text-slate-600 hover:bg-slate-50'
+              activeTab === 'overall' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
             }`}
           >
             Overall Records
@@ -644,9 +772,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           <button
             onClick={() => setActiveTab('find')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'find'
-                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border text-slate-600 hover:bg-slate-50'
+              activeTab === 'find' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
             }`}
           >
             Find &amp; Update Return
@@ -662,8 +788,11 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
         </div>
 
         <div className={activeTab === 'return' ? 'block' : 'hidden'}>
-        
+
         {/* Banner Messages */}
+        {lookupError && (
+          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{lookupError}</div>
+        )}
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4 flex items-center justify-between">
             <span>{successMsg}</span>
@@ -681,18 +810,18 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             <div className="flex items-center gap-2">
               <span className="font-semibold text-slate-700">Saved Drafts:</span>
               <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-bold">
-                {drafts.length} incomplete return(s) cached
+                {drafts.length} incomplete return(s)
               </span>
             </div>
             <div className="flex items-center gap-3">
-               <select
-                value={selectedDraftId}
+              <select
+                value={selectedDraftId ?? ''}
                 onChange={e => {
-                  const draftId = e.target.value;
+                  const draftId = e.target.value ? Number(e.target.value) : null;
                   setSelectedDraftId(draftId);
-                  const selected = drafts.find(d => d.id === draftId);
+                  const selected = drafts.find(d => d.return_id === draftId);
                   if (selected) {
-                    loadReturn(selected);
+                    loadReturnRow(selected);
                     setMode('new');
                   }
                 }}
@@ -701,25 +830,25 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               >
                 <option value="">Select a draft to load...</option>
                 {drafts.map(d => {
-                  const custName = state.customers.find(c => c.id === d.customerId)?.name || 'Unnamed Customer';
+                  const custName = customers.find(c => c.customer_id === d.customer_id)?.name || 'Unnamed Customer';
                   return (
-                    <option key={d.id} value={d.id}>
-                      {d.billNo || 'No Number'} - {custName} ({d.date})
+                    <option key={d.return_id} value={d.return_id}>
+                      {d.bill_no || 'No Number'} - {custName} ({d.return_date.slice(0, 10)})
                     </option>
                   );
                 })}
               </select>
+              <button type="button" onClick={handleConfirmDraft} className="text-xs text-emerald-600 hover:text-emerald-800 font-semibold transition-colors">
+                Confirm Draft (Post)
+              </button>
               <button
                 type="button"
-                onClick={() => {
-                  if (selectedDraftId) {
-                    setDrafts(prev => {
-                      const updated = prev.filter(d => d.id !== selectedDraftId);
-                      localStorage.setItem('wento_sale_return_drafts', JSON.stringify(updated));
-                      return updated;
-                    });
-                    setSelectedDraftId('');
+                onClick={async () => {
+                  if (selectedDraftId != null) {
+                    await api.draftSaleReturns.remove(selectedDraftId);
+                    setSelectedDraftId(null);
                     handleNew();
+                    refreshDrafts();
                     setSuccessMsg('Draft deleted successfully.');
                     setTimeout(() => setSuccessMsg(''), 2000);
                   } else {
@@ -743,25 +872,19 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 <button
                   onClick={() => {
                     setIsPrintingSingle(true);
-                    setTimeout(() => {
-                      window.print();
-                      setIsPrintingSingle(false);
-                    }, 100);
+                    setTimeout(() => { window.print(); setIsPrintingSingle(false); }, 100);
                   }}
                   className="px-4 py-2 text-sm font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-700 shadow-sm transition-colors flex items-center gap-1.5"
                 >
                   <Printer size={16} /> Print Return
                 </button>
-                <button
-                  onClick={exportToPDF}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5"
-                >
+                <button onClick={exportToPDF} className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5">
                   <FileDown size={16} /> Export PDF
                 </button>
                 <button
                   onClick={() => {
                     const headers = ['Article', 'Packing', 'Cartons', 'Pairs', 'Rate', 'D%', 'D. Value', 'Total Value'];
-                    const rows = items.map(it => [it.productName, it.packing, it.cartons, it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
+                    const rows = items.map(it => [it.label, it.packing, it.cartons, it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
                     exportRowsToExcel(`sale-return-${billNo || returnId}`, headers, rows);
                   }}
                   className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5"
@@ -769,22 +892,22 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   <FileSpreadsheet size={16} /> Export Excel
                 </button>
                 <button
-                  onClick={() => {
-                    const currentReturn = state.saleReturns.find(r => r.id === returnId);
-                    if (currentReturn) {
-                      handleEditSpecificReturn(currentReturn);
-                    } else {
-                      setMode('edit');
-                    }
-                  }}
+                  onClick={handleEditCurrentReturn}
                   className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
                 >
                   <Edit size={16} /> Edit Return
                 </button>
-                <button
-                  onClick={handleNew}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
-                >
+                {returnId != null && !currentReturnIsPosted && (
+                  <button onClick={handlePostCurrentReturn} className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all">
+                    Post Return
+                  </button>
+                )}
+                {returnId != null && currentReturnIsPosted && (
+                  <button onClick={handleUnpostCurrentReturn} className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all">
+                    Unpost Return
+                  </button>
+                )}
+                <button onClick={handleNew} className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all">
                   Create New Return
                 </button>
               </>
@@ -800,16 +923,22 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                     cursor: 'pointer'
                   }}
                 >
-                  <Save size={16} /> Confirm
+                  <Save size={16} /> {mode === 'edit' ? 'Update Return' : 'Save Return'}
                 </button>
-                <button
-                  onClick={handleSaveDraft}
-                  className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg flex items-center gap-1.5"
-                >
+                {!currentReturnIsPosted && (
+                  <button
+                    onClick={handleSaveAndPost}
+                    disabled={!isNecessaryFieldsFilled}
+                    className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-50"
+                  >
+                    Save &amp; Post
+                  </button>
+                )}
+                <button onClick={handleSaveDraft} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg flex items-center gap-1.5">
                   Save Draft
                 </button>
                 {mode === 'edit' ? (
-                  <button onClick={() => { setMode('view'); }} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
+                  <button onClick={() => setMode('view')} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
                     Cancel Edit
                   </button>
                 ) : (
@@ -820,24 +949,24 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               </>
             )}
           </div>
-          
+
           {mode === 'edit' && (
             <div className="text-sm font-semibold text-slate-500 font-inter">
-              Editing System Return: <span className="text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-100">{returnId}</span>
+              Editing System Return: <span className="text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-100">{returnId ?? 'New'}</span>
             </div>
           )}
-          
+
           {mode === 'view' && (
             <div className="text-sm font-semibold text-emerald-600 font-inter flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping text-[10px]"></span>
-              Return Confirmed &amp; Saved Successfully!
+              Return {currentReturnIsPosted ? 'Posted' : 'Saved'} Successfully!
             </div>
           )}
         </div>
 
         {/* Invoice Layout */}
         <div className="card-white shadow-sm p-6 md:p-8" style={{ border: '1px solid var(--border-color)', background: '#ffffff' }}>
-          
+
           {/* Print Title (Visible only when printing) */}
           <div className="hidden print:flex items-center justify-between mb-6 pb-4 border-b">
             <div>
@@ -846,7 +975,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
             <div className="text-right">
               <h2 className="font-lora font-semibold text-xl">SALE RETURN</h2>
-              <p className="text-sm font-inter text-slate-500">Status: {status}</p>
+              <p className="text-sm font-inter text-slate-500">Status: {currentReturnIsPosted ? 'Posted' : 'Unposted'}</p>
             </div>
           </div>
 
@@ -856,40 +985,22 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
                 Return No.
               </label>
-              <input
-                type="text"
-                value={returnId}
-                disabled
-                className="soleria-input bg-gray-50 text-gray-500 border-gray-200"
-                style={{ fontSize: '13px' }}
-              />
+              <input type="text" value={returnId ?? 'Unsaved'} disabled className="soleria-input bg-gray-50 text-gray-500 border-gray-200" style={{ fontSize: '13px' }} />
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
-              <input
-                type="date"
-                value={date}
-                disabled={isViewMode}
-                onChange={e => setDate(e.target.value)}
-                className="soleria-input"
-                style={{ fontSize: '13px' }}
-              />
+              <input type="date" value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
                 TO Store (Return Destination) <span className="text-red-500 font-bold">*</span>
               </label>
-              <select
-                value={storeId}
-                disabled={isViewMode}
-                onChange={e => setStoreId(e.target.value)}
-                className="soleria-input cursor-pointer"
-                style={{ fontSize: '13px' }}
-              >
-                {state.stores.map(st => (
-                  <option key={st.id} value={st.id}>{st.name}</option>
+              <select value={storeId} disabled={isViewMode} onChange={e => setStoreId(e.target.value)} className="soleria-input cursor-pointer" style={{ fontSize: '13px' }}>
+                <option value="">Select store...</option>
+                {stores.map(st => (
+                  <option key={st.store_id} value={st.store_id}>{st.name}</option>
                 ))}
               </select>
             </div>
@@ -901,39 +1012,11 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 type="text"
                 value={billNo}
                 disabled={isViewMode}
-                onChange={e => {
-                  const val = e.target.value;
-                  setBillNo(val);
-                  if (mode === 'new' && val.trim() !== '') {
-                    // 1. Check if there is an existing return with this billNo (switch to edit mode)
-                    const matchedReturn = state.saleReturns.find(r => r.billNo.trim().toLowerCase() === val.trim().toLowerCase());
-                    if (matchedReturn) {
-                      loadReturn(matchedReturn);
-                      setMode('edit');
-                      return;
-                    }
-                    // 2. Check if there is an existing sale bill with this billNo (prefill return items)
-                    const matchedBill = state.saleBills.find(b => b.billNo.trim().toLowerCase() === val.trim().toLowerCase());
-                    if (matchedBill) {
-                      prefillFromSaleBill(matchedBill);
-                    }
-                  }
-                }}
+                onChange={e => setBillNo(e.target.value)}
                 onBlur={e => {
-                  const val = e.target.value;
-                  if (mode === 'new' && val.trim() !== '') {
-                    // 1. Check if there is an existing return with this billNo (switch to edit mode)
-                    const matchedReturn = state.saleReturns.find(r => r.billNo.trim().toLowerCase() === val.trim().toLowerCase());
-                    if (matchedReturn) {
-                      loadReturn(matchedReturn);
-                      setMode('edit');
-                      return;
-                    }
-                    // 2. Check if there is an existing sale bill with this billNo (prefill return items)
-                    const matchedBill = state.saleBills.find(b => b.billNo.trim().toLowerCase() === val.trim().toLowerCase());
-                    if (matchedBill) {
-                      prefillFromSaleBill(matchedBill);
-                    }
+                  const val = e.target.value.trim();
+                  if (mode === 'new' && val !== '') {
+                    prefillFromSaleBill(val);
                   }
                 }}
                 className="soleria-input"
@@ -944,7 +1027,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
           {/* Customer & Dispatch Section */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6 pb-6 border-b" style={{ borderColor: 'var(--border-table)' }}>
-            
+
             {/* Customer Details Box */}
             <div className="flex flex-col gap-3 p-4 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
               <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-1.5">
@@ -958,42 +1041,26 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   <select
                     value={customerId}
                     disabled={isViewMode}
-                    onChange={e => {
-                      setCustomerId(e.target.value);
-                      setSubCustomerId('sub-same');
-                    }}
+                    onChange={e => { setCustomerId(e.target.value); setSubCustomerId(''); }}
                     className="soleria-input cursor-pointer"
                     style={{ fontSize: '13px' }}
                   >
                     <option value="">Select customer...</option>
                     {sortedCustomers.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
+                      <option key={c.customer_id} value={c.customer_id}>{c.name}</option>
                     ))}
                   </select>
+                  {selectedCustomer && selectedCustomer.ba_id == null && (
+                    <p className="text-[10px] text-amber-600 mt-1 font-semibold">
+                      This customer has no linked business account — the return cannot be posted until Setup adds one.
+                    </p>
+                  )}
                 </div>
-                <div>
+                <div className="col-span-2">
                   <label className="block text-xs font-medium text-slate-600 mb-1">
                     Customer Code
                   </label>
-                  <input
-                    type="text"
-                    value={customerId}
-                    disabled
-                    className="soleria-input bg-gray-100 text-gray-500"
-                    style={{ fontSize: '12px' }}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Main Account Group
-                  </label>
-                  <input
-                    type="text"
-                    value={customerMainAcName}
-                    disabled
-                    className="soleria-input bg-gray-100 text-gray-500"
-                    style={{ fontSize: '12px' }}
-                  />
+                  <input type="text" value={customerId} disabled className="soleria-input bg-gray-100 text-gray-500" style={{ fontSize: '12px' }} />
                 </div>
               </div>
             </div>
@@ -1005,46 +1072,49 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Delivery Agent (if any)
-                  </label>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="block text-xs font-medium text-slate-600">
+                      Delivery Agent (if any)
+                    </label>
+                    {!isViewMode && (
+                      <button type="button" onClick={() => setIsAddSubCustomerOpen(true)} className="text-[10px] font-bold underline transition-colors text-blue-600 hover:text-blue-800">
+                        + Add New
+                      </button>
+                    )}
+                  </div>
                   <SearchableSelect
-                    options={[
-                      { value: 'sub-same', label: 'SAME (Direct)' },
-                      ...filteredSubCustomers.map(sc => ({ value: sc.id, label: sc.name }))
-                    ]}
+                    options={subCustomers.map(sc => ({ value: String(sc.sub_customer_id), label: sc.name }))}
                     value={subCustomerId}
                     onChange={setSubCustomerId}
-                    placeholder="Select delivery agent..."
+                    placeholder="SAME (Direct) — none selected"
                     searchPlaceholder="Search sub-customers..."
                     disabled={isViewMode}
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
-                    GP No.
+                    Transport Adda <span className="text-red-500 font-bold">*</span>
                   </label>
-                  <input
-                    type="text"
-                    value={gpNo}
+                  <SearchableSelect
+                    options={addas.map(ad => ({ value: String(ad.adda_id), label: ad.name }))}
+                    value={addaId}
+                    onChange={setAddaId}
+                    placeholder="Select Adda..."
+                    searchPlaceholder="Search Adda..."
                     disabled={isViewMode}
-                    onChange={e => setGpNo(e.target.value)}
-                    className="soleria-input"
-                    style={{ fontSize: '13px' }}
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Bilty No.
+                    GP No. <span className="text-red-500 font-bold">*</span>
                   </label>
-                  <input
-                    type="text"
-                    value={biltyNo}
-                    disabled={isViewMode}
-                    onChange={e => setBiltyNo(e.target.value)}
-                    className="soleria-input"
-                    style={{ fontSize: '13px' }}
-                  />
+                  <input type="text" value={gpNo} disabled={isViewMode} onChange={e => setGpNo(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                    Bilty No. <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  <input type="text" value={biltyNo} disabled={isViewMode} onChange={e => setBiltyNo(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
                 </div>
               </div>
             </div>
@@ -1055,7 +1125,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="p-3 pl-4" style={{ minWidth: '220px' }}>Returned Article <span className="text-red-500 font-bold">*</span></th>
+                  <th className="p-3 pl-4" style={{ minWidth: '190px' }}>Returned Article <span className="text-red-500 font-bold">*</span></th>
+                  <th className="p-3 pl-4" style={{ minWidth: '150px' }}>Color <span className="text-red-500 font-bold">*</span></th>
                   <th className="p-3 text-center" style={{ width: '80px' }}>Packing</th>
                   <th className="p-3 text-center" style={{ width: '90px' }}>Stock</th>
                   <th className="p-3 text-center" style={{ width: '90px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
@@ -1069,26 +1140,37 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               </thead>
               <tbody>
                 {items.map((item, idx) => {
-                  const product = state.products.find(p => p.id === item.productId);
-                  const inStock = product ? product.stock : 0;
+                  const variantOptions = (item.articleId != null ? variantsByArticle[item.articleId] || [] : [])
+                    .map(v => ({ value: String(v.variant_id), label: v.color }));
                   return (
-                    <tr key={item.id} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
-                      {/* Product select */}
+                    <tr key={item.uid} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                      {/* Article select */}
                       <td className="p-3 pl-4">
                         {isViewMode ? (
-                          <span className="font-semibold text-slate-800 text-[13px] pl-2">
-                            {state.products.find(p => p.id === item.productId)?.name || 'Select article...'}
-                          </span>
+                          <span className="font-semibold text-slate-800 text-[13px] pl-2">{item.label || 'N/A'}</span>
                         ) : (
                           <SearchableSelect
-                            options={state.products.map(p => ({
-                              value: p.id,
-                              label: `${p.name} (${p.id})`
-                            }))}
-                            value={item.productId}
-                            onChange={val => updateItemField(idx, 'productId', val)}
+                            options={products.map(p => ({ value: String(p.article_id), label: `${p.name} (${p.code})` }))}
+                            value={item.articleId != null ? String(item.articleId) : ''}
+                            onChange={val => handleArticleChange(idx, val)}
                             placeholder="Select article..."
                             searchPlaceholder="Search articles..."
+                          />
+                        )}
+                      </td>
+
+                      {/* Color / Variant select */}
+                      <td className="p-3 pl-4">
+                        {isViewMode ? (
+                          <span className="text-slate-600 text-[13px]">{variantOptions.find(v => v.value === String(item.variantId))?.label || '-'}</span>
+                        ) : (
+                          <SearchableSelect
+                            options={variantOptions}
+                            value={item.variantId != null ? String(item.variantId) : ''}
+                            onChange={val => handleVariantChange(idx, val)}
+                            placeholder={item.articleId != null ? 'Select color...' : 'Select article first'}
+                            searchPlaceholder="Search colors..."
+                            disabled={item.articleId == null}
                           />
                         )}
                       </td>
@@ -1098,14 +1180,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                         {item.packing || '-'}
                       </td>
 
-                      {/* Stock */}
-                      <td className="p-3 text-center text-xs font-medium">
-                        {item.productId ? (
-                          <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
-                            {inStock}
-                          </span>
-                        ) : '-'}
-                      </td>
+                      {/* Stock — no real-time stock IPC channel exposed yet, see SaleBillPage comment */}
+                      <td className="p-3 text-center text-xs font-medium">—</td>
 
                       {/* Cartons */}
                       <td className="p-3">
@@ -1114,7 +1190,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                           value={item.cartons || ''}
                           disabled={isViewMode}
                           min={1}
-                          onChange={e => updateItemField(idx, 'cartons', parseInt(e.target.value) || 0)}
+                          onChange={e => updateNumericField(idx, 'cartons', parseInt(e.target.value) || 0)}
                           className="soleria-input text-center font-medium"
                           style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
@@ -1132,7 +1208,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                           value={item.rate || ''}
                           disabled={isViewMode}
                           min={0}
-                          onChange={e => updateItemField(idx, 'rate', parseInt(e.target.value) || 0)}
+                          onChange={e => updateNumericField(idx, 'rate', parseInt(e.target.value) || 0)}
                           className="soleria-input text-right font-medium"
                           style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
@@ -1146,7 +1222,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                           disabled={isViewMode}
                           min={0}
                           max={100}
-                          onChange={e => updateItemField(idx, 'discountPercent', parseFloat(e.target.value) || 0)}
+                          onChange={e => updateNumericField(idx, 'discountPercent', parseFloat(e.target.value) || 0)}
                           className="soleria-input text-center font-medium"
                           style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
@@ -1159,7 +1235,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                           value={item.discountValue || ''}
                           disabled={isViewMode}
                           min={0}
-                          onChange={e => updateItemField(idx, 'discountValue', parseInt(e.target.value) || 0)}
+                          onChange={e => updateNumericField(idx, 'discountValue', parseInt(e.target.value) || 0)}
                           className="soleria-input text-right font-medium"
                           style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
@@ -1174,11 +1250,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                       {/* Delete Action */}
                       {!isViewMode && (
                         <td className="p-3 text-center">
-                          <button
-                            onClick={() => handleRemoveItemRow(idx)}
-                            className="text-red-500 hover:text-red-700 p-1"
-                            disabled={items.length <= 1}
-                          >
+                          <button onClick={() => handleRemoveItemRow(idx)} className="text-red-500 hover:text-red-700 p-1" disabled={items.length <= 1}>
                             <Trash2 size={16} />
                           </button>
                         </td>
@@ -1190,33 +1262,15 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </table>
           </div>
 
-          {/* Add Row Button + Prior Purchase Quick-Add */}
+          {/* Add Row Button */}
           {!isViewMode && (
             <div className="flex flex-wrap items-center gap-3 mb-6">
-              <button
-                onClick={handleAddItemRow}
-                className="btn-dashed flex items-center gap-1 px-3 py-1.5"
-              >
+              <button onClick={handleAddItemRow} className="btn-dashed flex items-center gap-1 px-3 py-1.5">
                 <Plus size={14} /> Add Item Row
               </button>
-
-              {customerId && (
-                <div className="flex items-center gap-2 min-w-[280px]">
-                  <span className="text-xs font-medium text-slate-500 whitespace-nowrap">
-                    Previously bought by this customer:
-                  </span>
-                  <div className="flex-1">
-                    <SearchableSelect
-                      options={customerPurchaseHistory.map(h => ({ value: h.productId, label: h.productName }))}
-                      value=""
-                      onChange={handleQuickAddFromHistory}
-                      placeholder={customerPurchaseHistory.length ? 'Select to auto-fill...' : 'No prior purchases found'}
-                      searchPlaceholder="Search prior purchases..."
-                      disabled={customerPurchaseHistory.length === 0}
-                    />
-                  </div>
-                </div>
-              )}
+              <span className="text-xs text-slate-400">
+                Tip: type an existing Sale Bill's Manual Bill No. above and tab out to auto-prefill items from it.
+              </span>
             </div>
           )}
 
@@ -1239,10 +1293,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
 
             {/* Calculations Box */}
-            <div
-              className="flex flex-col justify-between p-4 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md"
-              style={{ minHeight: '160px' }}
-            >
+            <div className="flex flex-col justify-between p-4 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md" style={{ minHeight: '160px' }}>
               <div className="text-xs font-semibold uppercase tracking-wider border-b pb-1.5 mb-2 text-slate-400 border-slate-800">
                 Calculations
               </div>
@@ -1289,27 +1340,97 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       </div>
       </div>
 
+      {/* Add New Sub-Customer Modal */}
+      {isAddSubCustomerOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
+            <h3 className="font-lora font-bold text-lg text-slate-800 mb-4">
+              Add New Sub-Customer
+            </h3>
+
+            <div className="mb-4">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                Sub-Customer Name <span className="text-red-500 font-bold">*</span>
+              </label>
+              <input type="text" value={newSubCustomerName} onChange={e => setNewSubCustomerName(e.target.value)} placeholder="Enter sub-customer name..." className="soleria-input font-semibold" autoFocus />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Region <span className="text-red-500 font-bold">*</span>
+                </label>
+                <select
+                  value={newSubCustomerRegionId}
+                  onChange={e => { setNewSubCustomerRegionId(e.target.value); setNewSubCustomerCityId(''); }}
+                  className="soleria-input font-semibold cursor-pointer"
+                  required
+                >
+                  <option value="">Select Region...</option>
+                  {regions.map(r => (
+                    <option key={r.region_id} value={r.region_id}>{r.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  City
+                </label>
+                <select value={newSubCustomerCityId} onChange={e => setNewSubCustomerCityId(e.target.value)} className="soleria-input font-semibold cursor-pointer">
+                  <option value="">Select City...</option>
+                  {cities
+                    .filter(c => !newSubCustomerRegionId || c.region_id === Number(newSubCustomerRegionId))
+                    .map(c => (
+                      <option key={c.city_id} value={c.city_id}>{c.name}</option>
+                    ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 text-sm font-semibold">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAddSubCustomerOpen(false);
+                  setNewSubCustomerName('');
+                  setNewSubCustomerRegionId('');
+                  setNewSubCustomerCityId('');
+                }}
+                className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button type="button" onClick={handleCreateSubCustomer} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors shadow-sm">
+                Add Sub-Customer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Security Password Protection Modal */}
       <PasswordPromptModal
         isOpen={isPasswordModalOpen}
         onClose={() => {
           setIsPasswordModalOpen(false);
           setPasswordActionType(null);
-          setTargetReturnToEdit(null);
+          pendingEditRow.current = null;
         }}
         onSuccess={handlePasswordSuccess}
         title={
           passwordActionType === 'edit_return'
-            ? 'Authorization Required to Edit Confirmed Return'
-            : 'Authorization Required to Save Return Changes'
+            ? 'Authorization Required to Edit Posted Return'
+            : passwordActionType === 'post_return'
+              ? 'Authorization Required to Post Return'
+              : 'Authorization Required to Save Return Changes'
         }
         subtitle={
           passwordActionType === 'edit_return'
-            ? `Please enter password for user '${state.currentUsername || (state.currentUserRole === 'Admin' ? 'admin' : 'user')}' to unlock & edit Return #${targetReturnToEdit?.billNo || targetReturnToEdit?.id}.`
-            : `Please enter password for user '${state.currentUsername || (state.currentUserRole === 'Admin' ? 'admin' : 'user')}' to confirm & save changes to Return #${billNo || returnId}.`
+            ? `Please enter password for user '${state.currentUsername || 'user'}' to unlock & edit Return #${billNo || returnId}.`
+            : `Please enter password for user '${state.currentUsername || 'user'}' to confirm changes to Return #${billNo || returnId}.`
         }
       />
     </AppLayout>
   );
 }
-

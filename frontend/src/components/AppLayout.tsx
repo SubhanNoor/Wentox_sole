@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
+import * as api from '@/lib/api';
 
 interface NavItem {
   page: NavPage;
@@ -344,7 +345,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
               )}
               <div style={{ borderTop: '1px solid var(--sidebar-sep)' }} />
               <button
-                onClick={() => dispatch({ type: 'LOGOUT' })}
+                onClick={() => { void api.logout(); dispatch({ type: 'LOGOUT' }); }}
                 className="flex items-center gap-2 w-full px-3.5 py-3 text-sm transition-colors hover:bg-white/5"
                 style={{ color: '#d99a86' }}
               >

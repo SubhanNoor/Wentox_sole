@@ -1,22 +1,39 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
-import type { SaleReturn, Customer } from '@/types';
+import { useState, useEffect, useMemo } from 'react';
+import { formatCurrency } from '@/context/AppContext';
+import * as api from '@/lib/api';
+import type { SaleReturnRow, CustomerRow, SubCustomerRow, CityRow } from '@/lib/api';
 import { Calendar, Search, ArrowRight, ArrowLeft, FileText, Edit2, Printer } from 'lucide-react';
 
 interface WeeklyReturnTabProps {
-  onEditReturn: (ret: SaleReturn) => void;
-  onPrintReturn: (ret: SaleReturn) => void;
+  onEditReturn: (ret: SaleReturnRow) => void;
+  onPrintReturn: (ret: SaleReturnRow) => void;
 }
 
 export default function WeeklyReturnTab({ onEditReturn, onPrintReturn }: WeeklyReturnTabProps) {
-  const { state } = useApp();
+  const [returns, setReturns] = useState<SaleReturnRow[]>([]);
+  const [customers, setCustomers] = useState<CustomerRow[]>([]);
+  const [subCustomers, setSubCustomers] = useState<SubCustomerRow[]>([]);
+  const [cities, setCities] = useState<CityRow[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      const [r, c, sc, ct] = await Promise.all([
+        api.saleReturns.list({ range: 'weekly' }),
+        api.listCustomers(), api.listSubCustomers(), api.listCities()
+      ]);
+      if (r.ok) setReturns(r.data);
+      if (c.ok) setCustomers(c.data);
+      if (sc.ok) setSubCustomers(sc.data);
+      if (ct.ok) setCities(ct.data);
+    })();
+  }, []);
 
   // Filters
   const [nameQuery, setNameQuery] = useState('');
   const [selectedMonth, setSelectedMonth] = useState<string>('all'); // '0' to '11' or 'all'
 
   // Selected customer for viewing details
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
 
   const monthsList = [
     { value: '0', label: 'January' },
@@ -33,55 +50,32 @@ export default function WeeklyReturnTab({ onEditReturn, onPrintReturn }: WeeklyR
     { value: '11', label: 'December' },
   ];
 
-  // Helper: check if a date falls in the current week (ISO week calculation)
-  const isDateInCurrentWeek = (dateStr: string) => {
-    const d = new Date(dateStr);
-    const today = new Date();
-    
-    // Find current week Monday
-    const currentDay = today.getDay();
-    const distanceToMonday = currentDay === 0 ? -6 : 1 - currentDay;
-    const monday = new Date(today);
-    monday.setDate(today.getDate() + distanceToMonday);
-    monday.setHours(0, 0, 0, 0);
-
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
-    sunday.setHours(23, 59, 59, 999);
-
-    return d >= monday && d <= sunday;
-  };
-
-  // Filtered returns for the current week + filter inputs
+  // Client-side post-filter over the fetched (already weekly-scoped) returns
   const weeklyReturns = useMemo(() => {
-    return state.saleReturns.filter(ret => {
-      // 1. Must be in current week
-      if (!isDateInCurrentWeek(ret.date)) return false;
-
-      // 2. Filter by month if selected
+    return returns.filter(ret => {
       if (selectedMonth !== 'all') {
-         const retMonth = new Date(ret.date).getMonth().toString();
-         if (retMonth !== selectedMonth) return false;
+        const retMonth = new Date(ret.return_date).getMonth().toString();
+        if (retMonth !== selectedMonth) return false;
       }
 
-      // 3. Filter by customer name
       if (nameQuery.trim()) {
-        const custName = state.customers.find(c => c.id === ret.customerId)?.name.toLowerCase() || '';
+        const custName = customers.find(c => c.customer_id === ret.customer_id)?.name.toLowerCase() || '';
         if (!custName.includes(nameQuery.toLowerCase())) return false;
       }
 
       return true;
     });
-  }, [state.saleReturns, state.customers, selectedMonth, nameQuery]);
+  }, [returns, customers, selectedMonth, nameQuery]);
 
   // Group returns by customer for the card layout
   const customerCardsData = useMemo(() => {
-    const groups: { [customerId: string]: { customer: Customer; returns: SaleReturn[]; totalCartons: number; totalPairs: number; totalValue: number } } = {};
+    const groups: { [customerId: number]: { customer: CustomerRow; returns: SaleReturnRow[]; totalCartons: number; totalPairs: number; totalValue: number } } = {};
 
     weeklyReturns.forEach(ret => {
-      if (!groups[ret.customerId]) {
-        const cust = state.customers.find(c => c.id === ret.customerId) || { id: ret.customerId, name: 'Walk-in Customer', acId: '', regionId: '', cityId: '' };
-        groups[ret.customerId] = {
+      if (!groups[ret.customer_id]) {
+        const cust = customers.find(c => c.customer_id === ret.customer_id) ||
+          { customer_id: ret.customer_id, name: 'Walk-in Customer', ba_id: null, region_id: 0, city_id: null, address: null, is_active: true };
+        groups[ret.customer_id] = {
           customer: cust,
           returns: [],
           totalCartons: 0,
@@ -89,28 +83,27 @@ export default function WeeklyReturnTab({ onEditReturn, onPrintReturn }: WeeklyR
           totalValue: 0
         };
       }
-      
-      const grp = groups[ret.customerId];
+
+      const grp = groups[ret.customer_id];
       grp.returns.push(ret);
-      
-      const retCartons = ret.items.reduce((sum, item) => sum + (item.cartons || 0), 0);
-      const retPairs = ret.items.reduce((sum, item) => sum + (item.pairs || 0), 0);
-      const retValue = ret.items.reduce((sum, item) => sum + (item.value || 0), 0);
-      
+
+      const retCartons = ret.total_cartons;
+      const retPairs = ret.total_pairs;
+
       grp.totalCartons += retCartons;
       grp.totalPairs += retPairs;
-      grp.totalValue += retValue;
+      grp.totalValue += ret.net_value;
     });
 
     return Object.values(groups).sort((a, b) => b.totalValue - a.totalValue);
-  }, [weeklyReturns, state.customers]);
+  }, [weeklyReturns, customers]);
 
   const activeCustomerDetails = useMemo(() => {
-    if (!selectedCustomerId) return null;
-    return customerCardsData.find(c => c.customer.id === selectedCustomerId);
+    if (selectedCustomerId == null) return null;
+    return customerCardsData.find(c => c.customer.customer_id === selectedCustomerId);
   }, [selectedCustomerId, customerCardsData]);
 
-  if (selectedCustomerId && activeCustomerDetails) {
+  if (selectedCustomerId != null && activeCustomerDetails) {
     return (
       <div className="card-white p-6 bg-white border border-slate-200 shadow-sm rounded-xl animate-fadeIn">
         <div className="flex items-center justify-between border-b pb-4 mb-4" style={{ borderColor: 'var(--border-color)' }}>
@@ -155,20 +148,19 @@ export default function WeeklyReturnTab({ onEditReturn, onPrintReturn }: WeeklyR
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
               {activeCustomerDetails.returns.map(ret => {
-                const subCust = ret.subCustomerId ? state.subCustomers.find(sc => sc.id === ret.subCustomerId) : null;
-                const retCartons = ret.items.reduce((sum, item) => sum + (item.cartons || 0), 0);
-                const retPairs = ret.items.reduce((sum, item) => sum + (item.pairs || 0), 0);
-                const retValue = ret.items.reduce((sum, item) => sum + (item.value || 0), 0);
-                
+                const subCust = ret.sub_customer_id ? subCustomers.find(sc => sc.sub_customer_id === ret.sub_customer_id) : null;
+                const retCartons = ret.total_cartons;
+                const retPairs = ret.total_pairs;
+
                 return (
-                  <tr key={ret.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="p-3.5 pl-4 font-mono text-slate-600">{ret.date}</td>
+                  <tr key={ret.return_id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="p-3.5 pl-4 font-mono text-slate-600">{ret.return_date.slice(0, 10)}</td>
                     <td className="p-3.5 text-center">
                       <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
-                        {ret.id.replace('sr_', '')}
+                        {ret.return_id}
                       </span>
                     </td>
-                    <td className="p-3.5 text-center font-mono font-bold text-slate-800">{ret.billNo}</td>
+                    <td className="p-3.5 text-center font-mono font-bold text-slate-800">{ret.bill_no}</td>
                     <td className="p-3.5 text-slate-600 font-medium">
                       {subCust ? (
                         <span className="text-slate-700">{subCust.name}</span>
@@ -180,11 +172,11 @@ export default function WeeklyReturnTab({ onEditReturn, onPrintReturn }: WeeklyR
                     <td className="p-3.5 text-center font-mono font-semibold text-slate-700">{retPairs}</td>
                     <td className="p-3.5">
                       <div className="text-xs">
-                        <span className="font-semibold block text-slate-700">Bilty: {ret.biltyNo || '-'}</span>
-                        <span className="text-slate-400 block">GP: {ret.gpNo || '-'}</span>
+                        <span className="font-semibold block text-slate-700">Bilty: {ret.bilty_no || '-'}</span>
+                        <span className="text-slate-400 block">GP: {ret.gp_no || '-'}</span>
                       </div>
                     </td>
-                    <td className="p-3.5 text-right font-mono font-bold text-amber-800 pr-4">{formatCurrency(retValue)}</td>
+                    <td className="p-3.5 text-right font-mono font-bold text-amber-800 pr-4">{formatCurrency(ret.net_value)}</td>
                     <td className="p-3.5 text-center pr-4">
                       <div className="flex justify-center items-center gap-3">
                           <button
@@ -228,7 +220,7 @@ export default function WeeklyReturnTab({ onEditReturn, onPrintReturn }: WeeklyR
               className="soleria-input pl-10 py-2 w-full text-sm"
             />
           </div>
-          
+
           <select
             value={selectedMonth}
             onChange={e => setSelectedMonth(e.target.value)}
@@ -256,12 +248,12 @@ export default function WeeklyReturnTab({ onEditReturn, onPrintReturn }: WeeklyR
           </div>
         ) : (
           customerCardsData.map(data => {
-            const city = state.cities.find(c => c.id === data.customer.cityId)?.name || 'Local';
-            
+            const city = cities.find(c => c.city_id === data.customer.city_id)?.name || 'Local';
+
             return (
               <div
-                key={data.customer.id}
-                onClick={() => setSelectedCustomerId(data.customer.id)}
+                key={data.customer.customer_id}
+                onClick={() => setSelectedCustomerId(data.customer.customer_id)}
                 className="card-white p-5 bg-white border border-slate-200 cursor-pointer transition-all flex flex-col justify-between hover:shadow-md hover:border-amber-400 hover:ring-1 hover:ring-amber-200 rounded-xl"
               >
                 <div>
@@ -271,9 +263,9 @@ export default function WeeklyReturnTab({ onEditReturn, onPrintReturn }: WeeklyR
                     </h4>
                     <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{city}</span>
                   </div>
-                  
-                  <div className="font-mono text-xs text-slate-400 mb-4">Code: {data.customer.id}</div>
-                  
+
+                  <div className="font-mono text-xs text-slate-400 mb-4">Code: {data.customer.customer_id}</div>
+
                 </div>
                 <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-4">
                   <div className="flex items-center gap-1.5 bg-amber-50 text-amber-800 px-2.5 py-1 rounded-full text-xs font-semibold border border-amber-200">

@@ -1,20 +1,29 @@
 import { useState } from 'react';
 import { useApp } from '@/context/AppContext';
+import * as api from '@/lib/api';
 
 export default function LoginPage() {
   const { dispatch } = useApp();
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  function handleLogin(e: React.FormEvent) {
+  async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setError('');
     if (!username.trim() || !password.trim()) {
       setError('Please enter username and password.');
       return;
     }
-    dispatch({ type: 'LOGIN', payload: { username, password } });
+    setSubmitting(true);
+    const result = await api.login(username.trim(), password);
+    setSubmitting(false);
+    if (result.ok) {
+      dispatch({ type: 'LOGIN_SUCCESS', payload: result.data });
+    } else {
+      setError(result.error.message);
+    }
   }
 
   return (
@@ -156,18 +165,10 @@ export default function LoginPage() {
             {error && (
               <div className="banner-error rounded-lg px-3 py-2 text-sm">{error}</div>
             )}
-            <button type="submit" className="btn-gold w-full mt-1">
-              Log In
+            <button type="submit" className="btn-gold w-full mt-1" disabled={submitting}>
+              {submitting ? 'Signing in…' : 'Log In'}
             </button>
           </form>
-
-          <p
-            className="mt-5 text-center font-inter"
-            style={{ fontSize: '13px', color: 'var(--muted-text)' }}
-          >
-            Demo credentials: <strong>admin/admin</strong> (full access) or{' '}
-            <strong>user/user</strong> (restricted — no Bank Accounts or Director Expenses).
-          </p>
         </div>
       </div>
     </div>

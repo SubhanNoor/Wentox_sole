@@ -1,17 +1,34 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
-import type { SaleBill } from '@/types';
+import { useState, useEffect, useMemo } from 'react';
+import { formatCurrency } from '@/context/AppContext';
+import * as api from '@/lib/api';
+import type { SaleBillRow, SaleBillItemRow, CustomerRow, SubCustomerRow, AddaRow, ProductRow } from '@/lib/api';
 import { Search, Printer, Calendar, FileText, User, Edit2, Package, Truck, Layers, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
 interface FindTabProps {
-  onEditBill: (bill: SaleBill) => void;
-  onPrintBill: (bill: SaleBill) => void;
+  onEditBill: (bill: SaleBillRow) => void;
+  onPrintBill: (bill: SaleBillRow) => void;
 }
 
 export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
-  const { state } = useApp();
+  const [bills, setBills] = useState<SaleBillRow[]>([]);
+  const [customers, setCustomers] = useState<CustomerRow[]>([]);
+  const [subCustomers, setSubCustomers] = useState<SubCustomerRow[]>([]);
+  const [addas, setAddas] = useState<AddaRow[]>([]);
+  const [products, setProducts] = useState<ProductRow[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      const [c, sc, ad, p] = await Promise.all([
+        api.listCustomers(), api.listSubCustomers(), api.listAddas(), api.listProducts()
+      ]);
+      if (c.ok) setCustomers(c.data);
+      if (sc.ok) setSubCustomers(sc.data);
+      if (ad.ok) setAddas(ad.data);
+      if (p.ok) setProducts(p.data);
+    })();
+  }, []);
 
   // ── Search Filter State ──────────────────────────────────────────────────────
   const [fromDate, setFromDate]             = useState(getThreeMonthsAgoDate());
@@ -24,26 +41,49 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
   const [articleFilter, setArticleFilter]   = useState('');
   const [missingFilter, setMissingFilter]   = useState<'all' | 'no_adda' | 'no_bilty' | 'no_any'>('all');
 
+  // list() doesn't include line items (only get() does) — fetched lazily per bill only when the
+  // Article filter is actually in use, and cached by bill_id so re-filtering doesn't re-fetch.
+  const [itemsCache, setItemsCache] = useState<Record<number, SaleBillItemRow[]>>({});
+  useEffect(() => {
+    if (!articleFilter) return;
+    const missing = bills.filter(b => !(b.bill_id in itemsCache));
+    if (!missing.length) return;
+    (async () => {
+      const results = await Promise.all(missing.map(b => api.saleBills.get(b.bill_id)));
+      setItemsCache(prev => {
+        const next = { ...prev };
+        results.forEach((r, i) => { if (r.ok) next[missing[i].bill_id] = r.data.items; });
+        return next;
+      });
+    })();
+  }, [articleFilter, bills, itemsCache]);
+
+  // The backend filters by date range + exact bill number; everything else (name/agent/adda/
+  // article/audit pills) is applied client-side over the fetched result below.
+  useEffect(() => {
+    (async () => {
+      const res = await api.saleBills.list({
+        date_from: fromDate || undefined,
+        date_to: toDate || undefined,
+        bill_no: billNoQuery.trim() || undefined
+      });
+      if (res.ok) setBills(res.data);
+    })();
+  }, [fromDate, toDate, billNoQuery]);
+
   // ── Filtered Invoice List ────────────────────────────────────────────────────
   const filteredInvoices = useMemo(() => {
-    let result = [...state.saleBills];
-
-    if (fromDate)  result = result.filter(b => b.date >= fromDate);
-    if (toDate)    result = result.filter(b => b.date <= toDate);
-
-    if (billNoQuery.trim()) {
-      result = result.filter(b => b.billNo.includes(billNoQuery.trim()));
-    }
+    let result = [...bills];
 
     if (biltyNoQuery.trim()) {
       const q = biltyNoQuery.trim().toLowerCase();
-      result = result.filter(b => (b.biltyNo || '').toLowerCase().includes(q));
+      result = result.filter(b => (b.bilty_no || '').toLowerCase().includes(q));
     }
 
     if (customerQuery.trim()) {
       const q = customerQuery.toLowerCase();
       result = result.filter(b => {
-        const name = state.customers.find(c => c.id === b.customerId)?.name.toLowerCase() || '';
+        const name = customers.find(c => c.customer_id === b.customer_id)?.name.toLowerCase() || '';
         return name.includes(q);
       });
     }
@@ -51,33 +91,30 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
     if (subCustomerQuery.trim()) {
       const q = subCustomerQuery.toLowerCase();
       result = result.filter(b => {
-        if (!b.subCustomerId) return false;
-        const name = state.subCustomers.find(sc => sc.id === b.subCustomerId)?.name.toLowerCase() || '';
+        if (!b.sub_customer_id) return false;
+        const name = subCustomers.find(sc => sc.sub_customer_id === b.sub_customer_id)?.name.toLowerCase() || '';
         return name.includes(q);
       });
     }
 
     if (addaFilter) {
-      result = result.filter(b => b.addaId === addaFilter);
+      result = result.filter(b => b.adda_id === Number(addaFilter));
     }
 
     if (articleFilter) {
-      result = result.filter(b =>
-        b.items.some(item => item.productId === articleFilter)
-      );
+      const product = products.find(p => p.article_id === Number(articleFilter));
+      if (product) {
+        result = result.filter(b => (itemsCache[b.bill_id] || []).some(item => item.article_code === product.code));
+      }
     }
 
-    if (missingFilter === 'no_adda')  result = result.filter(b => !b.addaId);
-    if (missingFilter === 'no_bilty') result = result.filter(b => !b.biltyNo || !b.biltyNo.trim());
-    if (missingFilter === 'no_any')   result = result.filter(b => !b.addaId || !b.biltyNo || !b.biltyNo.trim());
+    if (missingFilter === 'no_adda')  result = result.filter(b => !b.adda_id);
+    if (missingFilter === 'no_bilty') result = result.filter(b => !b.bilty_no || !b.bilty_no.trim());
+    if (missingFilter === 'no_any')   result = result.filter(b => !b.adda_id || !b.bilty_no || !b.bilty_no.trim());
 
-    result.sort((a, b) => b.date.localeCompare(a.date));
+    result.sort((a, b) => b.bill_date.localeCompare(a.bill_date));
     return result;
-  }, [
-    state.saleBills, state.customers, state.subCustomers,
-    fromDate, toDate, billNoQuery, biltyNoQuery,
-    customerQuery, subCustomerQuery, addaFilter, articleFilter, missingFilter
-  ]);
+  }, [bills, customers, subCustomers, biltyNoQuery, customerQuery, subCustomerQuery, addaFilter, articleFilter, missingFilter, itemsCache]);
 
   // Compute overall summary totals for the results page/printout
   const { totalCartons, totalPairs, totalValue } = useMemo(() => {
@@ -85,9 +122,9 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
     let pairs = 0;
     let value = 0;
     filteredInvoices.forEach(bill => {
-      cartons += bill.items.reduce((sum, item) => sum + (item.cartons || 0), 0);
-      pairs += bill.items.reduce((sum, item) => sum + (item.pairs || 0), 0);
-      value += bill.totalValue || 0;
+      cartons += bill.total_cartons;
+      pairs += bill.total_pairs;
+      value += bill.net_value || 0;
     });
     return { totalCartons: cartons, totalPairs: pairs, totalValue: value };
   }, [filteredInvoices]);
@@ -95,10 +132,8 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
   const handleExportExcel = () => {
     const headers = ['Date', 'Sys ID', 'Bill No.', 'Customer', 'Cartons', 'Pairs', 'Total Value', 'Status'];
     const rows = filteredInvoices.map(bill => {
-      const cust = state.customers.find(c => c.id === bill.customerId);
-      const cartons = bill.items.reduce((s, it) => s + (it.cartons || 0), 0);
-      const pairs = bill.items.reduce((s, it) => s + (it.pairs || 0), 0);
-      return [bill.date, bill.id, bill.billNo, cust?.name || '-', cartons, pairs, bill.totalValue, bill.status];
+      const cust = customers.find(c => c.customer_id === bill.customer_id);
+      return [bill.bill_date.slice(0, 10), bill.bill_id, bill.bill_no, cust?.name || '-', bill.total_cartons, bill.total_pairs, bill.net_value, bill.is_posted ? 'Posted' : 'Unposted'];
     });
     exportRowsToExcel('sale-bills-search', headers, rows);
   };
@@ -193,8 +228,8 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
               </label>
               <select value={addaFilter} onChange={e => setAddaFilter(e.target.value)} className="soleria-input text-xs cursor-pointer">
                 <option value="">All Addas</option>
-                {state.addas.map(ad => (
-                  <option key={ad.id} value={ad.id}>{ad.name}</option>
+                {addas.map(ad => (
+                  <option key={ad.adda_id} value={ad.adda_id}>{ad.name}</option>
                 ))}
               </select>
             </div>
@@ -204,8 +239,8 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
               </label>
               <select value={articleFilter} onChange={e => setArticleFilter(e.target.value)} className="soleria-input text-xs cursor-pointer">
                 <option value="">All Articles</option>
-                {state.products.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
+                {products.map(p => (
+                  <option key={p.article_id} value={p.article_id}>{p.name}</option>
                 ))}
               </select>
             </div>
@@ -322,24 +357,24 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
                   </tr>
                 ) : (
                   filteredInvoices.map(bill => {
-                    const cust     = state.customers.find(c => c.id === bill.customerId);
-                    const subCust  = bill.subCustomerId ? state.subCustomers.find(sc => sc.id === bill.subCustomerId) : null;
-                    const adda     = state.addas.find(ad => ad.id === bill.addaId);
-                    const billCartons = bill.items.reduce((sum, item) => sum + (item.cartons || 0), 0);
-                    const billPairs = bill.items.reduce((sum, item) => sum + (item.pairs || 0), 0);
+                    const cust     = customers.find(c => c.customer_id === bill.customer_id);
+                    const subCust  = bill.sub_customer_id ? subCustomers.find(sc => sc.sub_customer_id === bill.sub_customer_id) : null;
+                    const adda     = addas.find(ad => ad.adda_id === bill.adda_id);
+                    const billCartons = bill.total_cartons;
+                    const billPairs = bill.total_pairs;
 
                     return (
                       <tr
-                        key={bill.id}
+                        key={bill.bill_id}
                         className="hover:bg-slate-50/50 transition-colors"
                       >
-                        <td className="p-3.5 pl-4 font-mono text-slate-600 whitespace-nowrap">{bill.date}</td>
+                        <td className="p-3.5 pl-4 font-mono text-slate-600 whitespace-nowrap">{bill.bill_date.slice(0, 10)}</td>
                         <td className="p-3.5 text-center">
                           <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
-                            {bill.id.replace('sb_', '')}
+                            {bill.bill_id}
                           </span>
                         </td>
-                        <td className="p-3.5 text-center font-mono font-bold text-slate-800">{bill.billNo}</td>
+                        <td className="p-3.5 text-center font-mono font-bold text-slate-800">{bill.bill_no}</td>
                         <td className="p-3.5 font-semibold text-slate-800">{cust?.name || 'Walk-in'}</td>
                         <td className="p-3.5 text-slate-600">
                           {subCust
@@ -347,8 +382,8 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
                             : <span className="text-slate-400 italic text-xs">SAME (Direct)</span>}
                         </td>
                         <td className="p-3.5 font-mono font-semibold">
-                          {bill.biltyNo
-                            ? <span className="text-slate-800">{bill.biltyNo}</span>
+                          {bill.bilty_no
+                            ? <span className="text-slate-800">{bill.bilty_no}</span>
                             : <span className="bg-red-50 text-red-600 border border-red-100 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Missing</span>}
                         </td>
                         <td className="p-3.5">
@@ -358,7 +393,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
                         </td>
                         <td className="p-3.5 text-right font-mono font-semibold text-slate-700">{billCartons}</td>
                         <td className="p-3.5 text-right font-mono text-slate-700">{billPairs.toLocaleString()}</td>
-                        <td className="p-3.5 text-right font-mono font-bold text-slate-900 pr-4">{formatCurrency(bill.totalValue)}</td>
+                        <td className="p-3.5 text-right font-mono font-bold text-slate-900 pr-4">{formatCurrency(bill.net_value)}</td>
                         <td className="p-3.5 text-center pr-4" onClick={e => e.stopPropagation()}>
                           <div className="flex justify-center items-center gap-3">
                             <button
@@ -411,10 +446,10 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
             <strong>Customer Query:</strong> {customerQuery || 'All'}
           </div>
           <div style={{ borderRight: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <strong>Adda Filter:</strong> {addaFilter ? (state.addas.find(a => a.id === addaFilter)?.name) : 'All'}
+            <strong>Adda Filter:</strong> {addaFilter ? (addas.find(a => a.adda_id === Number(addaFilter))?.name) : 'All'}
           </div>
           <div style={{ padding: '5px 8px', fontSize: '11px' }}>
-            <strong>Article Filter:</strong> {articleFilter ? (state.products.find(p => p.id === articleFilter)?.name) : 'All'}
+            <strong>Article Filter:</strong> {articleFilter ? (products.find(p => p.article_id === Number(articleFilter))?.name) : 'All'}
           </div>
         </div>
 
@@ -443,24 +478,24 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
               </tr>
             ) : (
               filteredInvoices.map(bill => {
-                const cust = state.customers.find(c => c.id === bill.customerId);
-                const subCust = bill.subCustomerId ? state.subCustomers.find(sc => sc.id === bill.subCustomerId) : null;
-                const adda = state.addas.find(ad => ad.id === bill.addaId);
-                const billCartons = bill.items.reduce((sum, item) => sum + (item.cartons || 0), 0);
-                const billPairs = bill.items.reduce((sum, item) => sum + (item.pairs || 0), 0);
+                const cust = customers.find(c => c.customer_id === bill.customer_id);
+                const subCust = bill.sub_customer_id ? subCustomers.find(sc => sc.sub_customer_id === bill.sub_customer_id) : null;
+                const adda = addas.find(ad => ad.adda_id === bill.adda_id);
+                const billCartons = bill.total_cartons;
+                const billPairs = bill.total_pairs;
 
                 return (
-                  <tr key={bill.id}>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{bill.date}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontFamily: 'monospace' }}>{bill.id.replace('sb_', '')}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontWeight: 'bold', fontFamily: 'monospace' }}>{bill.billNo}</td>
+                  <tr key={bill.bill_id}>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{bill.bill_date.slice(0, 10)}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontFamily: 'monospace' }}>{bill.bill_id}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontWeight: 'bold', fontFamily: 'monospace' }}>{bill.bill_no}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{cust?.name || 'Walk-in'}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px' }}>{subCust ? subCust.name : '-'}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{bill.biltyNo || '-'}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{bill.bilty_no || '-'}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px' }}>{adda ? adda.name : '-'}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{billCartons}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace' }}>{billPairs}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(bill.totalValue)}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(bill.net_value)}</td>
                   </tr>
                 );
               })

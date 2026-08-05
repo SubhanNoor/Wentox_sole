@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { Lock, Eye, EyeOff, X, KeyRound, ShieldAlert } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
+import * as api from '@/lib/api';
 
 interface PasswordPromptModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (password: string) => void;
   title?: string;
   subtitle?: string;
 }
@@ -21,40 +22,30 @@ export default function PasswordPromptModal({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
-  const currentUsername = state.currentUsername || (state.currentUserRole === 'Admin' ? 'admin' : 'user');
+  const currentUsername = state.currentUsername || 'admin';
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!password.trim()) {
       setErrorMsg('Please enter your password.');
       return;
     }
 
-    // Determine correct password for current user or admin
-    let isValid = false;
+    setSubmitting(true);
+    const result = await api.verifyPassword(password);
+    setSubmitting(false);
 
-    // Admin password check (admin password always works as master)
-    if (password === state.settings.password) {
-      isValid = true;
-    } 
-    // Standard user password check ('user')
-    else if (currentUsername === 'user' && password === 'user') {
-      isValid = true;
-    }
-    // Fallback default checks
-    else if (password === 'admin' || password === 'user') {
-      isValid = true;
-    }
-
-    if (isValid) {
+    if (result.ok) {
+      const verified = password;
       setPassword('');
       setErrorMsg('');
-      onSuccess();
+      onSuccess(verified);
     } else {
-      setErrorMsg(`Incorrect password for user '${currentUsername}'. Authorization failed.`);
+      setErrorMsg(result.error.message);
     }
   };
 
@@ -140,9 +131,10 @@ export default function PasswordPromptModal({
             </button>
             <button
               type="submit"
-              className="px-5 py-2 text-xs font-bold text-[#111c2a] bg-[#B08D57] hover:bg-[#111c2a] hover:text-[#B08D57] border border-[#B08D57] rounded-lg transition-all shadow-sm"
+              disabled={submitting}
+              className="px-5 py-2 text-xs font-bold text-[#111c2a] bg-[#B08D57] hover:bg-[#111c2a] hover:text-[#B08D57] border border-[#B08D57] rounded-lg transition-all shadow-sm disabled:opacity-60"
             >
-              Authorize &amp; Continue
+              {submitting ? 'Verifying…' : 'Authorize & Continue'}
             </button>
           </div>
         </form>

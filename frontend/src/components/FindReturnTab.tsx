@@ -1,17 +1,32 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
-import type { SaleReturn } from '@/types';
+import { useState, useEffect, useMemo } from 'react';
+import { formatCurrency } from '@/context/AppContext';
+import * as api from '@/lib/api';
+import type { SaleReturnRow, SaleReturnItemRow, CustomerRow, SubCustomerRow, ProductRow } from '@/lib/api';
 import { Search, Printer, Calendar, FileText, User, Edit2, Package, Layers, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
 interface FindReturnTabProps {
-  onEditReturn: (ret: SaleReturn) => void;
-  onPrintReturn: (ret: SaleReturn) => void;
+  onEditReturn: (ret: SaleReturnRow) => void;
+  onPrintReturn: (ret: SaleReturnRow) => void;
 }
 
 export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindReturnTabProps) {
-  const { state } = useApp();
+  const [returns, setReturns] = useState<SaleReturnRow[]>([]);
+  const [customers, setCustomers] = useState<CustomerRow[]>([]);
+  const [subCustomers, setSubCustomers] = useState<SubCustomerRow[]>([]);
+  const [products, setProducts] = useState<ProductRow[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      const [c, sc, p] = await Promise.all([
+        api.listCustomers(), api.listSubCustomers(), api.listProducts()
+      ]);
+      if (c.ok) setCustomers(c.data);
+      if (sc.ok) setSubCustomers(sc.data);
+      if (p.ok) setProducts(p.data);
+    })();
+  }, []);
 
   // ── Search Filter State ──────────────────────────────────────────────────────
   const [fromDate, setFromDate]             = useState(getThreeMonthsAgoDate());
@@ -23,26 +38,49 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
   const [articleFilter, setArticleFilter]   = useState('');
   const [missingFilter, setMissingFilter]   = useState<'all' | 'no_bilty'>('all');
 
+  // list() doesn't include line items (only get() does) — fetched lazily per return only when the
+  // Article filter is actually in use, and cached by return_id so re-filtering doesn't re-fetch.
+  const [itemsCache, setItemsCache] = useState<Record<number, SaleReturnItemRow[]>>({});
+  useEffect(() => {
+    if (!articleFilter) return;
+    const missing = returns.filter(r => !(r.return_id in itemsCache));
+    if (!missing.length) return;
+    (async () => {
+      const results = await Promise.all(missing.map(r => api.saleReturns.get(r.return_id)));
+      setItemsCache(prev => {
+        const next = { ...prev };
+        results.forEach((r, i) => { if (r.ok) next[missing[i].return_id] = r.data.items; });
+        return next;
+      });
+    })();
+  }, [articleFilter, returns, itemsCache]);
+
+  // The backend filters by date range + exact bill number; everything else (name/agent/article/
+  // audit pill) is applied client-side over the fetched result below.
+  useEffect(() => {
+    (async () => {
+      const res = await api.saleReturns.list({
+        date_from: fromDate || undefined,
+        date_to: toDate || undefined,
+        bill_no: billNoQuery.trim() || undefined
+      });
+      if (res.ok) setReturns(res.data);
+    })();
+  }, [fromDate, toDate, billNoQuery]);
+
   // ── Filtered Returns List ────────────────────────────────────────────────────
   const filteredReturns = useMemo(() => {
-    let result = [...state.saleReturns];
-
-    if (fromDate)  result = result.filter(r => r.date >= fromDate);
-    if (toDate)    result = result.filter(r => r.date <= toDate);
-
-    if (billNoQuery.trim()) {
-      result = result.filter(r => r.billNo.includes(billNoQuery.trim()));
-    }
+    let result = [...returns];
 
     if (biltyNoQuery.trim()) {
       const q = biltyNoQuery.trim().toLowerCase();
-      result = result.filter(r => (r.biltyNo || '').toLowerCase().includes(q));
+      result = result.filter(r => (r.bilty_no || '').toLowerCase().includes(q));
     }
 
     if (customerQuery.trim()) {
       const q = customerQuery.toLowerCase();
       result = result.filter(r => {
-        const name = state.customers.find(c => c.id === r.customerId)?.name.toLowerCase() || '';
+        const name = customers.find(c => c.customer_id === r.customer_id)?.name.toLowerCase() || '';
         return name.includes(q);
       });
     }
@@ -50,38 +88,32 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
     if (subCustomerQuery.trim()) {
       const q = subCustomerQuery.toLowerCase();
       result = result.filter(r => {
-        if (!r.subCustomerId) return false;
-        const name = state.subCustomers.find(sc => sc.id === r.subCustomerId)?.name.toLowerCase() || '';
+        if (!r.sub_customer_id) return false;
+        const name = subCustomers.find(sc => sc.sub_customer_id === r.sub_customer_id)?.name.toLowerCase() || '';
         return name.includes(q);
       });
     }
 
     if (articleFilter) {
-      result = result.filter(r =>
-        r.items.some(item => item.productId === articleFilter)
-      );
+      const product = products.find(p => p.article_id === Number(articleFilter));
+      if (product) {
+        result = result.filter(r => (itemsCache[r.return_id] || []).some(item => item.article_code === product.code));
+      }
     }
 
     if (missingFilter === 'no_bilty') {
-      result = result.filter(r => !r.biltyNo || !r.biltyNo.trim() || r.biltyNo === '0');
+      result = result.filter(r => !r.bilty_no || !r.bilty_no.trim() || r.bilty_no === '0');
     }
 
-    result.sort((a, b) => b.date.localeCompare(a.date));
+    result.sort((a, b) => b.return_date.localeCompare(a.return_date));
     return result;
-  }, [
-    state.saleReturns, state.customers, state.subCustomers,
-    fromDate, toDate, billNoQuery, biltyNoQuery,
-    customerQuery, subCustomerQuery, articleFilter, missingFilter
-  ]);
+  }, [returns, customers, subCustomers, products, biltyNoQuery, customerQuery, subCustomerQuery, articleFilter, missingFilter, itemsCache]);
 
   const handleExportExcel = () => {
     const headers = ['Date', 'Sys ID', 'Bill No.', 'Customer', 'Cartons', 'Pairs', 'Total Value', 'Status'];
     const rows = filteredReturns.map(ret => {
-      const cust = state.customers.find(c => c.id === ret.customerId);
-      const cartons = ret.items.reduce((s, it) => s + (it.cartons || 0), 0);
-      const pairs = ret.items.reduce((s, it) => s + (it.pairs || 0), 0);
-      const value = ret.items.reduce((s, it) => s + (it.value || 0), 0);
-      return [ret.date, ret.id, ret.billNo, cust?.name || '-', cartons, pairs, value, ret.status];
+      const cust = customers.find(c => c.customer_id === ret.customer_id);
+      return [ret.return_date.slice(0, 10), ret.return_id, ret.bill_no, cust?.name || '-', ret.total_cartons, ret.total_pairs, ret.net_value, ret.is_posted ? 'Posted' : 'Unposted'];
     });
     exportRowsToExcel('sale-returns-search', headers, rows);
   };
@@ -92,9 +124,9 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
     let pairs = 0;
     let value = 0;
     filteredReturns.forEach(ret => {
-      cartons += ret.items.reduce((sum, item) => sum + (item.cartons || 0), 0);
-      pairs += ret.items.reduce((sum, item) => sum + (item.pairs || 0), 0);
-      value += ret.items.reduce((sum, item) => sum + (item.value || 0), 0);
+      cartons += ret.total_cartons;
+      pairs += ret.total_pairs;
+      value += ret.net_value || 0;
     });
     return { totalCartons: cartons, totalPairs: pairs, totalValue: value };
   }, [filteredReturns]);
@@ -189,8 +221,8 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
               </label>
               <select value={articleFilter} onChange={e => setArticleFilter(e.target.value)} className="soleria-input text-xs cursor-pointer">
                 <option value="">All Articles</option>
-                {state.products.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
+                {products.map(p => (
+                  <option key={p.article_id} value={p.article_id}>{p.name}</option>
                 ))}
               </select>
             </div>
@@ -305,24 +337,23 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
                   </tr>
                 ) : (
                   filteredReturns.map(ret => {
-                    const cust     = state.customers.find(c => c.id === ret.customerId);
-                    const subCust  = ret.subCustomerId ? state.subCustomers.find(sc => sc.id === ret.subCustomerId) : null;
-                    const retCartons = ret.items.reduce((sum, item) => sum + (item.cartons || 0), 0);
-                    const retPairs = ret.items.reduce((sum, item) => sum + (item.pairs || 0), 0);
-                    const retValue = ret.items.reduce((sum, item) => sum + (item.value || 0), 0);
+                    const cust     = customers.find(c => c.customer_id === ret.customer_id);
+                    const subCust  = ret.sub_customer_id ? subCustomers.find(sc => sc.sub_customer_id === ret.sub_customer_id) : null;
+                    const retCartons = ret.total_cartons;
+                    const retPairs = ret.total_pairs;
 
                     return (
                       <tr
-                        key={ret.id}
+                        key={ret.return_id}
                         className="hover:bg-slate-50/50 transition-colors"
                       >
-                        <td className="p-3.5 pl-4 font-mono text-slate-600 whitespace-nowrap">{ret.date}</td>
+                        <td className="p-3.5 pl-4 font-mono text-slate-600 whitespace-nowrap">{ret.return_date.slice(0, 10)}</td>
                         <td className="p-3.5 text-center">
                           <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
-                            {ret.id.replace('sr_', '')}
+                            {ret.return_id}
                           </span>
                         </td>
-                        <td className="p-3.5 text-center font-mono font-bold text-slate-800">{ret.billNo}</td>
+                        <td className="p-3.5 text-center font-mono font-bold text-slate-800">{ret.bill_no}</td>
                         <td className="p-3.5 font-semibold text-slate-800">{cust?.name || 'Walk-in'}</td>
                         <td className="p-3.5 text-slate-600">
                           {subCust
@@ -330,14 +361,14 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
                             : <span className="text-slate-400 italic text-xs">SAME (Direct)</span>}
                         </td>
                         <td className="p-3.5 font-mono font-semibold">
-                          {ret.biltyNo && ret.biltyNo !== '0'
-                            ? <span className="text-slate-800">{ret.biltyNo}</span>
+                          {ret.bilty_no && ret.bilty_no !== '0'
+                            ? <span className="text-slate-800">{ret.bilty_no}</span>
                             : <span className="bg-red-50 text-red-600 border border-red-100 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Missing</span>}
                         </td>
-                        <td className="p-3.5 font-mono font-semibold text-slate-600">{ret.gpNo || '-'}</td>
+                        <td className="p-3.5 font-mono font-semibold text-slate-600">{ret.gp_no || '-'}</td>
                         <td className="p-3.5 text-right font-mono font-semibold text-slate-700">{retCartons}</td>
                         <td className="p-3.5 text-right font-mono text-slate-700">{retPairs.toLocaleString()}</td>
-                        <td className="p-3.5 text-right font-mono font-bold text-amber-800 pr-4">{formatCurrency(retValue)}</td>
+                        <td className="p-3.5 text-right font-mono font-bold text-amber-800 pr-4">{formatCurrency(ret.net_value)}</td>
                         <td className="p-3.5 text-center pr-4" onClick={e => e.stopPropagation()}>
                           <div className="flex justify-center items-center gap-3">
                             <button
@@ -393,7 +424,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
             <strong>Agent Query:</strong> {subCustomerQuery || 'All'}
           </div>
           <div style={{ padding: '5px 8px', fontSize: '11px' }}>
-            <strong>Article Filter:</strong> {articleFilter ? (state.products.find(p => p.id === articleFilter)?.name) : 'All'}
+            <strong>Article Filter:</strong> {articleFilter ? (products.find(p => p.article_id === Number(articleFilter))?.name) : 'All'}
           </div>
         </div>
 
@@ -422,24 +453,23 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
               </tr>
             ) : (
               filteredReturns.map(ret => {
-                const cust = state.customers.find(c => c.id === ret.customerId);
-                const subCust = ret.subCustomerId ? state.subCustomers.find(sc => sc.id === ret.subCustomerId) : null;
-                const retCartons = ret.items.reduce((sum, item) => sum + (item.cartons || 0), 0);
-                const retPairs = ret.items.reduce((sum, item) => sum + (item.pairs || 0), 0);
-                const retValue = ret.items.reduce((sum, item) => sum + (item.value || 0), 0);
+                const cust = customers.find(c => c.customer_id === ret.customer_id);
+                const subCust = ret.sub_customer_id ? subCustomers.find(sc => sc.sub_customer_id === ret.sub_customer_id) : null;
+                const retCartons = ret.total_cartons;
+                const retPairs = ret.total_pairs;
 
                 return (
-                  <tr key={ret.id}>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{ret.date}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontFamily: 'monospace' }}>{ret.id.replace('sr_', '')}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontWeight: 'bold', fontFamily: 'monospace' }}>{ret.billNo}</td>
+                  <tr key={ret.return_id}>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{ret.return_date.slice(0, 10)}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontFamily: 'monospace' }}>{ret.return_id}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontWeight: 'bold', fontFamily: 'monospace' }}>{ret.bill_no}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{cust?.name || 'Walk-in'}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px' }}>{subCust ? subCust.name : '-'}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{ret.biltyNo && ret.biltyNo !== '0' ? ret.biltyNo : '-'}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px' }}>{ret.gpNo || '-'}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{ret.bilty_no && ret.bilty_no !== '0' ? ret.bilty_no : '-'}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px' }}>{ret.gp_no || '-'}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{retCartons}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace' }}>{retPairs}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(retValue)}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(ret.net_value)}</td>
                   </tr>
                 );
               })

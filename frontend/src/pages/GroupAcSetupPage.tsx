@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2, ChevronRight, X } from 'lucide-react';
+import { filterChartAccountsForRole } from '@/lib/access';
 
 export default function GroupAcSetupPage() {
   const { state, dispatch } = useApp();
@@ -202,7 +203,13 @@ export default function GroupAcSetupPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredAndSortedGroups.map(grp => {
                   const initialLetter = grp.name.charAt(0).toUpperCase();
-                  const childCharts = state.chartAccounts.filter(c => c.groupId === grp.id);
+                  // UC-03: a User must not see a restricted chart account (Bank
+                  // Accounts, Directors Expenses) even indirectly via its parent
+                  // group's child count or drill-down.
+                  const childCharts = filterChartAccountsForRole(
+                    state.chartAccounts.filter(c => c.groupId === grp.id),
+                    state.currentUserRole
+                  );
 
                   return (
                     <div
@@ -355,7 +362,10 @@ export default function GroupAcSetupPage() {
       {viewingGroupId && (() => {
         const grp = state.groupAccounts.find(g => g.id === viewingGroupId);
         if (!grp) return null;
-        const childCharts = state.chartAccounts.filter(c => c.groupId === grp.id);
+        const childCharts = filterChartAccountsForRole(
+          state.chartAccounts.filter(c => c.groupId === grp.id),
+          state.currentUserRole
+        );
 
         return (
           <div

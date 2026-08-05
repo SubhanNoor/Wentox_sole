@@ -10,11 +10,6 @@ import type {
 } from '@/types';
 import { deriveChequeStatus } from '@/lib/cheques';
 
-// TASK-14: fixed second demo account, alongside the editable Admin
-// credential in state.settings. Not stored in state / not editable via
-// Settings — it's a static demo login, same as how Admin worked before.
-const DEMO_USER_ACCOUNT = { username: 'user', password: 'user' };
-
 /* ──────────────────── Demo Data ──────────────────── */
 
 const demoCities: City[] = [
@@ -777,13 +772,16 @@ export interface State {
   alertDismissals: AlertDismissal[];
   wageRuns: WageRun[];
   salaryRuns: SalaryRun[];
-
-  settings: { username: string; password: string };
 }
 
 type Action =
-  | { type: 'LOGIN'; payload: { username: string; password: string } }
+  // Dispatched only after a real `api.login(...)` round-trip has already resolved
+  // successfully (see LoginPage.tsx) — the reducer never touches credentials itself.
+  | { type: 'LOGIN_SUCCESS'; payload: { username: string; role: UserRole } }
   | { type: 'LOGOUT' }
+  // The signed-in user renamed their own account from Settings — updates the display name only,
+  // no navigation (unlike LOGIN_SUCCESS, which always lands on Home).
+  | { type: 'RENAME_CURRENT_USER'; username: string }
   | { type: 'NAVIGATE'; page: string; tab?: string }
   | { type: 'ADD_PRODUCTION_LOG'; log: ProductionLog }
   | { type: 'SELECT_BILL'; billId: string | null }
@@ -836,18 +834,7 @@ type Action =
   | { type: 'DELETE_BUSINESS_ACCOUNT'; id: string }
   
   // Bill Actions
-  | { type: 'ADD_SALE_BILL'; bill: SaleBill }
-  | { type: 'UPDATE_SALE_BILL'; billId: string; bill: SaleBill }
-  | { type: 'DELETE_SALE_BILL'; billId: string }
-  | { type: 'POST_SALE_BILL'; billId: string }
-  | { type: 'UNPOST_SALE_BILL'; billId: string }
   | { type: 'UPDATE_BILTY_INFO'; billId: string; biltyNo: string; addaId: string }
-  
-  // Return Actions
-  | { type: 'ADD_SALE_RETURN'; returnObj: SaleReturn }
-  | { type: 'UPDATE_SALE_RETURN'; returnId: string; returnObj: SaleReturn }
-  | { type: 'DELETE_SALE_RETURN'; returnId: string }
-  | { type: 'POST_SALE_RETURN'; returnId: string }
 
   // Purchase Actions
   | { type: 'ADD_PURCHASE'; purchase: Purchase }
@@ -902,9 +889,7 @@ type Action =
   | { type: 'UPDATE_SALARY_RUN'; runId: string; run: SalaryRun }
   | { type: 'DELETE_SALARY_RUN'; runId: string }
   | { type: 'POST_SALARY_RUN'; runId: string }
-  | { type: 'UNPOST_SALARY_RUN'; runId: string; unpostedAt: string }
-
-  | { type: 'UPDATE_SETTINGS'; settings: { username: string; password: string } };
+  | { type: 'UNPOST_SALARY_RUN'; runId: string; unpostedAt: string };
 
 const initialState: State = {
   isLoggedIn: false,
@@ -945,24 +930,22 @@ const initialState: State = {
   alertDismissals: [],
   wageRuns: demoWageRuns,
   salaryRuns: demoSalaryRuns,
-
-  settings: { username: 'admin', password: 'admin' },
 };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
-    case 'LOGIN': {
-      const { username, password } = action.payload;
-      if (username === state.settings.username && password === state.settings.password) {
-        return { ...state, isLoggedIn: true, currentUserRole: 'Admin', currentUsername: username, currentPage: 'home' };
-      }
-      if (username === DEMO_USER_ACCOUNT.username && password === DEMO_USER_ACCOUNT.password) {
-        return { ...state, isLoggedIn: true, currentUserRole: 'User', currentUsername: username, currentPage: 'home' };
-      }
-      return state;
-    }
+    case 'LOGIN_SUCCESS':
+      return {
+        ...state,
+        isLoggedIn: true,
+        currentUserRole: action.payload.role,
+        currentUsername: action.payload.username,
+        currentPage: 'home'
+      };
     case 'LOGOUT':
       return { ...state, isLoggedIn: false, currentUserRole: null, currentUsername: null, currentPage: 'login' };
+    case 'RENAME_CURRENT_USER':
+      return { ...state, currentUsername: action.username };
     case 'NAVIGATE':
       return { ...state, currentPage: action.page, currentTab: action.tab ?? null };
     case 'SELECT_BILL':
@@ -1187,109 +1170,6 @@ function reducer(state: State, action: Action): State {
       };
 
     /* ──── Sale Bill Handlers ──── */
-    case 'ADD_SALE_BILL': {
-      // Deduct stock if posted
-      let updatedProducts = [...state.products];
-      if (action.bill.status === 'Posted') {
-        updatedProducts = state.products.map(p => {
-          const item = action.bill.items.find(it => it.productId === p.id);
-          if (item) {
-            return { ...p, stock: Math.max(0, (p.stock || 0) - item.pairs) };
-          }
-          return p;
-        });
-      }
-      return { ...state, saleBills: [action.bill, ...state.saleBills], products: updatedProducts };
-    }
-    case 'UPDATE_SALE_BILL': {
-      const oldBill = state.saleBills.find(b => b.id === action.billId);
-      let updatedProducts = [...state.products];
-      
-      // Reverse old stock deduction if old bill was posted
-      if (oldBill && oldBill.status === 'Posted') {
-        updatedProducts = updatedProducts.map(p => {
-          const item = oldBill.items.find(it => it.productId === p.id);
-          if (item) {
-            return { ...p, stock: (p.stock || 0) + item.pairs };
-          }
-          return p;
-        });
-      }
-      // Apply new stock deduction if new bill is posted
-      if (action.bill.status === 'Posted') {
-        updatedProducts = updatedProducts.map(p => {
-          const item = action.bill.items.find(it => it.productId === p.id);
-          if (item) {
-            return { ...p, stock: Math.max(0, (p.stock || 0) - item.pairs) };
-          }
-          return p;
-        });
-      }
-
-      return {
-        ...state,
-        saleBills: state.saleBills.map(b => b.id === action.billId ? action.bill : b),
-        products: updatedProducts
-      };
-    }
-    case 'DELETE_SALE_BILL': {
-      const oldBill = state.saleBills.find(b => b.id === action.billId);
-      let updatedProducts = [...state.products];
-      
-      // Reverse old stock deduction if old bill was posted
-      if (oldBill && oldBill.status === 'Posted') {
-        updatedProducts = updatedProducts.map(p => {
-          const item = oldBill.items.find(it => it.productId === p.id);
-          if (item) {
-            return { ...p, stock: (p.stock || 0) + item.pairs };
-          }
-          return p;
-        });
-      }
-      return {
-        ...state,
-        saleBills: state.saleBills.filter(b => b.id !== action.billId),
-        products: updatedProducts
-      };
-    }
-    case 'POST_SALE_BILL': {
-      const bill = state.saleBills.find(b => b.id === action.billId);
-      if (!bill || bill.status === 'Posted') return state;
-
-      // Deduct stock
-      const updatedProducts = state.products.map(p => {
-        const item = bill.items.find(it => it.productId === p.id);
-        if (item) {
-          return { ...p, stock: Math.max(0, (p.stock || 0) - item.pairs) };
-        }
-        return p;
-      });
-
-      return {
-        ...state,
-        saleBills: state.saleBills.map(b => b.id === action.billId ? { ...b, status: 'Posted' } : b),
-        products: updatedProducts
-      };
-    }
-    case 'UNPOST_SALE_BILL': {
-      const bill = state.saleBills.find(b => b.id === action.billId);
-      if (!bill || bill.status === 'Unposted') return state;
-
-      // Restore stock
-      const updatedProducts = state.products.map(p => {
-        const item = bill.items.find(it => it.productId === p.id);
-        if (item) {
-          return { ...p, stock: (p.stock || 0) + item.pairs };
-        }
-        return p;
-      });
-
-      return {
-        ...state,
-        saleBills: state.saleBills.map(b => b.id === action.billId ? { ...b, status: 'Unposted' } : b),
-        products: updatedProducts
-      };
-    }
     case 'UPDATE_BILTY_INFO': {
       return {
         ...state,
@@ -1298,92 +1178,6 @@ function reducer(state: State, action: Action): State {
             ? { ...b, biltyNo: action.biltyNo, addaId: action.addaId }
             : b
         )
-      };
-    }
-
-    /* ──── Sale Return Handlers ──── */
-    case 'ADD_SALE_RETURN': {
-      // Add back to stock if posted
-      let updatedProducts = [...state.products];
-      if (action.returnObj.status === 'Posted') {
-        updatedProducts = state.products.map(p => {
-          const item = action.returnObj.items.find(it => it.productId === p.id);
-          if (item) {
-            return { ...p, stock: (p.stock || 0) + item.pairs };
-          }
-          return p;
-        });
-      }
-      return { ...state, saleReturns: [action.returnObj, ...state.saleReturns], products: updatedProducts };
-    }
-    case 'UPDATE_SALE_RETURN': {
-      const oldReturn = state.saleReturns.find(r => r.id === action.returnId);
-      let updatedProducts = [...state.products];
-      
-      // Reverse old stock addition if old return was posted
-      if (oldReturn && oldReturn.status === 'Posted') {
-        updatedProducts = updatedProducts.map(p => {
-          const item = oldReturn.items.find(it => it.productId === p.id);
-          if (item) {
-            return { ...p, stock: Math.max(0, (p.stock || 0) - item.pairs) };
-          }
-          return p;
-        });
-      }
-      // Apply new stock addition if new return is posted
-      if (action.returnObj.status === 'Posted') {
-        updatedProducts = updatedProducts.map(p => {
-          const item = action.returnObj.items.find(it => it.productId === p.id);
-          if (item) {
-            return { ...p, stock: (p.stock || 0) + item.pairs };
-          }
-          return p;
-        });
-      }
-
-      return {
-        ...state,
-        saleReturns: state.saleReturns.map(r => r.id === action.returnId ? action.returnObj : r),
-        products: updatedProducts
-      };
-    }
-    case 'DELETE_SALE_RETURN': {
-      const oldReturn = state.saleReturns.find(r => r.id === action.returnId);
-      let updatedProducts = [...state.products];
-      
-      // Reverse old stock addition if old return was posted
-      if (oldReturn && oldReturn.status === 'Posted') {
-        updatedProducts = updatedProducts.map(p => {
-          const item = oldReturn.items.find(it => it.productId === p.id);
-          if (item) {
-            return { ...p, stock: Math.max(0, (p.stock || 0) - item.pairs) };
-          }
-          return p;
-        });
-      }
-      return {
-        ...state,
-        saleReturns: state.saleReturns.filter(r => r.id !== action.returnId),
-        products: updatedProducts
-      };
-    }
-    case 'POST_SALE_RETURN': {
-      const returnObj = state.saleReturns.find(r => r.id === action.returnId);
-      if (!returnObj || returnObj.status === 'Posted') return state;
-
-      // Add stock
-      const updatedProducts = state.products.map(p => {
-        const item = returnObj.items.find(it => it.productId === p.id);
-        if (item) {
-          return { ...p, stock: (p.stock || 0) + item.pairs };
-        }
-        return p;
-      });
-
-      return {
-        ...state,
-        saleReturns: state.saleReturns.map(r => r.id === action.returnId ? { ...r, status: 'Posted' } : r),
-        products: updatedProducts
       };
     }
 
@@ -1587,9 +1381,6 @@ function reducer(state: State, action: Action): State {
             : r
         )
       };
-
-    case 'UPDATE_SETTINGS':
-      return { ...state, settings: action.settings };
 
     default:
       return state;

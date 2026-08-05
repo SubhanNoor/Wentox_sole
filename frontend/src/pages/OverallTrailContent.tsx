@@ -3,6 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import { Search, Printer, FileDown, FileSpreadsheet, ArrowLeft, ChevronRight, Filter, ChevronDown } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { isChartAccountRestrictedForRole, isBusinessAccountRestrictedForRole } from '@/lib/access';
 
 type AccountGroupType = 'all' | 'customer' | 'subcustomer' | 'vendor' | 'employee' | 'chart_account' | 'business_account';
 
@@ -218,7 +219,9 @@ export default function OverallTrailContent() {
     });
 
     // 5. Chart of Accounts (e.g. Director Expenses, Utilities, Rent, Cash, Banks)
+    // UC-03: a User must never see a restricted chart head's balance here.
     state.chartAccounts.forEach(ca => {
+      if (isChartAccountRestrictedForRole(ca, state.currentUserRole)) return;
       let debit = 0;
       let credit = 0;
 
@@ -244,7 +247,10 @@ export default function OverallTrailContent() {
     });
 
     // 6. Business Accounts
+    // UC-03: skip any business account whose parent chart head is restricted
+    // for this role (named banks, directors' personal draw accounts, etc).
     state.businessAccounts.forEach(ba => {
+      if (isBusinessAccountRestrictedForRole(ba, state.chartAccounts, state.currentUserRole)) return;
       let debit = ba.openingBalance || 0;
       let credit = 0;
 
