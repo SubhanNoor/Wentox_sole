@@ -959,14 +959,17 @@ function reducer(state: State, action: Action): State {
     case 'LOGIN': {
       const { username, password } = action.payload;
       if (username === state.settings.username && password === state.settings.password) {
+        localStorage.setItem('wento_sidebar_hidden', 'true');
         return { ...state, isLoggedIn: true, currentUserRole: 'Admin', currentUsername: username, currentPage: 'home' };
       }
       if (username === DEMO_USER_ACCOUNT.username && password === DEMO_USER_ACCOUNT.password) {
+        localStorage.setItem('wento_sidebar_hidden', 'true');
         return { ...state, isLoggedIn: true, currentUserRole: 'User', currentUsername: username, currentPage: 'home' };
       }
       return state;
     }
     case 'LOGOUT':
+      localStorage.setItem('wento_sidebar_hidden', 'true');
       return { ...state, isLoggedIn: false, currentUserRole: null, currentUsername: null, currentPage: 'login' };
     case 'NAVIGATE':
       return { ...state, currentPage: action.page, currentTab: action.tab ?? null };

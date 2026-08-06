@@ -96,9 +96,11 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
   const { state, dispatch } = useApp();
   const [showAdminPopup, setShowAdminPopup] = useState(false);
 
-  // Sidebar toggle state (desktop collapse & mobile drawer) - Default is HIDDEN until three lines button is pressed
+  // Sidebar toggle state (desktop collapse & mobile drawer) - Default is HIDDEN on fresh login, persists across page navigation
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isSidebarHidden, setIsSidebarHidden] = useState<boolean>(true);
+  const [isSidebarHidden, setIsSidebarHidden] = useState<boolean>(() => {
+    return localStorage.getItem('wento_sidebar_hidden') !== 'false';
+  });
 
   // Home Page Notification Side Panel state (opens automatically on home page, hideable)
   const [isHomeSidePanelOpen, setIsHomeSidePanelOpen] = useState(true);
@@ -147,7 +149,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
   }, []);
 
   useEffect(() => {
-    setSidebarOpen(false);
     if (state.currentPage !== 'home') {
       setIsHomeSidePanelOpen(false);
     }
@@ -156,17 +157,13 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
   function navigate(page: string, tab?: string) {
     dispatch({ type: 'NAVIGATE', page, tab });
     setShowAdminPopup(false);
-    setSidebarOpen(false);
   }
 
   const toggleSidebar = () => {
-    if (window.innerWidth < 768) {
-      setSidebarOpen(!sidebarOpen);
-    } else {
-      const nextHidden = !isSidebarHidden;
-      setIsSidebarHidden(nextHidden);
-      localStorage.setItem('wento_sidebar_hidden', String(nextHidden));
-    }
+    const nextHidden = !isSidebarHidden;
+    setIsSidebarHidden(nextHidden);
+    setSidebarOpen(!sidebarOpen);
+    localStorage.setItem('wento_sidebar_hidden', String(nextHidden));
   };
 
   const currentPage = state.currentPage;
