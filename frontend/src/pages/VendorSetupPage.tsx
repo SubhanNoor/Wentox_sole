@@ -1,27 +1,26 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2, Phone, MapPin, ChevronRight, X } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Trash2, Phone, MapPin, X, ArrowRight, Truck } from 'lucide-react';
 import type { Vendor } from '@/types';
 import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
+import SearchableSelect from '@/components/SearchableSelect';
 
 export default function VendorSetupPage() {
   const { state, dispatch } = useApp();
 
-  // Tab State: 'list' | 'form'
-  const [activeTab, setActiveTab] = useState<'list' | 'form'>('list');
   const [vendorSearch, setVendorSearch] = useState('');
   const [selectedCityFilter, setSelectedCityFilter] = useState('all');
 
-  // Editing state
+  // Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
 
   // Duplicate Check Modal state
   const [dupMatch, setDupMatch] = useState<Vendor | null>(null);
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
-  // Drill-down: clicking a vendor card opens a details window showing that
-  // vendor's purchase history, instead of jumping straight to edit.
+  // Drill-down: clicking a vendor card opens a details window showing that vendor's purchase history
   const [viewingVendorId, setViewingVendorId] = useState<string | null>(null);
 
   // Form State
@@ -31,32 +30,37 @@ export default function VendorSetupPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const handleAddNew = () => {
+  const handleOpenAddModal = () => {
     setSelectedVendorId(null);
     setVendorName('');
     setVendorPhone('');
     setVendorCity('');
     setErrorMsg('');
-    setActiveTab('form');
+    setIsModalOpen(true);
   };
 
-  const handleSelectVendor = (vendor: Vendor) => {
+  const handleOpenEditModal = (vendor: Vendor) => {
     setSelectedVendorId(vendor.id);
     setVendorName(vendor.name);
     setVendorPhone(vendor.phone || '');
     setVendorCity(vendor.city || '');
     setErrorMsg('');
-    setActiveTab('form');
+    setIsModalOpen(true);
   };
 
-  // Generate the next Business Account code under the "Vendors" chart account
-  // (210001). FOUR-digit serial — two digits caps a chart account at 99
-  // children, and the client's legacy data already holds 200+ accounts under
-  // one head. See database_schema.md §3.2.
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedVendorId(null);
+    setVendorName('');
+    setVendorPhone('');
+    setVendorCity('');
+    setErrorMsg('');
+  };
+
   const getNextVendorAccountCode = () => {
     const vendorAccounts = state.businessAccounts.filter(acc => acc.controlId === '210001');
     const maxSuffix = vendorAccounts.reduce((max, acc) => {
-      const num = parseInt(acc.id.substring(6), 10); // '210001' is 6 characters
+      const num = parseInt(acc.id.substring(6), 10);
       return isNaN(num) ? max : Math.max(max, num);
     }, 0);
     return `210001${String(maxSuffix + 1).padStart(4, '0')}`;
@@ -72,7 +76,6 @@ export default function VendorSetupPage() {
     }
 
     if (selectedVendorId) {
-      // Edit mode — the linked Business Account's name is kept in sync by the reducer
       const existingVendor = state.vendors.find(v => v.id === selectedVendorId);
       const savedVendor: Vendor = {
         id: selectedVendorId,
@@ -87,7 +90,6 @@ export default function VendorSetupPage() {
       });
       setSuccessMsg('Vendor details updated successfully.');
     } else {
-      // Add mode — Flow A duplicate check (name + phone)
       const match = state.vendors.find(v =>
         v.name.toLowerCase() === typedName.toLowerCase() &&
         (v.phone || '').trim() === typedPhone
@@ -103,7 +105,6 @@ export default function VendorSetupPage() {
         }
       }
 
-      // Add mode — auto-create the linked Business Account under "Vendors"
       const newId = 'v_' + Date.now();
       const baId = getNextVendorAccountCode();
 
@@ -134,12 +135,7 @@ export default function VendorSetupPage() {
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
-    setVendorName('');
-    setVendorPhone('');
-    setVendorCity('');
-    setSelectedVendorId(null);
-    setErrorMsg('');
-    setActiveTab('list');
+    handleCloseModal();
   };
 
   const handleActivateDuplicate = (id: string) => {
@@ -167,16 +163,10 @@ export default function VendorSetupPage() {
     }
     setIsDupModalOpen(false);
     setDupMatch(null);
-    setVendorName('');
-    setVendorPhone('');
-    setVendorCity('');
-    setSelectedVendorId(null);
-    setErrorMsg('');
-    setActiveTab('list');
+    handleCloseModal();
   };
 
   const handleDeleteVendor = (id: string) => {
-    // Check if vendor is used by any products
     const productCount = state.products.filter(p => p.vendorId === id && p.isActive !== false).length;
     if (productCount > 0) {
       alert(`Cannot delete this vendor. It is currently linked to ${productCount} registered product articles.`);
@@ -187,8 +177,7 @@ export default function VendorSetupPage() {
       dispatch({ type: 'DELETE_VENDOR', id });
       setSuccessMsg('Vendor deleted successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
-      setSelectedVendorId(null);
-      setActiveTab('list');
+      handleCloseModal();
     }
   };
 
@@ -196,7 +185,6 @@ export default function VendorSetupPage() {
     return state.vendors.filter(v => v.isActive !== false);
   }, [state.vendors]);
 
-  // Compile list of unique city names entered on existing active vendors
   const uniqueCitiesList = useMemo(() => {
     const cities = new Set<string>();
     activeVendors.forEach(v => {
@@ -209,7 +197,6 @@ export default function VendorSetupPage() {
 
   const filteredVendors = useMemo(() => {
     return activeVendors.filter(v => {
-      // 1. Filter by search query
       if (vendorSearch.trim()) {
         const q = vendorSearch.toLowerCase();
         const matchesQuery = 
@@ -220,7 +207,6 @@ export default function VendorSetupPage() {
         if (!matchesQuery) return false;
       }
 
-      // 2. Filter by city dropdown
       if (selectedCityFilter !== 'all') {
         if (!v.city || v.city.toLowerCase() !== selectedCityFilter.toLowerCase()) return false;
       }
@@ -231,7 +217,7 @@ export default function VendorSetupPage() {
 
   return (
     <AppLayout pageTitle="Vendor Setup">
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto" style={{ maxWidth: 1400 }}>
         
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
@@ -240,235 +226,223 @@ export default function VendorSetupPage() {
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
         )}
 
-        {/* Tab Selection Header */}
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+        {/* Vendors Directory Header & Action Card */}
+        <div className="card-white p-6 md:p-8 bg-white border mb-6">
+          <div className="border-b pb-4 mb-5 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
+                <Truck size={20} className="text-[#B08D57]" /> Vendors Directory
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">Search and manage manufacturing vendors and raw material partners.</p>
+            </div>
+            
             <button
-              onClick={() => {
-                setActiveTab('list');
-                setSelectedVendorId(null);
-              }}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'list' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              onClick={handleOpenAddModal}
+              className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
             >
-              Vendor Partners
-            </button>
-            <button
-              onClick={handleAddNew}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'form' && !selectedVendorId ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              Register New Vendor
+              <Plus size={16} /> Register Vendor Partner
             </button>
           </div>
 
-          {activeTab === 'list' && (
-            <button
-              onClick={handleAddNew}
-              className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm"
-            >
-              <Plus size={16} /> Add Vendor
-            </button>
-          )}
+          {/* Search & City Filter Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="relative flex-1 max-w-md">
+              <input
+                type="text"
+                placeholder="Search vendor name, code, phone, city..."
+                value={vendorSearch}
+                onChange={e => setVendorSearch(e.target.value)}
+                className="soleria-input w-full py-2 text-xs pr-10 font-semibold"
+              />
+              <Search className="absolute right-3.5 top-2.5 text-slate-400" size={14} />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="min-w-[180px]">
+                <SearchableSelect
+                  options={[
+                    { value: 'all', label: 'All Cities' },
+                    ...uniqueCitiesList.map(c => ({ value: c, label: c }))
+                  ]}
+                  value={selectedCityFilter}
+                  onChange={setSelectedCityFilter}
+                  placeholder="Filter City..."
+                />
+              </div>
+
+              <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-2 rounded-xl border border-slate-200">
+                Total: {filteredVendors.length} Vendors
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* View 1: Vendors Directory List */}
-        {activeTab === 'list' ? (
-          <div className="mb-6">
-            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">Vendors Directory</h3>
-                <p className="text-xs text-slate-500 font-medium">Search and manage manufacturing vendors and raw material partners.</p>
-              </div>
-              
-              <div className="flex items-center gap-3">
-                <div className="relative min-w-[200px]">
-                  <input
-                    type="text"
-                    placeholder="Search name, phone..."
-                    value={vendorSearch}
-                    onChange={e => setVendorSearch(e.target.value)}
-                    className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold bg-white"
-                  />
-                  <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
-                </div>
-
-                <select
-                  value={selectedCityFilter}
-                  onChange={e => setSelectedCityFilter(e.target.value)}
-                  className="soleria-input py-1.5 text-xs cursor-pointer font-semibold bg-white"
-                  style={{ minWidth: '150px' }}
-                >
-                  <option value="all">All Cities</option>
-                  {uniqueCitiesList.map(cityName => (
-                    <option key={cityName} value={cityName}>{cityName}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {filteredVendors.length === 0 ? (
-              <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
-                No registered vendors found matching your filters.
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredVendors.map(vendor => {
-                  const productCount = state.products.filter(p => p.vendorId === vendor.id && p.isActive !== false).length;
-                  const initialLetter = vendor.name.charAt(0).toUpperCase();
-                  const cityName = vendor.city || 'Local / Other';
-                  const purchaseCount = state.purchases.filter(p => p.vendorId === vendor.id).length;
-
-                  return (
-                    <div
-                      key={vendor.id}
-                      className="bg-white border rounded-xl p-5 hover:border-amber-500 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
-                      style={{ borderColor: 'var(--border-color)' }}
-                      onClick={() => setViewingVendorId(vendor.id)}
-                    >
-                      <div>
-                        {/* Card Top: Code & Status/City badge */}
-                        <div className="flex items-center justify-between mb-3.5">
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
-                            CODE: {vendor.id}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-bold text-[#B08D57] uppercase tracking-wider flex items-center gap-1">
-                              <MapPin size={10} />
-                              {cityName}
-                            </span>
-                            <ChevronRight size={16} className="text-slate-400" />
-                          </div>
-                        </div>
-
-                        {/* Card Middle: Avatar circle + Name */}
-                        <div className="flex items-start gap-3 mb-4">
-                          <div className="w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm bg-slate-50 text-slate-600 group-hover:bg-[#111c2a] group-hover:text-[#B08D57] transition-all duration-300 flex-shrink-0">
-                            {initialLetter}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
-                              {vendor.name}
-                            </h4>
-                            <div className="flex items-center gap-1 text-[11px] text-slate-400 font-medium mt-1">
-                              <Phone size={10} />
-                              <span>{vendor.phone || 'No Phone Number'}</span>
-                            </div>
-                            <p className="text-[10px] text-slate-400 font-semibold mt-2 uppercase tracking-wider">
-                              {productCount} {productCount === 1 ? 'PRODUCT ARTICLE' : 'PRODUCT ARTICLES'} · {purchaseCount} PURCHASE{purchaseCount !== 1 ? 'S' : ''}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Card Bottom: Actions */}
-                      <div className="border-t pt-3 mt-1 flex items-center justify-end gap-3" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => handleSelectVendor(vendor)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
-                          title="Edit Vendor"
-                        >
-                          <Edit2 size={15} />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteVendor(vendor.id)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                          title="Delete Vendor"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+        {/* Vendors Cards Grid (§1 Standard) */}
+        {filteredVendors.length === 0 ? (
+          <div className="card-white p-12 text-center text-slate-400">
+            <Truck size={36} className="mx-auto mb-3 text-slate-300" />
+            <p className="font-semibold text-slate-600">No registered vendors found matching your filters.</p>
           </div>
         ) : (
-          /* View 2: Add New / Edit Vendor Form */
-          <div className="card-white p-6 md:p-8 bg-white border">
-            <div className="flex items-center gap-2 border-b pb-3 mb-6">
-              <button
-                onClick={() => {
-                  setActiveTab('list');
-                  setSelectedVendorId(null);
-                }}
-                className="p-1.5 hover:bg-slate-100 rounded text-slate-500 hover:text-slate-800 transition-colors"
-              >
-                <ArrowLeft size={16} />
-              </button>
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-[#111c2a]">
-                  {selectedVendorId ? `Edit Vendor: ${vendorName}` : 'Register New Vendor'}
-                </h3>
-                <p className="text-xs text-slate-500 font-medium">Specify the business name, city location, and contact information of the manufacturing vendor.</p>
-              </div>
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredVendors.map(vendor => {
+              const productCount = state.products.filter(p => p.vendorId === vendor.id && p.isActive !== false).length;
+              const cityName = vendor.city || 'Local / Other';
+              const purchaseCount = state.purchases.filter(p => p.vendorId === vendor.id).length;
 
-            <form onSubmit={handleSaveVendor} className="flex flex-col gap-6">
-              {/* Vendor Details */}
-              <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-4" style={{ borderColor: 'var(--border-color)' }}>
-                <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
-                  <Settings size={15} className="text-[#B08D57]" /> Vendor Configuration
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              return (
+                <div
+                  key={vendor.id}
+                  onClick={() => setViewingVendorId(vendor.id)}
+                  className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
+                >
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Vendor Name</label>
+                    {/* Header: Name + City Badge */}
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
+                        {vendor.name}
+                      </h4>
+                      <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider flex-shrink-0 flex items-center gap-1">
+                        <MapPin size={10} className="text-slate-400" />
+                        {cityName}
+                      </span>
+                    </div>
+
+                    {/* Subtitle: Code in mono */}
+                    <div className="font-mono text-xs text-slate-400 mb-3">
+                      Vendor ID: <span className="font-semibold text-slate-600">#{vendor.id}</span>
+                    </div>
+
+                    {/* Contact & Articles Meta */}
+                    <div className="flex flex-col gap-1.5 text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5">
+                      <div className="flex items-center gap-1.5 text-slate-600">
+                        <Phone size={12} className="text-slate-400" />
+                        <span>{vendor.phone || 'No Phone Number'}</span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider mt-0.5">
+                        {productCount} {productCount === 1 ? 'Article' : 'Articles'} · {purchaseCount} Purchase{purchaseCount !== 1 ? 's' : ''}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Footer Bar */}
+                  <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
+                    <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => handleOpenEditModal(vendor)}
+                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                        title="Edit Vendor"
+                      >
+                        <Edit2 size={15} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteVendor(vendor.id)}
+                        className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                        title="Delete Vendor"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+
+                    <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
+                      Purchase History <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Modal Dialogue Box Pop-up */}
+        {isModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}>
+            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
+                <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
+                  <Settings size={18} className="text-[#B08D57]" />
+                  {selectedVendorId ? 'Edit Vendor Partner' : 'Register New Vendor Partner'}
+                </h3>
+                <button
+                  onClick={handleCloseModal}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveVendor} className="p-5 flex flex-col gap-4">
+                {errorMsg && (
+                  <div className="banner-error rounded-lg px-3 py-2 text-xs">{errorMsg}</div>
+                )}
+
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                      Vendor Partner Name <span className="text-rose-500">*</span>
+                    </label>
                     <input
                       type="text"
                       value={vendorName}
                       onChange={e => setVendorName(e.target.value)}
                       placeholder="e.g. Decent Polyurethane"
-                      className="soleria-input font-semibold bg-white w-full"
+                      className="soleria-input w-full font-semibold"
+                      autoFocus
                     />
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Phone Number</label>
-                    <input
-                      type="text"
-                      value={vendorPhone}
-                      onChange={e => setVendorPhone(e.target.value)}
-                      placeholder="e.g. 0300-1234567, 042-3588991"
-                      className="soleria-input font-semibold bg-white w-full"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">City Location</label>
-                    <input
-                      type="text"
-                      value={vendorCity}
-                      onChange={e => setVendorCity(e.target.value)}
-                      placeholder="e.g. Lahore, Karachi"
-                      className="soleria-input font-semibold bg-white w-full"
-                    />
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                        Phone Number
+                      </label>
+                      <input
+                        type="text"
+                        value={vendorPhone}
+                        onChange={e => setVendorPhone(e.target.value)}
+                        placeholder="e.g. 0300-1234567"
+                        className="soleria-input w-full font-semibold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                        City Location
+                      </label>
+                      <input
+                        type="text"
+                        value={vendorCity}
+                        onChange={e => setVendorCity(e.target.value)}
+                        placeholder="e.g. Lahore, Karachi"
+                        className="soleria-input w-full font-semibold"
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Form Actions */}
-              <div className="flex gap-3 justify-end border-t pt-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab('list');
-                    setSelectedVendorId(null);
-                  }}
-                  className="btn-outline px-5 py-2"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn-gold px-6 py-2 flex items-center gap-1.5"
-                >
-                  <Save size={16} /> Save Vendor Details
-                </button>
-              </div>
-            </form>
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={handleCloseModal}
+                    className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn-gold px-5 py-2 text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Save size={14} /> Save Vendor
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
 
       </div>
 
-      {/* Details window: this vendor's purchase history */}
+      {/* Details window: vendor purchase history modal */}
       {viewingVendorId && (() => {
         const vendor = state.vendors.find(v => v.id === viewingVendorId);
         if (!vendor) return null;
@@ -478,12 +452,12 @@ export default function VendorSetupPage() {
 
         return (
           <div
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn"
+            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 animate-in fade-in duration-200"
             data-no-print
             onClick={() => setViewingVendorId(null)}
           >
             <div
-              className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-3xl mx-4 animate-scaleUp max-h-[80vh] overflow-y-auto"
+              className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 w-full max-w-3xl mx-4 animate-in zoom-in-95 duration-200 max-h-[80vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between border-b pb-3 mb-4">
@@ -495,7 +469,7 @@ export default function VendorSetupPage() {
                 </div>
                 <button
                   onClick={() => setViewingVendorId(null)}
-                  className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
                   title="Close"
                 >
                   <X size={18} />

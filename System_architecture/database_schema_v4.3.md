@@ -1291,6 +1291,15 @@ CREATE TABLE dbo.expenses (                                   -- Kharch; also th
   -- state to model and no table to add — just the number and date, for the record.
   issued_cheque_no   VARCHAR(50) NULL,
   issued_cheque_date DATE        NULL,
+  -- CHEQUE_ISSUED only, added on the "Cheque Return" page follow-up (010_expenses_issued_cheque_
+  -- reversal.sql): the cheque we wrote can still bounce or be handed back unpaid after the fact.
+  -- Same reverse-never-delete lifecycle as dbo.cheques' own bounced_date/returned_date/
+  -- return_reason, just kept on this row instead of a dbo.cheques row (there still isn't one for a
+  -- cheque we wrote — see the comment above).
+  issued_cheque_status        VARCHAR(20)   NOT NULL CONSTRAINT DF_expenses_issued_cheque_status DEFAULT ('PENDING'),
+  issued_cheque_bounced_date  DATE          NULL,
+  issued_cheque_returned_date DATE          NULL,
+  issued_cheque_return_reason NVARCHAR(500) NULL,
   remarks      NVARCHAR(500) NULL,
   status       VARCHAR(10)   NOT NULL CONSTRAINT DF_exp_status  DEFAULT ('CONFIRMED'),
   created_by   INT           NULL,
@@ -1312,6 +1321,14 @@ CREATE TABLE dbo.expenses (                                   -- Kharch; also th
   CONSTRAINT CK_expenses_mode   CHECK (payment_mode IN
         ('CASH','CHEQUE_ENDORSED','CHEQUE_ISSUED','ONLINE')),
   CONSTRAINT CK_expenses_status CHECK (status IN ('CONFIRMED','DRAFT')),
+  CONSTRAINT CK_expenses_issued_cheque_status CHECK (
+        issued_cheque_status IN ('PENDING','BOUNCED','RETURNED')),
+  CONSTRAINT CK_expenses_issued_cheque_bounced CHECK (
+        (issued_cheque_bounced_date IS NULL     AND issued_cheque_status <> 'BOUNCED')
+     OR (issued_cheque_bounced_date IS NOT NULL AND issued_cheque_status =  'BOUNCED')),
+  CONSTRAINT CK_expenses_issued_cheque_returned CHECK (
+        (issued_cheque_returned_date IS NULL     AND issued_cheque_status <> 'RETURNED')
+     OR (issued_cheque_returned_date IS NOT NULL AND issued_cheque_status =  'RETURNED')),
   -- Each mode carries exactly the identity it needs and nothing it does not.
   CONSTRAINT CK_expenses_payment CHECK (
         (payment_mode = 'CASH'
@@ -1329,6 +1346,10 @@ CREATE TABLE dbo.expenses (                                   -- Kharch; also th
 );
 CREATE INDEX IX_expenses_date ON dbo.expenses(expense_date);
 CREATE INDEX IX_expenses_ba   ON dbo.expenses(ba_id, expense_date);
+-- "Cheque Return" page's issued-cheque list (mirrors IX_cheques_endorsable): CONFIRMED
+-- CHEQUE_ISSUED rows whose cheque hasn't bounced/been returned yet.
+CREATE INDEX IX_expenses_issued_cheque_returnable ON dbo.expenses(payment_mode, issued_cheque_status)
+       WHERE payment_mode = 'CHEQUE_ISSUED' AND issued_cheque_status = 'PENDING';
 
 CREATE TABLE dbo.draft_expenses (
   draft_id     INT IDENTITY(1,1) NOT NULL,
@@ -1558,8 +1579,12 @@ CREATE INDEX IX_cheque_allocations_vendor  ON dbo.cheque_allocations(target_vend
 CREATE INDEX IX_cheque_allocations_ba      ON dbo.cheque_allocations(target_ba_id)     WHERE target_ba_id     IS NOT NULL;
 
 CREATE TABLE dbo.alert_dismissals (                           -- §12 snooze/dismiss derived alerts
+  -- Milestone 9.1: both alert kinds are wired up now (alerts.service.js) — 'CHEQUE_DUE:<cheque_id>'
+  -- (cheques got their own table/id after this comment was written; receipt_id would still work
+  -- via the 1:1 join but cheque_id is the more specific key) and 'PAYMENT_OVERDUE:<bill_id>',
+  -- fed by sale_bills.due_date (re-added post-v4.3, see that table's own comment above).
   dismissal_id    INT IDENTITY(1,1) NOT NULL,
-  alert_key       VARCHAR(100)  NOT NULL,                     -- 'CHEQUE_DUE:<receipt_id>' | 'PAYMENT_OVERDUE:<bill_id>'
+  alert_key       VARCHAR(100)  NOT NULL,                     -- 'CHEQUE_DUE:<cheque_id>' | 'PAYMENT_OVERDUE:<bill_id>'
   user_id         INT           NULL,
   dismissed_at    DATETIME2(0)  NOT NULL CONSTRAINT DF_ad_at    DEFAULT (SYSUTCDATETIME()),
   dismissed_until DATETIME2(0)  NULL,                          -- NULL = dismissed permanently
@@ -1569,6 +1594,29 @@ CREATE TABLE dbo.alert_dismissals (                           -- §12 snooze/dis
   CONSTRAINT FK_alert_dismissals_user FOREIGN KEY (user_id) REFERENCES dbo.users(user_id)
 );
 CREATE INDEX IX_alert_dismissals_key ON dbo.alert_dismissals(alert_key);
+
+-- Milestone 9.1 follow-up: alerts are no longer computed live on every alerts:list call — a
+-- startup job (electron/main.js, once per app launch, no repeat) computes them and persists here;
+-- alerts:list just reads this table, still filtered against alert_dismissals above. severity
+-- ('overdue' vs 'due-soon') is deliberately NOT stored — derived from alert_date vs today at read
+-- time, so it never goes stale between job runs.
+CREATE TABLE dbo.generated_alerts (
+  alert_id    INT IDENTITY(1,1) NOT NULL,
+  alert_key   VARCHAR(100)  NOT NULL,               -- 'CHEQUE_DUE:<cheque_id>' | 'PAYMENT_OVERDUE:<bill_id>'
+  kind        VARCHAR(20)   NOT NULL,
+  title       NVARCHAR(200) NOT NULL,
+  detail      NVARCHAR(300) NULL,
+  alert_date  DATE          NOT NULL,                -- the cheque/bill due date driving this alert
+  amount      DECIMAL(14,2) NOT NULL,
+  target_page VARCHAR(50)   NOT NULL,
+  target_tab  VARCHAR(50)   NULL,
+  created_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_galerts_created DEFAULT (SYSUTCDATETIME()),
+  updated_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_galerts_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_generated_alerts     PRIMARY KEY (alert_id),
+  CONSTRAINT UQ_generated_alerts_key UNIQUE (alert_key),
+  CONSTRAINT CK_generated_alerts_kind CHECK (kind IN ('CHEQUE_DUE','PAYMENT_OVERDUE'))
+);
+CREATE INDEX IX_generated_alerts_date ON dbo.generated_alerts(alert_date);
 ```
 
 **Bounced-cheque cascade (§13):** setting `cheques.cheque_status = 'BOUNCED'` must, in the same

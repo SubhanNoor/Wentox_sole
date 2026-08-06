@@ -1,18 +1,18 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Trash2, X, Users, MapPin } from 'lucide-react';
 import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
+import SearchableSelect from '@/components/SearchableSelect';
 import type { SubCustomer } from '@/types';
 
 export default function SubCustomerSetupPage() {
   const { state, dispatch } = useApp();
 
-  // Tab State: 'list' | 'form'
-  const [activeTab, setActiveTab] = useState<'list' | 'form'>('list');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Editing state
+  // Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedSubId, setSelectedSubId] = useState<string | null>(null);
 
   // Duplicate Check Modal state (Flow B)
@@ -28,22 +28,31 @@ export default function SubCustomerSetupPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const handleAddNew = () => {
+  const handleOpenAddModal = () => {
     setSelectedSubId(null);
     setSubName('');
     setRegionId(state.regions.find(r => r.isActive !== false)?.id || '');
     setCityId('');
     setErrorMsg('');
-    setActiveTab('form');
+    setIsModalOpen(true);
   };
 
-  const handleSelectSubCustomer = (sub: { id: string; name: string; regionId: string; cityId: string }) => {
+  const handleOpenEditModal = (sub: { id: string; name: string; regionId: string; cityId: string }) => {
     setSelectedSubId(sub.id);
     setSubName(sub.name);
     setRegionId(sub.regionId);
     setCityId(sub.cityId);
     setErrorMsg('');
-    setActiveTab('form');
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedSubId(null);
+    setSubName('');
+    setRegionId('');
+    setCityId('');
+    setErrorMsg('');
   };
 
   const executeAddSubCustomer = (data: { name: string; regionId: string; cityId: string }) => {
@@ -59,12 +68,7 @@ export default function SubCustomerSetupPage() {
     });
     setSuccessMsg('New Sub Customer registered successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
-    setSubName('');
-    setRegionId('');
-    setCityId('');
-    setSelectedSubId(null);
-    setErrorMsg('');
-    setActiveTab('list');
+    handleCloseModal();
   };
 
   const handleSaveSubCustomer = (e: React.FormEvent) => {
@@ -86,14 +90,8 @@ export default function SubCustomerSetupPage() {
       });
       setSuccessMsg('Sub Customer details updated successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
-      setSubName('');
-      setRegionId('');
-      setCityId('');
-      setSelectedSubId(null);
-      setErrorMsg('');
-      setActiveTab('list');
+      handleCloseModal();
     } else {
-      // Flow B duplicate check
       const matches = state.subCustomers.filter(sc => sc.name.toLowerCase() === typed.toLowerCase());
       if (matches.length === 0) {
         executeAddSubCustomer({ name: typed, regionId, cityId });
@@ -121,12 +119,7 @@ export default function SubCustomerSetupPage() {
     setIsDupModalOpen(false);
     setDupMatches([]);
     setPendingSubCustomer(null);
-    setSubName('');
-    setRegionId('');
-    setCityId('');
-    setSelectedSubId(null);
-    setErrorMsg('');
-    setActiveTab('list');
+    handleCloseModal();
   };
 
   const handleCreateNewAnyway = () => {
@@ -143,8 +136,7 @@ export default function SubCustomerSetupPage() {
       dispatch({ type: 'DELETE_SUB_CUSTOMER', id });
       setSuccessMsg('Sub Customer deleted successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
-      setSelectedSubId(null);
-      setActiveTab('list');
+      handleCloseModal();
     }
   };
 
@@ -171,7 +163,7 @@ export default function SubCustomerSetupPage() {
 
   return (
     <AppLayout pageTitle="Sub Customer Setup">
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto" style={{ maxWidth: 1000 }}>
         
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
@@ -180,238 +172,189 @@ export default function SubCustomerSetupPage() {
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
         )}
 
-        {/* Tab Selection Header */}
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+        {/* Directory Card */}
+        <div className="card-white p-6 md:p-8 bg-white border">
+          <div className="border-b pb-4 mb-5 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
+                <Users size={20} className="text-[#B08D57]" /> Sub Customers Directory
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">Manage sub-customers associated with primary accounts for specialized bill dispatch.</p>
+            </div>
+            
             <button
-              onClick={() => {
-                setActiveTab('list');
-                setSelectedSubId(null);
-              }}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'list' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              Sub Customers Directory
-            </button>
-            <button
-              onClick={handleAddNew}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'form' && !selectedSubId ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              Add New Sub Customer
-            </button>
-          </div>
-
-          {activeTab === 'list' && (
-            <button
-              onClick={handleAddNew}
-              className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm"
+              onClick={handleOpenAddModal}
+              className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
             >
               <Plus size={16} /> Register Sub Customer
             </button>
-          )}
+          </div>
+
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div className="relative flex-1 max-w-sm">
+              <input
+                type="text"
+                placeholder="Search sub customer name or ID..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold"
+              />
+              <Search className="absolute right-3 top-2 text-slate-400" size={14} />
+            </div>
+
+            <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200">
+              Total: {filteredSubCustomers.length} Sub Customers
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-sm">
+              <thead>
+                <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                  <th className="p-3 pl-4">ID Code</th>
+                  <th className="p-3">Sub Customer Name</th>
+                  <th className="p-3">Region</th>
+                  <th className="p-3">City</th>
+                  <th className="p-3 text-center" style={{ width: '90px' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredSubCustomers.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="text-center p-8 text-slate-400">
+                      No registered sub customers found.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredSubCustomers.map(sc => {
+                    const regName = activeRegions.find(r => r.id === sc.regionId)?.name || 'N/A';
+                    const cityName = activeCities.find(c => c.id === sc.cityId)?.name || 'N/A';
+                    return (
+                      <tr key={sc.id} className="border-b hover:bg-slate-50/50 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                        <td className="p-3 pl-4 font-mono font-semibold text-slate-500 text-xs">{sc.id}</td>
+                        <td className="p-3 font-semibold text-slate-900">{sc.name}</td>
+                        <td className="p-3 text-slate-600 font-medium">{regName}</td>
+                        <td className="p-3 text-slate-600 font-medium flex items-center gap-1">
+                          <MapPin size={12} className="text-slate-400" />
+                          {cityName}
+                        </td>
+                        <td className="p-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => handleOpenEditModal(sc)}
+                              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                              title="Edit Sub Customer"
+                            >
+                              <Edit2 size={15} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteSubCustomer(sc.id)}
+                              className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                              title="Delete Sub Customer"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
-        {/* View 1: Sub Customers Directory List */}
-        {activeTab === 'list' ? (
-          <div className="mb-6">
-            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">Sub Customers Directory</h3>
-                <p className="text-xs text-slate-500 font-medium">Search and manage sub customers/delivery agents (independent, no parent account link).</p>
-              </div>
-
-              <div className="relative min-w-[265px]">
-                <input
-                  type="text"
-                  placeholder="Search by name or code..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold bg-white"
-                />
-                <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
-              </div>
-            </div>
-
-            {filteredSubCustomers.length === 0 ? (
-              <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
-                No registered sub customers found matching your search.
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredSubCustomers.map(sub => {
-                  const initialLetter = sub.name.charAt(0).toUpperCase();
-
-                  return (
-                    <div
-                      key={sub.id}
-                      className="bg-white border rounded-xl p-5 hover:border-amber-500 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
-                      style={{ borderColor: 'var(--border-color)' }}
-                      onClick={() => handleSelectSubCustomer(sub)}
-                    >
-                      <div>
-                        {/* Card Top: Code badge */}
-                        <div className="flex items-center justify-between mb-3.5 gap-2">
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider flex-shrink-0">
-                            CODE: {sub.id}
-                          </span>
-                        </div>
-
-                        {/* Card Middle: Avatar circle + Name */}
-                        <div className="flex items-start gap-3 mb-4">
-                          <div className="w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm bg-slate-50 text-slate-600 group-hover:bg-[#111c2a] group-hover:text-[#B08D57] transition-all duration-300 flex-shrink-0">
-                            {initialLetter}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
-                              {sub.name}
-                            </h4>
-                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                              {sub.regionId && (
-                                <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
-                                  {state.regions.find(r => r.id === sub.regionId)?.name || sub.regionId}
-                                </span>
-                              )}
-                              {sub.cityId && (
-                                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
-                                  {state.cities.find(c => c.id === sub.cityId)?.name || sub.cityId}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Card Bottom: Actions */}
-                      <div className="border-t pt-3 mt-1 flex items-center justify-end gap-3" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => handleSelectSubCustomer(sub)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
-                          title="Edit Sub Customer"
-                        >
-                          <Edit2 size={15} />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteSubCustomer(sub.id)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                          title="Delete Sub Customer"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        ) : (
-          /* View 2: Add New / Edit Sub Customer Form */
-          <div className="card-white p-6 md:p-8 bg-white border">
-            <div className="flex items-center gap-2 border-b pb-3 mb-6">
-              <button
-                onClick={() => {
-                  setActiveTab('list');
-                  setSelectedSubId(null);
-                }}
-                className="p-1.5 hover:bg-slate-100 rounded text-slate-500 hover:text-slate-800 transition-colors"
-              >
-                <ArrowLeft size={16} />
-              </button>
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-[#111c2a]">
-                  {selectedSubId ? `Edit Sub Customer: ${subName}` : 'Register New Sub Customer'}
+        {/* Modal Dialogue Box Pop-up */}
+        {isModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}>
+            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
+                <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
+                  <Settings size={18} className="text-[#B08D57]" />
+                  {selectedSubId ? 'Edit Sub Customer' : 'Register New Sub Customer'}
                 </h3>
-                <p className="text-xs text-slate-500 font-medium">Register an independent sub customer agent or sub destination account with regional parameters.</p>
+                <button
+                  onClick={handleCloseModal}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
               </div>
-            </div>
 
-            <form onSubmit={handleSaveSubCustomer} className="flex flex-col gap-6">
-              {/* Setup Configuration */}
-              <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-4" style={{ borderColor: 'var(--border-color)' }}>
-                <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
-                  <Settings size={15} className="text-[#B08D57]" /> Sub Customer Details
+              <form onSubmit={handleSaveSubCustomer} className="p-5 flex flex-col gap-4">
+                {errorMsg && (
+                  <div className="banner-error rounded-lg px-3 py-2 text-xs">{errorMsg}</div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                    Sub Customer Name <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={subName}
+                    onChange={e => setSubName(e.target.value)}
+                    placeholder="Enter sub customer name..."
+                    className="soleria-input w-full font-semibold"
+                    autoFocus
+                  />
                 </div>
-                <div className="flex flex-col gap-4">
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Sub Customer Name</label>
-                    <input
-                      type="text"
-                      value={subName}
-                      onChange={e => setSubName(e.target.value)}
-                      placeholder="e.g. Salim Agent LHR"
-                      className="soleria-input font-semibold"
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                      Region <span className="text-rose-500">*</span>
+                    </label>
+                    <SearchableSelect
+                      options={activeRegions.map(r => ({ value: r.id, label: r.name }))}
+                      value={regionId}
+                      onChange={setRegionId}
+                      placeholder="Select Region..."
                     />
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Region <span className="text-red-500 font-bold">*</span></label>
-                      <select
-                        value={regionId}
-                        onChange={e => {
-                          setRegionId(e.target.value);
-                          setCityId('');
-                        }}
-                        className="soleria-input font-semibold"
-                        required
-                      >
-                        <option value="">Select Region...</option>
-                        {activeRegions.map(r => (
-                          <option key={r.id} value={r.id}>{r.name} ({r.id})</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">City <span className="text-red-500 font-bold">*</span></label>
-                      <select
-                        value={cityId}
-                        onChange={e => setCityId(e.target.value)}
-                        className="soleria-input font-semibold"
-                        required
-                      >
-                        <option value="">Select City...</option>
-                        {activeCities
-                          .filter(c => !regionId || c.regionId === regionId)
-                          .map(c => (
-                            <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
-                          ))}
-                      </select>
-                    </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                      City <span className="text-rose-500">*</span>
+                    </label>
+                    <SearchableSelect
+                      options={activeCities.map(c => ({ value: c.id, label: c.name }))}
+                      value={cityId}
+                      onChange={setCityId}
+                      placeholder="Select City..."
+                    />
                   </div>
                 </div>
-              </div>
 
-              {/* Form Actions */}
-              <div className="flex gap-3 justify-end border-t pt-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab('list');
-                    setSelectedSubId(null);
-                  }}
-                  className="btn-outline px-5 py-2"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn-gold px-6 py-2 flex items-center gap-1.5"
-                >
-                  <Save size={16} /> Save Sub Customer Details
-                </button>
-              </div>
-            </form>
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={handleCloseModal}
+                    className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn-gold px-5 py-2 text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Save size={14} /> Save Sub Customer
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
 
         <DuplicateNamePromptModal
           isOpen={isDupModalOpen}
-          entityLabel="sub-customer"
+          entityLabel="sub customer"
           status={dupStatus}
-          matches={dupMatches.map(m => ({
-            id: m.id,
-            name: m.name,
-            regionName: state.regions.find(r => r.id === m.regionId)?.name,
-            cityName: state.cities.find(c => c.id === m.cityId)?.name
+          matches={dupMatches.map(sc => ({
+            id: sc.id,
+            name: sc.name,
+            cityName: activeCities.find(ct => ct.id === sc.cityId)?.name
           }))}
           allowCreateOnActive={true}
           onActivate={handleActivateDuplicate}

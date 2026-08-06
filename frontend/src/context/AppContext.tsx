@@ -6,7 +6,7 @@ import type {
   Customer, SubCustomer, SaleBill, SaleReturn, Purchase, PurchaseReturn,
   Receipt, Expense, ProductionLog, UserRole,
   ChequeAllocation, AlertDismissal,
-  WageRun, SalaryRun, BankAccount, Transfer, Deposit
+  WageRun, SalaryRun, BankAccount, Transfer, Deposit, MaterialAdjustment
 } from '@/types';
 
 /* ──────────────────── Demo Data ──────────────────── */
@@ -771,6 +771,9 @@ export interface State {
   alertDismissals: AlertDismissal[];
   wageRuns: WageRun[];
   salaryRuns: SalaryRun[];
+  materialAdjustments: MaterialAdjustment[];
+
+  settings: { username: string; password: string };
 }
 
 type Action =
@@ -849,7 +852,12 @@ type Action =
   | { type: 'UPDATE_SALARY_RUN'; runId: string; run: SalaryRun }
   | { type: 'DELETE_SALARY_RUN'; runId: string }
   | { type: 'POST_SALARY_RUN'; runId: string }
-  | { type: 'UNPOST_SALARY_RUN'; runId: string; unpostedAt: string };
+  | { type: 'UNPOST_SALARY_RUN'; runId: string; unpostedAt: string }
+
+  | { type: 'ADD_MATERIAL_ADJUSTMENT'; adjustment: MaterialAdjustment }
+  | { type: 'DELETE_MATERIAL_ADJUSTMENT'; id: string }
+
+  | { type: 'UPDATE_SETTINGS'; settings: { username: string; password: string } };
 
 const initialState: State = {
   isLoggedIn: false,
@@ -890,11 +898,15 @@ const initialState: State = {
   alertDismissals: [],
   wageRuns: demoWageRuns,
   salaryRuns: demoSalaryRuns,
+  materialAdjustments: [],
+
+  settings: { username: 'admin', password: 'admin' },
 };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'LOGIN_SUCCESS':
+      localStorage.setItem('wento_sidebar_hidden', 'true');
       return {
         ...state,
         isLoggedIn: true,
@@ -903,6 +915,7 @@ function reducer(state: State, action: Action): State {
         currentPage: 'home'
       };
     case 'LOGOUT':
+      localStorage.setItem('wento_sidebar_hidden', 'true');
       return { ...state, isLoggedIn: false, currentUserRole: null, currentUsername: null, currentPage: 'login' };
     case 'RENAME_CURRENT_USER':
       return { ...state, currentUsername: action.username };
@@ -1183,6 +1196,19 @@ function reducer(state: State, action: Action): State {
         )
       };
 
+    case 'ADD_MATERIAL_ADJUSTMENT':
+      return {
+        ...state,
+        materialAdjustments: [action.adjustment, ...state.materialAdjustments]
+      };
+    case 'DELETE_MATERIAL_ADJUSTMENT':
+      return {
+        ...state,
+        materialAdjustments: state.materialAdjustments.filter(a => a.id !== action.id)
+      };
+
+    case 'UPDATE_SETTINGS':
+      return { ...state, settings: action.settings };
     default:
       return state;
   }

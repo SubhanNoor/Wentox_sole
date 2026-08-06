@@ -116,7 +116,7 @@ export default function OverallExpensesTab() {
     overallExpenses.forEach(e => {
       if (!groups[e.ba_id]) {
         const biz = businessAccounts.find(b => b.ba_id === e.ba_id) ||
-          { ba_id: e.ba_id, code: '', name: 'General Expense Account', ac_id: 0, status: 'ACTIVE' as const };
+          { ba_id: e.ba_id, code: '', name: 'General Expense Account', ac_id: 0, region_id: null, city_id: null, opening_balance: null, opening_date: null, status: 'ACTIVE' as const };
         groups[e.ba_id] = {
           businessAccount: biz,
           expenses: [],
@@ -287,7 +287,7 @@ export default function OverallExpensesTab() {
                     </h4>
                   </div>
 
-                  {data.businessAccount.chart_code === '210001' && (
+                  {data.businessAccount.ac_code === '210001' && (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300 mb-2">
                       Vendor Payment
                     </span>

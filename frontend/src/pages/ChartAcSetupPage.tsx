@@ -1,15 +1,20 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2, ChevronRight, X } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Trash2, X, BookOpen, ArrowRight } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
 import { filterChartAccountsForRole } from '@/lib/access';
 
 export default function ChartAcSetupPage() {
   const { state, dispatch } = useApp();
 
-  // Tab State: 'list' | 'form'
-  const [activeTab, setActiveTab] = useState<'list' | 'form'>('list');
+  // Search and Sort State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>('');
+  const [sortBy, setSortBy] = useState<'code' | 'name'>('code');
+
+  // Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Form State
@@ -19,20 +24,14 @@ export default function ChartAcSetupPage() {
   const [linkCode, setLinkCode] = useState('A');
   const [status, setStatus] = useState<'Active' | 'Closed'>('Active');
 
-  // Search and Sort State
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>('');
-  const [sortBy, setSortBy] = useState<'code' | 'name'>('code');
-
-  // Drill-down: clicking a card opens a details window showing every
-  // Business Account registered under that chart account.
+  // Drill-down Modal State
   const [viewingChartId, setViewingChartId] = useState<string | null>(null);
 
   // Messages
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const handleAddNew = () => {
+  const handleOpenAddModal = () => {
     setSelectedId(null);
     setId('');
     setName('');
@@ -40,10 +39,10 @@ export default function ChartAcSetupPage() {
     setLinkCode('A');
     setStatus('Active');
     setErrorMsg('');
-    setActiveTab('form');
+    setIsModalOpen(true);
   };
 
-  const handleSelectChart = (c: any) => {
+  const handleOpenEditModal = (c: any) => {
     setSelectedId(c.id);
     setId(c.id);
     setName(c.name);
@@ -51,7 +50,18 @@ export default function ChartAcSetupPage() {
     setLinkCode(c.linkCode || 'A');
     setStatus(c.status || 'Active');
     setErrorMsg('');
-    setActiveTab('form');
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedId(null);
+    setId('');
+    setName('');
+    setGroupId('');
+    setLinkCode('A');
+    setStatus('Active');
+    setErrorMsg('');
   };
 
   const handleSave = (e: React.FormEvent) => {
@@ -60,7 +70,6 @@ export default function ChartAcSetupPage() {
     if (!name.trim()) return setErrorMsg('Account name is required.');
     if (!groupId) return setErrorMsg('Please select a parent Group A/C.');
 
-    // Duplicate check if adding new
     if (!selectedId && state.chartAccounts.some(c => c.id.toLowerCase() === id.trim().toLowerCase())) {
       return setErrorMsg('An Account with this code already exists.');
     }
@@ -82,8 +91,7 @@ export default function ChartAcSetupPage() {
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
-    setActiveTab('list');
-    setSelectedId(null);
+    handleCloseModal();
   };
 
   const handleDeleteChart = (chartId: string) => {
@@ -98,6 +106,7 @@ export default function ChartAcSetupPage() {
       dispatch({ type: 'DELETE_CHART_ACCOUNT', id: chartId });
       setSuccessMsg('Account deleted successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
+      handleCloseModal();
     }
   };
 
@@ -111,9 +120,14 @@ export default function ChartAcSetupPage() {
     ];
   }, [state.groupAccounts]);
 
+  const groupSelectOptions = useMemo(() => {
+    return state.groupAccounts.map(g => ({
+      value: g.id,
+      label: `${g.name} (${g.id})`
+    }));
+  }, [state.groupAccounts]);
+
   const filteredAndSortedCharts = useMemo(() => {
-    // UC-03: User never sees BANK ACCOUNTS / DIRECTORS EXPENSES - DRAWINGS themselves here, same
-    // rule as everywhere else — the screen stays open, just this one chart account is invisible.
     let list = filterChartAccountsForRole(state.chartAccounts, state.currentUserRole);
     if (selectedGroupFilter) {
       list = list.filter(c => c.groupId === selectedGroupFilter);
@@ -134,9 +148,18 @@ export default function ChartAcSetupPage() {
     });
   }, [state.chartAccounts, state.currentUserRole, searchQuery, sortBy, selectedGroupFilter]);
 
+  const viewingChart = useMemo(() => {
+    return state.chartAccounts.find(c => c.id === viewingChartId);
+  }, [viewingChartId, state.chartAccounts]);
+
+  const viewingChildBizAccounts = useMemo(() => {
+    if (!viewingChartId) return [];
+    return state.businessAccounts.filter(b => b.controlId === viewingChartId);
+  }, [viewingChartId, state.businessAccounts]);
+
   return (
     <AppLayout pageTitle="Chart of Accounts Setup">
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto" style={{ maxWidth: 1400 }}>
 
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
@@ -145,278 +168,306 @@ export default function ChartAcSetupPage() {
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
         )}
 
-        {/* Tab Selection Header */}
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+        {/* Directory Header Card */}
+        <div className="card-white p-6 md:p-8 bg-white border mb-6">
+          <div className="border-b pb-4 mb-5 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
+                <BookOpen size={20} className="text-[#B08D57]" /> Chart of Accounts Directory
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">Search and manage accounts defining reporting codes and sub-ledgers.</p>
+            </div>
+            
             <button
-              onClick={() => {
-                setActiveTab('list');
-                setSelectedId(null);
-              }}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'list' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              onClick={handleOpenAddModal}
+              className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
             >
-              Accounts Directory
-            </button>
-            <button
-              onClick={handleAddNew}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'form' && !selectedId ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              Add New Account
+              <Plus size={16} /> Register Chart Account
             </button>
           </div>
 
-          {activeTab === 'list' && (
-            <button
-              onClick={handleAddNew}
-              className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm"
-            >
-              <Plus size={16} /> Register Account
-            </button>
-          )}
-        </div>
-
-        {/* View 1: Chart Accounts Cards Directory */}
-        {activeTab === 'list' ? (
-          <div className="mb-6">
-            <div className="flex flex-col gap-4 mb-6">
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">Accounts Directory</h3>
-                <p className="text-xs text-slate-500 font-medium">Search and manage accounts defining reporting codes and sub-ledgers.</p>
-              </div>
-
-              {/* Group Filter select - full width, big and readable */}
-              <div className="w-full">
-                <SearchableSelect
-                  options={groupFilterOptions}
-                  value={selectedGroupFilter}
-                  onChange={setSelectedGroupFilter}
-                  placeholder="All Group Accounts"
-                  searchPlaceholder="Search group accounts..."
-                />
-              </div>
-
-              {/* Bottom row: Sort and Search */}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                {/* Sorting options */}
-                <div className="flex bg-slate-100 p-0.5 rounded-lg text-xs font-semibold border border-slate-200 self-start">
-                  <button
-                    type="button"
-                    onClick={() => setSortBy('code')}
-                    className={`px-3.5 py-2 rounded-md transition-all ${sortBy === 'code' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold scale-[1.02]' : 'text-slate-500 hover:text-slate-800'}`}
-                  >
-                    Sort by Code
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSortBy('name')}
-                    className={`px-3.5 py-2 rounded-md transition-all ${sortBy === 'name' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold scale-[1.02]' : 'text-slate-500 hover:text-slate-800'}`}
-                  >
-                    Sort by Name
-                  </button>
-                </div>
-
-                {/* Search Bar */}
-                <div className="relative flex-1 min-w-[270px] sm:max-w-sm">
-                  <input
-                    type="text"
-                    placeholder="Search by code, account name..."
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    className="soleria-input w-full py-2 px-3.5 text-sm pr-10 font-semibold bg-white shadow-sm hover:border-[#B08D57] transition-all"
-                  />
-                  <Search className="absolute right-3.5 top-2.5 text-slate-400" size={16} />
-                </div>
-              </div>
+          {/* Filters Toolbar */}
+          <div className="flex flex-col gap-4">
+            <div className="w-full">
+              <SearchableSelect
+                options={groupFilterOptions}
+                value={selectedGroupFilter}
+                onChange={setSelectedGroupFilter}
+                placeholder="All Group Accounts"
+                searchPlaceholder="Search group accounts..."
+              />
             </div>
 
-            {filteredAndSortedCharts.length === 0 ? (
-              <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl bg-white">
-                No registered accounts found matching your search.
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div className="flex bg-slate-100 p-0.5 rounded-xl text-xs font-semibold border border-slate-200 self-start">
+                <button
+                  type="button"
+                  onClick={() => setSortBy('code')}
+                  className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${sortBy === 'code' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                  Sort by Code
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSortBy('name')}
+                  className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${sortBy === 'name' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                  Sort by Name
+                </button>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredAndSortedCharts.map(c => {
-                  const initialLetter = c.name.charAt(0).toUpperCase();
-                  const groupName = state.groupAccounts.find(g => g.id === c.groupId)?.name || 'UNKNOWN GROUP';
-                  const childAccounts = state.businessAccounts.filter(b => b.controlId === c.id);
 
-                  return (
-                    <div
-                      key={c.id}
-                      className="bg-white border rounded-xl p-5 hover:border-[#B08D57] hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
-                      style={{ borderColor: 'var(--border-color)' }}
-                      onClick={() => setViewingChartId(c.id)}
-                    >
-                      <div>
-                        {/* Card Top: Code & Parent group */}
-                        <div className="flex items-center justify-between mb-3.5 gap-2">
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider flex-shrink-0">
-                            CODE: {c.id}
-                          </span>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            <span className="text-[10px] font-bold text-[#B08D57] uppercase tracking-wider truncate max-w-[135px]" title={groupName}>
-                              {groupName}
-                            </span>
-                            <ChevronRight size={16} className="text-slate-400" />
-                          </div>
-                        </div>
-
-                        {/* Card Middle: Avatar circle + Name */}
-                        <div className="flex items-start gap-3 mb-4">
-                          <div className="w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm bg-slate-50 text-slate-600 group-hover:bg-[#111c2a] group-hover:text-[#B08D57] transition-all duration-300 flex-shrink-0">
-                            {initialLetter}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
-                              {c.name}
-                            </h4>
-                            <p className="text-[11px] text-slate-400 font-medium mt-0.5 uppercase tracking-wider truncate">
-                              {childAccounts.length} business account{childAccounts.length !== 1 ? 's' : ''}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Card Bottom: Actions */}
-                      <div className="border-t pt-3 mt-1 flex items-center justify-between gap-3" onClick={(e) => e.stopPropagation()}>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider border ${
-                          c.status === 'Active'
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : 'bg-rose-50 text-rose-700 border-rose-200'
-                        }`}>
-                          {c.status === 'Active' ? 'Active' : 'Inactive'}
-                        </span>
-
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => handleSelectChart(c)}
-                            className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
-                            title="Edit Account"
-                          >
-                            <Edit2 size={15} />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteChart(c.id)}
-                            className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                            title="Delete Account"
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="relative flex-1 min-w-[270px] sm:max-w-sm">
+                <input
+                  type="text"
+                  placeholder="Search by code, account name..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  className="soleria-input w-full py-2 px-3.5 text-xs pr-10 font-semibold"
+                />
+                <Search className="absolute right-3.5 top-2.5 text-slate-400" size={14} />
               </div>
-            )}
+            </div>
+          </div>
+        </div>
+
+        {/* Chart Accounts Cards Grid (§1 Standard) */}
+        {filteredAndSortedCharts.length === 0 ? (
+          <div className="card-white p-12 text-center text-slate-400">
+            <BookOpen size={36} className="mx-auto mb-3 text-slate-300" />
+            <p className="font-semibold text-slate-600">No registered chart accounts found matching your search.</p>
           </div>
         ) : (
-          /* View 2: Form View */
-          <div className="max-w-2xl mx-auto">
-            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" style={{ overflow: 'visible' }}>
-              <div className="flex items-center gap-3 border-b pb-4 mb-6">
-                <button 
-                  onClick={() => {
-                    setActiveTab('list');
-                    setSelectedId(null);
-                  }}
-                  className="p-1.5 rounded-lg border hover:bg-slate-50 transition-colors"
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredAndSortedCharts.map(c => {
+              const groupName = state.groupAccounts.find(g => g.id === c.groupId)?.name || 'UNKNOWN GROUP';
+              const childAccounts = state.businessAccounts.filter(b => b.controlId === c.id);
+
+              return (
+                <div
+                  key={c.id}
+                  onClick={() => setViewingChartId(c.id)}
+                  className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
                 >
-                  <ArrowLeft size={16} className="text-slate-600" />
-                </button>
-                <div>
-                  <h3 className="font-lora font-semibold text-lg text-slate-800">
-                    {selectedId ? 'Edit Account' : 'Register New Account'}
-                  </h3>
-                  <p className="text-xs text-slate-500 font-medium">Configure account details, parent group structures, and status parameters.</p>
+                  <div>
+                    {/* Header: Title + Status Badge */}
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
+                        {c.name}
+                      </h4>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border flex-shrink-0 ${
+                        c.status === 'Active' 
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                          : 'bg-rose-50 text-rose-700 border-rose-200'
+                      }`}>
+                        {c.status === 'Active' ? 'Active' : 'Closed'}
+                      </span>
+                    </div>
+
+                    {/* Subtitle: Code in mono */}
+                    <div className="font-mono text-xs text-slate-400 mb-3">
+                      Chart Code: <span className="font-semibold text-slate-600">#{c.id}</span>
+                    </div>
+
+                    <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5 flex flex-col gap-1">
+                      <div className="font-semibold text-[#B08D57] truncate" title={groupName}>
+                        Group: {groupName}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        Sub-Ledgers Linked: <span className="font-semibold text-slate-700">{childAccounts.length}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Footer Bar */}
+                  <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
+                    <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => handleOpenEditModal(c)}
+                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                        title="Edit Chart Account"
+                      >
+                        <Edit2 size={15} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteChart(c.id)}
+                        className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                        title="Delete Chart Account"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+
+                    <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
+                      View Sub-Ledgers <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
+                    </span>
+                  </div>
                 </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Drill-down Modal showing child business accounts */}
+        {viewingChartId && viewingChart && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={() => setViewingChartId(null)}>
+            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
+                <div>
+                  <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
+                    <BookOpen size={18} className="text-[#B08D57]" /> {viewingChart.name}
+                  </h3>
+                  <p className="text-xs text-slate-500">Chart Code #{viewingChart.id}</p>
+                </div>
+                <button
+                  onClick={() => setViewingChartId(null)}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
               </div>
 
-              <form onSubmit={handleSave} className="flex flex-col gap-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Settings size={15} className="text-[#B08D57]" />
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Account Configuration</span>
+              <div className="p-5 max-h-96 overflow-y-auto">
+                <div className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-3">
+                  Linked Sub-Ledgers / Business Accounts ({viewingChildBizAccounts.length})
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {viewingChildBizAccounts.length === 0 ? (
+                  <div className="text-center p-6 text-slate-400 italic text-xs">
+                    No business accounts registered under this chart head.
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {viewingChildBizAccounts.map(b => (
+                      <div key={b.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
+                        <div>
+                          <div className="font-semibold text-xs text-slate-900">{b.name}</div>
+                          <div className="font-mono text-[11px] text-slate-400">Code: #{b.id}</div>
+                        </div>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase border ${b.status === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                          {b.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="p-4 border-t border-slate-100 flex justify-end">
+                <button onClick={() => setViewingChartId(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Dialogue Box Pop-up */}
+        {isModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}>
+            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
+                <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
+                  <Settings size={18} className="text-[#B08D57]" />
+                  {selectedId ? 'Edit Chart Account' : 'Register New Chart Account'}
+                </h3>
+                <button
+                  onClick={handleCloseModal}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSave} className="p-5 flex flex-col gap-4">
+                {errorMsg && (
+                  <div className="banner-error rounded-lg px-3 py-2 text-xs">{errorMsg}</div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Account Code</label>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                      Chart Account Code <span className="text-rose-500">*</span>
+                    </label>
                     <input
                       type="text"
                       value={id}
                       onChange={e => setId(e.target.value)}
                       placeholder="e.g. 110001"
                       disabled={!!selectedId}
-                      className="soleria-input font-mono font-semibold disabled:bg-slate-100 disabled:text-slate-500"
+                      className="soleria-input w-full font-mono font-semibold disabled:bg-slate-100 disabled:text-slate-500"
+                      autoFocus={!selectedId}
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Account Name</label>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                      Account Name <span className="text-rose-500">*</span>
+                    </label>
                     <input
                       type="text"
                       value={name}
                       onChange={e => setName(e.target.value)}
-                      placeholder="e.g. CUSTOMERS BALANCES"
-                      className="soleria-input font-semibold"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Parent Group A/C</label>
-                    <SearchableSelect
-                      options={state.groupAccounts.map(g => ({
-                        value: g.id,
-                        label: `${g.name} (${g.id})`
-                      }))}
-                      value={groupId}
-                      onChange={setGroupId}
-                      placeholder="Select Group..."
-                      searchPlaceholder="Search group accounts..."
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Link Code</label>
-                    <input
-                      type="text"
-                      value={linkCode}
-                      onChange={e => setLinkCode(e.target.value)}
-                      className="soleria-input font-mono font-medium"
+                      placeholder="e.g. CUSTOMERS ACCOUNTS"
+                      className="soleria-input w-full font-semibold"
+                      autoFocus={!!selectedId}
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
-                  <select
-                    value={status}
-                    onChange={e => setStatus(e.target.value as any)}
-                    className="soleria-input cursor-pointer font-medium"
-                  >
-                    <option value="Active">Active</option>
-                    <option value="Closed">Closed</option>
-                  </select>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                    Parent Group Account <span className="text-rose-500">*</span>
+                  </label>
+                  <SearchableSelect
+                    options={groupSelectOptions}
+                    value={groupId}
+                    onChange={setGroupId}
+                    placeholder="Select Group Account..."
+                    searchPlaceholder="Search group accounts..."
+                  />
                 </div>
 
-                <div className="flex justify-end gap-3 mt-6 border-t pt-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                      Link Code
+                    </label>
+                    <input
+                      type="text"
+                      value={linkCode}
+                      onChange={e => setLinkCode(e.target.value)}
+                      className="soleria-input w-full font-mono font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                      Status
+                    </label>
+                    <select
+                      value={status}
+                      onChange={e => setStatus(e.target.value as any)}
+                      className="soleria-input w-full cursor-pointer font-medium"
+                    >
+                      <option value="Active">Active</option>
+                      <option value="Closed">Closed</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                   <button
                     type="button"
-                    onClick={() => {
-                      setActiveTab('list');
-                      setSelectedId(null);
-                    }}
-                    className="px-5 py-2.5 text-xs font-bold text-slate-500 hover:text-slate-700 transition-colors uppercase tracking-wider"
+                    onClick={handleCloseModal}
+                    className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-slate-900 uppercase tracking-wider"
+                    className="btn-gold px-5 py-2 text-xs font-semibold cursor-pointer flex items-center gap-1.5"
                   >
-                    <Save size={14} /> Save Details
+                    <Save size={14} /> Save Chart Account
                   </button>
                 </div>
               </form>
@@ -425,68 +476,6 @@ export default function ChartAcSetupPage() {
         )}
 
       </div>
-
-      {/* Details window: every Business Account registered under this chart account */}
-      {viewingChartId && (() => {
-        const c = state.chartAccounts.find(x => x.id === viewingChartId);
-        if (!c) return null;
-        const groupName = state.groupAccounts.find(g => g.id === c.groupId)?.name || 'UNKNOWN GROUP';
-        const childAccounts = state.businessAccounts.filter(b => b.controlId === c.id);
-
-        return (
-          <div
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn"
-            data-no-print
-            onClick={() => setViewingChartId(null)}
-          >
-            <div
-              className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-2xl mx-4 animate-scaleUp max-h-[80vh] overflow-y-auto"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between border-b pb-3 mb-4">
-                <div>
-                  <h3 className="font-lora font-bold text-lg text-slate-800">{c.name}</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Code: {c.id} · {groupName} · {childAccounts.length} business account{childAccounts.length !== 1 ? 's' : ''}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setViewingChartId(null)}
-                  className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
-                  title="Close"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              {childAccounts.length === 0 ? (
-                <p className="text-sm text-slate-400 text-center py-8">No Business Accounts registered under this account yet.</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-sm">
-                    <thead>
-                      <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                        <th className="p-2 pl-3">Code</th>
-                        <th className="p-2">Account Name</th>
-                        <th className="p-2">City / Region</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {childAccounts.map(b => (
-                        <tr key={b.id} className="border-t hover:bg-slate-50" style={{ borderColor: 'var(--border-table)' }}>
-                          <td className="p-2 pl-3 font-mono text-slate-600">{b.id}</td>
-                          <td className="p-2 font-semibold text-slate-700">{b.name}</td>
-                          <td className="p-2 text-slate-500">{b.region || '-'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })()}
     </AppLayout>
   );
 }

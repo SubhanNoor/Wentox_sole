@@ -1432,6 +1432,14 @@ CREATE TABLE dbo.expenses (
   -- and date, for the record and for tracing it on a statement later.
   issued_cheque_no   VARCHAR(50) NULL,
   issued_cheque_date DATE        NULL,
+  -- CHEQUE_ISSUED only, POST-v4.3: re-added for the "Cheque Return" page's issued-cheque bounce/
+  -- return path (010_expenses_issued_cheque_reversal.sql) — same reverse-never-delete lifecycle
+  -- dbo.cheques' own bounced_date/returned_date/return_reason already gives CHEQUE_ENDORSED, just
+  -- kept on this row instead, since a cheque we write still isn't a dbo.cheques row.
+  issued_cheque_status        VARCHAR(20)   NOT NULL CONSTRAINT DF_expenses_issued_cheque_status DEFAULT ('PENDING'),
+  issued_cheque_bounced_date  DATE          NULL,
+  issued_cheque_returned_date DATE          NULL,
+  issued_cheque_return_reason NVARCHAR(500) NULL,
   remarks      NVARCHAR(500) NULL,
   status       VARCHAR(10)   NOT NULL CONSTRAINT DF_exp_status  DEFAULT ('CONFIRMED'),
   created_by   INT           NULL,
@@ -1453,6 +1461,14 @@ CREATE TABLE dbo.expenses (
   CONSTRAINT CK_expenses_mode   CHECK (payment_mode IN
         ('CASH','CHEQUE_ENDORSED','CHEQUE_ISSUED','ONLINE')),
   CONSTRAINT CK_expenses_status CHECK (status IN ('CONFIRMED','DRAFT')),
+  CONSTRAINT CK_expenses_issued_cheque_status CHECK (
+        issued_cheque_status IN ('PENDING','BOUNCED','RETURNED')),
+  CONSTRAINT CK_expenses_issued_cheque_bounced CHECK (
+        (issued_cheque_bounced_date IS NULL     AND issued_cheque_status <> 'BOUNCED')
+     OR (issued_cheque_bounced_date IS NOT NULL AND issued_cheque_status =  'BOUNCED')),
+  CONSTRAINT CK_expenses_issued_cheque_returned CHECK (
+        (issued_cheque_returned_date IS NULL     AND issued_cheque_status <> 'RETURNED')
+     OR (issued_cheque_returned_date IS NOT NULL AND issued_cheque_status =  'RETURNED')),
   -- Each mode carries exactly the identity it needs and nothing it does not.
   CONSTRAINT CK_expenses_payment CHECK (
         (payment_mode = 'CASH'
@@ -1470,6 +1486,9 @@ CREATE TABLE dbo.expenses (
 );
 CREATE INDEX IX_expenses_date ON dbo.expenses(expense_date);
 CREATE INDEX IX_expenses_ba   ON dbo.expenses(ba_id, expense_date);
+-- "Cheque Return" page's issued-cheque list (mirrors IX_cheques_endorsable).
+CREATE INDEX IX_expenses_issued_cheque_returnable ON dbo.expenses(payment_mode, issued_cheque_status)
+       WHERE payment_mode = 'CHEQUE_ISSUED' AND issued_cheque_status = 'PENDING';
 GO
 -- USED BY: Expense (Kharch) entry screen, including the vendor-payment
 -- flow (pick a vendor -> resolves to vendors.ba_id -> expenses.ba_id);
@@ -1807,6 +1826,36 @@ GO
 -- matching 'CHEQUE_DUE:<receipt_id>' row before showing an amber/red badge
 -- for a cheque due within 7 days / already past due
 -- (sourced from dbo.cheques.cheque_date / cheque_status, not receipts).
+
+/* ----------------------------------------------------------------------------
+   dbo.generated_alerts
+   WHAT:  Milestone 9.1 follow-up — alerts stopped being computed live on every
+          alerts:list call. A startup job (electron/main.js, runs once per app
+          launch, no repeat) computes cheque-due/sale-bill-due alerts and
+          persists them here; alerts:list just reads this table (still
+          filtered against dbo.alert_dismissals above). severity is
+          deliberately NOT stored — derived from alert_date vs today at read
+          time in alerts.service.js#list(), so display never goes stale
+          between job runs even though the job itself only runs at startup.
+---------------------------------------------------------------------------- */
+CREATE TABLE dbo.generated_alerts (
+  alert_id    INT IDENTITY(1,1) NOT NULL,
+  alert_key   VARCHAR(100)  NOT NULL,               -- 'CHEQUE_DUE:<cheque_id>' | 'PAYMENT_OVERDUE:<bill_id>'
+  kind        VARCHAR(20)   NOT NULL,
+  title       NVARCHAR(200) NOT NULL,
+  detail      NVARCHAR(300) NULL,
+  alert_date  DATE          NOT NULL,                -- the cheque/bill due date driving this alert
+  amount      DECIMAL(14,2) NOT NULL,
+  target_page VARCHAR(50)   NOT NULL,
+  target_tab  VARCHAR(50)   NULL,
+  created_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_galerts_created DEFAULT (SYSUTCDATETIME()),
+  updated_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_galerts_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_generated_alerts     PRIMARY KEY (alert_id),
+  CONSTRAINT UQ_generated_alerts_key UNIQUE (alert_key),
+  CONSTRAINT CK_generated_alerts_kind CHECK (kind IN ('CHEQUE_DUE','PAYMENT_OVERDUE'))
+);
+CREATE INDEX IX_generated_alerts_date ON dbo.generated_alerts(alert_date);
+GO
 
 /* ----------------------------------------------------------------------------
    dbo.transfers

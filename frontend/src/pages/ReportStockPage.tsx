@@ -1,6 +1,7 @@
 import { Fragment, useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
+import SearchableSelect from '@/components/SearchableSelect';
 import { Search, Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet, LayoutList, X } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
@@ -92,7 +93,19 @@ const getMonthName = (m: number): string => {
 export default function ReportStockPage() {
   const { state, dispatch } = useApp();
 
-  const [activeStockTab, setActiveStockTab] = useState<'current' | 'material' | 'ledger' | 'daily' | 'weekly' | 'monthly' | 'overall'>('current');
+  type StockTab = 'current' | 'material' | 'ledger' | 'daily' | 'weekly' | 'monthly' | 'overall';
+  const [activeStockTab, setActiveStockTab] = useState<StockTab>('current');
+  const [tabAnimating, setTabAnimating] = useState(false);
+
+  const switchStockTab = (next: StockTab) => {
+    if (next === activeStockTab) return;
+    setTabAnimating(true);
+    setTimeout(() => {
+      setActiveStockTab(next);
+      setTabAnimating(false);
+    }, 180);
+  };
+
   const [materialVendorFilter, setMaterialVendorFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -112,6 +125,52 @@ export default function ReportStockPage() {
   // Full Report modal — one row per article, every color's cartons/pairs inline on the same
   // line (no click-to-expand), ending with a combined Total Pairs across all colors.
   const [showColorReport, setShowColorReport] = useState(false);
+
+  // Material stock adjustment modal state (+ and -)
+  const [materialAdjModal, setMaterialAdjModal] = useState<{
+    isOpen: boolean;
+    type: 'ADD' | 'DEDUCT';
+    vendorId: string;
+    vendorName: string;
+    materialName: string;
+    unit: string;
+    currentQty: number;
+  } | null>(null);
+  const [materialAdjQty, setMaterialAdjQty] = useState('');
+  const [materialAdjRemarks, setMaterialAdjRemarks] = useState('');
+  const [materialAdjError, setMaterialAdjError] = useState('');
+
+  function handleSaveMaterialAdjustment() {
+    if (!materialAdjModal) return;
+    const qty = Number(materialAdjQty);
+    if (isNaN(qty) || qty <= 0) {
+      setMaterialAdjError('Quantity must be greater than 0.');
+      return;
+    }
+    if (materialAdjModal.type === 'DEDUCT' && materialAdjModal.currentQty - qty < 0) {
+      setMaterialAdjError(`Total stock after reduction cannot be less than 0. Maximum allowed reduction is ${materialAdjModal.currentQty.toLocaleString()} ${materialAdjModal.unit}.`);
+      return;
+    }
+
+    dispatch({
+      type: 'ADD_MATERIAL_ADJUSTMENT',
+      adjustment: {
+        id: 'madj_' + Date.now(),
+        date: getTodayDate(),
+        vendorId: materialAdjModal.vendorId,
+        materialName: materialAdjModal.materialName,
+        unit: materialAdjModal.unit,
+        type: materialAdjModal.type,
+        quantity: qty,
+        remarks: materialAdjRemarks
+      }
+    });
+
+    setMaterialAdjModal(null);
+    setMaterialAdjQty('');
+    setMaterialAdjRemarks('');
+    setMaterialAdjError('');
+  }
 
   const getProductLedgerEntries = (productIds: string[]): ProductLedgerEntry[] => {
     const idSet = new Set(productIds);
@@ -218,19 +277,25 @@ export default function ReportStockPage() {
   }, [filteredProducts]);
 
   // Material Stock: raw materials purchased from vendors, grouped by
-  // vendor + material name + unit, running qty = Purchase - Purchase Return.
-  // Separate from Current Stock (finished-goods pairs) — Purchase never
-  // touches Product.stock, so this is the only place raw material stock
-  // is visible.
+  // vendor + material name + unit, running qty = Purchase + Added - Purchase Return - Deducted.
   const materialStockRows = useMemo(() => {
-    const groups: Record<string, { vendorId: string; vendorName: string; materialName: string; unit: string; purchasedQty: number; returnedQty: number }> = {};
+    const groups: Record<string, {
+      vendorId: string;
+      vendorName: string;
+      materialName: string;
+      unit: string;
+      purchasedQty: number;
+      returnedQty: number;
+      addedQty: number;
+      deductedQty: number;
+    }> = {};
 
     state.purchases.forEach(p => {
       const vendorName = state.vendors.find(v => v.id === p.vendorId)?.name || 'Unknown Vendor';
       p.items.forEach(it => {
         const key = `${p.vendorId}::${it.materialName.trim().toLowerCase()}::${it.unit.trim().toLowerCase()}`;
         if (!groups[key]) {
-          groups[key] = { vendorId: p.vendorId, vendorName, materialName: it.materialName, unit: it.unit, purchasedQty: 0, returnedQty: 0 };
+          groups[key] = { vendorId: p.vendorId, vendorName, materialName: it.materialName, unit: it.unit, purchasedQty: 0, returnedQty: 0, addedQty: 0, deductedQty: 0 };
         }
         groups[key].purchasedQty += it.quantity;
       });
@@ -241,13 +306,29 @@ export default function ReportStockPage() {
       r.items.forEach(it => {
         const key = `${r.vendorId}::${it.materialName.trim().toLowerCase()}::${it.unit.trim().toLowerCase()}`;
         if (!groups[key]) {
-          groups[key] = { vendorId: r.vendorId, vendorName, materialName: it.materialName, unit: it.unit, purchasedQty: 0, returnedQty: 0 };
+          groups[key] = { vendorId: r.vendorId, vendorName, materialName: it.materialName, unit: it.unit, purchasedQty: 0, returnedQty: 0, addedQty: 0, deductedQty: 0 };
         }
         groups[key].returnedQty += it.quantity;
       });
     });
 
-    let rows = Object.values(groups).map(g => ({ ...g, currentQty: g.purchasedQty - g.returnedQty }));
+    (state.materialAdjustments || []).forEach(adj => {
+      const vendorName = state.vendors.find(v => v.id === adj.vendorId)?.name || 'Unknown Vendor';
+      const key = `${adj.vendorId}::${adj.materialName.trim().toLowerCase()}::${adj.unit.trim().toLowerCase()}`;
+      if (!groups[key]) {
+        groups[key] = { vendorId: adj.vendorId, vendorName, materialName: adj.materialName, unit: adj.unit, purchasedQty: 0, returnedQty: 0, addedQty: 0, deductedQty: 0 };
+      }
+      if (adj.type === 'ADD') {
+        groups[key].addedQty += adj.quantity;
+      } else {
+        groups[key].deductedQty += adj.quantity;
+      }
+    });
+
+    let rows = Object.values(groups).map(g => ({
+      ...g,
+      currentQty: g.purchasedQty + g.addedQty - g.returnedQty - g.deductedQty
+    }));
 
     if (materialVendorFilter !== 'all') {
       rows = rows.filter(r => r.vendorId === materialVendorFilter);
@@ -258,7 +339,7 @@ export default function ReportStockPage() {
     }
 
     return rows.sort((a, b) => a.vendorName.localeCompare(b.vendorName) || a.materialName.localeCompare(b.materialName));
-  }, [state.purchases, state.purchaseReturns, state.vendors, materialVendorFilter, searchQuery]);
+  }, [state.purchases, state.purchaseReturns, state.materialAdjustments, state.vendors, materialVendorFilter, searchQuery]);
 
   // 2. Production logs filter memo
   const filteredLogs = useMemo(() => {
@@ -391,7 +472,7 @@ export default function ReportStockPage() {
         {/* Top Tab Navigation - hidden on print */}
         <div className="flex flex-wrap gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           <button
-            onClick={() => setActiveStockTab('current')}
+            onClick={() => switchStockTab('current')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'current'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -401,7 +482,7 @@ export default function ReportStockPage() {
             Current Stock
           </button>
           <button
-            onClick={() => setActiveStockTab('material')}
+            onClick={() => switchStockTab('material')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'material'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -411,7 +492,7 @@ export default function ReportStockPage() {
             Material Stock
           </button>
           <button
-            onClick={() => setActiveStockTab('ledger')}
+            onClick={() => switchStockTab('ledger')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'ledger'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -421,7 +502,7 @@ export default function ReportStockPage() {
             Product Ledger
           </button>
           <button
-            onClick={() => setActiveStockTab('daily')}
+            onClick={() => switchStockTab('daily')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'daily'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -431,7 +512,7 @@ export default function ReportStockPage() {
             Daily Production
           </button>
           <button
-            onClick={() => setActiveStockTab('weekly')}
+            onClick={() => switchStockTab('weekly')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'weekly'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -441,7 +522,7 @@ export default function ReportStockPage() {
             Weekly Production
           </button>
           <button
-            onClick={() => setActiveStockTab('monthly')}
+            onClick={() => switchStockTab('monthly')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'monthly'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -451,7 +532,7 @@ export default function ReportStockPage() {
             Monthly Production
           </button>
           <button
-            onClick={() => setActiveStockTab('overall')}
+            onClick={() => switchStockTab('overall')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'overall'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -463,7 +544,7 @@ export default function ReportStockPage() {
         </div>
 
         {/* On-screen View - hidden on print */}
-        <div data-no-print>
+        <div data-no-print className={`transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
           {/* Search and Filters */}
           <div className="p-3 rounded-lg border mb-4 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }}>
             <div className="flex flex-wrap items-center gap-2.5">
@@ -478,16 +559,18 @@ export default function ReportStockPage() {
                 />
               </div>
               
-              <select
-                value={selectedCategory}
-                onChange={e => setSelectedCategory(e.target.value)}
-                className="soleria-input py-1.5 px-2.5 cursor-pointer text-xs font-semibold w-40 shrink-0"
-              >
-                <option value="all">All Categories</option>
-                {state.categories.map(cat => (
-                  <option key={cat.id} value={cat.id}>{cat.name}</option>
-                ))}
-              </select>
+              <div className="w-44 shrink-0">
+                <SearchableSelect
+                  options={[
+                    { value: 'all', label: 'All Categories' },
+                    ...state.categories.map(cat => ({ value: cat.id, label: cat.name }))
+                  ]}
+                  value={selectedCategory}
+                  onChange={setSelectedCategory}
+                  placeholder="All Categories"
+                  searchPlaceholder="Filter category..."
+                />
+              </div>
 
               {activeStockTab === 'current' && (
                 <button
@@ -511,20 +594,22 @@ export default function ReportStockPage() {
 
             {/* Timeframe Filters based on Active Tab */}
             {activeStockTab !== 'current' && (
-              <div className="flex flex-wrap items-center gap-4 pt-3 border-t" style={{ borderColor: 'var(--border-color)' }}>
+              <div className="flex flex-wrap items-center gap-4 mt-3 pt-3 border-t border-slate-200/80">
                 {activeStockTab === 'material' && (
                   <div className="flex items-center gap-2">
                     <label className="text-xs font-semibold text-slate-500 uppercase">Vendor:</label>
-                    <select
-                      value={materialVendorFilter}
-                      onChange={e => setMaterialVendorFilter(e.target.value)}
-                      className="soleria-input py-1.5 px-3 text-sm font-semibold cursor-pointer"
-                    >
-                      <option value="all">All Vendors</option>
-                      {state.vendors.map(v => (
-                        <option key={v.id} value={v.id}>{v.name}</option>
-                      ))}
-                    </select>
+                    <div className="w-48">
+                      <SearchableSelect
+                        options={[
+                          { value: 'all', label: 'All Vendors' },
+                          ...state.vendors.map(v => ({ value: v.id, label: v.name }))
+                        ]}
+                        value={materialVendorFilter}
+                        onChange={setMaterialVendorFilter}
+                        placeholder="All Vendors"
+                        searchPlaceholder="Filter vendor..."
+                      />
+                    </div>
                   </div>
                 )}
                 {activeStockTab === 'ledger' && (
@@ -549,16 +634,18 @@ export default function ReportStockPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <label className="text-xs font-semibold text-slate-500 uppercase">Vendor:</label>
-                      <select
-                        value={ledgerVendorFilter}
-                        onChange={e => setLedgerVendorFilter(e.target.value)}
-                        className="soleria-input py-1.5 px-3 text-sm font-semibold cursor-pointer"
-                      >
-                        <option value="all">All Vendors</option>
-                        {state.vendors.map(v => (
-                          <option key={v.id} value={v.id}>{v.name}</option>
-                        ))}
-                      </select>
+                      <div className="w-48">
+                        <SearchableSelect
+                          options={[
+                            { value: 'all', label: 'All Vendors' },
+                            ...state.vendors.map(v => ({ value: v.id, label: v.name }))
+                          ]}
+                          value={ledgerVendorFilter}
+                          onChange={setLedgerVendorFilter}
+                          placeholder="All Vendors"
+                          searchPlaceholder="Filter vendor..."
+                        />
+                      </div>
                     </div>
                   </div>
                 )}
@@ -599,15 +686,17 @@ export default function ReportStockPage() {
                   <div className="flex items-center gap-3">
                     <div className="flex items-center gap-2">
                       <label className="text-xs font-semibold text-slate-500 uppercase">Month:</label>
-                      <select
-                        value={monthlyMonth}
-                        onChange={e => setMonthlyMonth(parseInt(e.target.value))}
-                        className="soleria-input py-1.5 px-3 text-sm font-semibold cursor-pointer"
-                      >
-                        {Array.from({ length: 12 }, (_, i) => (
-                          <option key={i} value={i}>{getMonthName(i)}</option>
-                        ))}
-                      </select>
+                      <div className="w-40">
+                        <SearchableSelect
+                          options={Array.from({ length: 12 }, (_, i) => ({
+                            value: String(i),
+                            label: getMonthName(i)
+                          }))}
+                          value={String(monthlyMonth)}
+                          onChange={(val: string) => setMonthlyMonth(parseInt(val, 10))}
+                          placeholder="Select month..."
+                        />
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -797,27 +886,81 @@ export default function ReportStockPage() {
                       <th className="p-3">Unit</th>
                       <th className="p-3 text-right">Purchased</th>
                       <th className="p-3 text-right">Returned</th>
+                      <th className="p-3 text-right">Manual Adj</th>
                       <th className="p-3 text-right">Current Stock</th>
+                      <th className="p-3 text-right pr-4">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {materialStockRows.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="text-center p-8 text-slate-400">
+                        <td colSpan={8} className="text-center p-8 text-slate-400">
                           No raw material purchases recorded yet.
                         </td>
                       </tr>
                     ) : (
-                      materialStockRows.map((r, idx) => (
-                        <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                          <td className="p-3 pl-4 font-semibold text-slate-700">{r.vendorName}</td>
-                          <td className="p-3 text-slate-800">{r.materialName}</td>
-                          <td className="p-3 text-slate-500">{r.unit}</td>
-                          <td className="p-3 text-right font-semibold text-emerald-700">{r.purchasedQty.toLocaleString()}</td>
-                          <td className="p-3 text-right font-semibold text-rose-700">{r.returnedQty > 0 ? r.returnedQty.toLocaleString() : '-'}</td>
-                          <td className={`p-3 text-right font-bold ${r.currentQty <= 0 ? 'text-red-600' : 'text-slate-900'}`}>{r.currentQty.toLocaleString()}</td>
-                        </tr>
-                      ))
+                      materialStockRows.map((r, idx) => {
+                        const netAdj = r.addedQty - r.deductedQty;
+                        return (
+                          <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                            <td className="p-3 pl-4 font-semibold text-slate-700">{r.vendorName}</td>
+                            <td className="p-3 text-slate-800">{r.materialName}</td>
+                            <td className="p-3 text-slate-500">{r.unit}</td>
+                            <td className="p-3 text-right font-semibold text-emerald-700">{r.purchasedQty.toLocaleString()}</td>
+                            <td className="p-3 text-right font-semibold text-rose-700">{r.returnedQty > 0 ? r.returnedQty.toLocaleString() : '-'}</td>
+                            <td className="p-3 text-right text-xs font-semibold text-slate-600">
+                              {netAdj > 0 ? `+${netAdj.toLocaleString()}` : netAdj < 0 ? `${netAdj.toLocaleString()}` : '-'}
+                            </td>
+                            <td className={`p-3 text-right font-bold ${r.currentQty <= 0 ? 'text-red-600' : 'text-slate-900'}`}>{r.currentQty.toLocaleString()}</td>
+                            <td className="p-3 text-right pr-4">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => {
+                                    setMaterialAdjModal({
+                                      isOpen: true,
+                                      type: 'DEDUCT',
+                                      vendorId: r.vendorId,
+                                      vendorName: r.vendorName,
+                                      materialName: r.materialName,
+                                      unit: r.unit,
+                                      currentQty: r.currentQty
+                                    });
+                                    setMaterialAdjQty('');
+                                    setMaterialAdjRemarks('');
+                                    setMaterialAdjError('');
+                                  }}
+                                  title="Deduct / Reduce Material Stock"
+                                  className="border border-slate-900 rounded bg-transparent text-slate-900 hover:bg-slate-100 transition-colors flex items-center justify-center font-bold text-xs cursor-pointer"
+                                  style={{ width: '24px', height: '24px' }}
+                                >
+                                  -
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setMaterialAdjModal({
+                                      isOpen: true,
+                                      type: 'ADD',
+                                      vendorId: r.vendorId,
+                                      vendorName: r.vendorName,
+                                      materialName: r.materialName,
+                                      unit: r.unit,
+                                      currentQty: r.currentQty
+                                    });
+                                    setMaterialAdjQty('');
+                                    setMaterialAdjRemarks('');
+                                    setMaterialAdjError('');
+                                  }}
+                                  title="Add Material Stock"
+                                  className="border border-slate-900 rounded bg-transparent text-slate-900 hover:bg-slate-100 transition-colors flex items-center justify-center font-bold text-xs cursor-pointer"
+                                  style={{ width: '24px', height: '24px' }}
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1546,6 +1689,79 @@ export default function ReportStockPage() {
           </div>
         );
       })()}
+
+      {/* Material Stock Adjustment Modal Dialog (+ and -) */}
+      {materialAdjModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 border border-slate-200" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="flex items-center justify-between pb-4 border-b">
+              <h3 className="text-lg font-bold text-slate-800 font-lora">
+                {materialAdjModal.type === 'DEDUCT' ? 'Deduct Material Stock' : 'Add Material Stock'}
+              </h3>
+              <button
+                onClick={() => setMaterialAdjModal(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="py-4 space-y-4">
+              <div className="bg-slate-50 p-3 rounded-lg border text-xs space-y-1.5 text-slate-700">
+                <div><span className="font-semibold text-slate-500 uppercase tracking-wider text-[10px]">Vendor:</span> <span className="font-bold text-slate-800">{materialAdjModal.vendorName}</span></div>
+                <div><span className="font-semibold text-slate-500 uppercase tracking-wider text-[10px]">Material:</span> <span className="font-bold text-slate-800">{materialAdjModal.materialName}</span></div>
+                <div><span className="font-semibold text-slate-500 uppercase tracking-wider text-[10px]">Unit:</span> <span className="font-semibold text-slate-800">{materialAdjModal.unit}</span></div>
+                <div><span className="font-semibold text-slate-500 uppercase tracking-wider text-[10px]">Current Available Stock:</span> <strong className="text-slate-900 text-sm">{materialAdjModal.currentQty.toLocaleString()} {materialAdjModal.unit}</strong></div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {materialAdjModal.type === 'DEDUCT' ? 'Quantity to Deduct / Reduce *' : 'Quantity to Add *'}
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={materialAdjQty}
+                  onChange={e => {
+                    setMaterialAdjQty(e.target.value);
+                    setMaterialAdjError('');
+                  }}
+                  placeholder={`Enter quantity in ${materialAdjModal.unit}`}
+                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  autoFocus
+                />
+              </div>
+
+              {materialAdjError && (
+                <div className="p-3 text-xs bg-rose-50 text-rose-700 rounded-lg border border-rose-200 font-semibold">
+                  {materialAdjError}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3 border-t">
+              <button
+                type="button"
+                onClick={() => setMaterialAdjModal(null)}
+                className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveMaterialAdjustment}
+                className={`px-4 py-2 text-sm font-semibold text-white rounded-lg transition-colors ${
+                  materialAdjModal.type === 'DEDUCT'
+                    ? 'bg-rose-600 hover:bg-rose-700'
+                    : 'bg-emerald-600 hover:bg-emerald-700'
+                }`}
+              >
+                {materialAdjModal.type === 'DEDUCT' ? 'Confirm Reduction' : 'Confirm Addition'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppLayout>
   );
 }

@@ -61,8 +61,8 @@ export interface Employee {
   cityId?: string;  // the legacy ledger shows City for employee accounts
   baId: string;     // linked Business Account under the head the type implies
   employeeType: EmployeeType;
-  /** WORKER only — the stages he may be paid for. At least one; never empty. */
-  stages?: CostFieldKey[];
+  /** WORKER only — the stages / trades he may be paid for. At least one; never empty. */
+  stages?: string[];
   /** SALARIED only — the fixed monthly figure, typed when the employee is created. */
   monthlySalary?: number;
 }
@@ -298,7 +298,7 @@ export type ChequeStatus = 'PENDING' | 'DEPOSITED' | 'ENDORSED' | 'PARTIALLY_END
 export type UserRole = 'Admin' | 'User';
 
 /** You can only ever RECEIVE someone else's cheque, so no split is needed here. */
-export type ReceiptMode = 'Cash' | 'Cheque' | 'Online';
+export type ReceiptMode = 'Cash' | 'Cheque' | 'Online' | 'Bank Transfer';
 
 export interface Receipt {
   id: string; // Auto PK
@@ -311,6 +311,7 @@ export interface Receipt {
   bankId?: string;
   details: string; // bank details, online ref, etc.
   chequeNo?: string;
+  referenceNo?: string; // added reference number for bank transfers or other refs
   chequeDate?: string; // date written on the cheque
   chequeReceivedDate?: string; // date physically received
   chequeStatus?: ChequeStatus;
@@ -391,6 +392,15 @@ export interface Expense {
    */
   issuedChequeNo?: string;
   issuedChequeDate?: string;
+  /**
+   * ChequeIssued only — bounce/return lifecycle for a cheque WE wrote (mirrors Receipt's
+   * chequeStatus/bouncedDate/returnedDate, kept on this row since a cheque we write is never a
+   * dbo.cheques row). Undefined/'Pending' means still outstanding and returnable.
+   */
+  issuedChequeStatus?: 'Pending' | 'Bounced' | 'Returned';
+  issuedChequeBouncedDate?: string;
+  issuedChequeReturnedDate?: string;
+  issuedChequeReturnReason?: string;
   details: string;
   remarks: string;
   status?: 'Posted' | 'Unposted';
@@ -430,6 +440,17 @@ export interface PurchaseReturn {
   remarks: string;
   items: PurchaseReturnItem[];
   totalValue: number;
+}
+
+export interface MaterialAdjustment {
+  id: string;
+  date: string;
+  vendorId: string;
+  materialName: string;
+  unit: string;
+  type: 'ADD' | 'DEDUCT';
+  quantity: number;
+  remarks?: string;
 }
 
 export interface ProductionLog {
@@ -549,4 +570,5 @@ export type NavPage =
   | 'reports'
   | 'bilty-update'
   | 'overall-search'
-  | 'settings';
+  | 'settings'
+  | 'check-updates';

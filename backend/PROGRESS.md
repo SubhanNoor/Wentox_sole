@@ -105,6 +105,265 @@ Log every completed task here (newest first within its milestone). Format:
   wiring pass for this module (see Module 9.2 log once that lands).
 
 ---
+## Milestone 9, Module 9.1 — follow-up: alerts computed by a startup job, persisted, not live
+
+### 2026-08-05 — New `generated_alerts` table; a real (if minimal) "cron job"
+- **What:** User wanted alerts computed by a job that runs when the app starts, not recomputed
+  live on every `alerts:list` call. New `dbo.generated_alerts` table (migration
+  `011_generated_alerts.sql`, folded into `database/schema.sql` directly too, matching how
+  migration 010 was handled). `alerts.service.js#refreshAlerts()` is the job body: same
+  cheque-due/sale-bill-due queries `list()` used to run live, now upserted into `generated_alerts`
+  by `alert_key`, with a cleanup pass (`deleteGeneratedNotIn`) removing any stored row no longer in
+  the fresh set. `list()` now just reads that table — cheap, no recomputation — and derives
+  `severity` live from `alert_date` vs today at read time (deliberately not stored, so display
+  can't go stale between job runs even though the job itself doesn't repeat).
+- **Trigger, per explicit choice (asked directly, user picked "startup only, no repeat" over
+  hourly/15-minute options):** `electron/main.js#app.whenReady()` calls `refreshAlerts()` once,
+  right after `registerIpcHandlers()`, not awaited (so a slow/unreachable DB doesn't delay the
+  window opening) and wrapped in `.catch()` (so a failure logs instead of crashing startup). No
+  `setInterval`, no scheduler library — "once per app launch" is the entire mechanism.
+- **Known trade-off, accepted not fixed:** since the job never repeats, a cheque/bill that newly
+  enters the 7-day window during a long-running session won't appear until the app is restarted.
+  This was the explicit choice offered and picked, not an oversight.
+- **Files:** `backend/src/db/migrations/011_generated_alerts.sql`, `database/schema.sql`,
+  `System_architecture/database_schema_v4.3.md`, `backend/src/repositories/alerts.repository.js`,
+  `backend/src/services/alerts.service.js`, `backend/electron/main.js`.
+
+## Migration 010's columns folded into `database/schema.sql` directly
+
+### 2026-08-05 — `database/schema.sql`'s own `dbo.expenses` now carries the issued-cheque reversal columns
+- **What:** Per explicit instruction, `010_expenses_issued_cheque_reversal.sql`'s columns
+  (`issued_cheque_status`/`issued_cheque_bounced_date`/`issued_cheque_returned_date`/
+  `issued_cheque_return_reason`), its three CHECK constraints, and its filtered index are now also
+  baked directly into `database/schema.sql`'s `dbo.expenses` table — not just the migration file
+  and `database_schema_v4.3.md`. Matches the existing precedent already in this file for
+  `sale_bills.due_date` (added post-v4.3 the same way, flagged "POST-v4.3: re-added").
+  `dbo.draft_expenses` was deliberately NOT touched — a draft is never posted, so it can't have a
+  bounced/returned status to track.
+- **Still needed on a live/already-applied database:** `schema.sql` only describes a *fresh*
+  database — an existing `wentox_db` still needs migration `010_expenses_issued_cheque_reversal.sql`
+  run against it to actually gain these columns; editing `schema.sql` doesn't retroactively alter a
+  database that was already created from an earlier copy of this file.
+- **Files:** `database/schema.sql` only.
+
+### 2026-08-05 — Simplified per explicit instruction: no schema change needed
+- **What:** Removed the "Disposition" column entirely. Every row — endorsed-to-vendor/expense
+  (`ALLOCATION`), cheque-we-wrote (`ISSUED`), and deposited-awaiting-clearance (`DEPOSITED`) — now
+  shows the exact same two buttons: **Return** and **Mark Cleared**. What each button actually does
+  underneath is still routed by the row's real `kind` internally (never shown) — an `ALLOCATION`
+  Return still reverses one allocation, an `ISSUED` Return still reverses the expense's ledger
+  entry, a `DEPOSITED` Return now means "the bank bounced/rejected it" (reverses the *original
+  receipt*), and a `DEPOSITED` Mark Cleared is still the real `MARK_CHEQUE_CLEARED` dispatch.
+- **Key decision, resolved via two clarifying rounds:** "Mark Cleared" on an `ALLOCATION`/`ISSUED`
+  row has **no equivalent backend concept** — once a cheque is endorsed or issued, the money
+  already moved, so there's nothing pending to "clear" (unlike a deposited cheque, which has a real
+  `CLEARED` status waiting on bank confirmation). Explicitly chosen as a **local-only dismissal**
+  (a `dismissedKeys` Set in component state) rather than inventing a new schema status for this —
+  **no migration, no schema change**. Only `DEPOSITED`'s Mark Cleared writes real state.
+- **Files:** `frontend/src/pages/ChequeReturnPage.tsx` only — no backend files touched.
+
+## Milestone 9, Module 9.3 — follow-up: Check for Updates gets its own page; deposited cheques get both actions
+
+### 2026-08-05 — Two corrections after user review of the running app
+- **Check for Updates moved to its own page.** It was a card inside `SettingsPage.tsx`; user said
+  "make proper page." New `CheckForUpdatesPage.tsx`, own `NavPage` value (`check-updates`), own
+  sidebar entry under System Setup (admin-only), routed in `App.tsx`. `SettingsPage.tsx` reverted
+  back to just the admin-credentials form — nothing else changed about the update-check logic
+  itself, only where it lives.
+- **Cheque Return's `DEPOSITED` row now shows BOTH "Return" and "Mark Cleared."** Originally built
+  with "Mark Cleared" only; user pointed out a deposited cheque has two real, mutually exclusive
+  outcomes — the bank clears it, or the bank bounces/rejects it — so both need to be offered,
+  matching how `ChequesTab.tsx` already shows multiple coexisting actions per cheque. "Return" on a
+  `DEPOSITED` row now opens the same confirm modal as the other two row kinds, with its own
+  copy describing a bank bounce (reverses the *original receipt*, restoring the customer's due —
+  the same whole-cheque reversal `cheques.service.js#bounce()`/`#returnToSender()` do on the real
+  backend, distinct from `ALLOCATION`'s narrower single-allocation reversal). "Mark Cleared" is
+  unchanged (still a real dispatch, not a preview).
+- **Files:** `frontend/src/pages/CheckForUpdatesPage.tsx` (new), `frontend/src/pages/SettingsPage.tsx`
+  (reverted), `frontend/src/App.tsx`, `frontend/src/components/AppLayout.tsx`,
+  `frontend/src/types/index.ts`, `frontend/src/pages/ChequeReturnPage.tsx`.
+
+## Milestone 9, Module 9.3 — Check for Updates; Cheque Return — Mark Cleared follow-up
+
+### 2026-08-05 — electron-updater wired (check/install), first real window.api page; Cheque Return gained a Mark Cleared row
+- **What (Check for Updates):** New `electron-updater` dependency. `src/services/updates.service.js`
+  (no repository — nothing here touches SQL): `check()` probes internet via a HEAD request to
+  `api.github.com` specifically (not a generic host), then calls `autoUpdater.checkForUpdates()`
+  (fed via `setFeedURL({provider:'github', owner:'SubhanNoor', repo:'Wentox_sole'})`, not an
+  electron-builder-generated `app-update.yml`, since packaging isn't set up yet). Two distinct
+  failure points per explicit instruction: no internet AT ALL upfront throws `ApiError`
+  (`NO_INTERNET`, shown to the user); a connection dropping *during* the actual update lookup
+  (having passed the internet check) is caught internally and reported as "no update," never
+  surfaced as an error. `install()` downloads and calls `quitAndInstall()` once the user confirms.
+  `updates:check`/`updates:install` IPC channels. `SettingsPage.tsx` (frontend) gained a real
+  "Check for Updates" card calling `window.api.updates.check()`/`.install()` — the first page in
+  this entire frontend to call the real backend instead of `AppContext` demo data (there's no
+  meaningful demo version of an internet/update check to fake). New `frontend/src/types/
+  electron-api.d.ts` ambient type for `window.api` (didn't exist at all before this).
+- **Also found while scoping this**: `npm run electron:dev` (Vite + Electron concurrently) was
+  already present in `package.json` — nothing to build there, milestone9.md checkbox just hadn't
+  been ticked. `electron-builder` packaging config intentionally deferred — nothing meaningful to
+  package while the frontend still runs on demo data (Module 9.2).
+- **What (Cheque Return — Mark Cleared):** User pointed out a gap on the "Cheque Return" page: a
+  deposited cheque that's actually cleared by the bank has no reason to keep sitting on that page
+  (nothing left to return), but its ledger entry must stay untouched. Added a third row kind,
+  `DEPOSITED`, sourced from `state.receipts` where `chequeStatus === 'DEPOSITED'`. "Mark Cleared"
+  dispatches the real `MARK_CHEQUE_CLEARED` reducer action (already used correctly by
+  `ChequesTab.tsx`) rather than a preview message — the one deliberate exception to this page's
+  "not connected" scaffolding, since there's no reason to fake an action that already works. The
+  row disappears from the list on its own once `chequeStatus` flips to `'CLEARED'`, no extra
+  removal logic needed.
+- **Debugger pass, twice** (Check for Updates backend, then the frontend `SettingsPage.tsx`
+  addition + the `ChequeReturnPage.tsx` `DEPOSITED` row together) — both clean, no bugs found.
+  Checked: `checkInternet()`'s promise-settlement paths, the internet-check-vs-mid-check failure
+  boundary, `install()`'s double-reject safety, IPC/`FEATURES` registration, and that a `DEPOSITED`
+  row can never reach the Return-confirmation modal's `ALLOCATION`/`ISSUED`-only ternary.
+- **Not live-verified this session** — no SQL Server or packaged Electron build available in this
+  sandbox; the update-check flow additionally can't be meaningfully tested at all until
+  `electron-builder` packaging exists.
+- **Files:** `backend/package.json`, `backend/src/services/updates.service.js`,
+  `backend/src/ipc/updates.ipc.js`, `backend/src/ipc/index.js`, `backend/electron/preload.js`,
+  `frontend/src/pages/SettingsPage.tsx`, `frontend/src/types/electron-api.d.ts`,
+  `frontend/src/pages/ChequeReturnPage.tsx`.
+
+## Milestone 9, Module 9.1 — Alerts
+
+### 2026-08-05 — Cheque-due AND sale-bill-due-date alerts, both wired up
+- **What:** `alerts:list`/`alerts:dismiss`. User explicitly asked for both a cheque-date alert and a
+  sale-bill due-date alert, 7 days out, dismissible — overriding milestone9.md's original "payment-
+  overdue alert dropped in v4.3, cheque-due only" plan. Turned out to need no schema change at all:
+  `database/schema.sql` already had `sale_bills.due_date` and `alert_dismissals` re-added, with a
+  comment on the latter literally saying "this alert isn't wired up yet" — `database_schema_v4.3.md`
+  had the same column already in its own CREATE TABLE block, just stale surrounding prose from
+  before that restoration. Only the code (`alerts.repository/service/ipc.js`) was actually missing.
+- **How:** `chequeDueRows()` reuses `IX_cheques_due`'s exact filter (`cheque_status IN ('PENDING',
+  'PARTIALLY_ENDORSED')`); `saleBillDueRows()` only considers POSTED bills (derived via a
+  `ledger_entries` existence check, matching how "posted" is derived everywhere else — `sale_bills`
+  has no status column of its own). Both are unconditional — no "balance still positive" check —
+  since that would need a per-bill payment link this schema doesn't have (receipts are customer-
+  level, never tied to a specific bill); matches what was actually asked for, not UC-05's original,
+  now-stale wording. `alert_key` = `CHEQUE_DUE:<cheque_id>` / `PAYMENT_OVERDUE:<bill_id>`; dismiss
+  is permanent (`dismissed_until` stays `NULL`) and idempotent.
+- **Not live-verified this session** — no SQL Server reachable in this sandbox.
+- **Files:** `src/repositories/alerts.repository.js`, `src/services/alerts.service.js`,
+  `src/ipc/alerts.ipc.js`, `src/ipc/index.js`, `electron/preload.js`,
+  `System_architecture/database_schema_v4.3.md` (prose reconciliation only, no schema change).
+
+## Milestone 8, Modules 8.2 & 8.3 — Account Classes, Group/Chart/Business Accounts CRUD, Accounts Tree
+
+### 2026-08-05 — Built the last unbuilt system-setup layer (UC-15/16/17), found and fixed one real IPC bug before it shipped
+- **What:** `accountClasses` (read-only lookup), `groupAccounts` (full CRUD), `chartAccounts` (full
+  CRUD), `businessAccounts` (filled in `list()`/`update()`/`remove()`/`reactivate()` on top of the
+  existing `createUnderChartCode()`/`getById()`/`getCashAccount()`), and a new `accounts:tree`
+  cross-entity read. Full detail in `milestones/milestone8.md` Modules 8.2/8.3.
+- **Key decisions:** `groupAccounts` code = `<classDigit><3-digit serial>` (new class→digit
+  mapping, since `account_classes.code` is text); `chartAccounts` code = `<group.code><2-digit
+  serial>`, matching the majority of already-seeded reserved codes (4 payroll codes are pre-existing
+  outliers, flagged not fixed). Neither `chart_of_accounts` nor `business_accounts` has a hard
+  delete — both "remove" to `status = 'CLOSED'` (their only soft-delete column), blocked outright
+  for reserved chart codes and for any business account already owned by a vendor/customer/
+  employee/bank. `is_restricted` chart accounts (and business accounts under them) hidden from
+  non-ADMIN sessions across `list()`/`get()`/the tree, reusing `reports.service.js#paymentTrail()`'s
+  existing `session.role === 'ADMIN'` pattern (TASK-14) rather than inventing a new one.
+- **Bug found and fixed before this was ever run**: every new multi-word-feature `.ipc.js` file
+  (`businessAccounts`, `chartAccounts`, `groupAccounts`, `accountClasses`) registered camelCase
+  channel prefixes (`businessAccounts:list`), but `preload.js`'s `camelToKebab()` only ever computes
+  a kebab-case prefix from the `FEATURES` array (`business-accounts`) — every one of those channels,
+  including `businessAccounts:getCashAccount` from the earlier Cash/Transfer fix this same day,
+  would have been unreachable from the renderer. Fixed across all four files to match
+  `bankAccounts.ipc.js`/`subCustomers.ipc.js`'s existing convention.
+- **Debugger pass found one more real bug**: `businessAccounts.service.js#create()`'s `validate()`
+  only checked `name`/`ac_id` — `dbo.business_accounts`'s `CK_business_accounts_opening` requires
+  `opening_balance`/`opening_date` together or neither, so a payload with only one of the two would
+  have hit a raw SQL CHECK-constraint violation, which isn't an `ApiError` and so gets swallowed by
+  `ipc/wrap.js` into an opaque `INTERNAL` error with no indication which field was wrong. Fixed with
+  an explicit both-or-neither check in `validate()`, matching `CK_receipts_cheque`-style guards
+  elsewhere in this codebase that exist specifically to keep a DB constraint violation from ever
+  reaching the wire unexplained.
+- **Not live-verified this session** — no SQL Server reachable in this sandbox; no schema change
+  needed (the four tables already exist), but every new channel still needs a real CRUD pass
+  against `wentox_db` before this is "done" the way the rest of this log has been.
+- **Files:** `src/repositories/{accountClasses,groupAccounts,chartAccounts,businessAccounts,
+  accountsTree}.repository.js`, `src/services/{accountClasses,groupAccounts,chartAccounts,
+  businessAccounts,accountsTree}.service.js`, `src/ipc/{accountClasses,groupAccounts,chartAccounts,
+  businessAccounts,accounts}.ipc.js`, `src/ipc/index.js`, `electron/preload.js`.
+
+## Milestone 4, Module 4.4 — Transfer — follow-up: cash had no business account, so cash↔bank transfers were impossible
+
+### 2026-08-05 — Seeded a Cash business account; Cash Book now reads both dimensions cash posts across
+- **What:** Auditing milestones 1–7 for anything still missing (excluding frontend wiring) surfaced
+  a real gap: `dbo.transfers.from_ba_id`/`to_ba_id` are FKs to `business_accounts` only, but
+  `src/db/seeds/run.js` never created a `business_accounts` row for `CASH_IN_HAND` — only banks got
+  one. So a cash↔bank transfer was impossible to create at all, even though
+  `database/schema.sql`'s own comment on `business_accounts.opening_balance` says "cash needs one,
+  every bank needs one," and `cash_and_bank.md` §9 (decisions 4/5) requires exactly this (a single
+  Petty Cash account, opening balance on `business_accounts`) — §7 calls bank→cash "likely the most
+  common [transfer] of all" (wage withdrawals).
+- **How:** `ensureCashBusinessAccount()` added to `src/db/seeds/run.js` — idempotent, same
+  `code = chartCode + '0001'` composition every other reserved-account row uses, runs right after
+  the `CASH_IN_HAND` chart account is ensured, backfills on a re-seed of an already-live DB.
+  `businessAccountsRepository.findByAcId()` + `businessAccountsService.getCashAccount()` resolve it
+  by chart code (matching every other reserved-account lookup pattern in this codebase, e.g.
+  `chartAccountsRepository.findByCode`), rather than a hardcoded id. New
+  `businessAccounts:getCashAccount` IPC channel for a future Transfer screen's "Cash" option.
+  Fixed the report-side consequence at the same time: `reports.service.js#cashBook()` was reading
+  only `ledger_entries WHERE ac_id = CASH_IN_HAND's ac_id` — since a cash-side transfer posts via
+  the new Cash `ba_id` instead (same as every other transfer party), that query would have silently
+  missed it. `reports.repository.js#ledgerRows()`/`#netBalance()` gained an OR-condition path for
+  when BOTH `ba_id` and `ac_id` are passed together (only `cashBook()` does this; every other
+  caller still passes exactly one, unchanged) — matches rows from either dimension. Opening balance
+  for the combined query still only comes from the `business_accounts` side (chart accounts have no
+  `opening_balance` column).
+- **Known trade-off, not fixed:** Overall Trail will now show cash as two separate rows whenever a
+  cash-side transfer exists — one Chart-of-Account row for `CASH_IN_HAND` (from CASH
+  receipts/expenses, unchanged), one business-account row for the new Cash account (from transfers
+  only). Each is individually correct; nothing is double-counted or lost, it's just split across
+  two lines instead of one. Fully unifying it would mean switching CASH receipts/expenses to post
+  via the Cash `ba_id` too (matching how banks work — ONLINE/CHEQUE_ISSUED never post to a chart
+  account directly) — a larger, riskier change touching `receipts.service.js`/`expenses.service.js`
+  and out of scope for this fix.
+- **Not verified live this session** — no SQL Server reachable in this sandbox. Needs `npm run
+  seed` (backfills the Cash business account on the existing `wentox_db`) + a live cash↔bank
+  transfer create/post + Cash Book check, on a machine with the DB running, before this is
+  considered done the way every other entry in this log has been.
+- **Files:** `src/db/seeds/run.js`, `src/repositories/businessAccounts.repository.js`,
+  `src/services/businessAccounts.service.js`, `src/ipc/businessAccounts.ipc.js`,
+  `src/repositories/reports.repository.js`, `src/services/reports.service.js`.
+
+## Milestone 4, Module 4.2 — Expenses / Kharch — follow-up: Cheque Return for issued cheques
+
+### 2026-08-05 — Bounce/return for CHEQUE_ISSUED expenses (a cheque WE wrote, not just endorsed ones)
+- **What:** The existing "Cheque Return" page (2026-08-04 entry below) only covered undoing one
+  endorsement of a customer's cheque we'd passed on (`cheques.service.js#reverseAllocation`). User
+  pointed out the gap: a cheque **we** write to pay a vendor (`CHEQUE_ISSUED` expense) can also
+  bounce, and had no reversal path at all — deliberately, by the original schema design
+  (deduct-on-write, no pending state, no `cheques` row). Added `expenses.service.js#bounceIssuedCheque()`
+  / `#returnIssuedCheque()`, the mirror image of `cheques.service.js#reverseCheque()` but for an
+  `expenses` row instead of `cheques`/`receipts` rows.
+- **How:** New columns directly on `expenses` — `issued_cheque_status` (`PENDING`/`BOUNCED`/
+  `RETURNED`), `issued_cheque_bounced_date`, `issued_cheque_returned_date`,
+  `issued_cheque_return_reason` — same shape as `cheques`' own bounce/return columns, kept here
+  instead since a cheque we write still isn't a `cheques` row. `reverseIssuedCheque()` (shared by
+  both actions) requires the expense to be `CHEQUE_ISSUED`, `CONFIRMED`, and still `PENDING`, then
+  writes the opposite ledger pair (`Dr bank ba_id / Cr expense.ba_id` — undoing the original
+  `Dr ba_id / Cr bank_id`) dated the bounce/return date, and flips the status — nothing deleted or
+  rewritten, same reverse-never-delete rule as every other bounce/return flow. New
+  `listReturnableIssuedCheques()` (CONFIRMED, `CHEQUE_ISSUED`, `PENDING`) feeds the same "Cheque
+  Return" page as the existing endorsed-allocations list, per explicit user request — one page, one
+  merged row set, with the "From" column showing our bank's name instead of a customer's name for
+  these rows. New IPC channels `expenses:bounceIssuedCheque` / `expenses:returnIssuedCheque` /
+  `expenses:returnableIssuedCheques` (camelCase action names, matching the documented
+  `productColors.ipc.js` convention — `cheques.ipc.js`'s kebab-case actions predate that
+  convention and were left as-is, not touched here). Frontend: `ChequeReturnPage.tsx` (still
+  NOT CONNECTED demo scaffolding, same as the rest of the frontend) now merges endorsed-allocation
+  rows and issued-cheque rows into one table; `Expense` type gained the matching
+  `issuedChequeStatus`/`issuedChequeBouncedDate`/`issuedChequeReturnedDate`/`issuedChequeReturnReason`
+  fields.
+- **Files:** `System_architecture/database_schema_v4.3.md`,
+  `backend/src/db/migrations/010_expenses_issued_cheque_reversal.sql`,
+  `backend/src/repositories/expenses.repository.js`, `backend/src/services/expenses.service.js`,
+  `backend/src/ipc/expenses.ipc.js`, `frontend/src/types/index.ts`,
+  `frontend/src/pages/ChequeReturnPage.tsx`.
 
 ## Milestone 5, Module 5.2 — Reports — Milestone 5 now fully complete
 

@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
+import SearchableSelect from '@/components/SearchableSelect';
 import { Printer, Search, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { expenseModeLabel, getAccountBalance, getCashAccount } from '@/lib/cashbank';
@@ -356,26 +357,28 @@ export function ReportCashBookContent() {
               <div className="flex items-center gap-2">
                 <div>
                   <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Month:</span>
-                  <select
-                    value={filterMonth}
-                    onChange={e => setFilterMonth(parseInt(e.target.value))}
-                    className="soleria-input py-1.5 cursor-pointer text-xs min-w-[110px]"
-                  >
-                    {months.map((m, idx) => (
-                      <option key={idx} value={idx}>{m}</option>
-                    ))}
-                  </select>
+                  <div className="w-36">
+                    <SearchableSelect
+                      options={months.map((m, idx) => ({ value: String(idx), label: m }))}
+                      value={String(filterMonth)}
+                      onChange={(val: string) => setFilterMonth(parseInt(val, 10))}
+                      placeholder="Select month..."
+                    />
+                  </div>
                 </div>
                 <div>
                   <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Year:</span>
-                  <select
-                    value={filterYear}
-                    onChange={e => setFilterYear(parseInt(e.target.value))}
-                    className="soleria-input py-1.5 cursor-pointer text-xs min-w-[80px]"
-                  >
-                    <option value={2026}>2026</option>
-                    <option value={2025}>2025</option>
-                  </select>
+                  <div className="w-28">
+                    <SearchableSelect
+                      options={[
+                        { value: '2026', label: '2026' },
+                        { value: '2025', label: '2025' }
+                      ]}
+                      value={String(filterYear)}
+                      onChange={(val: string) => setFilterYear(parseInt(val, 10))}
+                      placeholder="Year"
+                    />
+                  </div>
                 </div>
               </div>
             )}

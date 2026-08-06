@@ -1106,8 +1106,13 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       Select Customer Name <span className="text-red-500 font-bold">*</span>
                     </label>
                     {!isViewMode && (
-                      <button type="button" onClick={() => setIsAddCustomerOpen(true)} className="text-[10px] font-bold text-blue-600 hover:text-blue-800 underline transition-colors">
-                        + Add New Customer
+                      <button
+                        type="button"
+                        onClick={() => setIsAddCustomerOpen(true)}
+                        className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102"
+                      >
+                        <Plus size={12} className="text-blue-600" />
+                        <span>Add New Customer</span>
                       </button>
                     )}
                   </div>
@@ -1176,8 +1181,13 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                         Sub-Customer <span className="text-red-500 font-bold">*</span>
                       </label>
                       {!isViewMode && (
-                        <button type="button" onClick={() => setIsAddSubCustomerOpen(true)} className="text-[10px] font-bold underline transition-colors text-blue-600 hover:text-blue-800">
-                          + Add New
+                        <button
+                          type="button"
+                          onClick={() => setIsAddSubCustomerOpen(true)}
+                          className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102"
+                        >
+                          <Plus size={12} className="text-blue-600" />
+                          <span>Add New</span>
                         </button>
                       )}
                     </div>

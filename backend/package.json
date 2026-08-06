@@ -15,12 +15,13 @@
   "dependencies": {
     "bcrypt": "^5.1.1",
     "dotenv": "^16.4.5",
+    "electron-updater": "^6.8.9",
     "mssql": "^11.0.1"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",
     "cross-env": "^7.0.3",
-    "electron": "^33.0.0",
+    "electron": "^33.4.11",
     "electron-builder": "^25.0.0",
     "nodemon": "^3.1.4"
   }

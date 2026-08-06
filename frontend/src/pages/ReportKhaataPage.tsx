@@ -23,7 +23,16 @@ export function ReportKhaataContent() {
   const { state } = useApp();
 
   const [customerId, setCustomerId] = useState('');
+  const [isClosing, setIsClosing] = useState(false);
   const [accountSearch, setAccountSearch] = useState('');
+
+  const handleCloseDetail = () => {
+    setIsClosing(true);
+    setTimeout(() => {
+      setCustomerId('');
+      setIsClosing(false);
+    }, 200);
+  };
   const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(getTodayDate());
 
@@ -307,8 +316,7 @@ export function ReportKhaataContent() {
                       <div
                         key={c.id}
                         onClick={() => setCustomerId(c.id)}
-                        className="bg-white border rounded-xl p-5 hover:border-amber-500 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 cursor-pointer flex flex-col justify-between group"
-                        style={{ borderColor: 'var(--border-color)' }}
+                        className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
                       >
                         <div>
                           {/* Card Top: Code & City badge */}
@@ -351,68 +359,73 @@ export function ReportKhaataContent() {
           </>
         ) : (
           /* 2. Specific Account Statement Ledger View */
-          <>
-            {/* Navigation / Action Bar */}
-            <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setCustomerId('')}
-                  className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm font-semibold"
-                >
-                  &larr; Back to Accounts Directory
-                </button>
-                <div className="text-sm font-semibold text-slate-600">
-                  Viewing Ledger: <span className="text-amber-800 font-bold">{selectedCustomer?.name}</span>
+          <div className={`transition-all duration-200 ${isClosing ? 'opacity-0 translate-y-2 scale-98' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
+            {/* Navigation & Action Card - data-no-print */}
+            <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-6 shadow-2xs" data-no-print>
+              {/* ROW 1: Back Button & Customer Name (Left), Opening Balance (Right) */}
+              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-3 mb-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={handleCloseDetail}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-50/80 hover:bg-amber-100/90 text-amber-900 border border-amber-200/80 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer shadow-2xs hover:shadow-xs"
+                  >
+                    &larr; Back to Accounts Directory
+                  </button>
+                  <div className="text-sm font-semibold text-slate-700">
+                    Viewing Ledger: <span className="font-lora font-bold text-slate-900 text-base ml-1">{selectedCustomer?.name}</span>
+                  </div>
                 </div>
-              </div>
-              
-              <div className="flex flex-col items-end gap-2">
-                <div className="text-right">
-                  <span className="block text-[10px] font-semibold text-slate-500 uppercase">Opening Balance</span>
-                  <span className="font-bold font-mono text-sm" style={{ color: 'var(--brand-gold)' }}>
+
+                <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Opening Balance:</span>
+                  <span className="font-bold font-mono text-sm text-[var(--brand-gold)]">
                     {formatCurrency(Math.abs(runningKhaata[0]?.balance || 0))}
                   </span>
                 </div>
-                <div className="flex items-center gap-4">
-                <div className="flex items-center gap-3">
-                  <div>
-                    <span className="block text-xs font-semibold text-slate-500 uppercase mb-0.5">From:</span>
+              </div>
+
+              {/* ROW 2: Date Filters (Left), Print & Export Buttons (Right) */}
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
                     <input
                       type="date"
                       value={fromDate}
                       onChange={e => setFromDate(e.target.value)}
-                      className="soleria-input py-1 text-xs"
+                      className="soleria-input py-1.5 px-3 text-xs font-semibold"
                     />
                   </div>
-                  <div>
-                    <span className="block text-xs font-semibold text-slate-500 uppercase mb-0.5">To:</span>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
                     <input
                       type="date"
                       value={toDate}
                       onChange={e => setToDate(e.target.value)}
-                      className="soleria-input py-1 text-xs"
+                      className="soleria-input py-1.5 px-3 text-xs font-semibold"
                     />
                   </div>
                 </div>
-                
-                <button
-                  onClick={() => window.print()}
-                  className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm self-end h-9 mt-4"
-                >
-                  <Printer size={16} /> Print Statement
-                </button>
-                <button
-                  onClick={exportToPDF}
-                  className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm self-end h-9 mt-4"
-                >
-                  <FileDown size={16} /> Export PDF
-                </button>
-                <button
-                  onClick={handleExportExcel}
-                  className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm self-end h-9 mt-4"
-                >
-                  <FileSpreadsheet size={16} /> Export Excel
-                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => window.print()}
+                    className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer"
+                  >
+                    <Printer size={14} /> Print Statement
+                  </button>
+                  <button
+                    onClick={exportToPDF}
+                    className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer"
+                  >
+                    <FileDown size={14} /> Export PDF
+                  </button>
+                  <button
+                    onClick={handleExportExcel}
+                    className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer"
+                  >
+                    <FileSpreadsheet size={14} /> Export Excel
+                  </button>
                 </div>
               </div>
             </div>
@@ -521,9 +534,8 @@ export function ReportKhaataContent() {
                 </table>
               </div>
             </div>
-          </>
+          </div>
         )}
-
       </div>
   );
 }

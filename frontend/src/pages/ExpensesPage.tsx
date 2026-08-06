@@ -134,7 +134,7 @@ export default function ExpensesPage() {
   // Vendor payments are Expense entries where the selected account's parent chart
   // account is "VENDORS ACCOUNTS" (210001) — no separate transaction page, this is
   // purely a UI-level distinction that feeds the Vendor Report.
-  const isVendorPayment = selectedBa?.chart_code === '210001';
+  const isVendorPayment = selectedBa?.ac_code === '210001';
   const linkedVendor = useMemo(() => {
     if (!isVendorPayment || !selectedBa) return undefined;
     return vendors.find(v => v.ba_id === selectedBa.ba_id);
@@ -616,7 +616,7 @@ export default function ExpensesPage() {
                   <div className="p-3 bg-amber-50/60 border border-amber-200/80 rounded-lg text-xs flex justify-between items-center">
                     <span className="text-amber-900 font-medium">Control Account Head:</span>
                     <span className="font-bold text-amber-950 uppercase tracking-wide">
-                      {selectedBa.chart_name || 'EXPENSES ACCOUNTS'}
+                      {selectedBa.ac_name || 'EXPENSES ACCOUNTS'}
                     </span>
                   </div>
                 )}

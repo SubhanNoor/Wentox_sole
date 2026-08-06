@@ -1077,8 +1077,13 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                       Delivery Agent (if any)
                     </label>
                     {!isViewMode && (
-                      <button type="button" onClick={() => setIsAddSubCustomerOpen(true)} className="text-[10px] font-bold underline transition-colors text-blue-600 hover:text-blue-800">
-                        + Add New
+                      <button
+                        type="button"
+                        onClick={() => setIsAddSubCustomerOpen(true)}
+                        className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102"
+                      >
+                        <Plus size={12} className="text-blue-600" />
+                        <span>Add New</span>
                       </button>
                     )}
                   </div>
@@ -1277,59 +1282,58 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           {/* Invoice Summary and Remarks */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4">
             {/* Remarks */}
-            <div className="md:col-span-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
-                Return Reason / Remarks
+            <div className="md:col-span-2 flex flex-col">
+              <label className="block text-xs font-bold uppercase tracking-wider mb-2 text-slate-500 font-inter">
+                RETURN REASON / REMARKS
               </label>
               <textarea
                 value={remarks}
                 disabled={isViewMode}
                 onChange={e => setRemarks(e.target.value)}
                 placeholder="Enter return reasons or remarks..."
-                className="soleria-input w-full"
-                rows={3}
+                className="soleria-input w-full flex-1 rounded-xl border border-slate-200/90 p-3.5 focus:ring-2 focus:ring-[var(--brand-gold)]/20 focus:border-[var(--brand-gold)] transition-all"
+                rows={4}
                 style={{ fontSize: '13px', resize: 'none' }}
               />
             </div>
 
             {/* Calculations Box */}
-            <div className="flex flex-col justify-between p-4 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md" style={{ minHeight: '160px' }}>
-              <div className="text-xs font-semibold uppercase tracking-wider border-b pb-1.5 mb-2 text-slate-400 border-slate-800">
-                Calculations
+            <div className="flex flex-col justify-between p-5 rounded-2xl border transition-all bg-[#111c2a] text-white border-slate-800 shadow-lg min-h-[180px]">
+              <div className="text-xs font-bold uppercase tracking-wider border-b pb-2 mb-3 text-slate-400 border-slate-800/80 font-inter">
+                CALCULATIONS
               </div>
               <div className="flex flex-col gap-2 font-inter text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Total Cartons:</span>
-                  <span className="font-semibold">{totalCartons}</span>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400 font-medium">Total Cartons:</span>
+                  <span className="font-semibold font-mono text-sm text-slate-200">{totalCartons}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Total Pairs:</span>
-                  <span className="font-semibold">{totalPairs}</span>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400 font-medium">Total Pairs:</span>
+                  <span className="font-semibold font-mono text-sm text-slate-200">{totalPairs.toLocaleString('en-US')}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Gross Total:</span>
-                  <span className="font-semibold">Rs {itemsTotalValue.toLocaleString('en-US')}</span>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400 font-medium">Gross Total:</span>
+                  <span className="font-semibold font-mono text-sm text-slate-200">Rs {itemsTotalValue.toLocaleString('en-US')}</span>
                 </div>
                 <div className="flex justify-between items-center mt-1">
-                  <span className="text-slate-400">Inv. Discount:</span>
+                  <span className="text-slate-400 font-medium">Inv. Discount:</span>
                   {isViewMode ? (
-                    <span className="font-semibold">Rs {invoiceDiscount.toLocaleString('en-US')}</span>
+                    <span className="font-semibold font-mono text-sm text-slate-200">Rs {invoiceDiscount.toLocaleString('en-US')}</span>
                   ) : (
                     <input
                       type="number"
                       value={invoiceDiscount || ''}
                       onChange={e => setInvoiceDiscount(Math.max(0, parseInt(e.target.value) || 0))}
-                      className="soleria-input text-right font-medium py-0.5 px-2 border bg-slate-800 text-white border-slate-700 focus:ring-amber-500"
-                      style={{ width: '85px', fontSize: '12px' }}
+                      className="soleria-input text-right font-mono py-1 px-2.5 rounded-lg border bg-slate-800/80 text-white border-slate-700 focus:outline-none focus:border-[var(--brand-gold)] shadow-2xs"
+                      style={{ width: '90px', fontSize: '12px' }}
                     />
                   )}
                 </div>
               </div>
-              <div className="flex justify-between items-center border-t pt-2 mt-2 border-[#1e293b]">
-                <span className="font-bold text-[11px] uppercase tracking-wider text-slate-400">Total Credit Amount:</span>
-                <span className="text-xl font-bold font-extrabold">
-                  <span style={{ color: '#B08D57' }}>Rs </span>
-                  <span style={{ color: '#B08D57' }}>{finalTotalValue.toLocaleString('en-US')}</span>
+              <div className="flex justify-between items-center border-t pt-3 mt-3 border-slate-800/80">
+                <span className="font-bold text-[11px] uppercase tracking-wider text-slate-400">TOTAL CREDIT AMOUNT:</span>
+                <span className="text-xl font-bold font-mono text-[var(--brand-gold)]">
+                  Rs {finalTotalValue.toLocaleString('en-US')}
                 </span>
               </div>
             </div>

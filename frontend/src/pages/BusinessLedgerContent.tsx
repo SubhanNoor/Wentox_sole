@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import { filterBusinessAccountsForRole } from '@/lib/access';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import SearchableSelect from '@/components/SearchableSelect';
 
 interface ActivityEntry {
   date: string;
@@ -122,12 +123,17 @@ export default function BusinessLedgerContent() {
           </div>
 
           {viewMode === 'detail' && (
-            <select value={accountFilter} onChange={e => setAccountFilter(e.target.value)} className="soleria-input py-1.5 cursor-pointer text-sm min-w-[220px]">
-              <option value="">Select an account...</option>
-              {accessibleAccounts.map(b => (
-                <option key={b.id} value={b.id}>{b.name} ({b.id})</option>
-              ))}
-            </select>
+            <div className="min-w-[240px]">
+              <SearchableSelect
+                options={accessibleAccounts.map(b => ({
+                  value: b.id,
+                  label: `${b.name} (${b.id})`
+                }))}
+                value={accountFilter}
+                onChange={setAccountFilter}
+                placeholder="Select an account..."
+              />
+            </div>
           )}
 
           <div className="flex items-center gap-2">

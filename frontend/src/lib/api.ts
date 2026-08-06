@@ -535,9 +535,16 @@ export interface BusinessAccountRow {
   code: string;
   name: string;
   ac_id: number;
-  chart_code?: string;
-  chart_name?: string;
-  status: 'ACTIVE' | 'INACTIVE';
+  region_id: number | null;
+  city_id: number | null;
+  opening_balance: number | null;
+  opening_date: string | null;
+  status: 'ACTIVE' | 'CLOSED';
+  ac_code?: string;
+  ac_name?: string;
+  is_restricted?: boolean;
+  region_name?: string;
+  city_name?: string;
 }
 
 export type ExpensePaymentMode = 'CASH' | 'ONLINE' | 'CHEQUE_ENDORSED' | 'CHEQUE_ISSUED';
@@ -763,7 +770,13 @@ declare global {
         'allocations-for-receipt': (payload: { receipt_id: number }) => Promise<ApiResult<ChequeAllocationRow[]>>;
       };
       businessAccounts: {
-        list: (payload?: { ac_id?: number; status?: 'ACTIVE' | 'INACTIVE'; search?: string }) => Promise<ApiResult<BusinessAccountRow[]>>;
+        list: (payload?: { ac_id?: number; excludeRestrictedParent?: boolean; excludeClosed?: boolean }) => Promise<ApiResult<BusinessAccountRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<BusinessAccountRow>>;
+        create: (payload: { name: string; ac_id: number; region_id?: number; city_id?: number; opening_balance?: number; opening_date?: string }) => Promise<ApiResult<BusinessAccountRow>>;
+        update: (payload: { id: number; name: string; region_id?: number; city_id?: number }) => Promise<ApiResult<BusinessAccountRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        reactivate: (payload: { id: number }) => Promise<ApiResult<BusinessAccountRow>>;
+        getCashAccount: () => Promise<ApiResult<BusinessAccountRow>>;
       };
       expenses: {
         list: (payload?: ExpenseListFilters) => Promise<ApiResult<ExpenseRow[]>>;
@@ -780,6 +793,10 @@ declare global {
         create: (payload: Partial<ExpenseCreateInput>) => Promise<ApiResult<DraftExpenseRow>>;
         remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
         confirm: (payload: { id: number }) => Promise<ApiResult<ExpenseRow>>;
+      };
+      updates: {
+        check: () => Promise<ApiResult<{ updateAvailable: boolean; currentVersion?: string; latestVersion?: string; packaged?: boolean }>>;
+        install: () => Promise<ApiResult<{ ok: true }>>;
       };
     };
   }
@@ -1176,9 +1193,15 @@ export const cheques = {
 
 // ── Module 4d: Expenses & Business Accounts ──
 
-export async function listBusinessAccounts(filters?: { ac_id?: number; search?: string }): Promise<ApiResult<BusinessAccountRow[]>> {
+export async function listBusinessAccounts(filters?: { ac_id?: number; excludeClosed?: boolean }): Promise<ApiResult<BusinessAccountRow[]>> {
   if (!window.api) return NO_BRIDGE;
-  return window.api.businessAccounts.list(filters);
+  // excludeRestrictedParent is decided server-side from the session's role, not by the caller.
+  return window.api.businessAccounts.list({ excludeClosed: true, ...filters });
+}
+
+export async function getCashBusinessAccount(): Promise<ApiResult<BusinessAccountRow>> {
+  if (!window.api) return NO_BRIDGE;
+  return window.api.businessAccounts.getCashAccount();
 }
 
 function normalizeExpenseRow(row: ExpenseRow): ExpenseRow {

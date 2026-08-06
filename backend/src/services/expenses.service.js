@@ -213,7 +213,12 @@ async function post(expenseId, userId) {
 // its real ledger effect belongs to a cheque_allocations row, and the only correct way to undo a
 // cheque disposition is the cheque's own bounce/return-to-sender flow (which already knows how to
 // reverse it), not a generic unpost on this document. Attempting it is rejected with a clear
-// pointer to the right place.
+// pointer to the right place. A CHEQUE_ISSUED expense that has already bounced/been returned is
+// blocked the same way — deleteLedgerEntries() matches on source_type/source_id alone, with no way
+// to tell the original post's rows apart from bounceIssuedCheque()/returnIssuedCheque()'s reversal
+// rows, so an unguarded unpost would erase the reversal history too and strand issued_cheque_status
+// at a terminal value on a DRAFT row (same class of bug receipts.service.js#unpost() already guards
+// against for a disposed-of received cheque).
 async function unpost(expenseId) {
   const expense = await getById(expenseId);
   if (expense.status !== 'CONFIRMED') {
@@ -225,6 +230,12 @@ async function unpost(expenseId) {
       'USE_CHEQUE_REVERSAL',
     );
   }
+  if (expense.payment_mode === 'CHEQUE_ISSUED' && expense.issued_cheque_status !== 'PENDING') {
+    throw ApiError.conflict(
+      `This cheque has already been ${expense.issued_cheque_status.toLowerCase()} — its ledger history cannot be unposted`,
+      'ISSUED_CHEQUE_TERMINAL',
+    );
+  }
 
   await withTransaction(async (transaction) => {
     await repository.deleteLedgerEntries(transaction, expenseId);
@@ -234,4 +245,60 @@ async function unpost(expenseId) {
   return getById(expenseId);
 }
 
-module.exports = { list, getById, create, update, remove, post, unpost };
+// Shared reversal mechanics for a CHEQUE_ISSUED expense that bounces or is returned unpaid — the
+// mirror image of cheques.service.js#reverseCheque(), but for a cheque WE wrote instead of one we
+// endorsed on: there is no cheques/cheque_allocations row to touch, just this expense's own ledger
+// effect and its own issued_cheque_status. Reverses the original Dr ba_id / Cr bank ba_id entry
+// (Dr bank ba_id / Cr ba_id here), dated the bounce/return date — nothing deleted or rewritten,
+// same reverse-never-delete rule as receipts/cheques bounce.
+async function reverseIssuedCheque(expenseId, { date, reason, mode }, userId) {
+  const expense = await getById(expenseId);
+  if (expense.payment_mode !== 'CHEQUE_ISSUED') {
+    throw ApiError.badRequest('Only a CHEQUE_ISSUED expense can be bounced or returned this way');
+  }
+  if (expense.status !== 'CONFIRMED') {
+    throw ApiError.conflict('Post the expense before bouncing or returning its cheque', 'EXPENSE_NOT_POSTED');
+  }
+  if (expense.issued_cheque_status !== 'PENDING') {
+    throw ApiError.conflict(`This cheque is already ${expense.issued_cheque_status.toLowerCase()}`, 'ISSUED_CHEQUE_TERMINAL');
+  }
+  if (!date) throw ApiError.badRequest('date is required');
+
+  const bank = await bankAccountsService.getById(expense.bank_id);
+  if (!bank.ba_id) throw ApiError.conflict('Bank account has no linked ledger account yet', 'NO_BANK_ACCOUNT');
+
+  const narration = `${mode} reversal of expense #${expenseId}`;
+
+  await withTransaction(async (transaction) => {
+    await repository.insertLedgerEntries(transaction, [
+      { entry_date: date, ba_id: bank.ba_id, debit: expense.amount, credit: 0, source_type: 'EXPENSE', source_id: expenseId, narration },
+      { entry_date: date, ba_id: expense.ba_id, debit: 0, credit: expense.amount, source_type: 'EXPENSE', source_id: expenseId, narration },
+    ]);
+    if (mode === 'BOUNCED') {
+      await repository.markIssuedChequeBounced(transaction, expenseId, date);
+    } else {
+      await repository.markIssuedChequeReturned(transaction, expenseId, date, reason);
+    }
+  });
+
+  return getById(expenseId);
+}
+
+function bounceIssuedCheque(expenseId, payload, userId) {
+  return reverseIssuedCheque(expenseId, { date: payload.bounced_date, mode: 'BOUNCED' }, userId);
+}
+
+function returnIssuedCheque(expenseId, payload, userId) {
+  return reverseIssuedCheque(expenseId, { date: payload.returned_date, reason: payload.reason, mode: 'RETURNED' }, userId);
+}
+
+// "Cheque Return" page's issued-cheque list — every posted CHEQUE_ISSUED expense whose cheque
+// hasn't bounced/been returned yet, alongside the existing endorsed-allocations list.
+function listReturnableIssuedCheques(filters) {
+  return repository.listReturnableIssuedCheques(filters);
+}
+
+module.exports = {
+  list, getById, create, update, remove, post, unpost,
+  bounceIssuedCheque, returnIssuedCheque, listReturnableIssuedCheques,
+};

@@ -1,18 +1,18 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Trash2, X, Truck, MapPin } from 'lucide-react';
 import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
+import SearchableSelect from '@/components/SearchableSelect';
 import type { Adda } from '@/types';
 
 export default function AddaSetupPage() {
   const { state, dispatch } = useApp();
 
-  // Tab State: 'list' | 'form'
-  const [activeTab, setActiveTab] = useState<'list' | 'form'>('list');
   const [addaSearch, setAddaSearch] = useState('');
 
-  // Editing state
+  // Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedAddaId, setSelectedAddaId] = useState<string | null>(null);
 
   // Duplicate Check Modal state
@@ -26,22 +26,31 @@ export default function AddaSetupPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const handleAddNew = () => {
+  const handleOpenAddModal = () => {
     setSelectedAddaId(null);
     setAddaName('');
     setRegionId(state.regions[0]?.id || '');
     setCityId('');
     setErrorMsg('');
-    setActiveTab('form');
+    setIsModalOpen(true);
   };
 
-  const handleSelectAdda = (adda: { id: string; name: string; regionId?: string; cityId: string }) => {
+  const handleOpenEditModal = (adda: { id: string; name: string; regionId?: string; cityId: string }) => {
     setSelectedAddaId(adda.id);
     setAddaName(adda.name);
     setRegionId(adda.regionId || '');
     setCityId(adda.cityId || '');
     setErrorMsg('');
-    setActiveTab('form');
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedAddaId(null);
+    setAddaName('');
+    setRegionId('');
+    setCityId('');
+    setErrorMsg('');
   };
 
   const handleSaveAdda = (e: React.FormEvent) => {
@@ -55,7 +64,6 @@ export default function AddaSetupPage() {
     }
 
     if (selectedAddaId) {
-      // Edit mode
       dispatch({
         type: 'UPDATE_ADDA',
         adda: {
@@ -67,7 +75,6 @@ export default function AddaSetupPage() {
       });
       setSuccessMsg('Adda details updated successfully.');
     } else {
-      // Add mode - Flow A duplicate check
       const match = state.addas.find(a => a.name.toLowerCase() === typed.toLowerCase());
       if (match) {
         if (match.isActive !== false) {
@@ -93,12 +100,7 @@ export default function AddaSetupPage() {
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
-    setAddaName('');
-    setRegionId('');
-    setCityId('');
-    setSelectedAddaId(null);
-    setErrorMsg('');
-    setActiveTab('list');
+    handleCloseModal();
   };
 
   const handleActivateDuplicate = (id: string) => {
@@ -118,16 +120,10 @@ export default function AddaSetupPage() {
     }
     setIsDupModalOpen(false);
     setDupMatch(null);
-    setAddaName('');
-    setRegionId('');
-    setCityId('');
-    setSelectedAddaId(null);
-    setErrorMsg('');
-    setActiveTab('list');
+    handleCloseModal();
   };
 
   const handleDeleteAdda = (id: string) => {
-    // Check if adda is used by any sale bills
     const billCount = state.saleBills.filter(b => b.addaId === id).length;
     if (billCount > 0) {
       alert(`Cannot delete this Adda. It is currently assigned to ${billCount} registered sale bills.`);
@@ -138,8 +134,7 @@ export default function AddaSetupPage() {
       dispatch({ type: 'DELETE_ADDA', id });
       setSuccessMsg('Transport Adda deleted successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
-      setSelectedAddaId(null);
-      setActiveTab('list');
+      handleCloseModal();
     }
   };
 
@@ -163,7 +158,7 @@ export default function AddaSetupPage() {
 
   return (
     <AppLayout pageTitle="Transport Adda Setup">
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto" style={{ maxWidth: 1400 }}>
 
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
@@ -172,223 +167,187 @@ export default function AddaSetupPage() {
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
         )}
 
-        {/* Tab Selection Header */}
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+        {/* Directory Header Card */}
+        <div className="card-white p-6 md:p-8 bg-white border mb-6">
+          <div className="border-b pb-4 mb-5 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
+                <Truck size={20} className="text-[#B08D57]" /> Transport Addas Directory
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">Search and manage delivery points / adda services for wholesale shipment routing.</p>
+            </div>
+            
             <button
-              onClick={() => {
-                setActiveTab('list');
-                setSelectedAddaId(null);
-              }}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'list'
-                  ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-                }`}
-            >
-              Addas Directory
-            </button>
-            <button
-              onClick={handleAddNew}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'form' && !selectedAddaId
-                  ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-                }`}
-            >
-              Add New Adda
-            </button>
-          </div>
-
-          {activeTab === 'list' && (
-            <button
-              onClick={handleAddNew}
-              className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm"
+              onClick={handleOpenAddModal}
+              className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
             >
               <Plus size={16} /> Register Adda
             </button>
-          )}
-        </div>
+          </div>
 
-        {/* View 1: List view */}
-        {activeTab === 'list' ? (
-          <div className="mb-6">
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-6">
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">Transport Addas</h3>
-                <p className="text-xs text-slate-500 font-medium">Search and manage delivery points / adda services for wholesale shipment routing.</p>
-              </div>
-
-              {/* Search Bar */}
-              <div className="relative flex-1 min-w-[270px] sm:max-w-sm">
-                <input
-                  type="text"
-                  placeholder="Search adda by name..."
-                  value={addaSearch}
-                  onChange={e => setAddaSearch(e.target.value)}
-                  className="soleria-input w-full py-2 px-3.5 text-sm pr-10 font-semibold bg-white shadow-sm hover:border-[#B08D57] transition-all"
-                />
-                <Search className="absolute right-3.5 top-2.5 text-slate-400" size={16} />
-              </div>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="relative flex-1 max-w-md">
+              <input
+                type="text"
+                placeholder="Search adda by name, code..."
+                value={addaSearch}
+                onChange={e => setAddaSearch(e.target.value)}
+                className="soleria-input w-full py-2 text-xs pr-10 font-semibold"
+              />
+              <Search className="absolute right-3.5 top-2.5 text-slate-400" size={14} />
             </div>
 
-            {filteredAddas.length === 0 ? (
-              <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl bg-white">
-                No transport addas found matching your search.
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredAddas.map(adda => {
-                  const initialLetter = adda.name.charAt(0).toUpperCase();
+            <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-2 rounded-xl border border-slate-200">
+              Total: {filteredAddas.length} Addas
+            </div>
+          </div>
+        </div>
 
-                  return (
-                    <div
-                      key={adda.id}
-                      className="bg-white border rounded-xl p-5 hover:border-[#B08D57] hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
-                      style={{ borderColor: 'var(--border-color)' }}
-                      onClick={() => handleSelectAdda(adda)}
-                    >
-                      <div>
-                        {/* Card Top: Code */}
-                        <div className="flex items-center justify-between mb-3.5">
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
-                            CODE: {adda.id}
-                          </span>
-                        </div>
-
-                        {/* Card Middle: Avatar circle + Name */}
-                        <div className="flex items-center gap-3 mb-2">
-                          <div className="w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm bg-slate-50 text-slate-600 group-hover:bg-[#111c2a] group-hover:text-[#B08D57] transition-all duration-300 flex-shrink-0">
-                            {initialLetter}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
-                              {adda.name}
-                            </h4>
-                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                              {adda.regionId && (
-                                <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
-                                  {state.regions.find(r => r.id === adda.regionId)?.name || adda.regionId}
-                                </span>
-                              )}
-                              {adda.cityId && (
-                                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
-                                  {state.cities.find(c => c.id === adda.cityId)?.name || adda.cityId}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Card Bottom: Actions */}
-                      <div className="border-t pt-3 mt-3 flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => handleSelectAdda(adda)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
-                          title="Edit Adda"
-                        >
-                          <Edit2 size={15} />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteAdda(adda.id)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                          title="Delete Adda"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+        {/* Addas Cards Grid (§1 Standard) */}
+        {filteredAddas.length === 0 ? (
+          <div className="card-white p-12 text-center text-slate-400">
+            <Truck size={36} className="mx-auto mb-3 text-slate-300" />
+            <p className="font-semibold text-slate-600">No registered transport addas found matching your search.</p>
           </div>
         ) : (
-          /* View 2: Form view */
-          <div className="max-w-2xl mx-auto">
-            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm">
-              <div className="flex items-center gap-3 border-b pb-4 mb-6">
-                <button
-                  onClick={() => {
-                    setActiveTab('list');
-                    setSelectedAddaId(null);
-                  }}
-                  className="p-1.5 rounded-lg border hover:bg-slate-50 transition-colors"
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredAddas.map(adda => {
+              const cityName = activeCities.find(c => c.id === adda.cityId)?.name || 'N/A';
+              const regionName = activeRegions.find(r => r.id === adda.regionId)?.name || 'N/A';
+
+              return (
+                <div
+                  key={adda.id}
+                  onClick={() => handleOpenEditModal(adda)}
+                  className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
                 >
-                  <ArrowLeft size={16} className="text-slate-600" />
-                </button>
-                <div>
-                  <h3 className="font-lora font-semibold text-lg text-slate-800">
-                    {selectedAddaId ? 'Edit Transport Adda' : 'Register New Transport Adda'}
-                  </h3>
-                  <p className="text-xs text-slate-500 font-medium font-inter">Configure delivery points and location parameters for wholesale shipment routing.</p>
+                  <div>
+                    {/* Header: Title + City Badge */}
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
+                        {adda.name}
+                      </h4>
+                      <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider flex-shrink-0 flex items-center gap-1">
+                        <MapPin size={10} className="text-slate-400" />
+                        {cityName}
+                      </span>
+                    </div>
+
+                    {/* Subtitle: Code in mono */}
+                    <div className="font-mono text-xs text-slate-400 mb-3">
+                      Adda Code: <span className="font-semibold text-slate-600">#{adda.id}</span>
+                    </div>
+
+                    <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5">
+                      Region: <span className="font-semibold text-slate-700">{regionName}</span>
+                    </div>
+                  </div>
+
+                  {/* Footer Bar */}
+                  <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
+                    <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => handleOpenEditModal(adda)}
+                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                        title="Edit Adda"
+                      >
+                        <Edit2 size={15} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteAdda(adda.id)}
+                        className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                        title="Delete Adda"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+
+                    <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
+                      Edit Adda &rarr;
+                    </span>
+                  </div>
                 </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Modal Dialogue Box Pop-up */}
+        {isModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}>
+            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
+                <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
+                  <Settings size={18} className="text-[#B08D57]" />
+                  {selectedAddaId ? 'Edit Transport Adda' : 'Register New Transport Adda'}
+                </h3>
+                <button
+                  onClick={handleCloseModal}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
               </div>
 
-              <form onSubmit={handleSaveAdda} className="flex flex-col gap-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Settings size={15} className="text-[#B08D57]" />
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider font-inter">Adda Parameters</span>
-                </div>
+              <form onSubmit={handleSaveAdda} className="p-5 flex flex-col gap-4">
+                {errorMsg && (
+                  <div className="banner-error rounded-lg px-3 py-2 text-xs">{errorMsg}</div>
+                )}
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1 font-inter">Transport Adda Name</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                    Transport Adda Name <span className="text-rose-500">*</span>
+                  </label>
                   <input
                     type="text"
                     value={addaName}
                     onChange={e => setAddaName(e.target.value)}
-                    placeholder="e.g. Multan Adda Service, Faisalabad Goods"
-                    className="soleria-input font-semibold"
+                    placeholder="e.g. Faisal Goods Transport, Badami Bagh Adda"
+                    className="soleria-input w-full font-semibold"
+                    autoFocus
                   />
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1 font-inter">Region</label>
-                    <select
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                      Region
+                    </label>
+                    <SearchableSelect
+                      options={[
+                        { value: '', label: 'Select Region (Optional)' },
+                        ...activeRegions.map(r => ({ value: r.id, label: r.name }))
+                      ]}
                       value={regionId}
-                      onChange={e => {
-                        setRegionId(e.target.value);
-                        setCityId('');
-                      }}
-                      className="soleria-input font-semibold"
-                    >
-                      <option value="">Select Region (Optional)</option>
-                      {activeRegions.map(r => (
-                        <option key={r.id} value={r.id}>{r.name} ({r.id})</option>
-                      ))}
-                    </select>
+                      onChange={setRegionId}
+                      placeholder="Select Region..."
+                    />
                   </div>
+
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1 font-inter">City</label>
-                    <select
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                      City Location <span className="text-rose-500">*</span>
+                    </label>
+                    <SearchableSelect
+                      options={activeCities.map(c => ({ value: c.id, label: c.name }))}
                       value={cityId}
-                      onChange={e => setCityId(e.target.value)}
-                      className="soleria-input font-semibold"
-                    >
-                      <option value="">Select City</option>
-                      {activeCities
-                        .filter(c => !regionId || c.regionId === regionId)
-                        .map(c => (
-                          <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
-                        ))}
-                    </select>
+                      onChange={setCityId}
+                      placeholder="Select City..."
+                    />
                   </div>
                 </div>
 
-                <div className="flex justify-end gap-3 mt-6 border-t pt-4">
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                   <button
                     type="button"
-                    onClick={() => {
-                      setActiveTab('list');
-                      setSelectedAddaId(null);
-                    }}
-                    className="px-5 py-2.5 text-xs font-bold text-slate-500 hover:text-slate-700 transition-colors uppercase tracking-wider font-inter"
+                    onClick={handleCloseModal}
+                    className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-slate-900 uppercase tracking-wider font-inter"
+                    className="btn-gold px-5 py-2 text-xs font-semibold cursor-pointer flex items-center gap-1.5"
                   >
                     <Save size={14} /> Save Adda
                   </button>
@@ -400,14 +359,9 @@ export default function AddaSetupPage() {
 
         <DuplicateNamePromptModal
           isOpen={isDupModalOpen}
-          entityLabel="adda"
+          entityLabel="transport adda"
           status="inactive"
-          matches={dupMatch ? [{
-            id: dupMatch.id,
-            name: dupMatch.name,
-            regionName: dupMatch.regionId ? state.regions.find(r => r.id === dupMatch.regionId)?.name : undefined,
-            cityName: dupMatch.cityId ? state.cities.find(c => c.id === dupMatch.cityId)?.name : undefined
-          }] : []}
+          matches={dupMatch ? [{ id: dupMatch.id, name: dupMatch.name }] : []}
           allowCreateOnActive={false}
           onActivate={handleActivateDuplicate}
           onCreateNew={() => {}}
