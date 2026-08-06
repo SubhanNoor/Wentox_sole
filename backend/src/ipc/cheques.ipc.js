@@ -57,4 +57,10 @@ module.exports = function register() {
     const session = requireSession();
     return service.reverseAllocation(payload.id, payload, session.userId);
   }));
+
+  // Full allocation history for one cheque's receipt (Cheques tab's per-cheque history view).
+  ipcMain.handle('cheques:allocations-for-receipt', wrap((payload) => {
+    requireSession();
+    return service.listAllocationsForReceipt(payload.receipt_id);
+  }));
 };

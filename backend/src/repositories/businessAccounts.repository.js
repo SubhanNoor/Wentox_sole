@@ -52,4 +52,32 @@ async function findById(baId) {
   return result.recordset[0] || null;
 }
 
-module.exports = { nextSerial, insert, updateName, findById };
+// Read-only listing for pickers that need "any business account" (e.g. Expenses' non-vendor
+// payment target, Cheques' EXPENSE_PAYMENT disposition) — dedicated party lists (vendors,
+// bankAccounts) already cover their own kind; this is the generic fallback for everything else.
+async function list(filters = {}) {
+  const conditions = [`ba.status = @status`];
+  const params = { status: { type: sql.VarChar(10), value: filters.status || 'ACTIVE' } };
+
+  if (filters.ac_id) {
+    conditions.push('ba.ac_id = @acId');
+    params.acId = { type: sql.Int, value: filters.ac_id };
+  }
+  if (filters.search) {
+    conditions.push('ba.name LIKE @search');
+    params.search = { type: sql.NVarChar(100), value: `%${filters.search}%` };
+  }
+
+  const where = `WHERE ${conditions.join(' AND ')}`;
+  const result = await query(
+    `SELECT ba.*, ca.code AS chart_code, ca.name AS chart_name
+     FROM dbo.business_accounts ba
+     JOIN dbo.chart_of_accounts ca ON ca.ac_id = ba.ac_id
+     ${where}
+     ORDER BY ba.name`,
+    params,
+  );
+  return result.recordset;
+}
+
+module.exports = { nextSerial, insert, updateName, findById, list };

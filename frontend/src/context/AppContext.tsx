@@ -5,10 +5,9 @@ import type {
   GroupAccount, ChartOfAccount, BusinessAccount,
   Customer, SubCustomer, SaleBill, SaleReturn, Purchase, PurchaseReturn,
   Receipt, Expense, ProductionLog, UserRole,
-  ChequeAllocation, ChequeStatus, AlertDismissal,
+  ChequeAllocation, AlertDismissal,
   WageRun, SalaryRun, BankAccount, Transfer, Deposit
 } from '@/types';
-import { deriveChequeStatus } from '@/lib/cheques';
 
 /* ──────────────────── Demo Data ──────────────────── */
 
@@ -800,9 +799,6 @@ type Action =
   | { type: 'ADD_EMPLOYEE'; employee: Employee }
   | { type: 'UPDATE_EMPLOYEE'; employee: Employee }
   | { type: 'DELETE_EMPLOYEE'; id: string }
-  | { type: 'ADD_BANK_ACCOUNT'; bank: BankAccount }
-  | { type: 'UPDATE_BANK_ACCOUNT'; bank: BankAccount }
-  | { type: 'DELETE_BANK_ACCOUNT'; id: string }
   | { type: 'ADD_CITY'; city: City }
   | { type: 'UPDATE_CITY'; city: City }
   | { type: 'DELETE_CITY'; id: string }
@@ -836,35 +832,9 @@ type Action =
   // Bill Actions
   | { type: 'UPDATE_BILTY_INFO'; billId: string; biltyNo: string; addaId: string }
 
-  // Purchase Actions
-  | { type: 'ADD_PURCHASE'; purchase: Purchase }
-  | { type: 'DELETE_PURCHASE'; id: string }
-  | { type: 'ADD_PURCHASE_RETURN'; purchaseReturn: PurchaseReturn }
-  | { type: 'DELETE_PURCHASE_RETURN'; id: string }
-
-  // Receipt Actions
-  | { type: 'ADD_RECEIPT'; receipt: Receipt }
-
-  // Cheque disposition / bounce (§13)
-  // The id is assigned by the reducer, not the caller — mirrors a real API
-  // where the server owns identity, and keeps the page component pure.
-  | { type: 'ADD_CHEQUE_ALLOCATION'; allocation: Omit<ChequeAllocation, 'id'> }
-  // Which of our banks a received cheque was deposited into. On the cheque
-  // rather than the allocation: one cheque is never split across two banks.
-  | { type: 'SET_DEPOSIT_BANK'; receiptId: string; bankId: string }
-  | { type: 'MARK_CHEQUE_CLEARED'; receiptId: string }
-  | { type: 'BOUNCE_CHEQUE'; receiptId: string; bouncedDate: string }
-  // Overdue cheque handed back to the customer voluntarily — not a bank rejection (that's
-  // BOUNCE_CHEQUE), but the same reversal mechanics: customer due restored, allocations reversed.
-  | { type: 'RETURN_CHEQUE_TO_SENDER'; receiptId: string; returnedDate: string }
-
   // Alerts (§12)
   | { type: 'DISMISS_ALERT'; alertKey: string; dismissedAt: string }
   | { type: 'RESTORE_ALERTS' }
-
-  // Expense Actions
-  | { type: 'ADD_EXPENSE'; expense: Expense }
-  | { type: 'DELETE_EXPENSE'; id: string }
 
   // Payroll (payroll.md §8). Both run types share one mutation path:
   // Posted → unpost → Unposted → edit → post → Posted. A Posted run is never
@@ -875,16 +845,6 @@ type Action =
   | { type: 'DELETE_WAGE_RUN'; runId: string }
   | { type: 'POST_WAGE_RUN'; runId: string }
   | { type: 'UNPOST_WAGE_RUN'; runId: string; unpostedAt: string }
-  // Money between our own accounts. Deliberately NOT an expense+receipt pair —
-  // that would inflate both totals with money that never left the business.
-  | { type: 'ADD_TRANSFER'; transfer: Transfer }
-  | { type: 'DELETE_TRANSFER'; id: string }
-  // Money entering from outside WentoX's own books — owner capital, a loan,
-  // a non-customer refund. Not a Receipt (no customer), not a Transfer (no
-  // counter-account already in the books).
-  | { type: 'ADD_DEPOSIT'; deposit: Deposit }
-  | { type: 'DELETE_DEPOSIT'; id: string }
-
   | { type: 'ADD_SALARY_RUN'; run: SalaryRun }
   | { type: 'UPDATE_SALARY_RUN'; runId: string; run: SalaryRun }
   | { type: 'DELETE_SALARY_RUN'; runId: string }
@@ -1017,40 +977,6 @@ function reducer(state: State, action: Action): State {
           : state.businessAccounts
       };
     }
-    /* ──── Bank Account Handlers ──── */
-    case 'ADD_BANK_ACCOUNT':
-      return { ...state, bankAccounts: [...state.bankAccounts, action.bank] };
-    case 'UPDATE_BANK_ACCOUNT':
-      return {
-        ...state,
-        bankAccounts: state.bankAccounts.map(b => b.id === action.bank.id ? action.bank : b),
-        businessAccounts: state.businessAccounts.map(b =>
-          b.id === action.bank.baId ? { ...b, name: action.bank.name } : b
-        )
-      };
-    case 'DELETE_BANK_ACCOUNT': {
-      const deleted = state.bankAccounts.find(b => b.id === action.id);
-      return {
-        ...state,
-        bankAccounts: state.bankAccounts.filter(b => b.id !== action.id),
-        businessAccounts: deleted
-          ? state.businessAccounts.filter(b => b.id !== deleted.baId)
-          : state.businessAccounts
-      };
-    }
-
-    /* ──── Transfer Handlers ──── */
-    case 'ADD_TRANSFER':
-      return { ...state, transfers: [action.transfer, ...state.transfers] };
-    case 'DELETE_TRANSFER':
-      return { ...state, transfers: state.transfers.filter(t => t.id !== action.id) };
-
-    /* ──── Deposit Handlers (money entering from outside our own books) ──── */
-    case 'ADD_DEPOSIT':
-      return { ...state, deposits: [action.deposit, ...state.deposits] };
-    case 'DELETE_DEPOSIT':
-      return { ...state, deposits: state.deposits.filter(d => d.id !== action.id) };
-
     case 'ADD_CITY':
       return { ...state, cities: [...state.cities, action.city] };
     case 'UPDATE_CITY':
@@ -1181,93 +1107,6 @@ function reducer(state: State, action: Action): State {
       };
     }
 
-    /* ──── Purchase Handlers ──── */
-    case 'ADD_PURCHASE':
-      return { ...state, purchases: [action.purchase, ...state.purchases] };
-    case 'DELETE_PURCHASE':
-      return { ...state, purchases: state.purchases.filter(p => p.id !== action.id) };
-    case 'ADD_PURCHASE_RETURN':
-      return { ...state, purchaseReturns: [action.purchaseReturn, ...state.purchaseReturns] };
-    case 'DELETE_PURCHASE_RETURN':
-      return { ...state, purchaseReturns: state.purchaseReturns.filter(p => p.id !== action.id) };
-
-    /* ──── Receipt Handlers ──── */
-    case 'ADD_RECEIPT':
-      return { ...state, receipts: [action.receipt, ...state.receipts] };
-
-    /* ──── Cheque disposition / bounce (§13) ──── */
-    case 'ADD_CHEQUE_ALLOCATION': {
-      const receipt = state.receipts.find(r => r.id === action.allocation.receiptId);
-      if (!receipt) return state;
-
-      const allocation: ChequeAllocation = {
-        ...action.allocation,
-        id: `ca_${Date.now()}_${state.chequeAllocations.length}`
-      };
-      const allocations = [...state.chequeAllocations, allocation];
-      const nextStatus = deriveChequeStatus(receipt, allocations, state.expenses);
-
-      return {
-        ...state,
-        chequeAllocations: allocations,
-        receipts: state.receipts.map(r =>
-          r.id === receipt.id ? { ...r, chequeStatus: nextStatus } : r
-        )
-      };
-    }
-    case 'SET_DEPOSIT_BANK':
-      return {
-        ...state,
-        receipts: state.receipts.map(r =>
-          r.id === action.receiptId ? { ...r, depositBankId: action.bankId } : r
-        )
-      };
-    case 'MARK_CHEQUE_CLEARED':
-      return {
-        ...state,
-        receipts: state.receipts.map(r =>
-          r.id === action.receiptId && r.chequeStatus === 'DEPOSITED'
-            ? { ...r, chequeStatus: 'CLEARED' as ChequeStatus }
-            : r
-        )
-      };
-    case 'BOUNCE_CHEQUE': {
-      // A bounce reverses BOTH sides together: the customer's receipt (their
-      // due goes back up) and every allocation sourced from that cheque (the
-      // vendor's / expense account's balance goes back up too). Rows are kept
-      // rather than deleted — the counter-entries are dated `bouncedDate`, so
-      // previously printed reports still reconcile.
-      return {
-        ...state,
-        receipts: state.receipts.map(r =>
-          r.id === action.receiptId
-            ? { ...r, chequeStatus: 'BOUNCED' as ChequeStatus, bouncedDate: action.bouncedDate }
-            : r
-        ),
-        chequeAllocations: state.chequeAllocations.map(a =>
-          a.receiptId === action.receiptId ? { ...a, status: 'REVERSED' as const } : a
-        )
-      };
-    }
-    case 'RETURN_CHEQUE_TO_SENDER': {
-      // Same reversal mechanics as BOUNCE_CHEQUE (customer due restored, every allocation
-      // sourced from this cheque reversed), but a distinct terminal status: this is us handing
-      // an overdue cheque back voluntarily, not the bank rejecting it. The customer's due goes
-      // back up like any other outstanding balance — they're expected to pay again later via a
-      // normal Receipt, in any payment mode; nothing further to track here.
-      return {
-        ...state,
-        receipts: state.receipts.map(r =>
-          r.id === action.receiptId
-            ? { ...r, chequeStatus: 'RETURNED' as ChequeStatus, returnedDate: action.returnedDate }
-            : r
-        ),
-        chequeAllocations: state.chequeAllocations.map(a =>
-          a.receiptId === action.receiptId ? { ...a, status: 'REVERSED' as const } : a
-        )
-      };
-    }
-
     /* ──── Alerts (§12) ──── */
     case 'DISMISS_ALERT':
       return {
@@ -1279,44 +1118,6 @@ function reducer(state: State, action: Action): State {
       };
     case 'RESTORE_ALERTS':
       return { ...state, alertDismissals: [] };
-
-    /* ──── Expense Handlers ──── */
-    case 'ADD_EXPENSE': {
-      const expenses = [action.expense, ...state.expenses];
-      // "Cheque — Endorse" spends a received cheque exactly like a
-      // ChequeAllocation does, just from the Expenses page instead of the
-      // Cheques tab's Dispose workflow — so the source receipt's stored
-      // status must be recomputed the same way, or it silently stays
-      // PENDING/alertable while already partly or fully spent.
-      if (action.expense.paymentMode === 'ChequeEndorsed' && action.expense.chequeId) {
-        const receipt = state.receipts.find(r => r.id === action.expense.chequeId);
-        if (receipt) {
-          const nextStatus = deriveChequeStatus(receipt, state.chequeAllocations, expenses);
-          return {
-            ...state,
-            expenses,
-            receipts: state.receipts.map(r => r.id === receipt.id ? { ...r, chequeStatus: nextStatus } : r)
-          };
-        }
-      }
-      return { ...state, expenses };
-    }
-    case 'DELETE_EXPENSE': {
-      const deleted = state.expenses.find(e => e.id === action.id);
-      const expenses = state.expenses.filter(e => e.id !== action.id);
-      if (deleted?.paymentMode === 'ChequeEndorsed' && deleted.chequeId) {
-        const receipt = state.receipts.find(r => r.id === deleted.chequeId);
-        if (receipt) {
-          const nextStatus = deriveChequeStatus(receipt, state.chequeAllocations, expenses);
-          return {
-            ...state,
-            expenses,
-            receipts: state.receipts.map(r => r.id === receipt.id ? { ...r, chequeStatus: nextStatus } : r)
-          };
-        }
-      }
-      return { ...state, expenses };
-    }
 
     /* ──── Payroll Handlers (payroll.md §8) ────
      * Unlike sale bills, posting a payroll run has no stock side effect to

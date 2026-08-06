@@ -1,82 +1,75 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { todayISO } from '@/lib/cheques';
-import { maskedBusinessAccountName } from '@/lib/access';
 import { AlertTriangle, RotateCcw, Search } from 'lucide-react';
-import type { ChequeAllocation, ChequeDisposition } from '@/types';
+import * as api from '@/lib/api';
+import type { ChequeAllocationRow, ChequeDispositionType } from '@/lib/api';
 
-// NOT CONNECTED — scaffolding only, per explicit instruction. "Confirm Return" below does not
-// dispatch anything against AppContext's demo reducer (no REVERSE_CHEQUE_ALLOCATION action exists
-// there yet) and does not call the real backend (cheques:reverse-allocation, built this session in
-// cheques.service.js#reverseAllocation — see System_architecture/soft_delete_and_duplicate_check.md-
-// style docs / backend/PROGRESS.md for the write-up). Wiring this up for real means both: adding a
-// reducer case here, AND switching this page off demo data onto real window.api calls, neither of
-// which has been done for ANY page in this frontend yet.
-//
-// WHY THIS PAGE IS SEPARATE FROM ChequesTab.tsx's existing "Dispose"/"Bounce"/"Return to Sender"
-// actions: those operate on a whole CHEQUE (every active allocation on it, or the underlying
-// receipt). This page operates on ONE ENDORSEMENT at a time — e.g. a vendor hands a cheque back
-// after being paid with it — without touching the cheque's other allocations or the original
-// receipt at all. The cheque itself is fine; only this one payment is being undone.
-
-const DISPOSITION_LABELS: Record<Exclude<ChequeDisposition, 'DEPOSIT'>, string> = {
+const DISPOSITION_LABELS: Record<Exclude<ChequeDispositionType, 'DEPOSIT'>, string> = {
   VENDOR_PAYMENT: 'Paid to Vendor',
   EXPENSE_PAYMENT: 'Paid to Expense Account',
 };
 
 export default function ChequeReturnPage() {
-  const { state } = useApp();
+  const [allocations, setAllocations] = useState<ChequeAllocationRow[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const [search, setSearch] = useState('');
-  const [returningAlloc, setReturningAlloc] = useState<ChequeAllocation | null>(null);
+  const [returningAlloc, setReturningAlloc] = useState<ChequeAllocationRow | null>(null);
   const [returnDate, setReturnDate] = useState(todayISO());
   const [returnRemarks, setReturnRemarks] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
 
-  // Only ACTIVE VENDOR_PAYMENT/EXPENSE_PAYMENT allocations — DEPOSIT is excluded on purpose
-  // (moving a deposit to a different bank is a different action, not this one), same as the
-  // backend's listEndorsedAllocations().
+  const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 5000); };
+  const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
+
+  const loadAllocations = useCallback(async () => {
+    setLoading(true);
+    const res = await api.cheques.endorsedAllocations();
+    if (res.ok) setAllocations(res.data);
+    else fail('Failed to load endorsed cheques: ' + res.error.message);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadAllocations(); }, [loadAllocations]);
+
+  // api.cheques.endorsedAllocations() already returns exactly ACTIVE VENDOR_PAYMENT/EXPENSE_PAYMENT
+  // allocations (DEPOSIT excluded server-side), so only search filtering happens here.
   const endorsedRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return state.chequeAllocations
-      .filter(a => a.status === 'ACTIVE' && a.dispositionType !== 'DEPOSIT')
-      .map(a => {
-        const receipt = state.receipts.find(r => r.id === a.receiptId);
-        const customer = receipt ? state.customers.find(c => c.id === receipt.customerId) : undefined;
-        const targetName = a.targetType === 'VENDOR'
-          ? state.vendors.find(v => v.id === a.targetId)?.name || 'Vendor'
-          : maskedBusinessAccountName(a.targetId, state.businessAccounts, state.chartAccounts, state.currentUserRole) || 'Account';
-        return { allocation: a, receipt, customerName: customer?.name || 'Unknown customer', targetName };
-      })
-      .filter(row => {
+    return allocations
+      .filter(a => {
         if (!q) return true;
         return (
-          (row.receipt?.chequeNo || '').toLowerCase().includes(q) ||
-          row.customerName.toLowerCase().includes(q) ||
-          row.targetName.toLowerCase().includes(q)
+          (a.cheque_no || '').toLowerCase().includes(q) ||
+          (a.target_name || '').toLowerCase().includes(q) ||
+          (a.vendor_name || '').toLowerCase().includes(q)
         );
       })
-      .sort((a, b) => b.allocation.allocationDate.localeCompare(a.allocation.allocationDate));
-  }, [state.chequeAllocations, state.receipts, state.customers, state.vendors, state.businessAccounts, state.chartAccounts, state.currentUserRole, search]);
+      .sort((a, b) => b.allocation_date.localeCompare(a.allocation_date));
+  }, [allocations, search]);
 
-  const openReturn = (allocation: ChequeAllocation) => {
+  const openReturn = (allocation: ChequeAllocationRow) => {
     setReturningAlloc(allocation);
     setReturnDate(todayISO());
     setReturnRemarks('');
   };
 
-  // Scaffolding only — see the file-level note above. Real behavior once wired: reverse this one
-  // allocation (Dr/Cr swapped from the original entry, dated returnDate), free up the cheque's
-  // balance, leave the original entries and the cheque's other allocations untouched.
-  const confirmReturn = () => {
+  const confirmReturn = async () => {
     if (!returningAlloc) return;
-    setSuccessMsg(
-      `(Preview only — not connected) Would reverse ${formatCurrency(returningAlloc.amount)} back into ` +
-      `Cheques in Hand, dated ${returnDate}, and free up that much of the cheque's balance again.`
+    const res = await api.cheques.reverseAllocation(returningAlloc.allocation_id, {
+      date: returnDate,
+      remarks: returnRemarks || undefined,
+    });
+    if (!res.ok) { fail(res.error.message); return; }
+    flash(
+      `Reversed ${formatCurrency(returningAlloc.amount)} back into Cheques in Hand, dated ${returnDate}, ` +
+      `and freed up that much of the cheque's balance again.`
     );
-    setTimeout(() => setSuccessMsg(''), 6000);
     setReturningAlloc(null);
+    await loadAllocations();
   };
 
   return (
@@ -84,6 +77,9 @@ export default function ChequeReturnPage() {
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
+        )}
+        {errorMsg && (
+          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
         )}
 
         <div
@@ -119,7 +115,6 @@ export default function ChequeReturnPage() {
                   style={{ borderColor: 'var(--border-color)' }}
                 >
                   <th className="p-3 pl-4">Cheque No.</th>
-                  <th className="p-3">From (Customer)</th>
                   <th className="p-3">Paid To</th>
                   <th className="p-3 text-center">Disposition</th>
                   <th className="p-3 text-right">Amount</th>
@@ -130,26 +125,25 @@ export default function ChequeReturnPage() {
               <tbody>
                 {endorsedRows.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center p-8 text-slate-400">
-                      No endorsed cheques match this filter.
+                    <td colSpan={6} className="text-center p-8 text-slate-400">
+                      {loading ? 'Loading…' : 'No endorsed cheques match this filter.'}
                     </td>
                   </tr>
                 ) : (
                   endorsedRows.map(row => (
-                    <tr key={row.allocation.id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                      <td className="p-3 pl-4 font-mono font-semibold text-slate-800">{row.receipt?.chequeNo || '-'}</td>
-                      <td className="p-3 font-semibold text-slate-800">{row.customerName}</td>
-                      <td className="p-3 font-semibold text-slate-700">{row.targetName}</td>
+                    <tr key={row.allocation_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                      <td className="p-3 pl-4 font-mono font-semibold text-slate-800">{row.cheque_no || '-'}</td>
+                      <td className="p-3 font-semibold text-slate-700">{row.vendor_name || row.target_name || 'Vendor'}</td>
                       <td className="p-3 text-center">
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-violet-50 text-violet-800 border-violet-200">
-                          {DISPOSITION_LABELS[row.allocation.dispositionType as Exclude<ChequeDisposition, 'DEPOSIT'>]}
+                          {DISPOSITION_LABELS[row.disposition_type as Exclude<ChequeDispositionType, 'DEPOSIT'>]}
                         </span>
                       </td>
-                      <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.allocation.amount)}</td>
-                      <td className="p-3 text-center text-xs text-slate-600">{row.allocation.allocationDate}</td>
+                      <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.amount)}</td>
+                      <td className="p-3 text-center text-xs text-slate-600">{row.allocation_date}</td>
                       <td className="p-3 text-center" data-no-print>
                         <button
-                          onClick={() => openReturn(row.allocation)}
+                          onClick={() => openReturn(row)}
                           className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200 transition-colors"
                         >
                           <RotateCcw size={11} /> Return

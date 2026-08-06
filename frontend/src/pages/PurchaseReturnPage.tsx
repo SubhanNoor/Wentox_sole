@@ -1,15 +1,25 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
-import type { PurchaseReturnItem } from '@/types';
-import { Plus, Trash2, Save, Undo2 } from 'lucide-react';
+import * as api from '@/lib/api';
+import type { VendorRow, CityRow, PurchaseRow, PurchaseReturnRow, PurchaseReturnCreateInput, PurchaseReturnItemInput } from '@/lib/api';
+import { Plus, Trash2, Save, Undo2, Edit } from 'lucide-react';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
 
-function emptyItem(): PurchaseReturnItem {
+interface UiItem {
+  uid: string;
+  materialName: string;
+  unit: string;
+  quantity: number;
+  pricePerUnit: number;
+  totalPrice: number;
+}
+
+function emptyItem(): UiItem {
   return {
-    id: 'pri_' + Date.now() + Math.random().toString(36).slice(2, 7),
+    uid: 'pri_' + Date.now() + Math.random().toString(36).slice(2, 7),
     materialName: '',
     unit: 'Meters',
     quantity: 0,
@@ -19,12 +29,41 @@ function emptyItem(): PurchaseReturnItem {
 }
 
 export default function PurchaseReturnPage() {
-  const { state, dispatch } = useApp();
+  // ── Real lookup / list data ──
+  const [vendors, setVendors] = useState<VendorRow[]>([]);
+  const [cities, setCities] = useState<CityRow[]>([]);
+  const [priorPurchases, setPriorPurchases] = useState<PurchaseRow[]>([]);
+  const [returns, setReturns] = useState<PurchaseReturnRow[]>([]);
+  const [lookupError, setLookupError] = useState('');
 
+  const refreshReturns = useCallback(async () => {
+    const res = await api.purchaseReturns.list({});
+    if (res.ok) setReturns(res.data);
+    else setLookupError('Failed to load purchase returns: ' + res.error.message);
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const [v, ct, pu] = await Promise.all([api.listVendors(), api.listCities(), api.purchases.list({})]);
+      const failures: string[] = [];
+      if (v.ok) setVendors(v.data); else failures.push(v.error.message);
+      if (ct.ok) setCities(ct.data); else failures.push(ct.error.message);
+      if (pu.ok) setPriorPurchases(pu.data); else failures.push(pu.error.message);
+      if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
+    })();
+    refreshReturns();
+  }, [refreshReturns]);
+
+  // Mode: 'view' | 'edit' | 'new'
+  const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');
+
+  const [returnId, setReturnId] = useState<number | null>(null);
+  const [currentIsPosted, setCurrentIsPosted] = useState(false);
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [vendorId, setVendorId] = useState('');
+  const [billNo, setBillNo] = useState('');
   const [remarks, setRemarks] = useState('');
-  const [items, setItems] = useState<PurchaseReturnItem[]>([emptyItem()]);
+  const [items, setItems] = useState<UiItem[]>([emptyItem()]);
   const [customUnitRows, setCustomUnitRows] = useState<Record<string, boolean>>({});
   const [copyFromPurchaseId, setCopyFromPurchaseId] = useState('');
 
@@ -32,45 +71,50 @@ export default function PurchaseReturnPage() {
   const [successMsg, setSuccessMsg] = useState('');
 
   const vendorOptions = useMemo(() => {
-    return state.vendors.map(v => ({
-      value: v.id,
-      label: `${v.name}${v.city ? ' — ' + v.city : ''}`
-    }));
-  }, [state.vendors]);
+    return vendors.map(v => {
+      const cityName = cities.find(c => c.city_id === v.city_id)?.name;
+      return { value: String(v.vendor_id), label: `${v.name}${cityName ? ' — ' + cityName : ''}` };
+    });
+  }, [vendors, cities]);
 
   const selectedVendor = useMemo(() => {
-    return state.vendors.find(v => v.id === vendorId);
-  }, [vendorId, state.vendors]);
+    return vendors.find(v => v.vendor_id === Number(vendorId));
+  }, [vendorId, vendors]);
 
   // Prior purchases from this vendor, to optionally prefill a return
   const priorPurchaseOptions = useMemo(() => {
-    return state.purchases
-      .filter(p => !vendorId || p.vendorId === vendorId)
+    return priorPurchases
+      .filter(p => !vendorId || p.vendor_id === Number(vendorId))
       .map(p => ({
-        value: p.id,
-        label: `${p.date} — ${formatCurrency(p.totalValue)} (${p.items.length} items)`
+        value: String(p.purchase_id),
+        label: `${p.purchase_date} — ${formatCurrency(p.total_value)}`
       }));
-  }, [state.purchases, vendorId]);
+  }, [priorPurchases, vendorId]);
 
-  const handleCopyFromPurchase = (purchaseId: string) => {
-    setCopyFromPurchaseId(purchaseId);
-    if (!purchaseId) return;
-    const purchase = state.purchases.find(p => p.id === purchaseId);
-    if (!purchase) return;
-    setVendorId(purchase.vendorId);
+  const handleCopyFromPurchase = async (purchaseIdStr: string) => {
+    setCopyFromPurchaseId(purchaseIdStr);
+    if (!purchaseIdStr) return;
+    // list() rows never carry items — fetch the full record before cloning its line items.
+    const res = await api.purchases.get(Number(purchaseIdStr));
+    if (!res.ok) {
+      setErrorMsg('Failed to load prior purchase: ' + res.error.message);
+      return;
+    }
+    const purchase = res.data;
+    setVendorId(String(purchase.vendor_id));
     setItems(purchase.items.map(it => ({
-      id: 'pri_' + Date.now() + Math.random().toString(36).slice(2, 7),
-      materialName: it.materialName,
+      uid: 'pri_' + Date.now() + Math.random().toString(36).slice(2, 7),
+      materialName: it.material_name || '',
       unit: it.unit,
       quantity: it.quantity,
-      pricePerUnit: it.pricePerUnit,
-      totalPrice: it.totalPrice
+      pricePerUnit: it.price_per_unit,
+      totalPrice: it.total_price
     })));
   };
 
-  const updateItem = (id: string, field: keyof PurchaseReturnItem, value: string | number) => {
+  const updateItem = (uid: string, field: keyof UiItem, value: string | number) => {
     setItems(prev => prev.map(it => {
-      if (it.id !== id) return it;
+      if (it.uid !== uid) return it;
       const updated = { ...it, [field]: value };
       if (field === 'quantity' || field === 'pricePerUnit') {
         updated.totalPrice = Number(updated.quantity) * Number(updated.pricePerUnit);
@@ -81,11 +125,11 @@ export default function PurchaseReturnPage() {
 
   const addItemRow = () => setItems(prev => [...prev, emptyItem()]);
 
-  const removeItemRow = (id: string) => {
-    setItems(prev => prev.length > 1 ? prev.filter(it => it.id !== id) : prev);
+  const removeItemRow = (uid: string) => {
+    setItems(prev => prev.length > 1 ? prev.filter(it => it.uid !== uid) : prev);
     setCustomUnitRows(prev => {
       const next = { ...prev };
-      delete next[id];
+      delete next[uid];
       return next;
     });
   };
@@ -97,49 +141,137 @@ export default function PurchaseReturnPage() {
     return items.every(it => it.materialName.trim() && it.unit.trim() && it.quantity > 0 && it.pricePerUnit > 0);
   }, [vendorId, date, items]);
 
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!vendorId) return setErrorMsg('Vendor is required.');
-    if (!date) return setErrorMsg('Date is required.');
-    if (!isValid) return setErrorMsg('Every line item needs a material name, unit, quantity, and price per unit.');
+  const isViewMode = mode === 'view';
 
-    dispatch({
-      type: 'ADD_PURCHASE_RETURN',
-      purchaseReturn: {
-        id: 'pr_' + Date.now(),
-        date,
-        vendorId,
-        remarks: remarks.trim(),
-        items,
-        totalValue: grandTotal
-      }
-    });
-
+  const handleNew = () => {
+    setMode('new');
+    setReturnId(null);
+    setCurrentIsPosted(false);
     setDate(new Date().toISOString().split('T')[0]);
     setVendorId('');
+    setBillNo('');
     setRemarks('');
     setItems([emptyItem()]);
     setCustomUnitRows({});
     setCopyFromPurchaseId('');
     setErrorMsg('');
-    setSuccessMsg('Purchase return recorded successfully.');
-    setTimeout(() => setSuccessMsg(''), 3000);
   };
 
-  const handleDeleteReturn = (id: string) => {
-    if (window.confirm('Are you sure you want to delete this purchase return record?')) {
-      dispatch({ type: 'DELETE_PURCHASE_RETURN', id });
+  const buildPayload = (): PurchaseReturnCreateInput | null => {
+    if (!vendorId) { setErrorMsg('Vendor is required.'); return null; }
+    if (!date) { setErrorMsg('Date is required.'); return null; }
+    if (!isValid) { setErrorMsg('Every line item needs a material name, unit, quantity, and price per unit.'); return null; }
+
+    const itemsPayload: PurchaseReturnItemInput[] = items.map(it => ({
+      material_name: it.materialName.trim(),
+      unit: it.unit,
+      quantity: it.quantity,
+      price_per_unit: it.pricePerUnit
+    }));
+
+    return {
+      vendor_id: Number(vendorId),
+      return_date: date,
+      bill_no: billNo.trim() || undefined,
+      remarks: remarks.trim() || undefined,
+      items: itemsPayload
+    };
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const payload = buildPayload();
+    if (!payload) return;
+
+    const result = mode === 'edit' && returnId != null
+      ? await api.purchaseReturns.update(returnId, payload)
+      : await api.purchaseReturns.create(payload);
+
+    if (!result.ok) {
+      setErrorMsg('Failed to save purchase return: ' + result.error.message);
+      return;
     }
+
+    setReturnId(result.data.return_id);
+    setCurrentIsPosted(result.data.is_posted);
+    setErrorMsg('');
+    setSuccessMsg(mode === 'edit' ? 'Purchase return updated successfully.' : 'Purchase return recorded successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    setMode('view');
+    refreshReturns();
+  };
+
+  const loadReturnRow = async (rowIn: PurchaseReturnRow) => {
+    // list() rows never carry items/an accurate is_posted (plain SELECT * — only get()/create()/
+    // update()/post()/unpost() compute those) — re-fetch the full record whenever items are missing.
+    let row = rowIn;
+    if (!row.items) {
+      const res = await api.purchaseReturns.get(row.return_id);
+      if (!res.ok) {
+        setErrorMsg('Failed to load purchase return: ' + res.error.message);
+        return;
+      }
+      row = res.data;
+    }
+
+    setReturnId(row.return_id);
+    setCurrentIsPosted(row.is_posted);
+    setDate(row.return_date.slice(0, 10));
+    setVendorId(String(row.vendor_id));
+    setBillNo(row.bill_no || '');
+    setRemarks(row.remarks || '');
+    setCopyFromPurchaseId('');
+    setItems(row.items.length
+      ? row.items.map(it => ({
+          uid: 'pri_' + it.item_id,
+          materialName: it.material_name || '',
+          unit: it.unit,
+          quantity: it.quantity,
+          pricePerUnit: it.price_per_unit,
+          totalPrice: it.total_price
+        }))
+      : [emptyItem()]);
+    setErrorMsg('');
+    setMode('view');
+  };
+
+  const handlePost = async () => {
+    if (returnId == null) return;
+    const res = await api.purchaseReturns.post(returnId);
+    if (!res.ok) {
+      setErrorMsg('Failed to post purchase return: ' + res.error.message);
+      return;
+    }
+    setCurrentIsPosted(true);
+    setSuccessMsg('Purchase return posted successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    refreshReturns();
+  };
+
+  const handleUnpost = async () => {
+    if (returnId == null) return;
+    const res = await api.purchaseReturns.unpost(returnId);
+    if (!res.ok) {
+      setErrorMsg('Failed to unpost purchase return: ' + res.error.message);
+      return;
+    }
+    setCurrentIsPosted(false);
+    setSuccessMsg('Purchase return unposted successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    refreshReturns();
   };
 
   const sortedReturns = useMemo(() => {
-    return [...state.purchaseReturns].sort((a, b) => b.date.localeCompare(a.date));
-  }, [state.purchaseReturns]);
+    return [...returns].sort((a, b) => b.return_date.localeCompare(a.return_date));
+  }, [returns]);
 
   return (
     <AppLayout pageTitle="Purchase Return">
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
 
+        {lookupError && (
+          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>
+        )}
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
         )}
@@ -148,13 +280,52 @@ export default function PurchaseReturnPage() {
         )}
 
         <form onSubmit={handleSave} className="card-white p-6 bg-white border mb-8" data-no-print>
-          <div className="flex items-center gap-2 border-b pb-3 mb-5">
-            <Undo2 size={18} className="text-[#B08D57]" />
-            <h3 className="font-lora font-semibold text-lg text-slate-800">Raw Material Purchase Return</h3>
+          <div className="flex items-center justify-between border-b pb-3 mb-5">
+            <div className="flex items-center gap-2">
+              <Undo2 size={18} className="text-[#B08D57]" />
+              <h3 className="font-lora font-semibold text-lg text-slate-800">Raw Material Purchase Return</h3>
+            </div>
+            {mode === 'view' && (
+              <div className="flex items-center gap-2">
+                {!currentIsPosted && (
+                  <button
+                    type="button"
+                    onClick={() => setMode('edit')}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
+                  >
+                    <Edit size={13} /> Edit
+                  </button>
+                )}
+                {!currentIsPosted ? (
+                  <button
+                    type="button"
+                    onClick={handlePost}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
+                  >
+                    Post
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleUnpost}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
+                  >
+                    Unpost
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleNew}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
+                >
+                  New Return
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Header fields */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">
                 Date <span className="text-red-500 font-bold">*</span>
@@ -162,6 +333,7 @@ export default function PurchaseReturnPage() {
               <input
                 type="date"
                 value={date}
+                disabled={isViewMode}
                 onChange={e => setDate(e.target.value)}
                 className="soleria-input"
                 style={{ fontSize: '13px' }}
@@ -177,34 +349,50 @@ export default function PurchaseReturnPage() {
                 onChange={val => { setVendorId(val); setCopyFromPurchaseId(''); }}
                 placeholder="Select vendor..."
                 searchPlaceholder="Search vendors..."
+                disabled={isViewMode}
               />
               {selectedVendor && (
                 <p className="text-[11px] text-slate-400 mt-1">
-                  {selectedVendor.phone || 'No Phone'} {selectedVendor.city ? `· ${selectedVendor.city}` : ''}
+                  {selectedVendor.phone || 'No Phone'} {selectedVendor.city_id != null ? `· ${cities.find(c => c.city_id === selectedVendor.city_id)?.name || ''}` : ''}
                 </p>
               )}
             </div>
+            {!isViewMode && (
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">
+                  Copy From Prior Purchase (optional)
+                </label>
+                <select
+                  value={copyFromPurchaseId}
+                  onChange={e => handleCopyFromPurchase(e.target.value)}
+                  className="soleria-input cursor-pointer"
+                  style={{ fontSize: '13px' }}
+                >
+                  <option value="">Manual entry (default)</option>
+                  {priorPurchaseOptions.map(o => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                Copy From Prior Purchase (optional)
-              </label>
-              <select
-                value={copyFromPurchaseId}
-                onChange={e => handleCopyFromPurchase(e.target.value)}
-                className="soleria-input cursor-pointer"
+              <label className="block text-xs font-medium text-slate-600 mb-1">Vendor Bill No.</label>
+              <input
+                type="text"
+                value={billNo}
+                disabled={isViewMode}
+                onChange={e => setBillNo(e.target.value)}
+                placeholder="Vendor's own invoice #..."
+                className="soleria-input"
                 style={{ fontSize: '13px' }}
-              >
-                <option value="">Manual entry (default)</option>
-                {priorPurchaseOptions.map(o => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
+              />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">Remarks</label>
               <input
                 type="text"
                 value={remarks}
+                disabled={isViewMode}
                 onChange={e => setRemarks(e.target.value)}
                 placeholder="Reason for return..."
                 className="soleria-input"
@@ -228,29 +416,31 @@ export default function PurchaseReturnPage() {
               </thead>
               <tbody>
                 {items.map(item => (
-                  <tr key={item.id} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                  <tr key={item.uid} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
                     <td className="p-3 pl-4">
                       <input
                         type="text"
                         value={item.materialName}
-                        onChange={e => updateItem(item.id, 'materialName', e.target.value)}
+                        disabled={isViewMode}
+                        onChange={e => updateItem(item.uid, 'materialName', e.target.value)}
                         placeholder="e.g. PU Sheet Roll"
                         className="soleria-input font-semibold"
                         style={{ fontSize: '13px' }}
                       />
                     </td>
                     <td className="p-3">
-                      {customUnitRows[item.id] ? (
+                      {customUnitRows[item.uid] ? (
                         <input
                           type="text"
                           value={item.unit}
-                          onChange={e => updateItem(item.id, 'unit', e.target.value)}
+                          disabled={isViewMode}
+                          onChange={e => updateItem(item.uid, 'unit', e.target.value)}
                           placeholder="Type unit..."
                           autoFocus
                           onBlur={() => {
                             if (!item.unit.trim()) {
-                              setCustomUnitRows(prev => ({ ...prev, [item.id]: false }));
-                              updateItem(item.id, 'unit', UNIT_PRESETS[0]);
+                              setCustomUnitRows(prev => ({ ...prev, [item.uid]: false }));
+                              updateItem(item.uid, 'unit', UNIT_PRESETS[0]);
                             }
                           }}
                           className="soleria-input"
@@ -259,12 +449,13 @@ export default function PurchaseReturnPage() {
                       ) : (
                         <select
                           value={UNIT_PRESETS.includes(item.unit) ? item.unit : '__other__'}
+                          disabled={isViewMode}
                           onChange={e => {
                             if (e.target.value === '__other__') {
-                              setCustomUnitRows(prev => ({ ...prev, [item.id]: true }));
-                              updateItem(item.id, 'unit', '');
+                              setCustomUnitRows(prev => ({ ...prev, [item.uid]: true }));
+                              updateItem(item.uid, 'unit', '');
                             } else {
-                              updateItem(item.id, 'unit', e.target.value);
+                              updateItem(item.uid, 'unit', e.target.value);
                             }
                           }}
                           className="soleria-input cursor-pointer"
@@ -284,7 +475,8 @@ export default function PurchaseReturnPage() {
                         type="number"
                         min={0}
                         value={item.quantity || ''}
-                        onChange={e => updateItem(item.id, 'quantity', Number(e.target.value))}
+                        disabled={isViewMode}
+                        onChange={e => updateItem(item.uid, 'quantity', Number(e.target.value))}
                         className="soleria-input text-center font-semibold"
                         style={{ fontSize: '13px' }}
                       />
@@ -294,7 +486,8 @@ export default function PurchaseReturnPage() {
                         type="number"
                         min={0}
                         value={item.pricePerUnit || ''}
-                        onChange={e => updateItem(item.id, 'pricePerUnit', Number(e.target.value))}
+                        disabled={isViewMode}
+                        onChange={e => updateItem(item.uid, 'pricePerUnit', Number(e.target.value))}
                         className="soleria-input text-center font-semibold"
                         style={{ fontSize: '13px' }}
                       />
@@ -303,14 +496,16 @@ export default function PurchaseReturnPage() {
                       {formatCurrency(item.totalPrice)}
                     </td>
                     <td className="p-3 text-center">
-                      <button
-                        type="button"
-                        onClick={() => removeItemRow(item.id)}
-                        className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                        title="Remove Row"
-                      >
-                        <Trash2 size={15} />
-                      </button>
+                      {!isViewMode && (
+                        <button
+                          type="button"
+                          onClick={() => removeItemRow(item.uid)}
+                          className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
+                          title="Remove Row"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -325,21 +520,38 @@ export default function PurchaseReturnPage() {
             </table>
           </div>
 
-          <div className="flex items-center justify-between">
-            <button
-              type="button"
-              onClick={addItemRow}
-              className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm"
-            >
-              <Plus size={16} /> Add Line Item
-            </button>
-            <button
-              type="submit"
-              className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-sm font-bold"
-            >
-              <Save size={16} /> Save Purchase Return
-            </button>
-          </div>
+          {!isViewMode && (
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={addItemRow}
+                className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm"
+              >
+                <Plus size={16} /> Add Line Item
+              </button>
+              <div className="flex items-center gap-2">
+                {mode === 'edit' && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (returnId == null) return;
+                      const res = await api.purchaseReturns.get(returnId);
+                      if (res.ok) await loadReturnRow(res.data);
+                    }}
+                    className="btn-outline px-4 py-2 text-sm font-semibold"
+                  >
+                    Cancel Edit
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-sm font-bold"
+                >
+                  <Save size={16} /> {mode === 'edit' ? 'Update Return' : 'Save Purchase Return'}
+                </button>
+              </div>
+            </div>
+          )}
         </form>
 
         {/* Recorded Purchase Returns */}
@@ -356,31 +568,26 @@ export default function PurchaseReturnPage() {
                   <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                     <th className="p-3 pl-4">Date</th>
                     <th className="p-3">Vendor</th>
+                    <th className="p-3">Bill No.</th>
                     <th className="p-3">Remarks</th>
-                    <th className="p-3 text-center">Line Items</th>
                     <th className="p-3 text-right">Total Value</th>
-                    <th className="p-3 text-center" style={{ width: '60px' }} data-no-print></th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedReturns.map(r => {
-                    const vendorName = state.vendors.find(v => v.id === r.vendorId)?.name || 'Unknown Vendor';
+                    const vendorName = vendors.find(v => v.vendor_id === r.vendor_id)?.name || 'Unknown Vendor';
                     return (
-                      <tr key={r.id} className="border-b hover:bg-slate-50/40" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-3 pl-4 font-mono">{r.date}</td>
+                      <tr
+                        key={r.return_id}
+                        onClick={() => loadReturnRow(r)}
+                        className="border-b hover:bg-slate-50/40 cursor-pointer"
+                        style={{ borderColor: 'var(--border-table)' }}
+                      >
+                        <td className="p-3 pl-4 font-mono">{r.return_date}</td>
                         <td className="p-3 font-semibold text-slate-700">{vendorName}</td>
+                        <td className="p-3 text-xs text-slate-500">{r.bill_no || '-'}</td>
                         <td className="p-3 text-xs text-slate-500">{r.remarks || '-'}</td>
-                        <td className="p-3 text-center text-slate-600">{r.items.length}</td>
-                        <td className="p-3 text-right font-bold text-rose-700">- {formatCurrency(r.totalValue)}</td>
-                        <td className="p-3 text-center" data-no-print>
-                          <button
-                            onClick={() => handleDeleteReturn(r.id)}
-                            className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                            title="Delete Purchase Return"
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        </td>
+                        <td className="p-3 text-right font-bold text-rose-700">- {formatCurrency(r.total_value)}</td>
                       </tr>
                     );
                   })}

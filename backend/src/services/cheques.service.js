@@ -24,6 +24,13 @@ async function getById(chequeId) {
   return cheque;
 }
 
+// Full allocation history for one cheque's receipt (all disposition types, including DEPOSIT and
+// REVERSED rows) — the Cheques tab's per-cheque history view. `listEndorsedAllocations` deliberately
+// excludes DEPOSIT/REVERSED (it's the narrower "Cheque Return" undo-picker), so this is separate.
+async function listAllocationsForReceipt(receiptId) {
+  return repository.listAllocations(receiptId);
+}
+
 // receipt.amount minus every ACTIVE allocation against it — the balance still sitting in CHEQUES
 // IN HAND for this cheque (cash_and_bank.md §10's derived-balance formula, one cheque at a time).
 async function remainingBalance(cheque) {
@@ -316,5 +323,5 @@ async function reverseAllocation(allocationId, payload, userId) {
 
 module.exports = {
   list, getById, deposit, endorseToVendor, endorseToExpense, markCleared, bounce, returnToSender,
-  listEndorsedAllocations, reverseAllocation,
+  listEndorsedAllocations, reverseAllocation, listAllocationsForReceipt,
 };

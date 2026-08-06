@@ -1,16 +1,20 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { getAccountBalance, BANK_CHART_ID } from '@/lib/cashbank';
-import { Plus, ArrowLeft, Save, Edit2, Trash2, Landmark, Search } from 'lucide-react';
-import type { BankAccount } from '@/types';
+import * as api from '@/lib/api';
+import type { BankAccountRow } from '@/lib/api';
+import { Plus, ArrowLeft, Save, Edit2, Ban, RotateCcw, Landmark, Search, AlertTriangle } from 'lucide-react';
 
 export default function BankSetupPage() {
-  const { state, dispatch } = useApp();
+  const { state } = useApp();
 
   const [tab, setTab] = useState<'list' | 'form'>('list');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
+  const [showInactive, setShowInactive] = useState(false);
+
+  const [banks, setBanks] = useState<BankAccountRow[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const [name, setName] = useState('');
   const [accountNo, setAccountNo] = useState('');
@@ -21,8 +25,21 @@ export default function BankSetupPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  const [deactivatingBank, setDeactivatingBank] = useState<BankAccountRow | null>(null);
+  const [reactivatePrompt, setReactivatePrompt] = useState<{ bank_id: number; name: string; account_no: string | null } | null>(null);
+
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3000); };
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
+
+  const loadBanks = useCallback(async (includeInactive: boolean) => {
+    setLoading(true);
+    const res = await api.bankAccounts.list(includeInactive);
+    if (res.ok) setBanks(res.data);
+    else fail('Failed to load bank accounts: ' + res.error.message);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadBanks(showInactive); }, [loadBanks, showInactive]);
 
   const addNew = () => {
     setSelectedId(null);
@@ -32,112 +49,96 @@ export default function BankSetupPage() {
     setTab('form');
   };
 
-  const select = (bank: BankAccount) => {
-    const ba = state.businessAccounts.find(b => b.id === bank.baId);
-    setSelectedId(bank.id);
+  const select = (bank: BankAccountRow) => {
+    setSelectedId(bank.bank_id);
     setName(bank.name);
-    setAccountNo(bank.accountNo || '');
+    setAccountNo(bank.account_no || '');
     setBranch(bank.branch || '');
-    setOpeningBalance(ba?.openingBalance != null ? String(ba.openingBalance) : '');
-    setOpeningDate(ba?.openingDate || new Date().toISOString().split('T')[0]);
     setErrorMsg('');
     setTab('form');
   };
 
-  /**
-   * Next business account code under BANK ACCOUNTS (120002), with the FOUR-digit
-   * serial. Two digits caps a chart head at 99 children — banks should not
-   * inherit the old cash account's numbering.
-   */
-  const nextAccountCode = () => {
-    const existing = state.businessAccounts.filter(a => a.controlId === BANK_CHART_ID);
-    const max = existing.reduce((m, a) => {
-      const n = parseInt(a.id.substring(BANK_CHART_ID.length), 10);
-      return isNaN(n) ? m : Math.max(m, n);
-    }, 0);
-    return `${BANK_CHART_ID}${String(max + 1).padStart(4, '0')}`;
-  };
-
-  const save = (e: React.FormEvent) => {
+  const save = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return setErrorMsg('Bank account name is required.');
 
     const opening = openingBalance.trim() === '' ? undefined : Number(openingBalance);
     if (opening !== undefined && isNaN(opening)) return setErrorMsg('Opening balance must be a number.');
-    // An opening balance with no date cannot be placed on a timeline, so a
-    // ledger could not tell whether it sits before or after the first entry.
     if (opening !== undefined && !openingDate) return setErrorMsg('An opening balance needs a date.');
 
     if (selectedId) {
-      const existing = state.bankAccounts.find(b => b.id === selectedId);
-      if (!existing) return;
-      dispatch({
-        type: 'UPDATE_BANK_ACCOUNT',
-        bank: { id: selectedId, name: name.trim(), accountNo: accountNo.trim() || undefined, branch: branch.trim() || undefined, baId: existing.baId }
+      const res = await api.bankAccounts.update(selectedId, {
+        name: name.trim(),
+        account_no: accountNo.trim() || undefined,
+        branch: branch.trim() || undefined
       });
-      const ba = state.businessAccounts.find(b => b.id === existing.baId);
-      if (ba) {
-        dispatch({
-          type: 'UPDATE_BUSINESS_ACCOUNT',
-          account: { ...ba, name: name.trim(), openingBalance: opening, openingDate: opening !== undefined ? openingDate : undefined }
-        });
-      }
+      if (!res.ok) return setErrorMsg(res.error.message);
       flash('Bank account updated.');
+      setSelectedId(null);
+      setTab('list');
+      loadBanks(showInactive);
     } else {
-      const baId = nextAccountCode();
-      dispatch({
-        type: 'ADD_BUSINESS_ACCOUNT',
-        account: {
-          id: baId,
-          name: name.trim(),
-          controlId: BANK_CHART_ID,
-          linkCode: 'A',
-          region: 'LOCAL',
-          status: 'Active',
-          openingBalance: opening,
-          openingDate: opening !== undefined ? openingDate : undefined
+      const payload: Parameters<typeof api.bankAccounts.create>[0] = {
+        name: name.trim(),
+        account_no: accountNo.trim() || undefined,
+        branch: branch.trim() || undefined
+      };
+      if (opening !== undefined) {
+        payload.opening_balance = opening;
+        payload.opening_date = openingDate;
+      }
+      const res = await api.bankAccounts.create(payload);
+      if (!res.ok) {
+        if (res.error.code === 'INACTIVE_DUPLICATE' && res.error.details) {
+          setReactivatePrompt(res.error.details as { bank_id: number; name: string; account_no: string | null });
+          return;
         }
-      });
-      dispatch({
-        type: 'ADD_BANK_ACCOUNT',
-        bank: { id: 'bank_' + Date.now(), name: name.trim(), accountNo: accountNo.trim() || undefined, branch: branch.trim() || undefined, baId }
-      });
+        return setErrorMsg(res.error.message);
+      }
       flash('Bank account added. It can now be selected on payments and receipts.');
+      setSelectedId(null);
+      setTab('list');
+      loadBanks(showInactive);
     }
-
-    setSelectedId(null);
-    setTab('list');
   };
 
-  const remove = (bank: BankAccount) => {
-    // Deleting a bank removes its ledger account, which would orphan every
-    // payment routed through it — so block while anything references it.
-    const used =
-      state.receipts.filter(r => r.bankId === bank.id || r.depositBankId === bank.id).length +
-      state.expenses.filter(e => e.bankId === bank.id).length +
-      state.transfers.filter(t => t.fromBaId === bank.baId || t.toBaId === bank.baId).length +
-      state.deposits.filter(d => d.toBaId === bank.baId).length;
-    if (used > 0) {
-      return fail(`Cannot delete ${bank.name}: ${used} transaction(s) are recorded against it.`);
-    }
-    if (window.confirm(`Delete ${bank.name}? Its ledger account will be removed too.`)) {
-      dispatch({ type: 'DELETE_BANK_ACCOUNT', id: bank.id });
-      flash('Bank account deleted.');
-      setTab('list');
-    }
+  const confirmDeactivate = async () => {
+    if (!deactivatingBank) return;
+    const res = await api.bankAccounts.remove(deactivatingBank.bank_id);
+    if (!res.ok) { fail('Failed to deactivate: ' + res.error.message); setDeactivatingBank(null); return; }
+    flash('Bank account deactivated.');
+    setDeactivatingBank(null);
+    loadBanks(showInactive);
+  };
+
+  const reactivate = async (bankId: number) => {
+    const res = await api.bankAccounts.reactivate(bankId);
+    if (!res.ok) return fail('Failed to reactivate: ' + res.error.message);
+    flash('Bank account reactivated.');
+    loadBanks(showInactive);
+  };
+
+  const confirmReactivateFromPrompt = async () => {
+    if (!reactivatePrompt) return;
+    const res = await api.bankAccounts.reactivate(reactivatePrompt.bank_id);
+    setReactivatePrompt(null);
+    if (!res.ok) return fail('Failed to reactivate: ' + res.error.message);
+    flash('Existing bank account reactivated.');
+    setSelectedId(null);
+    setTab('list');
+    setShowInactive(false);
+    loadBanks(false);
   };
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return state.bankAccounts;
+    if (!search.trim()) return banks;
     const q = search.toLowerCase();
-    return state.bankAccounts.filter(b =>
+    return banks.filter(b =>
       b.name.toLowerCase().includes(q) ||
-      (b.accountNo || '').toLowerCase().includes(q) ||
+      (b.account_no || '').toLowerCase().includes(q) ||
       (b.branch || '').toLowerCase().includes(q)
     );
-  }, [state.bankAccounts, search]);
-
-  const grandTotal = state.bankAccounts.reduce((s, b) => s + getAccountBalance(state, b.baId), 0);
+  }, [banks, search]);
 
   // Defense-in-depth: the sidebar already hides this page's nav item for User (UC-03), but this
   // page has no other route to it — guard here too rather than rely solely on the sidebar.
@@ -164,7 +165,7 @@ export default function BankSetupPage() {
               onClick={() => { setTab('list'); setSelectedId(null); }}
               className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'list' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
-              <Landmark size={15} /> Bank Accounts ({state.bankAccounts.length})
+              <Landmark size={15} /> Bank Accounts ({banks.length})
             </button>
           </div>
           {tab === 'list' && (
@@ -183,17 +184,23 @@ export default function BankSetupPage() {
                   Each sits under the <strong>Bank Accounts</strong> chart head, so adding one is data — not a schema change.
                 </p>
               </div>
-              <div className="relative">
-                <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search:</span>
+              <div className="flex items-end gap-4">
+                <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 pb-2 cursor-pointer">
+                  <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
+                  Show inactive
+                </label>
                 <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="Name, account no, branch..."
-                    value={search}
-                    onChange={e => setSearch(e.target.value)}
-                    className="soleria-input py-2 text-sm pr-9 font-semibold min-w-[220px]"
-                  />
-                  <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
+                  <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search:</span>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder="Name, account no, branch..."
+                      value={search}
+                      onChange={e => setSearch(e.target.value)}
+                      className="soleria-input py-2 text-sm pr-9 font-semibold min-w-[220px]"
+                    />
+                    <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
+                  </div>
                 </div>
               </div>
             </div>
@@ -206,64 +213,59 @@ export default function BankSetupPage() {
                     <th className="p-3">Bank</th>
                     <th className="p-3">Account No.</th>
                     <th className="p-3">Branch</th>
-                    <th className="p-3 text-right">Opening</th>
-                    <th className="p-3 text-right">Balance</th>
+                    <th className="p-3 text-center">Status</th>
                     <th className="p-3 text-center" style={{ width: 90 }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.length === 0 ? (
+                  {loading ? (
                     <tr>
-                      <td colSpan={7} className="text-center p-8 text-slate-400">
-                        {state.bankAccounts.length === 0
+                      <td colSpan={6} className="text-center p-8 text-slate-400">Loading...</td>
+                    </tr>
+                  ) : filtered.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="text-center p-8 text-slate-400">
+                        {banks.length === 0
                           ? 'No bank accounts yet. Add one so payments and receipts can name where the money moved.'
                           : 'No accounts match this search.'}
                       </td>
                     </tr>
-                  ) : filtered.map(b => {
-                    const ba = state.businessAccounts.find(x => x.id === b.baId);
-                    const bal = getAccountBalance(state, b.baId);
-                    return (
-                      <tr key={b.id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-3 pl-4 font-mono font-semibold text-slate-600">{b.baId}</td>
-                        <td className="p-3 font-semibold text-slate-900">{b.name}</td>
-                        <td className="p-3 font-mono text-slate-600">{b.accountNo || <span className="text-slate-300">—</span>}</td>
-                        <td className="p-3 text-slate-600">{b.branch || <span className="text-slate-300">—</span>}</td>
-                        <td className="p-3 text-right text-slate-500 font-mono">
-                          {ba?.openingBalance != null ? formatCurrency(ba.openingBalance) : <span className="text-slate-300">—</span>}
-                        </td>
-                        <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(bal)}</td>
-                        <td className="p-3 text-center">
-                          <div className="flex items-center justify-center gap-2">
-                            <button onClick={() => select(b)} title="Edit" className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-800">
-                              <Edit2 size={15} />
+                  ) : filtered.map(b => (
+                    <tr key={b.bank_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                      <td className="p-3 pl-4 font-mono font-semibold text-slate-600">{b.ba_id ?? '—'}</td>
+                      <td className="p-3 font-semibold text-slate-900">{b.name}</td>
+                      <td className="p-3 font-mono text-slate-600">{b.account_no || <span className="text-slate-300">—</span>}</td>
+                      <td className="p-3 text-slate-600">{b.branch || <span className="text-slate-300">—</span>}</td>
+                      <td className="p-3 text-center">
+                        {b.is_active ? (
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">Active</span>
+                        ) : (
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">Inactive</span>
+                        )}
+                      </td>
+                      <td className="p-3 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          {b.is_active ? (
+                            <>
+                              <button onClick={() => select(b)} title="Edit" className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-800">
+                                <Edit2 size={15} />
+                              </button>
+                              <button onClick={() => setDeactivatingBank(b)} title="Deactivate" className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600">
+                                <Ban size={15} />
+                              </button>
+                            </>
+                          ) : (
+                            <button onClick={() => reactivate(b.bank_id)} title="Reactivate" className="p-1.5 rounded hover:bg-emerald-50 text-slate-400 hover:text-emerald-600">
+                              <RotateCcw size={15} />
                             </button>
-                            <button onClick={() => remove(b)} title="Delete" className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600">
-                              <Trash2 size={15} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                {state.bankAccounts.length > 0 && (
-                  <tfoot>
-                    <tr className="bg-slate-50 font-bold">
-                      <td colSpan={5} className="p-3 pl-4 text-slate-700">Total across all banks</td>
-                      <td className="p-3 text-right text-lg text-slate-900">{formatCurrency(grandTotal)}</td>
-                      <td />
+                          )}
+                        </div>
+                      </td>
                     </tr>
-                  </tfoot>
-                )}
+                  ))}
+                </tbody>
               </table>
             </div>
-            <p className="text-[11px] text-slate-400 mt-4">
-              Balance is derived, never stored: opening balance, plus online receipts and cheques
-              deposited here, plus transfers in, minus online payments, cheques written on this
-              account, and transfers out. A cheque you wrote reduces the balance on the day it was
-              written — so this is what you have committed, not what the bank would say today.
-            </p>
           </div>
         ) : (
           <div className="card-white p-6 md:p-8 bg-white border overflow-visible" style={{ borderColor: 'var(--border-color)' }}>
@@ -307,27 +309,30 @@ export default function BankSetupPage() {
                 </div>
               </div>
 
-              <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-3" style={{ borderColor: 'var(--border-color)' }}>
-                <div className="text-xs font-bold text-slate-700 uppercase tracking-wider border-b pb-2">
-                  Opening Balance
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Amount already in the account</label>
-                    <input type="number" value={openingBalance} onChange={e => setOpeningBalance(e.target.value)}
-                      placeholder="0" className="soleria-input text-right font-semibold" />
+              {!selectedId && (
+                <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-3" style={{ borderColor: 'var(--border-color)' }}>
+                  <div className="text-xs font-bold text-slate-700 uppercase tracking-wider border-b pb-2">
+                    Opening Balance
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">As at</label>
-                    <input type="date" value={openingDate} onChange={e => setOpeningDate(e.target.value)}
-                      className="soleria-input" />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Amount already in the account</label>
+                      <input type="number" value={openingBalance} onChange={e => setOpeningBalance(e.target.value)}
+                        placeholder="0" className="soleria-input text-right font-semibold" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">As at</label>
+                      <input type="date" value={openingDate} onChange={e => setOpeningDate(e.target.value)}
+                        className="soleria-input" />
+                    </div>
                   </div>
+                  <p className="text-[11px] text-slate-500">
+                    An account opened mid-life already holds money. This is where the running balance
+                    starts — leave it blank for a genuinely new account. Set only when the account is
+                    created; it cannot be changed afterward.
+                  </p>
                 </div>
-                <p className="text-[11px] text-slate-500">
-                  An account opened mid-life already holds money. This is where the running balance
-                  starts — leave it blank for a genuinely new account.
-                </p>
-              </div>
+              )}
 
               <div className="flex gap-3 justify-end border-t pt-4">
                 <button type="button" onClick={() => { setTab('list'); setSelectedId(null); }}
@@ -339,6 +344,66 @@ export default function BankSetupPage() {
                 </button>
               </div>
             </form>
+          </div>
+        )}
+
+        {/* ── Deactivate confirmation ── */}
+        {deactivatingBank && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+              <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
+                <AlertTriangle size={18} className="text-rose-600" /> Deactivate Bank Account
+              </h3>
+              <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+                <strong>{deactivatingBank.name}</strong> will be hidden from selection on new payments
+                and receipts. Its ledger account and history stay intact — this can be undone any time
+                with Reactivate.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setDeactivatingBank(null)}
+                  className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDeactivate}
+                  className="px-4 py-2 text-sm rounded-lg bg-rose-600 text-white hover:bg-rose-700"
+                >
+                  Confirm Deactivate
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Reactivate-instead-of-create prompt ── */}
+        {reactivatePrompt && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+              <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
+                <AlertTriangle size={18} className="text-amber-600" /> Inactive Account Found
+              </h3>
+              <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+                An inactive bank account named <strong>{reactivatePrompt.name}</strong>
+                {reactivatePrompt.account_no ? <> (A/C {reactivatePrompt.account_no})</> : null} already
+                exists. Reactivate it instead of creating a new one?
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setReactivatePrompt(null)}
+                  className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmReactivateFromPrompt}
+                  className="px-4 py-2 text-sm rounded-lg bg-[#111c2a] text-[#B08D57] hover:opacity-90"
+                >
+                  Reactivate Existing
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

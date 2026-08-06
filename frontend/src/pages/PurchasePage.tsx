@@ -1,15 +1,25 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
-import type { PurchaseItem, Vendor } from '@/types';
-import { Plus, Trash2, Save, ShoppingBag } from 'lucide-react';
+import * as api from '@/lib/api';
+import type { VendorRow, RegionRow, CityRow, PurchaseRow, PurchaseCreateInput, PurchaseItemInput } from '@/lib/api';
+import { Plus, Trash2, Save, ShoppingBag, Edit } from 'lucide-react';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
 
-function emptyItem(): PurchaseItem {
+interface UiItem {
+  uid: string;
+  materialName: string;
+  unit: string;
+  quantity: number;
+  pricePerUnit: number;
+  totalPrice: number;
+}
+
+function emptyItem(): UiItem {
   return {
-    id: 'pui_' + Date.now() + Math.random().toString(36).slice(2, 7),
+    uid: 'pui_' + Date.now() + Math.random().toString(36).slice(2, 7),
     materialName: '',
     unit: 'Meters',
     quantity: 0,
@@ -19,12 +29,41 @@ function emptyItem(): PurchaseItem {
 }
 
 export default function PurchasePage() {
-  const { state, dispatch } = useApp();
+  // ── Real lookup / list data ──
+  const [vendors, setVendors] = useState<VendorRow[]>([]);
+  const [regions, setRegions] = useState<RegionRow[]>([]);
+  const [cities, setCities] = useState<CityRow[]>([]);
+  const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
+  const [lookupError, setLookupError] = useState('');
 
+  const refreshPurchases = useCallback(async () => {
+    const res = await api.purchases.list({});
+    if (res.ok) setPurchases(res.data);
+    else setLookupError('Failed to load purchases: ' + res.error.message);
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const [v, rg, ct] = await Promise.all([api.listVendors(), api.listRegions(), api.listCities()]);
+      const failures: string[] = [];
+      if (v.ok) setVendors(v.data); else failures.push(v.error.message);
+      if (rg.ok) setRegions(rg.data); else failures.push(rg.error.message);
+      if (ct.ok) setCities(ct.data); else failures.push(ct.error.message);
+      if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
+    })();
+    refreshPurchases();
+  }, [refreshPurchases]);
+
+  // Mode: 'view' | 'edit' | 'new'
+  const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');
+
+  const [purchaseId, setPurchaseId] = useState<number | null>(null);
+  const [currentIsPosted, setCurrentIsPosted] = useState(false);
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [vendorId, setVendorId] = useState('');
+  const [billNo, setBillNo] = useState('');
   const [remarks, setRemarks] = useState('');
-  const [items, setItems] = useState<PurchaseItem[]>([emptyItem()]);
+  const [items, setItems] = useState<UiItem[]>([emptyItem()]);
   const [customUnitRows, setCustomUnitRows] = useState<Record<string, boolean>>({});
 
   const [errorMsg, setErrorMsg] = useState('');
@@ -35,22 +74,10 @@ export default function PurchasePage() {
   const [newVendorName, setNewVendorName] = useState('');
   const [newVendorPhone, setNewVendorPhone] = useState('');
   const [newVendorRegionId, setNewVendorRegionId] = useState('');
-  const [newVendorCity, setNewVendorCity] = useState('');
+  const [newVendorCityId, setNewVendorCityId] = useState('');
   const [vendorErrorMsg, setVendorErrorMsg] = useState('');
 
-  // FOUR-digit serial — two digits caps a chart account at 99 children, and
-  // the client's legacy data already holds 200+ accounts under one head.
-  // See database_schema.md §3.2.
-  const getNextVendorAccountCode = () => {
-    const vendorAccounts = state.businessAccounts.filter(acc => acc.controlId === '210001');
-    const maxSuffix = vendorAccounts.reduce((max, acc) => {
-      const num = parseInt(acc.id.substring(6), 10);
-      return isNaN(num) ? max : Math.max(max, num);
-    }, 0);
-    return `210001${String(maxSuffix + 1).padStart(4, '0')}`;
-  };
-
-  const handleCreateVendor = (e: React.FormEvent) => {
+  const handleCreateVendor = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newVendorName.trim()) {
       setVendorErrorMsg('Vendor name is required.');
@@ -61,57 +88,43 @@ export default function PurchasePage() {
       return;
     }
 
-    const newVendorId = 'v_' + Date.now();
-    const baId = getNextVendorAccountCode();
-    const regionName = state.regions.find(r => r.id === newVendorRegionId)?.name || 'LOCAL';
-
-    dispatch({
-      type: 'ADD_BUSINESS_ACCOUNT',
-      account: {
-        id: baId,
-        name: `${newVendorName.trim()} A/C`,
-        controlId: '210001',
-        linkCode: 'A',
-        region: regionName,
-        status: 'Active'
-      }
-    });
-
-    const newVendor: Vendor = {
-      id: newVendorId,
+    const res = await api.createVendor({
       name: newVendorName.trim(),
       phone: newVendorPhone.trim() || undefined,
-      city: newVendorCity.trim() || undefined,
-      regionId: newVendorRegionId,
-      baId
-    };
-    dispatch({ type: 'ADD_VENDOR', vendor: newVendor });
+      region_id: Number(newVendorRegionId),
+      city_id: newVendorCityId ? Number(newVendorCityId) : undefined
+    });
+    if (!res.ok) {
+      setVendorErrorMsg('Failed to create vendor: ' + res.error.message);
+      return;
+    }
 
-    setVendorId(newVendorId);
+    setVendors(prev => [...prev, res.data]);
+    setVendorId(String(res.data.vendor_id));
     setIsAddVendorOpen(false);
     setNewVendorName('');
     setNewVendorPhone('');
     setNewVendorRegionId('');
-    setNewVendorCity('');
+    setNewVendorCityId('');
     setVendorErrorMsg('');
     setSuccessMsg('New vendor added successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
   const vendorOptions = useMemo(() => {
-    return state.vendors.map(v => ({
-      value: v.id,
-      label: `${v.name}${v.city ? ' — ' + v.city : ''}`
-    }));
-  }, [state.vendors]);
+    return vendors.map(v => {
+      const cityName = cities.find(c => c.city_id === v.city_id)?.name;
+      return { value: String(v.vendor_id), label: `${v.name}${cityName ? ' — ' + cityName : ''}` };
+    });
+  }, [vendors, cities]);
 
   const selectedVendor = useMemo(() => {
-    return state.vendors.find(v => v.id === vendorId);
-  }, [vendorId, state.vendors]);
+    return vendors.find(v => v.vendor_id === Number(vendorId));
+  }, [vendorId, vendors]);
 
-  const updateItem = (id: string, field: keyof PurchaseItem, value: string | number) => {
+  const updateItem = (uid: string, field: keyof UiItem, value: string | number) => {
     setItems(prev => prev.map(it => {
-      if (it.id !== id) return it;
+      if (it.uid !== uid) return it;
       const updated = { ...it, [field]: value };
       if (field === 'quantity' || field === 'pricePerUnit') {
         updated.totalPrice = Number(updated.quantity) * Number(updated.pricePerUnit);
@@ -122,11 +135,11 @@ export default function PurchasePage() {
 
   const addItemRow = () => setItems(prev => [...prev, emptyItem()]);
 
-  const removeItemRow = (id: string) => {
-    setItems(prev => prev.length > 1 ? prev.filter(it => it.id !== id) : prev);
+  const removeItemRow = (uid: string) => {
+    setItems(prev => prev.length > 1 ? prev.filter(it => it.uid !== uid) : prev);
     setCustomUnitRows(prev => {
       const next = { ...prev };
-      delete next[id];
+      delete next[uid];
       return next;
     });
   };
@@ -138,48 +151,135 @@ export default function PurchasePage() {
     return items.every(it => it.materialName.trim() && it.unit.trim() && it.quantity > 0 && it.pricePerUnit > 0);
   }, [vendorId, date, items]);
 
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!vendorId) return setErrorMsg('Vendor is required.');
-    if (!date) return setErrorMsg('Date is required.');
-    if (!isValid) return setErrorMsg('Every line item needs a material name, unit, quantity, and price per unit.');
+  const isViewMode = mode === 'view';
 
-    dispatch({
-      type: 'ADD_PURCHASE',
-      purchase: {
-        id: 'pu_' + Date.now(),
-        date,
-        vendorId,
-        remarks: remarks.trim(),
-        items,
-        totalValue: grandTotal
-      }
-    });
-
+  const handleNew = () => {
+    setMode('new');
+    setPurchaseId(null);
+    setCurrentIsPosted(false);
     setDate(new Date().toISOString().split('T')[0]);
     setVendorId('');
+    setBillNo('');
     setRemarks('');
     setItems([emptyItem()]);
     setCustomUnitRows({});
     setErrorMsg('');
-    setSuccessMsg('Purchase recorded successfully.');
-    setTimeout(() => setSuccessMsg(''), 3000);
   };
 
-  const handleDeletePurchase = (id: string) => {
-    if (window.confirm('Are you sure you want to delete this purchase record?')) {
-      dispatch({ type: 'DELETE_PURCHASE', id });
+  const buildPayload = (): PurchaseCreateInput | null => {
+    if (!vendorId) { setErrorMsg('Vendor is required.'); return null; }
+    if (!date) { setErrorMsg('Date is required.'); return null; }
+    if (!isValid) { setErrorMsg('Every line item needs a material name, unit, quantity, and price per unit.'); return null; }
+
+    const itemsPayload: PurchaseItemInput[] = items.map(it => ({
+      material_name: it.materialName.trim(),
+      unit: it.unit,
+      quantity: it.quantity,
+      price_per_unit: it.pricePerUnit
+    }));
+
+    return {
+      vendor_id: Number(vendorId),
+      purchase_date: date,
+      bill_no: billNo.trim() || undefined,
+      remarks: remarks.trim() || undefined,
+      items: itemsPayload
+    };
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const payload = buildPayload();
+    if (!payload) return;
+
+    const result = mode === 'edit' && purchaseId != null
+      ? await api.purchases.update(purchaseId, payload)
+      : await api.purchases.create(payload);
+
+    if (!result.ok) {
+      setErrorMsg('Failed to save purchase: ' + result.error.message);
+      return;
     }
+
+    setPurchaseId(result.data.purchase_id);
+    setCurrentIsPosted(result.data.is_posted);
+    setErrorMsg('');
+    setSuccessMsg(mode === 'edit' ? 'Purchase updated successfully.' : 'Purchase recorded successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    setMode('view');
+    refreshPurchases();
+  };
+
+  const loadPurchaseRow = async (rowIn: PurchaseRow) => {
+    // list() rows never carry items/an accurate is_posted (plain SELECT * — only get()/create()/
+    // update()/post()/unpost() compute those) — re-fetch the full record whenever items are missing.
+    let row = rowIn;
+    if (!row.items) {
+      const res = await api.purchases.get(row.purchase_id);
+      if (!res.ok) {
+        setErrorMsg('Failed to load purchase: ' + res.error.message);
+        return;
+      }
+      row = res.data;
+    }
+
+    setPurchaseId(row.purchase_id);
+    setCurrentIsPosted(row.is_posted);
+    setDate(row.purchase_date.slice(0, 10));
+    setVendorId(String(row.vendor_id));
+    setBillNo(row.bill_no || '');
+    setRemarks(row.remarks || '');
+    setItems(row.items.length
+      ? row.items.map(it => ({
+          uid: 'pui_' + it.item_id,
+          materialName: it.material_name || '',
+          unit: it.unit,
+          quantity: it.quantity,
+          pricePerUnit: it.price_per_unit,
+          totalPrice: it.total_price
+        }))
+      : [emptyItem()]);
+    setErrorMsg('');
+    setMode('view');
+  };
+
+  const handlePost = async () => {
+    if (purchaseId == null) return;
+    const res = await api.purchases.post(purchaseId);
+    if (!res.ok) {
+      setErrorMsg('Failed to post purchase: ' + res.error.message);
+      return;
+    }
+    setCurrentIsPosted(true);
+    setSuccessMsg('Purchase posted successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    refreshPurchases();
+  };
+
+  const handleUnpost = async () => {
+    if (purchaseId == null) return;
+    const res = await api.purchases.unpost(purchaseId);
+    if (!res.ok) {
+      setErrorMsg('Failed to unpost purchase: ' + res.error.message);
+      return;
+    }
+    setCurrentIsPosted(false);
+    setSuccessMsg('Purchase unposted successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    refreshPurchases();
   };
 
   const sortedPurchases = useMemo(() => {
-    return [...state.purchases].sort((a, b) => b.date.localeCompare(a.date));
-  }, [state.purchases]);
+    return [...purchases].sort((a, b) => b.purchase_date.localeCompare(a.purchase_date));
+  }, [purchases]);
 
   return (
     <AppLayout pageTitle="Purchase Entry">
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
 
+        {lookupError && (
+          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>
+        )}
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
         )}
@@ -188,13 +288,52 @@ export default function PurchasePage() {
         )}
 
         <form onSubmit={handleSave} className="card-white p-6 bg-white border mb-8" data-no-print>
-          <div className="flex items-center gap-2 border-b pb-3 mb-5">
-            <ShoppingBag size={18} className="text-[#B08D57]" />
-            <h3 className="font-lora font-semibold text-lg text-slate-800">Raw Material Purchase</h3>
+          <div className="flex items-center justify-between border-b pb-3 mb-5">
+            <div className="flex items-center gap-2">
+              <ShoppingBag size={18} className="text-[#B08D57]" />
+              <h3 className="font-lora font-semibold text-lg text-slate-800">Raw Material Purchase</h3>
+            </div>
+            {mode === 'view' && (
+              <div className="flex items-center gap-2">
+                {!currentIsPosted && (
+                  <button
+                    type="button"
+                    onClick={() => setMode('edit')}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
+                  >
+                    <Edit size={13} /> Edit
+                  </button>
+                )}
+                {!currentIsPosted ? (
+                  <button
+                    type="button"
+                    onClick={handlePost}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
+                  >
+                    Post
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleUnpost}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
+                  >
+                    Unpost
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleNew}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
+                >
+                  New Purchase
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Header fields */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">
                 Date <span className="text-red-500 font-bold">*</span>
@@ -202,6 +341,7 @@ export default function PurchasePage() {
               <input
                 type="date"
                 value={date}
+                disabled={isViewMode}
                 onChange={e => setDate(e.target.value)}
                 className="soleria-input"
                 style={{ fontSize: '13px' }}
@@ -212,13 +352,15 @@ export default function PurchasePage() {
                 <label className="block text-xs font-medium text-slate-600">
                   Vendor <span className="text-red-500 font-bold">*</span>
                 </label>
-                <button
-                  type="button"
-                  onClick={() => setIsAddVendorOpen(true)}
-                  className="text-[10px] font-bold underline transition-colors text-blue-600 hover:text-blue-800"
-                >
-                  + Add New Vendor
-                </button>
+                {!isViewMode && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAddVendorOpen(true)}
+                    className="text-[10px] font-bold underline transition-colors text-blue-600 hover:text-blue-800"
+                  >
+                    + Add New Vendor
+                  </button>
+                )}
               </div>
               <SearchableSelect
                 options={vendorOptions}
@@ -226,18 +368,32 @@ export default function PurchasePage() {
                 onChange={setVendorId}
                 placeholder="Select vendor..."
                 searchPlaceholder="Search vendors..."
+                disabled={isViewMode}
               />
               {selectedVendor && (
                 <p className="text-[11px] text-slate-400 mt-1">
-                  {selectedVendor.phone || 'No Phone'} {selectedVendor.city ? `· ${selectedVendor.city}` : ''}
+                  {selectedVendor.phone || 'No Phone'} {selectedVendor.city_id != null ? `· ${cities.find(c => c.city_id === selectedVendor.city_id)?.name || ''}` : ''}
                 </p>
               )}
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Vendor Bill No.</label>
+              <input
+                type="text"
+                value={billNo}
+                disabled={isViewMode}
+                onChange={e => setBillNo(e.target.value)}
+                placeholder="Vendor's own invoice #..."
+                className="soleria-input"
+                style={{ fontSize: '13px' }}
+              />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">Remarks</label>
               <input
                 type="text"
                 value={remarks}
+                disabled={isViewMode}
                 onChange={e => setRemarks(e.target.value)}
                 placeholder="Optional notes..."
                 className="soleria-input"
@@ -261,29 +417,31 @@ export default function PurchasePage() {
               </thead>
               <tbody>
                 {items.map(item => (
-                  <tr key={item.id} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                  <tr key={item.uid} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
                     <td className="p-3 pl-4">
                       <input
                         type="text"
                         value={item.materialName}
-                        onChange={e => updateItem(item.id, 'materialName', e.target.value)}
+                        disabled={isViewMode}
+                        onChange={e => updateItem(item.uid, 'materialName', e.target.value)}
                         placeholder="e.g. PU Sheet Roll"
                         className="soleria-input font-semibold"
                         style={{ fontSize: '13px' }}
                       />
                     </td>
                     <td className="p-3">
-                      {customUnitRows[item.id] ? (
+                      {customUnitRows[item.uid] ? (
                         <input
                           type="text"
                           value={item.unit}
-                          onChange={e => updateItem(item.id, 'unit', e.target.value)}
+                          disabled={isViewMode}
+                          onChange={e => updateItem(item.uid, 'unit', e.target.value)}
                           placeholder="Type unit..."
                           autoFocus
                           onBlur={() => {
                             if (!item.unit.trim()) {
-                              setCustomUnitRows(prev => ({ ...prev, [item.id]: false }));
-                              updateItem(item.id, 'unit', UNIT_PRESETS[0]);
+                              setCustomUnitRows(prev => ({ ...prev, [item.uid]: false }));
+                              updateItem(item.uid, 'unit', UNIT_PRESETS[0]);
                             }
                           }}
                           className="soleria-input"
@@ -291,13 +449,14 @@ export default function PurchasePage() {
                         />
                       ) : (
                         <select
-                          value={item.unit}
+                          value={UNIT_PRESETS.includes(item.unit) ? item.unit : '__other__'}
+                          disabled={isViewMode}
                           onChange={e => {
                             if (e.target.value === '__other__') {
-                              setCustomUnitRows(prev => ({ ...prev, [item.id]: true }));
-                              updateItem(item.id, 'unit', '');
+                              setCustomUnitRows(prev => ({ ...prev, [item.uid]: true }));
+                              updateItem(item.uid, 'unit', '');
                             } else {
-                              updateItem(item.id, 'unit', e.target.value);
+                              updateItem(item.uid, 'unit', e.target.value);
                             }
                           }}
                           className="soleria-input cursor-pointer"
@@ -306,7 +465,9 @@ export default function PurchasePage() {
                           {UNIT_PRESETS.map(u => (
                             <option key={u} value={u}>{u}</option>
                           ))}
-                          <option value="__other__">Other (type manually)...</option>
+                          <option value="__other__">
+                            {UNIT_PRESETS.includes(item.unit) ? 'Other (type manually)...' : item.unit || 'Other (type manually)...'}
+                          </option>
                         </select>
                       )}
                     </td>
@@ -315,7 +476,8 @@ export default function PurchasePage() {
                         type="number"
                         min={0}
                         value={item.quantity || ''}
-                        onChange={e => updateItem(item.id, 'quantity', Number(e.target.value))}
+                        disabled={isViewMode}
+                        onChange={e => updateItem(item.uid, 'quantity', Number(e.target.value))}
                         className="soleria-input text-center font-semibold"
                         style={{ fontSize: '13px' }}
                       />
@@ -325,7 +487,8 @@ export default function PurchasePage() {
                         type="number"
                         min={0}
                         value={item.pricePerUnit || ''}
-                        onChange={e => updateItem(item.id, 'pricePerUnit', Number(e.target.value))}
+                        disabled={isViewMode}
+                        onChange={e => updateItem(item.uid, 'pricePerUnit', Number(e.target.value))}
                         className="soleria-input text-center font-semibold"
                         style={{ fontSize: '13px' }}
                       />
@@ -334,14 +497,16 @@ export default function PurchasePage() {
                       {formatCurrency(item.totalPrice)}
                     </td>
                     <td className="p-3 text-center">
-                      <button
-                        type="button"
-                        onClick={() => removeItemRow(item.id)}
-                        className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                        title="Remove Row"
-                      >
-                        <Trash2 size={15} />
-                      </button>
+                      {!isViewMode && (
+                        <button
+                          type="button"
+                          onClick={() => removeItemRow(item.uid)}
+                          className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
+                          title="Remove Row"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -356,21 +521,38 @@ export default function PurchasePage() {
             </table>
           </div>
 
-          <div className="flex items-center justify-between">
-            <button
-              type="button"
-              onClick={addItemRow}
-              className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm"
-            >
-              <Plus size={16} /> Add Line Item
-            </button>
-            <button
-              type="submit"
-              className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-sm font-bold"
-            >
-              <Save size={16} /> Save Purchase
-            </button>
-          </div>
+          {!isViewMode && (
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={addItemRow}
+                className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm"
+              >
+                <Plus size={16} /> Add Line Item
+              </button>
+              <div className="flex items-center gap-2">
+                {mode === 'edit' && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (purchaseId == null) return;
+                      const res = await api.purchases.get(purchaseId);
+                      if (res.ok) await loadPurchaseRow(res.data);
+                    }}
+                    className="btn-outline px-4 py-2 text-sm font-semibold"
+                  >
+                    Cancel Edit
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-sm font-bold"
+                >
+                  <Save size={16} /> {mode === 'edit' ? 'Update Purchase' : 'Save Purchase'}
+                </button>
+              </div>
+            </div>
+          )}
         </form>
 
         {/* Recorded Purchases */}
@@ -387,31 +569,26 @@ export default function PurchasePage() {
                   <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                     <th className="p-3 pl-4">Date</th>
                     <th className="p-3">Vendor</th>
+                    <th className="p-3">Bill No.</th>
                     <th className="p-3">Remarks</th>
-                    <th className="p-3 text-center">Line Items</th>
                     <th className="p-3 text-right">Total Value</th>
-                    <th className="p-3 text-center" style={{ width: '60px' }} data-no-print></th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedPurchases.map(p => {
-                    const vendorName = state.vendors.find(v => v.id === p.vendorId)?.name || 'Unknown Vendor';
+                    const vendorName = vendors.find(v => v.vendor_id === p.vendor_id)?.name || 'Unknown Vendor';
                     return (
-                      <tr key={p.id} className="border-b hover:bg-slate-50/40" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-3 pl-4 font-mono">{p.date}</td>
+                      <tr
+                        key={p.purchase_id}
+                        onClick={() => loadPurchaseRow(p)}
+                        className="border-b hover:bg-slate-50/40 cursor-pointer"
+                        style={{ borderColor: 'var(--border-table)' }}
+                      >
+                        <td className="p-3 pl-4 font-mono">{p.purchase_date}</td>
                         <td className="p-3 font-semibold text-slate-700">{vendorName}</td>
+                        <td className="p-3 text-xs text-slate-500">{p.bill_no || '-'}</td>
                         <td className="p-3 text-xs text-slate-500">{p.remarks || '-'}</td>
-                        <td className="p-3 text-center text-slate-600">{p.items.length}</td>
-                        <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(p.totalValue)}</td>
-                        <td className="p-3 text-center" data-no-print>
-                          <button
-                            onClick={() => handleDeletePurchase(p.id)}
-                            className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                            title="Delete Purchase"
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        </td>
+                        <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(p.total_value)}</td>
                       </tr>
                     );
                   })}
@@ -467,28 +644,33 @@ export default function PurchasePage() {
                 </label>
                 <select
                   value={newVendorRegionId}
-                  onChange={e => setNewVendorRegionId(e.target.value)}
+                  onChange={e => { setNewVendorRegionId(e.target.value); setNewVendorCityId(''); }}
                   className="soleria-input cursor-pointer font-semibold"
                   required
                 >
                   <option value="">Select Region...</option>
-                  {state.regions.map(rg => (
-                    <option key={rg.id} value={rg.id}>{rg.name}</option>
+                  {regions.map(rg => (
+                    <option key={rg.region_id} value={rg.region_id}>{rg.name}</option>
                   ))}
                 </select>
               </div>
 
               <div className="mb-6">
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  City Location
+                  City
                 </label>
-                <input
-                  type="text"
-                  value={newVendorCity}
-                  onChange={e => setNewVendorCity(e.target.value)}
-                  placeholder="e.g. Lahore, Karachi"
-                  className="soleria-input font-semibold"
-                />
+                <select
+                  value={newVendorCityId}
+                  onChange={e => setNewVendorCityId(e.target.value)}
+                  className="soleria-input cursor-pointer font-semibold"
+                >
+                  <option value="">Select City...</option>
+                  {cities
+                    .filter(ct => !newVendorRegionId || ct.region_id === Number(newVendorRegionId))
+                    .map(ct => (
+                      <option key={ct.city_id} value={ct.city_id}>{ct.name}</option>
+                    ))}
+                </select>
               </div>
 
               <div className="flex justify-end gap-2 text-sm font-semibold">
@@ -499,7 +681,7 @@ export default function PurchasePage() {
                     setNewVendorName('');
                     setNewVendorPhone('');
                     setNewVendorRegionId('');
-                    setNewVendorCity('');
+                    setNewVendorCityId('');
                     setVendorErrorMsg('');
                   }}
                   className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"

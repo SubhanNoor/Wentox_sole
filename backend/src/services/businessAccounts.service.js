@@ -12,6 +12,10 @@ async function getById(baId) {
   return account;
 }
 
+function list(filters) {
+  return repository.list(filters);
+}
+
 // Auto-creates a business_accounts row under a reserved chart account (UC-08/UC-09 pattern: a
 // vendor/customer/bank never exposes a separate account-setup step — one row appears here,
 // linked via the party's own ba_id, the moment the party is created). §3.2 composition: code =
@@ -34,4 +38,4 @@ function renameLinked(baId, name) {
   return repository.updateName(baId, name);
 }
 
-module.exports = { createUnderChartCode, renameLinked, getById };
+module.exports = { createUnderChartCode, renameLinked, getById, list };

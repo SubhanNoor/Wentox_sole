@@ -1,14 +1,14 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
-import { getCustomerBalance } from '@/lib/cheques';
 import AppLayout from '@/components/AppLayout';
-import type { Receipt } from '@/types';
-import { Save, DollarSign, Search, FileText } from 'lucide-react';
+import SearchableSelect from '@/components/SearchableSelect';
+import * as api from '@/lib/api';
+import type { CustomerRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow } from '@/lib/api';
+import { Save, DollarSign, Search, FileText, Edit, Trash2, AlertTriangle } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
 import ChequesTab from '@/components/ChequesTab';
-import SearchableSelect from '@/components/SearchableSelect';
 
 type ReceiptTab = 'entry' | 'weekly' | 'monthly' | 'overall' | 'cheques';
 
@@ -20,8 +20,10 @@ const RECEIPT_TAB_LABELS: Record<ReceiptTab, string> = {
   cheques: 'Cheques Disposal'
 };
 
+const today = () => new Date().toISOString().split('T')[0];
+
 export default function ReceiptsPage() {
-  const { state, dispatch } = useApp();
+  const { state } = useApp();
 
   // Navigation / Tabs State — sync with state.currentTab
   const [activeTab, setActiveTab] = useState<ReceiptTab>(() => {
@@ -39,15 +41,52 @@ export default function ReceiptsPage() {
     }
   }, [state.currentTab, state.currentUserRole]);
 
-  // Form State
-  const [receiptId, setReceiptId] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  // ── Real lookup / list data ──
+  const [customers, setCustomers] = useState<CustomerRow[]>([]);
+  const [regions, setRegions] = useState<RegionRow[]>([]);
+  const [cities, setCities] = useState<CityRow[]>([]);
+  const [banks, setBanks] = useState<BankAccountRow[]>([]);
+  const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
+  const [drafts, setDrafts] = useState<DraftReceiptRow[]>([]);
+  const [lookupError, setLookupError] = useState('');
+
+  const refreshReceipts = useCallback(async () => {
+    const res = await api.receipts.list({});
+    if (res.ok) setReceipts(res.data);
+    else setLookupError('Failed to load receipts: ' + res.error.message);
+  }, []);
+
+  const refreshDrafts = useCallback(async () => {
+    const res = await api.draftReceipts.list({});
+    if (res.ok) setDrafts(res.data);
+    else setLookupError('Failed to load drafts: ' + res.error.message);
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const [c, rg, ct, bk] = await Promise.all([
+        api.listCustomers(), api.listRegions(), api.listCities(), api.bankAccounts.list()
+      ]);
+      const failures: string[] = [];
+      if (c.ok) setCustomers(c.data); else failures.push(c.error.message);
+      if (rg.ok) setRegions(rg.data); else failures.push(rg.error.message);
+      if (ct.ok) setCities(ct.data); else failures.push(ct.error.message);
+      if (bk.ok) setBanks(bk.data); else failures.push(bk.error.message);
+      if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
+    })();
+    refreshReceipts();
+    refreshDrafts();
+  }, [refreshReceipts, refreshDrafts]);
+
+  // ── Real-receipt form (mirrors PurchasePage.tsx's mode structure) ──
+  const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
+  const [receiptId, setReceiptId] = useState<number | null>(null);
+  const [receiptStatus, setReceiptStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
+  const [date, setDate] = useState(today());
   const [customerId, setCustomerId] = useState('');
   const [amount, setAmount] = useState<number>(0);
   const [commission, setCommission] = useState<number>(0);
-  const [paymentMode, setPaymentMode] = useState<'Cash' | 'Cheque' | 'Online'>('Cash');
-  // ONLINE only — which of our accounts the money landed in. Without it the
-  // receipt is one-sided and no bank balance can be trusted.
+  const [paymentMode, setPaymentMode] = useState<'CASH' | 'ONLINE' | 'CHEQUE'>('CASH');
   const [bankId, setBankId] = useState('');
   const [details, setDetails] = useState('');
   const [chequeNo, setChequeNo] = useState('');
@@ -55,12 +94,11 @@ export default function ReceiptsPage() {
   const [chequeReceivedDate, setChequeReceivedDate] = useState('');
   const [remarks, setRemarks] = useState('');
 
-  // Drafts state
-  const [drafts, setDrafts] = useState<Receipt[]>(() => {
-    const saved = localStorage.getItem('wento_receipt_drafts');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [selectedDraftId, setSelectedDraftId] = useState('');
+  // draftReceipts is a separate server-side feature (genuinely incomplete entries) —
+  // distinct from a receipt's own DRAFT/CONFIRMED status above. Loading one just
+  // fills the form; since draftReceipts has no update(), re-saving replaces it.
+  const [loadedDraftId, setLoadedDraftId] = useState<number | null>(null);
+  const [selectedDraftPick, setSelectedDraftPick] = useState('');
 
   // Dropdown search state
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -69,170 +107,258 @@ export default function ReceiptsPage() {
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<ReceiptRow | null>(null);
+
+  const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
+  const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
+
+  const isViewMode = mode === 'view';
+  const isPosted = receiptStatus === 'CONFIRMED';
 
   // Customer account group helpers
   const selectedCustomer = useMemo(() => {
-    return state.customers.find(c => c.id === customerId);
-  }, [customerId, state.customers]);
-
-  const customerMainAcName = useMemo(() => {
-    if (!selectedCustomer) return '';
-    return state.chartAccounts.find(a => a.id === selectedCustomer.acId)?.name || 'CUSTOMERS ACCOUNTS';
-  }, [selectedCustomer, state.chartAccounts]);
+    return customers.find(c => c.customer_id === Number(customerId));
+  }, [customerId, customers]);
 
   // Dropdown list filter — Customer search: Primary = Region, Secondary = City
   const filteredDropdownCustomers = useMemo(() => {
-    const regionName = (id: string) => state.regions.find(r => r.id === id)?.name || '';
-    const cityName = (id: string) => state.cities.find(ct => ct.id === id)?.name || '';
+    const regionName = (id: number) => regions.find(r => r.region_id === id)?.name || '';
+    const cityName = (id: number | null) => id == null ? '' : cities.find(ct => ct.city_id === id)?.name || '';
     const query = customerSearchQuery.trim().toLowerCase();
     const list = query
-      ? state.customers.filter(c =>
+      ? customers.filter(c =>
           c.name.toLowerCase().includes(query) ||
-          c.id.toLowerCase().includes(query)
+          String(c.customer_id).includes(query)
         )
-      : state.customers;
+      : customers;
     return [...list].sort((a, b) => {
-      const regionCmp = regionName(a.regionId).localeCompare(regionName(b.regionId));
+      const regionCmp = regionName(a.region_id).localeCompare(regionName(b.region_id));
       if (regionCmp !== 0) return regionCmp;
-      return cityName(a.cityId).localeCompare(cityName(b.cityId));
+      return cityName(a.city_id).localeCompare(cityName(b.city_id));
     });
-  }, [customerSearchQuery, state.customers, state.regions, state.cities]);
+  }, [customerSearchQuery, customers, regions, cities]);
 
-  // Customer balance calculations. Uses the shared helper so a BOUNCED cheque
-  // stops counting as payment here exactly as it does in the Account Ledger.
-  const customerBalanceDetails = useMemo(() => {
-    if (!customerId) return null;
+  const bankOptions = useMemo(
+    () => banks.filter(b => b.is_active).map(b => ({ value: String(b.bank_id), label: b.name })),
+    [banks]
+  );
 
-    const currentBalance = getCustomerBalance(
-      customerId, state.saleBills, state.saleReturns, state.receipts
-    );
-    const afterCommission = currentBalance - commission;
-    const remainingBalance = afterCommission - amount;
-
-    return {
-      currentBalance,
-      afterCommission,
-      remainingBalance
-    };
-  }, [customerId, state.saleBills, state.saleReturns, state.receipts, amount, commission]);
-
-  const loadReceipt = (r: Receipt) => {
-    setReceiptId(r.id);
-    setDate(r.date);
-    setCustomerId(r.customerId);
-    setAmount(r.amount || 0);
-    setCommission(r.commission || 0);
-    setPaymentMode(r.paymentMode);
-    setBankId(r.bankId || '');
-    setDetails(r.details || '');
-    setChequeNo(r.chequeNo || '');
-    setChequeDate(r.chequeDate || '');
-    setChequeReceivedDate(r.chequeReceivedDate || '');
-    setRemarks(r.remarks || '');
-    setErrorMsg('');
-  };
-
-  const handleSaveDraft = () => {
-    const currentId = receiptId || 'rc_draft_' + Date.now();
-    const draftReceipt: Receipt = {
-      id: currentId,
-      date,
-      customerId,
-      amount: amount || 0,
-      commission: commission || undefined,
-      paymentMode,
-      bankId: paymentMode === 'Online' ? bankId : undefined,
-      details,
-      ...(paymentMode === 'Cheque' ? {
-        chequeNo: chequeNo.trim(),
-        chequeDate,
-        chequeReceivedDate: chequeReceivedDate || date,
-        chequeStatus: 'PENDING' as const
-      } : {}),
-      remarks,
-      status: 'Unposted'
-    };
-
-    setDrafts(prev => {
-      const existingIdx = prev.findIndex(d => d.id === currentId);
-      let updated;
-      if (existingIdx !== -1) {
-        updated = [...prev];
-        updated[existingIdx] = draftReceipt;
-      } else {
-        updated = [draftReceipt, ...prev];
-      }
-      localStorage.setItem('wento_receipt_drafts', JSON.stringify(updated));
-      return updated;
-    });
-
-    setReceiptId(currentId);
-    setSelectedDraftId(currentId);
-    setSuccessMsg('Receipt saved to drafts cache.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-  };
-
-  const handleSaveReceipt = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!date) return setErrorMsg('Please pick a date.');
-    if (!customerId) return setErrorMsg('Please select a customer.');
-    if (amount <= 0) return setErrorMsg('Amount must be greater than 0.');
-    if (paymentMode === 'Cheque' && !chequeNo.trim()) return setErrorMsg('Cheque No. is required for cheque payments.');
-    if (paymentMode === 'Cheque' && !chequeDate) return setErrorMsg('Date on Cheque is required for cheque payments.');
-    if (paymentMode === 'Online' && !bankId) return setErrorMsg('Select which bank account received this money.');
-
-    const newReceipt: Receipt = {
-      id: receiptId || ('rc_' + Date.now()),
-      date,
-      customerId,
-      amount,
-      commission: commission || undefined,
-      paymentMode,
-      bankId: paymentMode === 'Online' ? bankId : undefined,
-      details,
-      ...(paymentMode === 'Cheque' ? {
-        chequeNo: chequeNo.trim(),
-        chequeDate,
-        chequeReceivedDate: chequeReceivedDate || date,
-        chequeStatus: 'PENDING' as const
-      } : {}),
-      remarks,
-      status: 'Posted'
-    };
-
-    dispatch({ type: 'ADD_RECEIPT', receipt: newReceipt });
-
-    // Clean up draft from cache if saved/confirmed
-    setDrafts(prev => {
-      const updated = prev.filter(d => d.id !== receiptId && d.id !== selectedDraftId);
-      localStorage.setItem('wento_receipt_drafts', JSON.stringify(updated));
-      return updated;
-    });
-    setSelectedDraftId('');
-    setReceiptId('');
-
-    const commissionNote = commission > 0 ? ` (+ ${formatCurrency(commission)} commission)` : '';
-    setSuccessMsg(`Receipt of ${formatCurrency(amount)}${commissionNote} saved successfully against customer!`);
-    setTimeout(() => setSuccessMsg(''), 3500);
-
-    // Reset Form
+  const handleNew = () => {
+    setMode('new');
+    setReceiptId(null);
+    setReceiptStatus('DRAFT');
+    setDate(today());
     setCustomerId('');
     setCustomerSearchQuery('');
-    setBankId('');
     setAmount(0);
     setCommission(0);
+    setPaymentMode('CASH');
+    setBankId('');
     setDetails('');
     setChequeNo('');
     setChequeDate('');
     setChequeReceivedDate('');
     setRemarks('');
+    setLoadedDraftId(null);
+    setSelectedDraftPick('');
     setErrorMsg('');
   };
+
+  const buildPayload = (): ReceiptCreateInput | null => {
+    if (!date) { setErrorMsg('Please pick a date.'); return null; }
+    if (!customerId) { setErrorMsg('Please select a customer.'); return null; }
+    if (amount <= 0) { setErrorMsg('Amount must be greater than 0.'); return null; }
+    if (paymentMode === 'ONLINE' && !bankId) { setErrorMsg('Select which bank account received this money.'); return null; }
+    if (paymentMode === 'CHEQUE' && !chequeNo.trim()) { setErrorMsg('Cheque No. is required for cheque payments.'); return null; }
+    if (paymentMode === 'CHEQUE' && !chequeDate) { setErrorMsg('Date on Cheque is required for cheque payments.'); return null; }
+
+    return {
+      customer_id: Number(customerId),
+      receipt_date: date,
+      amount,
+      commission: commission || undefined,
+      payment_mode: paymentMode,
+      details: details.trim() || undefined,
+      bank_id: paymentMode === 'ONLINE' ? Number(bankId) : undefined,
+      cheque_no: paymentMode === 'CHEQUE' ? chequeNo.trim() : undefined,
+      cheque_date: paymentMode === 'CHEQUE' ? chequeDate : undefined,
+      cheque_received_date: paymentMode === 'CHEQUE' ? (chequeReceivedDate || date) : undefined,
+      remarks: remarks.trim() || undefined
+    };
+  };
+
+  const handleSaveReceipt = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const payload = buildPayload();
+    if (!payload) return;
+
+    const result = mode === 'edit' && receiptId != null
+      ? await api.receipts.update(receiptId, payload)
+      : await api.receipts.create(payload);
+
+    if (!result.ok) { fail('Failed to save receipt: ' + result.error.message); return; }
+
+    // A confirmed real receipt supersedes whatever draftReceipts entry it came from.
+    if (loadedDraftId != null) {
+      await api.draftReceipts.remove(loadedDraftId);
+      refreshDrafts();
+    }
+
+    setReceiptId(result.data.receipt_id);
+    setReceiptStatus(result.data.status);
+    setLoadedDraftId(null);
+    setErrorMsg('');
+    flash(mode === 'edit' ? 'Receipt updated successfully.' : 'Receipt recorded successfully.');
+    setMode('view');
+    refreshReceipts();
+  };
+
+  const loadReceiptRow = async (rowIn: ReceiptRow) => {
+    // list() rows never carry cheque_no/cheque_date (only get()'s join does) — re-fetch
+    // full detail whenever a CHEQUE row is opened for view/edit.
+    let row = rowIn;
+    if (row.payment_mode === 'CHEQUE' && row.cheque_no === undefined) {
+      const res = await api.receipts.get(row.receipt_id);
+      if (!res.ok) { fail('Failed to load receipt: ' + res.error.message); return; }
+      row = res.data;
+    }
+
+    setReceiptId(row.receipt_id);
+    setReceiptStatus(row.status);
+    setDate(row.receipt_date.slice(0, 10));
+    setCustomerId(String(row.customer_id));
+    setAmount(row.amount);
+    setCommission(row.commission || 0);
+    setPaymentMode(row.payment_mode);
+    setBankId(row.bank_id != null ? String(row.bank_id) : '');
+    setDetails(row.details || '');
+    setChequeNo(row.cheque_no || '');
+    setChequeDate(row.cheque_date ? row.cheque_date.slice(0, 10) : '');
+    setChequeReceivedDate(row.cheque_received_date ? row.cheque_received_date.slice(0, 10) : '');
+    setRemarks(row.remarks || '');
+    setLoadedDraftId(null);
+    setSelectedDraftPick('');
+    setErrorMsg('');
+    setMode('view');
+  };
+
+  const handlePost = async () => {
+    if (receiptId == null) return;
+    const res = await api.receipts.post(receiptId);
+    if (!res.ok) { fail('Failed to post receipt: ' + res.error.message); return; }
+    setReceiptStatus(res.data.status);
+    flash('Receipt posted successfully.');
+    refreshReceipts();
+  };
+
+  const handleUnpost = async () => {
+    if (receiptId == null) return;
+    const res = await api.receipts.unpost(receiptId);
+    if (!res.ok) { fail('Failed to unpost receipt: ' + res.error.message); return; }
+    setReceiptStatus(res.data.status);
+    flash('Receipt unposted successfully.');
+    refreshReceipts();
+  };
+
+  const confirmDeleteReceipt = async () => {
+    if (!deleteTarget) return;
+    const res = await api.receipts.remove(deleteTarget.receipt_id);
+    setDeleteTarget(null);
+    if (!res.ok) { fail('Failed to delete receipt: ' + res.error.message); return; }
+    flash('Receipt deleted.');
+    if (receiptId === deleteTarget.receipt_id) handleNew();
+    refreshReceipts();
+  };
+
+  // ── draftReceipts (server-side, CASH/ONLINE only) ──
+  const handleSaveDraft = async () => {
+    if (paymentMode === 'CHEQUE') {
+      fail('Cheque receipts cannot be saved as drafts — save the receipt directly instead.');
+      return;
+    }
+    if (!customerId) { fail('Please select a customer.'); return; }
+
+    const payload: Partial<ReceiptCreateInput> = {
+      customer_id: Number(customerId),
+      receipt_date: date,
+      amount: amount || undefined,
+      commission: commission || undefined,
+      payment_mode: paymentMode,
+      details: details.trim() || undefined,
+      bank_id: paymentMode === 'ONLINE' && bankId ? Number(bankId) : undefined,
+      remarks: remarks.trim() || undefined
+    };
+
+    // draftReceipts has no update() — replace the old draft in place.
+    if (loadedDraftId != null) {
+      await api.draftReceipts.remove(loadedDraftId);
+    }
+
+    const res = await api.draftReceipts.create(payload);
+    if (!res.ok) { fail('Failed to save draft: ' + res.error.message); return; }
+
+    setLoadedDraftId(res.data.draft_id);
+    setSelectedDraftPick(String(res.data.draft_id));
+    flash('Receipt saved to drafts.');
+    refreshDrafts();
+  };
+
+  const loadDraft = (row: DraftReceiptRow) => {
+    setMode('new');
+    setReceiptId(null);
+    setReceiptStatus('DRAFT');
+    setDate(row.receipt_date.slice(0, 10));
+    setCustomerId(String(row.customer_id));
+    setAmount(row.amount || 0);
+    setCommission(row.commission || 0);
+    setPaymentMode(row.payment_mode);
+    setBankId(row.bank_id != null ? String(row.bank_id) : '');
+    setDetails(row.details || '');
+    setChequeNo('');
+    setChequeDate('');
+    setChequeReceivedDate('');
+    setRemarks(row.remarks || '');
+    setLoadedDraftId(row.draft_id);
+    setErrorMsg('');
+  };
+
+  const handleDeleteDraft = async () => {
+    if (!selectedDraftPick) { fail('Please select a draft first.'); return; }
+    const id = Number(selectedDraftPick);
+    const res = await api.draftReceipts.remove(id);
+    if (!res.ok) { fail('Failed to delete draft: ' + res.error.message); return; }
+    if (loadedDraftId === id) handleNew();
+    setSelectedDraftPick('');
+    flash('Draft deleted successfully.');
+    refreshDrafts();
+  };
+
+  const handleConfirmDraft = async () => {
+    if (!selectedDraftPick) { fail('Please select a draft first.'); return; }
+    const id = Number(selectedDraftPick);
+    const res = await api.draftReceipts.confirm(id);
+    if (!res.ok) { fail('Failed to confirm draft: ' + res.error.message); return; }
+    if (loadedDraftId === id) handleNew();
+    setSelectedDraftPick('');
+    flash('Draft confirmed and posted as a receipt.');
+    refreshDrafts();
+    refreshReceipts();
+  };
+
+  const sortedReceipts = useMemo(
+    () => [...receipts].sort((a, b) => b.receipt_date.localeCompare(a.receipt_date)),
+    [receipts]
+  );
+
+  const customerName = useCallback(
+    (id: number) => customers.find(c => c.customer_id === id)?.name || 'Unknown Customer',
+    [customers]
+  );
 
   return (
     <AppLayout pageTitle="Receipts / Jamma Entry" subTabTitle={RECEIPT_TAB_LABELS[activeTab]} subTabId={activeTab}>
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
-        
+
         {/* Top Tab Navigation */}
         <div className="flex flex-wrap gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           <button
@@ -323,6 +449,9 @@ export default function ReceiptsPage() {
         {activeTab === 'entry' && (
           <div className="max-w-2xl mx-auto animate-fadeIn">
             {/* Banner Alerts */}
+            {lookupError && (
+              <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>
+            )}
             {successMsg && (
               <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
             )}
@@ -341,54 +470,33 @@ export default function ReceiptsPage() {
                 </div>
                 <div className="flex items-center gap-3">
                   <select
-                    value={selectedDraftId}
+                    value={selectedDraftPick}
                     onChange={e => {
                       const draftId = e.target.value;
-                      setSelectedDraftId(draftId);
-                      const selected = drafts.find(d => d.id === draftId);
-                      if (selected) {
-                        loadReceipt(selected);
-                      }
+                      setSelectedDraftPick(draftId);
+                      const selected = drafts.find(d => String(d.draft_id) === draftId);
+                      if (selected) loadDraft(selected);
                     }}
                     className="soleria-input py-1 px-2.5 text-xs bg-white border cursor-pointer font-medium"
                     style={{ width: '240px' }}
                   >
                     <option value="">Select a draft to load...</option>
-                    {drafts.map(d => {
-                      const custName = state.customers.find(c => c.id === d.customerId)?.name || 'Unnamed Customer';
-                      return (
-                        <option key={d.id} value={d.id}>
-                          {custName} - {formatCurrency(d.amount)} ({d.date})
-                        </option>
-                      );
-                    })}
+                    {drafts.map(d => (
+                      <option key={d.draft_id} value={d.draft_id}>
+                        {customerName(d.customer_id)} - {formatCurrency(d.amount)} ({d.receipt_date.slice(0, 10)})
+                      </option>
+                    ))}
                   </select>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (selectedDraftId) {
-                        setDrafts(prev => {
-                          const updated = prev.filter(d => d.id !== selectedDraftId);
-                          localStorage.setItem('wento_receipt_drafts', JSON.stringify(updated));
-                          return updated;
-                        });
-                        setSelectedDraftId('');
-                        setReceiptId('');
-                        setCustomerId('');
-                        setAmount(0);
-                        setCommission(0);
-                        setDetails('');
-                        setChequeNo('');
-                        setChequeDate('');
-                        setChequeReceivedDate('');
-                        setRemarks('');
-                        setSuccessMsg('Draft deleted successfully.');
-                        setTimeout(() => setSuccessMsg(''), 2000);
-                      } else {
-                        setErrorMsg('Please select a draft first.');
-                        setTimeout(() => setErrorMsg(''), 2000);
-                      }
-                    }}
+                    onClick={handleConfirmDraft}
+                    className="text-xs text-emerald-700 hover:text-emerald-900 font-semibold transition-colors"
+                  >
+                    Confirm Draft
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteDraft}
                     className="text-xs text-rose-600 hover:text-rose-800 font-semibold transition-colors"
                   >
                     Delete Selected Draft
@@ -399,16 +507,69 @@ export default function ReceiptsPage() {
 
             {/* Entry Form Card */}
             <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print>
-              <h3 className="font-lora font-semibold text-xl border-b pb-3 mb-5 text-slate-800 flex items-center gap-2">
-                <DollarSign size={20} className="text-[#B08D57]" /> Customer Payment Receipt (Jamma)
-              </h3>
-              
+              <div className="flex items-center justify-between border-b pb-3 mb-5">
+                <h3 className="font-lora font-semibold text-xl text-slate-800 flex items-center gap-2">
+                  <DollarSign size={20} className="text-[#B08D57]" /> Customer Payment Receipt (Jamma)
+                </h3>
+                {mode === 'view' && (
+                  <div className="flex items-center gap-2">
+                    {!isPosted && (
+                      <button
+                        type="button"
+                        onClick={() => setMode('edit')}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
+                      >
+                        <Edit size={13} /> Edit
+                      </button>
+                    )}
+                    {!isPosted ? (
+                      <button
+                        type="button"
+                        onClick={handlePost}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
+                      >
+                        Post
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleUnpost}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
+                      >
+                        Unpost
+                      </button>
+                    )}
+                    {!isPosted && receiptId != null && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const row = receipts.find(r => r.receipt_id === receiptId);
+                          if (row) setDeleteTarget(row);
+                        }}
+                        className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
+                        title="Delete"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleNew}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
+                    >
+                      New Receipt
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <form onSubmit={handleSaveReceipt} className="flex flex-col gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
                   <input
                     type="date"
                     value={date}
+                    disabled={isViewMode}
                     onChange={e => setDate(e.target.value)}
                     className="soleria-input font-semibold"
                   />
@@ -420,16 +581,16 @@ export default function ReceiptsPage() {
                     Select Customer Account <span className="text-red-500 font-bold">*</span>
                   </label>
                   <div
-                    onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                    className="soleria-input flex justify-between items-center cursor-pointer font-semibold bg-white"
+                    onClick={() => !isViewMode && setIsDropdownOpen(!isDropdownOpen)}
+                    className={`soleria-input flex justify-between items-center font-semibold bg-white ${isViewMode ? '' : 'cursor-pointer'}`}
                   >
                     <span className={selectedCustomer ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
-                      {selectedCustomer ? `${selectedCustomer.name} (${selectedCustomer.id})` : 'Search customer...'}
+                      {selectedCustomer ? `${selectedCustomer.name} (${selectedCustomer.customer_id})` : 'Search customer...'}
                     </span>
-                    <span className="text-xs text-slate-400">▼</span>
+                    {!isViewMode && <span className="text-xs text-slate-400">▼</span>}
                   </div>
 
-                  {isDropdownOpen && (
+                  {isDropdownOpen && !isViewMode && (
                     <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
                       <div className="p-2 border-b sticky top-0 bg-white">
                         <div className="relative">
@@ -449,13 +610,13 @@ export default function ReceiptsPage() {
                           <div className="p-3 text-xs text-slate-400 text-center font-medium">No matching customers</div>
                         ) : (
                           filteredDropdownCustomers.map(c => {
-                            const regName = state.regions.find(r => r.id === c.regionId)?.name || '';
-                            const ctName = state.cities.find(ct => ct.id === c.cityId)?.name || '';
+                            const regName = regions.find(r => r.region_id === c.region_id)?.name || '';
+                            const ctName = c.city_id != null ? cities.find(ct => ct.city_id === c.city_id)?.name || '' : '';
                             return (
                               <div
-                                key={c.id}
+                                key={c.customer_id}
                                 onClick={() => {
-                                  setCustomerId(c.id);
+                                  setCustomerId(String(c.customer_id));
                                   setIsDropdownOpen(false);
                                   setCustomerSearchQuery('');
                                 }}
@@ -463,7 +624,7 @@ export default function ReceiptsPage() {
                               >
                                 <div>
                                   <span className="font-semibold text-slate-800">{c.name}</span>
-                                  <span className="text-slate-400 text-[10px] ml-2">({c.id})</span>
+                                  <span className="text-slate-400 text-[10px] ml-2">({c.customer_id})</span>
                                 </div>
                                 <div className="text-[10px] text-slate-500 font-medium">
                                   {regName} {ctName ? `— ${ctName}` : ''}
@@ -477,48 +638,13 @@ export default function ReceiptsPage() {
                   )}
                 </div>
 
-                {/* Display Parent Account Group */}
-                {selectedCustomer && (
-                  <div className="p-3 bg-amber-50/60 border border-amber-200/80 rounded-lg text-xs flex justify-between items-center">
-                    <span className="text-amber-900 font-medium">Control Account Head:</span>
-                    <span className="font-bold text-amber-950 uppercase tracking-wide">{customerMainAcName}</span>
-                  </div>
-                )}
-
-                {/* Customer Outstanding Balance details */}
-                {customerBalanceDetails && (
-                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs flex flex-col gap-1.5">
-                    <div className="flex justify-between items-center font-semibold text-slate-700 border-b pb-1">
-                      <span>Current Outstanding Balance:</span>
-                      <span className={`font-mono text-sm ${customerBalanceDetails.currentBalance > 0 ? 'text-rose-700 font-bold' : customerBalanceDetails.currentBalance < 0 ? 'text-emerald-700 font-bold' : 'text-slate-600'}`}>
-                        {formatCurrency(customerBalanceDetails.currentBalance)}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-[11px] pt-0.5">
-                      {commission > 0 && (
-                        <div>
-                          <span className="block text-slate-500 font-medium mb-0.5">After Commission:</span>
-                          <span className={`font-bold font-mono text-sm ${customerBalanceDetails.afterCommission > 0 ? 'text-rose-700' : customerBalanceDetails.afterCommission < 0 ? 'text-emerald-700' : 'text-slate-600'}`}>
-                            {formatCurrency(customerBalanceDetails.afterCommission)}
-                          </span>
-                        </div>
-                      )}
-                      <div>
-                        <span className="block text-slate-500 font-medium mb-0.5">Remaining Balance:</span>
-                        <span className={`font-bold font-mono text-sm ${customerBalanceDetails.remainingBalance > 0 ? 'text-rose-700' : customerBalanceDetails.remainingBalance < 0 ? 'text-emerald-700' : 'text-slate-600'}`}>
-                          {formatCurrency(customerBalanceDetails.remainingBalance)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Amount Received (PKR)</label>
                   <input
                     type="number"
                     min={0}
                     value={amount || ''}
+                    disabled={isViewMode}
                     onChange={e => setAmount(Math.max(0, parseInt(e.target.value) || 0))}
                     placeholder="Enter amount in Rs..."
                     className="soleria-input font-semibold font-mono"
@@ -533,6 +659,7 @@ export default function ReceiptsPage() {
                     type="number"
                     min={0}
                     value={commission || ''}
+                    disabled={isViewMode}
                     onChange={e => setCommission(Math.max(0, parseInt(e.target.value) || 0))}
                     placeholder="Enter commission given, if any..."
                     className="soleria-input font-semibold font-mono"
@@ -544,71 +671,76 @@ export default function ReceiptsPage() {
                   <div className="grid grid-cols-3 gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
                     <button
                       type="button"
-                      onClick={() => { setPaymentMode('Cash'); setDetails(''); }}
-                      className={`py-2 rounded-md transition-colors ${paymentMode === 'Cash' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                      disabled={isViewMode}
+                      onClick={() => { setPaymentMode('CASH'); setDetails(''); }}
+                      className={`py-2 rounded-md transition-colors ${paymentMode === 'CASH' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
                     >
                       Cash
                     </button>
                     <button
                       type="button"
-                      onClick={() => setPaymentMode('Cheque')}
-                      className={`py-2 rounded-md transition-colors ${paymentMode === 'Cheque' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                      disabled={isViewMode}
+                      onClick={() => setPaymentMode('CHEQUE')}
+                      className={`py-2 rounded-md transition-colors ${paymentMode === 'CHEQUE' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
                     >
                       Cheque
                     </button>
                     <button
                       type="button"
-                      onClick={() => setPaymentMode('Online')}
-                      className={`py-2 rounded-md transition-colors ${paymentMode === 'Online' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                      disabled={isViewMode}
+                      onClick={() => setPaymentMode('ONLINE')}
+                      className={`py-2 rounded-md transition-colors ${paymentMode === 'ONLINE' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
                     >
                       Online
                     </button>
                   </div>
                 </div>
 
-                {paymentMode === 'Online' && (
+                {paymentMode === 'ONLINE' && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
                       Received Into <span className="text-red-500 font-bold">*</span>
                     </label>
-                    {state.bankAccounts.length === 0 ? (
+                    {bankOptions.length === 0 ? (
                       <div className="soleria-input text-rose-600 text-sm flex items-center font-semibold">
                         Add a bank account first
                       </div>
                     ) : (
                       <SearchableSelect
-                        options={state.bankAccounts.map(b => ({ value: b.id, label: b.name }))}
+                        options={bankOptions}
                         value={bankId}
                         onChange={setBankId}
                         placeholder="Select bank account..."
+                        disabled={isViewMode}
                       />
                     )}
                   </div>
                 )}
 
-                {paymentMode === 'Cheque' && (
+                {paymentMode === 'CHEQUE' && (
                   <p className="text-[11px] text-slate-500 -mt-2">
                     A received cheque goes into <strong>Cheques in Hand</strong>, not a bank. You
                     choose the bank later, when it is deposited.
                   </p>
                 )}
 
-                {paymentMode !== 'Cash' && (
+                {paymentMode !== 'CASH' && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      {paymentMode === 'Cheque' ? 'Drawn On (customer\'s bank) / Details' : 'Online Reference Code / Details'}
+                      {paymentMode === 'CHEQUE' ? 'Drawn On (customer\'s bank) / Details' : 'Online Reference Code / Details'}
                     </label>
                     <input
                       type="text"
                       value={details}
+                      disabled={isViewMode}
                       onChange={e => setDetails(e.target.value)}
-                      placeholder={paymentMode === 'Cheque' ? 'e.g. MCB Bank, Gulberg Branch' : 'e.g. Alfa ref 980124'}
+                      placeholder={paymentMode === 'CHEQUE' ? 'e.g. MCB Bank, Gulberg Branch' : 'e.g. Alfa ref 980124'}
                       className="soleria-input"
                     />
                   </div>
                 )}
 
-                {paymentMode === 'Cheque' && (
+                {paymentMode === 'CHEQUE' && (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">
@@ -617,6 +749,7 @@ export default function ReceiptsPage() {
                       <input
                         type="text"
                         value={chequeNo}
+                        disabled={isViewMode}
                         onChange={e => setChequeNo(e.target.value)}
                         placeholder="e.g. 982341"
                         className="soleria-input font-mono"
@@ -629,6 +762,7 @@ export default function ReceiptsPage() {
                       <input
                         type="date"
                         value={chequeDate}
+                        disabled={isViewMode}
                         onChange={e => setChequeDate(e.target.value)}
                         className="soleria-input"
                       />
@@ -640,6 +774,7 @@ export default function ReceiptsPage() {
                       <input
                         type="date"
                         value={chequeReceivedDate}
+                        disabled={isViewMode}
                         onChange={e => setChequeReceivedDate(e.target.value)}
                         placeholder={date}
                         className="soleria-input"
@@ -653,6 +788,7 @@ export default function ReceiptsPage() {
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
                   <textarea
                     value={remarks}
+                    disabled={isViewMode}
                     onChange={e => setRemarks(e.target.value)}
                     placeholder="Enter remarks..."
                     className="soleria-input"
@@ -661,22 +797,100 @@ export default function ReceiptsPage() {
                   />
                 </div>
 
-                <div className="flex gap-3 mt-2">
-                  <button
-                    type="button"
-                    onClick={handleSaveDraft}
-                    className="btn-outline flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
-                  >
-                    <FileText size={16} /> Save in Draft
-                  </button>
-                  <button
-                    type="submit"
-                    className="btn-gold flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
-                  >
-                    <Save size={16} /> Save Receipt
-                  </button>
-                </div>
+                {!isViewMode && (
+                  <div className="flex gap-3 mt-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveDraft}
+                      disabled={paymentMode === 'CHEQUE'}
+                      title={paymentMode === 'CHEQUE' ? 'Cheque receipts cannot be saved as drafts' : undefined}
+                      className="btn-outline flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <FileText size={16} /> Save in Draft
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn-gold flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
+                    >
+                      <Save size={16} /> {mode === 'edit' ? 'Update Receipt' : 'Save Receipt'}
+                    </button>
+                  </div>
+                )}
               </form>
+            </div>
+
+            {/* Recorded Receipts */}
+            <div className="card-white p-6 mt-8 bg-white border border-slate-200 rounded-xl shadow-sm">
+              <h3 className="font-lora font-semibold text-lg text-slate-800 mb-4">Recorded Receipts</h3>
+              {sortedReceipts.length === 0 ? (
+                <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
+                  No receipts recorded yet.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                        <th className="p-3 pl-4">Date</th>
+                        <th className="p-3">Customer</th>
+                        <th className="p-3 text-center">Mode</th>
+                        <th className="p-3 text-right">Amount</th>
+                        <th className="p-3 text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedReceipts.map(r => (
+                        <tr
+                          key={r.receipt_id}
+                          onClick={() => loadReceiptRow(r)}
+                          className="border-b hover:bg-slate-50/50 cursor-pointer"
+                          style={{ borderColor: 'var(--border-table)' }}
+                        >
+                          <td className="p-3 pl-4 font-mono text-slate-600">{r.receipt_date.slice(0, 10)}</td>
+                          <td className="p-3 font-semibold text-slate-900">{r.customer_name || customerName(r.customer_id)}</td>
+                          <td className="p-3 text-center text-xs text-slate-500">{r.payment_mode}</td>
+                          <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
+                          <td className="p-3 text-center">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                              r.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                            }`}>
+                              {r.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Delete confirmation ── */}
+        {deleteTarget && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+              <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
+                <AlertTriangle size={18} className="text-rose-600" /> Delete Receipt
+              </h3>
+              <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+                This receipt of <strong>{formatCurrency(deleteTarget.amount)}</strong> will be permanently removed. This cannot be undone.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setDeleteTarget(null)}
+                  className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDeleteReceipt}
+                  className="px-4 py-2 text-sm rounded-lg bg-rose-600 text-white hover:bg-rose-700"
+                >
+                  Confirm Delete
+                </button>
+              </div>
             </div>
           </div>
         )}

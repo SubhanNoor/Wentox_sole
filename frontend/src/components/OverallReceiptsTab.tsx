@@ -1,18 +1,33 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
-import type { Receipt, Customer } from '@/types';
+import { useState, useEffect, useMemo } from 'react';
+import { formatCurrency } from '@/context/AppContext';
+import * as api from '@/lib/api';
+import type { ReceiptRow, CustomerRow, CityRow } from '@/lib/api';
 import { Calendar, Search, ArrowRight, ArrowLeft, FileText, DollarSign, Landmark, CreditCard } from 'lucide-react';
 
 export default function OverallReceiptsTab() {
-  const { state } = useApp();
+  const [rows, setRows] = useState<ReceiptRow[]>([]);
+  const [customers, setCustomers] = useState<CustomerRow[]>([]);
+  const [cities, setCities] = useState<CityRow[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      const [r, c, ct] = await Promise.all([
+        api.receipts.list({ range: 'overall' }),
+        api.listCustomers(), api.listCities()
+      ]);
+      if (r.ok) setRows(r.data);
+      if (c.ok) setCustomers(c.data);
+      if (ct.ok) setCities(ct.data);
+    })();
+  }, []);
 
   // Filters
   const [nameQuery, setNameQuery] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState<string>('all'); // '0' to '11' or 'all'
+  const [selectedMonth, setSelectedMonth] = useState<string>('all'); // Default to all
   const [selectedYear, setSelectedYear] = useState<string>('all'); // Default to all
 
   // Selected customer for viewing details
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
 
   const monthsList = [
     { value: '0', label: 'January' },
@@ -32,9 +47,9 @@ export default function OverallReceiptsTab() {
   // Extract unique years from receipts for the filter
   const yearsList = useMemo(() => {
     const years = new Set<string>();
-    state.receipts.forEach(r => {
-      if (r.date) {
-        const parts = r.date.split('-');
+    rows.forEach(r => {
+      if (r.receipt_date) {
+        const parts = r.receipt_date.split('-');
         if (parts[0] && parts[0].length === 4) {
           years.add(parts[0]);
         }
@@ -43,25 +58,21 @@ export default function OverallReceiptsTab() {
     // Always guarantee current year is in the list
     years.add(new Date().getFullYear().toString());
     return Array.from(years).sort((a, b) => b.localeCompare(a));
-  }, [state.receipts]);
+  }, [rows]);
 
   // Filtered receipts + filter inputs
   const overallReceipts = useMemo(() => {
-    return state.receipts.filter(r => {
+    return rows.filter(r => {
       let rYear = '';
       let rMonth = '';
 
-      if (r.date) {
-        const parts = r.date.split('-');
+      if (r.receipt_date) {
+        const parts = r.receipt_date.split('-');
         if (parts[0]) rYear = parts[0];
         if (parts[1]) {
           const mVal = parseInt(parts[1], 10) - 1;
           rMonth = mVal.toString();
         }
-      } else {
-        const d = new Date(r.date);
-        rYear = d.getFullYear().toString();
-        rMonth = d.getMonth().toString();
       }
 
       // 1. Filter by year if selected
@@ -74,47 +85,45 @@ export default function OverallReceiptsTab() {
         if (rMonth !== selectedMonth) return false;
       }
 
-      // 3. Filter by customer name or code
+      // 3. Filter by customer name
       if (nameQuery.trim()) {
-        const cust = state.customers.find(c => c.id === r.customerId);
-        const custName = cust?.name.toLowerCase() || '';
-        const custCode = cust?.id.toLowerCase() || '';
-        const query = nameQuery.toLowerCase();
-        if (!custName.includes(query) && !custCode.includes(query)) return false;
+        const custName = customers.find(c => c.customer_id === r.customer_id)?.name.toLowerCase() || '';
+        if (!custName.includes(nameQuery.toLowerCase())) return false;
       }
 
       return true;
     });
-  }, [state.receipts, state.customers, selectedYear, selectedMonth, nameQuery]);
+  }, [rows, customers, selectedYear, selectedMonth, nameQuery]);
 
   // Group receipts by customer for the card layout
   const customerCardsData = useMemo(() => {
-    const groups: { [customerId: string]: { customer: Customer; receipts: Receipt[]; totalAmount: number } } = {};
+    const groups: { [customerId: number]: { customer: CustomerRow; receipts: ReceiptRow[]; totalAmount: number } } = {};
 
     overallReceipts.forEach(r => {
-      if (!groups[r.customerId]) {
-        const cust = state.customers.find(c => c.id === r.customerId) || { id: r.customerId, name: 'Walk-in Customer', acId: '', regionId: '', cityId: '' };
-        groups[r.customerId] = {
+      if (!groups[r.customer_id]) {
+        const cust = customers.find(c => c.customer_id === r.customer_id) ||
+          { customer_id: r.customer_id, name: 'Walk-in Customer', ba_id: null, region_id: 0, city_id: null, address: null, is_active: true };
+        groups[r.customer_id] = {
           customer: cust,
           receipts: [],
           totalAmount: 0
         };
       }
-      
-      const grp = groups[r.customerId];
+
+      const grp = groups[r.customer_id];
       grp.receipts.push(r);
       grp.totalAmount += r.amount;
     });
 
     return Object.values(groups).sort((a, b) => b.totalAmount - a.totalAmount);
-  }, [overallReceipts, state.customers]);
+  }, [overallReceipts, customers]);
 
   const activeCustomerDetails = useMemo(() => {
-    if (!selectedCustomerId) return null;
-    return customerCardsData.find(c => c.customer.id === selectedCustomerId);
+    if (selectedCustomerId == null) return null;
+    return customerCardsData.find(c => c.customer.customer_id === selectedCustomerId);
   }, [selectedCustomerId, customerCardsData]);
 
-  if (selectedCustomerId && activeCustomerDetails) {
+  if (selectedCustomerId != null && activeCustomerDetails) {
     return (
       <div className="card-white p-6 bg-white border border-slate-200 shadow-sm rounded-xl animate-fadeIn">
         <div className="flex items-center justify-between border-b pb-4 mb-4" style={{ borderColor: 'var(--border-color)' }}>
@@ -156,19 +165,19 @@ export default function OverallReceiptsTab() {
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
               {activeCustomerDetails.receipts.map(r => (
-                <tr key={r.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="p-3.5 pl-4 font-mono text-slate-600">{r.date}</td>
+                <tr key={r.receipt_id} className="hover:bg-slate-50/50 transition-colors">
+                  <td className="p-3.5 pl-4 font-mono text-slate-600">{r.receipt_date.slice(0, 10)}</td>
                   <td className="p-3.5 text-center">
                     <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
-                      {r.id.replace('rc_', '')}
+                      {r.receipt_id}
                     </span>
                   </td>
                   <td className="p-3.5 text-center">
-                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${r.paymentMode === 'Cash' ? 'bg-green-50 text-green-700 border border-green-200' : r.paymentMode === 'Cheque' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-indigo-50 text-indigo-700 border border-indigo-200'}`}>
-                      {r.paymentMode === 'Cash' && <DollarSign size={10} />}
-                      {r.paymentMode === 'Cheque' && <Landmark size={10} />}
-                      {r.paymentMode === 'Online' && <CreditCard size={10} />}
-                      {r.paymentMode}
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${r.payment_mode === 'CASH' ? 'bg-green-50 text-green-700 border border-green-200' : r.payment_mode === 'CHEQUE' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-indigo-50 text-indigo-700 border border-indigo-200'}`}>
+                      {r.payment_mode === 'CASH' && <DollarSign size={10} />}
+                      {r.payment_mode === 'CHEQUE' && <Landmark size={10} />}
+                      {r.payment_mode === 'ONLINE' && <CreditCard size={10} />}
+                      {r.payment_mode}
                     </span>
                   </td>
                   <td className="p-3.5 text-slate-600 font-medium">{r.details || '-'}</td>
@@ -192,13 +201,13 @@ export default function OverallReceiptsTab() {
             <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
             <input
               type="text"
-              placeholder="Search by customer name or code..."
+              placeholder="Search by customer name..."
               value={nameQuery}
               onChange={e => setNameQuery(e.target.value)}
               className="soleria-input pl-10 py-2 w-full text-sm"
             />
           </div>
-          
+
           <select
             value={selectedMonth}
             onChange={e => setSelectedMonth(e.target.value)}
@@ -237,12 +246,12 @@ export default function OverallReceiptsTab() {
           </div>
         ) : (
           customerCardsData.map(data => {
-            const city = state.cities.find(c => c.id === data.customer.cityId)?.name || 'Local';
-            
+            const city = cities.find(c => c.city_id === data.customer.city_id)?.name || 'Local';
+
             return (
               <div
-                key={data.customer.id}
-                onClick={() => setSelectedCustomerId(data.customer.id)}
+                key={data.customer.customer_id}
+                onClick={() => setSelectedCustomerId(data.customer.customer_id)}
                 className="card-white p-5 bg-white border border-slate-200 cursor-pointer transition-all flex flex-col justify-between hover:shadow-md hover:border-amber-400 hover:ring-1 hover:ring-amber-200 rounded-xl"
               >
                 <div>
@@ -252,15 +261,15 @@ export default function OverallReceiptsTab() {
                     </h4>
                     <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{city}</span>
                   </div>
-                  
-                  <div className="font-mono text-xs text-slate-400 mb-4">Code: {data.customer.id}</div>
-                  
+
+                  <div className="font-mono text-xs text-slate-400 mb-4">Code: {data.customer.customer_id}</div>
+
                   <div className="text-xs font-semibold text-slate-700 flex justify-between bg-slate-50 p-2.5 rounded-lg border border-slate-100">
                     <span>Total Jamma:</span>
                     <span className="font-mono text-emerald-700">{formatCurrency(data.totalAmount)}</span>
                   </div>
                 </div>
-                
+
                 <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-4">
                   <div className="flex items-center gap-1.5 bg-amber-50 text-amber-800 px-2.5 py-1 rounded-full text-xs font-semibold border border-amber-200">
                     <FileText size={13} className="text-amber-600" />

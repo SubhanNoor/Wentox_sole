@@ -14,6 +14,98 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Milestone 4 — new `businessAccounts:list` (read-only)
+
+### 2026-08-07 — New `businessAccounts:list` channel (+ a bug fixed same-day)
+- **What:** Added a read-only listing endpoint for "any business account" — needed by two pickers
+  that hit the same gap during frontend wiring: Expenses' non-vendor payment target (Office Rent,
+  Utilities, an employee — `expenses.service.js#resolveTarget()` already accepted a raw `ba_id` for
+  this, just had nothing to list from) and Cheques' EXPENSE_PAYMENT disposition (disabled in the
+  frontend during Module 4c for the same reason). `businessAccounts.ipc.js` was previously an empty
+  stub (`create`/`update`/`remove`/`get`/`list` all commented out as `TODO(milestone)`).
+  `create`/`update`/`remove`/`get` remain unregistered — no UI needs direct business-account CRUD
+  yet (accounts are still only ever created via a party's own setup flow — vendor, customer,
+  bank account).
+- **How:** `businessAccounts.repository.js#list(filters)` — joins `chart_of_accounts` for
+  `chart_code`/`chart_name` (so a picker can show/filter by parent head, e.g. "under Vendors
+  Accounts" vs "under Business Running Expenses"), filterable by `ac_id?`/`status?` (default
+  `ACTIVE`)/`search?`. Thin passthrough in `businessAccounts.service.js#list()`, registered as the
+  wire channel `business-accounts:list` (kebab-case — `window.api.businessAccounts.list()` on the
+  frontend, per `ipcBridge.ts`'s `camelToKebab()` convention every other feature already follows).
+- **Bug found during live verification**: the channel was initially registered as
+  `businessAccounts:list` (camelCase, matching the JS file/service name instead of the wire
+  convention) — every other `*.ipc.js` file in this codebase registers kebab-case
+  (`sub-customers:list`, `bank-accounts:list`, etc), and `ipcBridge.ts`'s Proxy always calls the
+  kebab form. Caught immediately by a live "No handler registered for 'business-accounts:list'"
+  error the moment the Expenses page tried to use it; fixed to `business-accounts:list`.
+- **Files:** `backend/src/repositories/businessAccounts.repository.js`,
+  `backend/src/services/businessAccounts.service.js`, `backend/src/ipc/businessAccounts.ipc.js`.
+- **Verified:** live end-to-end via the real Electron app as part of the Expenses frontend wiring
+  pass (see Module 4.2 log).
+
+---
+
+## Milestone 4, Module 4.1 — Receipts/Cheques (bug fix)
+
+### 2026-08-07 — `receipts:get` was missing `cheque_received_date`
+- **What:** `receipts.repository.js#findById()`'s join to `dbo.cheques` selected `cheque_no`/
+  `cheque_date`/`cheque_status`/`bank_id` but omitted `cheque_received_date` — a real column,
+  genuinely missing from the SELECT list (not a design choice). Found while wiring the frontend's
+  Receipts edit flow: reopening a CHEQUE receipt for edit always came back with the received-date
+  field blank.
+- **How:** One-line fix — added `ch.cheque_received_date` to the SELECT.
+- **Files:** `backend/src/repositories/receipts.repository.js`.
+- **Verified:** module loads cleanly; live verification happens as part of the frontend wiring pass.
+
+---
+
+## Milestone 4, Module 4.1 — Receipts/Cheques (allocation-history addendum)
+
+### 2026-08-06 — New `cheques:allocations-for-receipt` channel
+- **What:** Added a read-only channel exposing the full allocation history (all disposition types,
+  including DEPOSIT and REVERSED rows) for one cheque's receipt — needed by the Cheques tab's
+  per-cheque history view during frontend wiring. `cheques:endorsed-allocations` was already built
+  but deliberately excludes DEPOSIT/REVERSED (it's the narrower "Cheque Return" undo-picker), so it
+  couldn't serve this purpose.
+- **How:** `repository.listAllocations(receiptId)` already existed (used internally elsewhere) but
+  had no IPC channel — just wired it through a thin `cheques.service.js#listAllocationsForReceipt()`
+  passthrough. No schema/migration change, no new logic.
+- **Files:** `backend/src/services/cheques.service.js`, `backend/src/ipc/cheques.ipc.js`.
+- **Verified:** both files load cleanly (`node -e "require(...)"`); live end-to-end verification
+  happens as part of the frontend wiring pass for this module.
+
+---
+
+## Milestone 4, Module 4.4 — Transfer (Deposit addendum)
+
+### 2026-08-06 — New "Deposit" feature (one-sided manual account adjustment)
+- **What:** Added a `deposits` feature alongside `transfers` — a one-sided manual credit/debit
+  adjustment to a single business account (owner capital, bank fees, etc), requested during
+  frontend wiring of the Transfer module since the frontend's demo `TransferPage.tsx` has a
+  "Deposit" mode with no prior backend equivalent at all.
+- **How:** Mirrors `transfers.*` almost exactly (create as DRAFT, `update`/`remove` blocked once
+  CONFIRMED via `POSTED_LOCK`, `post`/`unpost` toggling ledger rows + status, no password guard),
+  but one side of the double-entry is a fixed reserved chart account (`MISC_ADJUSTMENTS`, code
+  `400006`, new entry in `reservedAccounts.js` + seeded in `db/seeds/run.js`) instead of a second
+  `ba_id` — same pattern Purchases already uses for `PURCHASES`. `direction='CREDIT'` → Dr `to_ba_id`
+  / Cr `MISC_ADJUSTMENTS`; `direction='DEBIT'` → Dr `MISC_ADJUSTMENTS` / Cr `to_ba_id`,
+  `source_type='DEPOSIT'`. New table `dbo.deposits` (mirrors `dbo.transfers`' shape minus the second
+  account) added via a temporary migration (`010_deposits.sql`), applied + verified against
+  `wentox_db`, then folded directly into `database/schema.sql` and the migration file deleted — same
+  cycle used for this project's other schema changes. `CK_ledger_entries_src` widened to allow
+  `'DEPOSIT'` as a `source_type` (also via the same migration, folded in place in schema.sql).
+- **Files:** `database/schema.sql` (new `dbo.deposits` table + widened `CK_ledger_entries_src`),
+  `backend/src/repositories/deposits.repository.js`, `backend/src/services/deposits.service.js`,
+  `backend/src/ipc/deposits.ipc.js`, `backend/src/ipc/index.js` (registered), `backend/src/constants/reservedAccounts.js`
+  (+`MISC_ADJUSTMENTS`), `backend/src/db/seeds/run.js` (+seeded the new chart account),
+  `frontend/src/lib/ipcBridge.ts` (+`deposits` to `FEATURES`).
+- **Verified:** ran the migration + seed against the live dev DB — confirmed `dbo.deposits` exists,
+  `MISC_ADJUSTMENTS` (code `400006`) seeded at `ac_id=17`, and `CK_ledger_entries_src` now permits
+  `'DEPOSIT'`. Live end-to-end CREDIT/DEBIT posting verification happens as part of the frontend
+  wiring pass for this module (see Module 9.2 log once that lands).
+
+---
+
 ## Milestone 5, Module 5.2 — Reports — Milestone 5 now fully complete
 
 ### 2026-08-04 — All 11 reports built in one pass (9 originally-deferred + 2 new user-requested), backed directly by `ledger_entries`

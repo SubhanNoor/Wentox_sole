@@ -1684,7 +1684,9 @@ CREATE TABLE dbo.ledger_entries (
          -- Money moved between OUR OWN accounts (cash_and_bank.md SS7).
          -- Dr destination / Cr source. It is neither income nor expenditure and
          -- MUST be excluded from every such total -- see dbo.transfers.
-         'TRANSFER'))
+         'TRANSFER',
+         -- One-sided manual adjustment against MISC_ADJUSTMENTS (Module 4b) -- see dbo.deposits.
+         'DEPOSIT'))
 );
 CREATE INDEX IX_ledger_entries_ba     ON dbo.ledger_entries(ba_id, entry_date) WHERE ba_id IS NOT NULL;
 CREATE INDEX IX_ledger_entries_ac     ON dbo.ledger_entries(ac_id, entry_date) WHERE ac_id IS NOT NULL;
@@ -1853,6 +1855,38 @@ CREATE INDEX IX_transfers_to   ON dbo.transfers(to_ba_id, transfer_date);
 GO
 -- USED BY: Transfer screen; every cash/bank balance (both sides); Cash Book.
 -- LEDGERS AS: Dr to_ba_id / Cr from_ba_id, source_type 'TRANSFER'.
+
+-- Module 4b: Deposit — a one-sided manual credit/debit adjustment to a single account (owner
+-- capital, bank fees, etc), posted against the fixed MISC_ADJUSTMENTS chart account (400006) on
+-- the other side. Deposit's free-text `source` carries the specific reason, same as how PURCHASES
+-- doesn't care what was bought.
+CREATE TABLE dbo.deposits (
+  deposit_id   INT IDENTITY(1,1) NOT NULL,
+  deposit_date DATE          NOT NULL,
+  to_ba_id     INT           NOT NULL,
+  direction    VARCHAR(10)   NOT NULL,
+  amount       DECIMAL(14,2) NOT NULL,
+  source       NVARCHAR(200) NOT NULL,
+  remarks      NVARCHAR(500) NULL,
+  status       VARCHAR(10)   NOT NULL CONSTRAINT DF_dep_status  DEFAULT ('DRAFT'),
+  created_by   INT           NULL,
+  updated_by   INT           NULL,
+  created_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_dep_created DEFAULT (SYSUTCDATETIME()),
+  updated_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_dep_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_deposits           PRIMARY KEY (deposit_id),
+  CONSTRAINT FK_deposits_ba        FOREIGN KEY (to_ba_id)   REFERENCES dbo.business_accounts(ba_id),
+  CONSTRAINT FK_deposits_cby       FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_deposits_uby       FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT CK_deposits_amount    CHECK (amount > 0),
+  CONSTRAINT CK_deposits_status    CHECK (status IN ('CONFIRMED','DRAFT')),
+  CONSTRAINT CK_deposits_direction CHECK (direction IN ('CREDIT','DEBIT'))
+);
+CREATE INDEX IX_deposits_ba   ON dbo.deposits(to_ba_id, deposit_date);
+CREATE INDEX IX_deposits_date ON dbo.deposits(deposit_date);
+GO
+-- USED BY: Transfer screen's Deposit mode.
+-- LEDGERS AS: CREDIT -> Dr to_ba_id / Cr MISC_ADJUSTMENTS; DEBIT -> Dr MISC_ADJUSTMENTS / Cr to_ba_id;
+-- source_type 'DEPOSIT'.
 
 /* ############################################################################
    PAYROLL — piece-rate wages and monthly salaries.

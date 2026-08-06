@@ -51,7 +51,8 @@ async function unlinkCheque(transaction, receiptId) {
 async function findById(receiptId) {
   const result = await query(
     `SELECT r.*, c.name AS customer_name, b.name AS bank_name,
-            ch.cheque_no, ch.cheque_date, ch.cheque_status, ch.bank_id AS cheque_bank_id
+            ch.cheque_no, ch.cheque_date, ch.cheque_received_date, ch.cheque_status,
+            ch.bank_id AS cheque_bank_id
      FROM dbo.receipts r
      JOIN dbo.customers c ON c.customer_id = r.customer_id
      LEFT JOIN dbo.bank_accounts b ON b.bank_id = r.bank_id

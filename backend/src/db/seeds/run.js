@@ -113,6 +113,9 @@ async function seed() {
   await ensureChartAccount(pool, { code: CODES.WAGES_EXPENSE, name: 'WAGES EXPENSE', groupId: expensesGroup });
   await ensureChartAccount(pool, { code: CODES.SALARIES_EXPENSE, name: 'SALARIES EXPENSE', groupId: expensesGroup });
 
+  // --- Module 4b: Deposit's counter-account ---
+  await ensureChartAccount(pool, { code: CODES.MISC_ADJUSTMENTS, name: 'Miscellaneous Adjustments', groupId: expensesGroup });
+
   // --- Stages (payroll.md §4) — the 12 manufacturing stages, defined once as data ---
   for (const [index, stage] of STAGES.entries()) {
     const exists = await pool.request()

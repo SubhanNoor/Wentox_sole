@@ -1,26 +1,89 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import type { Expense, ExpenseMode } from '@/types';
-import { Save, Wallet, FileText } from 'lucide-react';
-import { getUnallocatedCheque } from '@/lib/cashbank';
 import SearchableSelect from '@/components/SearchableSelect';
+import * as api from '@/lib/api';
+import type {
+  VendorRow, BankAccountRow, BusinessAccountRow, ChequeRow, ChequeAllocationRow,
+  ExpenseRow, ExpenseCreateInput, DraftExpenseRow, ExpensePaymentMode
+} from '@/lib/api';
+import { Save, Wallet, FileText, Edit, Trash2, AlertTriangle } from 'lucide-react';
 import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
 import MonthlyExpensesTab from '@/components/MonthlyExpensesTab';
 import OverallExpensesTab from '@/components/OverallExpensesTab';
 
-export default function ExpensesPage() {
-  const { state, dispatch } = useApp();
+const today = () => new Date().toISOString().split('T')[0];
 
+// Cheques still in the drawer with value left — a fully-endorsed, cleared, bounced,
+// or returned-to-sender cheque must not appear in the endorsement picker.
+const NON_TERMINAL_CHEQUE_STATUS = new Set(['PENDING', 'DEPOSITED', 'ENDORSED', 'PARTIALLY_ENDORSED']);
+
+export default function ExpensesPage() {
   // Navigation / Tabs State
   const [activeTab, setActiveTab] = useState<'entry' | 'weekly' | 'monthly' | 'overall'>('entry');
 
-  // Form State
-  const [expenseId, setExpenseId] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [businessAccountId, setBusinessAccountId] = useState('');
+  // ── Real lookup / list data ──
+  const [vendors, setVendors] = useState<VendorRow[]>([]);
+  const [businessAccounts, setBusinessAccounts] = useState<BusinessAccountRow[]>([]);
+  const [banks, setBanks] = useState<BankAccountRow[]>([]);
+  const [cheques, setCheques] = useState<ChequeRow[]>([]);
+  const [allocationsByReceipt, setAllocationsByReceipt] = useState<Record<number, ChequeAllocationRow[]>>({});
+  const [expenseRows, setExpenseRows] = useState<ExpenseRow[]>([]);
+  const [drafts, setDrafts] = useState<DraftExpenseRow[]>([]);
+  const [lookupError, setLookupError] = useState('');
+
+  const refreshExpenses = useCallback(async () => {
+    const res = await api.expenses.list({});
+    if (res.ok) setExpenseRows(res.data);
+    else setLookupError('Failed to load expenses: ' + res.error.message);
+  }, []);
+
+  const refreshDrafts = useCallback(async () => {
+    const res = await api.draftExpenses.list({});
+    if (res.ok) setDrafts(res.data);
+    else setLookupError('Failed to load drafts: ' + res.error.message);
+  }, []);
+
+  const refreshCheques = useCallback(async () => {
+    const res = await api.cheques.list();
+    if (res.ok) {
+      setCheques(res.data);
+      const entries = await Promise.all(
+        res.data.map(async c => {
+          const allocRes = await api.cheques.allocationsForReceipt(c.receipt_id);
+          return [c.receipt_id, allocRes.ok ? allocRes.data : []] as const;
+        })
+      );
+      setAllocationsByReceipt(Object.fromEntries(entries));
+    } else {
+      setLookupError('Failed to load cheques: ' + res.error.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const [v, ba, bk] = await Promise.all([
+        api.listVendors(), api.listBusinessAccounts(), api.bankAccounts.list()
+      ]);
+      const failures: string[] = [];
+      if (v.ok) setVendors(v.data); else failures.push(v.error.message);
+      if (ba.ok) setBusinessAccounts(ba.data); else failures.push(ba.error.message);
+      if (bk.ok) setBanks(bk.data); else failures.push(bk.error.message);
+      if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
+    })();
+    refreshExpenses();
+    refreshDrafts();
+    refreshCheques();
+  }, [refreshExpenses, refreshDrafts, refreshCheques]);
+
+  // ── Real-expense form (mirrors ReceiptsPage.tsx's mode structure) ──
+  const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
+  const [expenseId, setExpenseId] = useState<number | null>(null);
+  const [expenseStatus, setExpenseStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
+  const [date, setDate] = useState(today());
+  const [baId, setBaId] = useState('');
   const [amount, setAmount] = useState<number>(0);
-  const [paymentMode, setPaymentMode] = useState<ExpenseMode>('Cash');
+  const [paymentMode, setPaymentMode] = useState<ExpensePaymentMode>('CASH');
   const [bankId, setBankId] = useState('');
   const [chequeId, setChequeId] = useState('');
   const [issuedChequeNo, setIssuedChequeNo] = useState('');
@@ -28,183 +91,334 @@ export default function ExpensesPage() {
   const [details, setDetails] = useState('');
   const [remarks, setRemarks] = useState('');
 
-  // Drafts state
-  const [drafts, setDrafts] = useState<Expense[]>(() => {
-    const saved = localStorage.getItem('wento_expense_drafts');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [selectedDraftId, setSelectedDraftId] = useState('');
-
-  const bankOptions = useMemo(
-    () => state.bankAccounts.map(b => ({ value: b.id, label: b.name })),
-    [state.bankAccounts]
-  );
-
-  // Cheques still in the drawer with value left — the only ones that can be
-  // handed on. A fully-endorsed, bounced, or returned-to-sender cheque must not appear here.
-  const endorsableCheques = useMemo(() => {
-    return state.receipts
-      .filter(r => r.paymentMode === 'Cheque' && r.chequeStatus !== 'BOUNCED' && r.chequeStatus !== 'RETURNED')
-      .map(r => ({ receipt: r, left: getUnallocatedCheque(state, r.id) }))
-      .filter(x => x.left > 0)
-      .map(x => ({
-        value: x.receipt.id,
-        label: `${x.receipt.chequeNo || 'Cheque'} — ${formatCurrency(x.left)} left`
-      }));
-  }, [state]);
-
-  const resetModeFields = (mode: ExpenseMode) => {
-    setPaymentMode(mode);
-    setBankId('');
-    setChequeId('');
-    setIssuedChequeNo('');
-    setIssuedChequeDate('');
-    if (mode === 'Cash') setDetails('');
-  };
+  // draftExpenses is a separate server-side feature (genuinely incomplete entries) —
+  // distinct from an expense's own DRAFT/CONFIRMED status above. Loading one just
+  // fills the form; since draftExpenses has no update(), re-saving replaces it.
+  const [loadedDraftId, setLoadedDraftId] = useState<number | null>(null);
+  const [selectedDraftPick, setSelectedDraftPick] = useState('');
 
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<ExpenseRow | null>(null);
 
-  // Business Account helper
-  const selectedBizAc = useMemo(() => {
-    return state.businessAccounts.find(b => b.id === businessAccountId);
-  }, [businessAccountId, state.businessAccounts]);
+  const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
+  const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
 
-  const bizParentAcName = useMemo(() => {
-    if (!selectedBizAc) return '';
-    return state.chartAccounts.find(a => a.id === selectedBizAc.controlId)?.name || 'EXPENSES ACCOUNTS';
-  }, [selectedBizAc, state.chartAccounts]);
+  const isViewMode = mode === 'view';
+  const isPosted = expenseStatus === 'CONFIRMED';
 
-  // Vendor payments are Expense entries where the selected account's parent
-  // chart account is "VENDORS ACCOUNTS" (210001) — no separate transaction
-  // page, this is purely a UI-level distinction that feeds Vendor Report.
-  const isVendorPayment = selectedBizAc?.controlId === '210001';
+  const bankOptions = useMemo(
+    () => banks.filter(b => b.is_active).map(b => ({ value: String(b.bank_id), label: b.name })),
+    [banks]
+  );
+
+  // Combined vendor + any-other-business-account picker. A vendor's own ba_id is a
+  // business account too, so listBusinessAccounts() already covers it — options are
+  // keyed by ba_id, with vendor-linked accounts given a distinguishing label.
+  const accountOptions = useMemo(() => {
+    return businessAccounts.map(ba => {
+      const vendor = vendors.find(v => v.ba_id === ba.ba_id);
+      return {
+        value: String(ba.ba_id),
+        label: vendor ? `${vendor.name} (Vendor)` : `${ba.name} (${ba.code})`
+      };
+    });
+  }, [businessAccounts, vendors]);
+
+  const selectedBa = useMemo(
+    () => businessAccounts.find(b => b.ba_id === Number(baId)),
+    [baId, businessAccounts]
+  );
+
+  // Vendor payments are Expense entries where the selected account's parent chart
+  // account is "VENDORS ACCOUNTS" (210001) — no separate transaction page, this is
+  // purely a UI-level distinction that feeds the Vendor Report.
+  const isVendorPayment = selectedBa?.chart_code === '210001';
   const linkedVendor = useMemo(() => {
-    if (!isVendorPayment || !selectedBizAc) return undefined;
-    return state.vendors.find(v => v.baId === selectedBizAc.id);
-  }, [isVendorPayment, selectedBizAc, state.vendors]);
+    if (!isVendorPayment || !selectedBa) return undefined;
+    return vendors.find(v => v.ba_id === selectedBa.ba_id);
+  }, [isVendorPayment, selectedBa, vendors]);
 
-  const loadExpense = (exp: Expense) => {
-    setExpenseId(exp.id);
-    setDate(exp.date);
-    setBusinessAccountId(exp.businessAccountId);
-    setAmount(exp.amount || 0);
-    setPaymentMode(exp.paymentMode);
-    setBankId(exp.bankId || '');
-    setChequeId(exp.chequeId || '');
-    setIssuedChequeNo(exp.issuedChequeNo || '');
-    setIssuedChequeDate(exp.issuedChequeDate || '');
-    setDetails(exp.details || '');
-    setRemarks(exp.remarks || '');
-    setErrorMsg('');
+  function unallocatedFor(c: ChequeRow): number {
+    if (c.cheque_status === 'BOUNCED' || c.cheque_status === 'RETURNED' || c.cheque_status === 'CLEARED') return 0;
+    const active = (allocationsByReceipt[c.receipt_id] || []).filter(a => a.status === 'ACTIVE');
+    const allocated = active.reduce((s, a) => s + a.amount, 0);
+    return Math.max(0, (c.receipt_amount ?? 0) - allocated);
+  }
+
+  const selectedCheque = useMemo(
+    () => cheques.find(c => c.cheque_id === Number(chequeId)),
+    [chequeId, cheques]
+  );
+
+  const endorsableCheques = useMemo(() => {
+    const list = cheques
+      .filter(c => NON_TERMINAL_CHEQUE_STATUS.has(c.cheque_status))
+      .map(c => ({ cheque: c, left: unallocatedFor(c) }))
+      .filter(x => x.left > 0)
+      .map(x => ({
+        value: String(x.cheque.cheque_id),
+        label: `${x.cheque.cheque_no} — ${formatCurrency(x.left)} left`
+      }));
+    // A previously-endorsed cheque (viewing/editing a posted expense) may no longer
+    // carry remaining balance and drop out of the list above — keep it selectable so
+    // the field doesn't render blank.
+    if (chequeId && !list.some(o => o.value === chequeId) && selectedCheque) {
+      list.unshift({ value: chequeId, label: `${selectedCheque.cheque_no} (${selectedCheque.cheque_status})` });
+    }
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cheques, allocationsByReceipt, chequeId, selectedCheque]);
+
+  const resetModeFields = () => {
+    setBankId('');
+    setChequeId('');
+    setIssuedChequeNo('');
+    setIssuedChequeDate('');
   };
 
-  const handleSaveDraft = () => {
-    const currentId = expenseId || 'exp_draft_' + Date.now();
-    const draftExpense: Expense = {
-      id: currentId,
-      date,
-      businessAccountId,
-      amount: amount || 0,
-      paymentMode,
-      bankId: (paymentMode === 'Online' || paymentMode === 'ChequeIssued') ? bankId : undefined,
-      chequeId: paymentMode === 'ChequeEndorsed' ? chequeId : undefined,
-      issuedChequeNo: paymentMode === 'ChequeIssued' ? issuedChequeNo.trim() : undefined,
-      issuedChequeDate: paymentMode === 'ChequeIssued' ? issuedChequeDate : undefined,
-      details,
-      remarks,
-      status: 'Unposted'
-    };
-
-    setDrafts(prev => {
-      const existingIdx = prev.findIndex(d => d.id === currentId);
-      let updated;
-      if (existingIdx !== -1) {
-        updated = [...prev];
-        updated[existingIdx] = draftExpense;
-      } else {
-        updated = [draftExpense, ...prev];
-      }
-      localStorage.setItem('wento_expense_drafts', JSON.stringify(updated));
-      return updated;
-    });
-
-    setExpenseId(currentId);
-    setSelectedDraftId(currentId);
-    setSuccessMsg('Expense saved to drafts cache.');
-    setTimeout(() => setSuccessMsg(''), 3000);
+  const selectPaymentMode = (m: ExpensePaymentMode) => {
+    setPaymentMode(m);
+    resetModeFields();
+    if (m === 'CASH') setDetails('');
   };
 
-  const handleSaveExpense = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!date) return setErrorMsg('Please pick a date.');
-    if (!businessAccountId) return setErrorMsg('Please select a business account.');
-    if (amount <= 0) return setErrorMsg('Amount must be greater than 0.');
-
-    // Every mode except cash has to say WHICH account the money left, or the
-    // entry is one-sided and no bank balance can ever be trusted.
-    if ((paymentMode === 'Online' || paymentMode === 'ChequeIssued') && !bankId) {
-      return setErrorMsg('Select which bank account this payment leaves.');
-    }
-    if (paymentMode === 'ChequeIssued') {
-      if (!issuedChequeNo.trim()) return setErrorMsg('Enter the cheque number.');
-      if (!issuedChequeDate) return setErrorMsg('Enter the date on the cheque.');
-    }
-    if (paymentMode === 'ChequeEndorsed') {
-      if (!chequeId) return setErrorMsg('Pick which received cheque is being handed over.');
-      const left = getUnallocatedCheque(state, chequeId);
-      if (amount > left) {
-        return setErrorMsg(`That cheque only has ${formatCurrency(left)} left unallocated.`);
-      }
-    }
-
-    const newExpense: Expense = {
-      id: expenseId || ('exp_' + Date.now()),
-      date,
-      businessAccountId,
-      amount,
-      paymentMode,
-      bankId: (paymentMode === 'Online' || paymentMode === 'ChequeIssued') ? bankId : undefined,
-      chequeId: paymentMode === 'ChequeEndorsed' ? chequeId : undefined,
-      issuedChequeNo: paymentMode === 'ChequeIssued' ? issuedChequeNo.trim() : undefined,
-      issuedChequeDate: paymentMode === 'ChequeIssued' ? issuedChequeDate : undefined,
-      details,
-      remarks,
-      status: 'Posted'
-    };
-
-    dispatch({ type: 'ADD_EXPENSE', expense: newExpense });
-
-    // Clean up draft from cache if saved/confirmed
-    setDrafts(prev => {
-      const updated = prev.filter(d => d.id !== expenseId && d.id !== selectedDraftId);
-      localStorage.setItem('wento_expense_drafts', JSON.stringify(updated));
-      return updated;
-    });
-    setSelectedDraftId('');
-    setExpenseId('');
-
-    setSuccessMsg(
-      isVendorPayment
-        ? `Vendor payment of ${formatCurrency(amount)} recorded against ${linkedVendor?.name || 'vendor'}!`
-        : `Expense of ${formatCurrency(amount)} saved successfully against ledger account!`
-    );
-    setTimeout(() => setSuccessMsg(''), 3500);
-
-    // Reset Form
-    setBusinessAccountId('');
+  const handleNew = () => {
+    setMode('new');
+    setExpenseId(null);
+    setExpenseStatus('DRAFT');
+    setDate(today());
+    setBaId('');
     setAmount(0);
+    setPaymentMode('CASH');
+    resetModeFields();
     setDetails('');
     setRemarks('');
-    resetModeFields('Cash');
+    setLoadedDraftId(null);
+    setSelectedDraftPick('');
     setErrorMsg('');
   };
+
+  const buildPayload = (): ExpenseCreateInput | null => {
+    if (!date) { setErrorMsg('Please pick a date.'); return null; }
+    if (!baId) { setErrorMsg('Please select an account to pay.'); return null; }
+    if (amount <= 0) { setErrorMsg('Amount must be greater than 0.'); return null; }
+    if ((paymentMode === 'ONLINE' || paymentMode === 'CHEQUE_ISSUED') && !bankId) {
+      setErrorMsg('Select which bank account this payment leaves.'); return null;
+    }
+    if (paymentMode === 'CHEQUE_ISSUED') {
+      if (!issuedChequeNo.trim()) { setErrorMsg('Enter the cheque number.'); return null; }
+      if (!issuedChequeDate) { setErrorMsg('Enter the date on the cheque.'); return null; }
+    }
+    if (paymentMode === 'CHEQUE_ENDORSED') {
+      if (!chequeId) { setErrorMsg('Pick which received cheque is being handed over.'); return null; }
+      const left = selectedCheque ? unallocatedFor(selectedCheque) : 0;
+      if (amount > left) {
+        setErrorMsg(`That cheque only has ${formatCurrency(left)} left unallocated.`);
+        return null;
+      }
+    }
+
+    const vendor = vendors.find(v => v.ba_id === Number(baId));
+
+    return {
+      expense_date: date,
+      amount,
+      payment_mode: paymentMode,
+      vendor_id: vendor ? vendor.vendor_id : undefined,
+      ba_id: vendor ? undefined : Number(baId),
+      details: details.trim() || undefined,
+      remarks: remarks.trim() || undefined,
+      bank_id: (paymentMode === 'ONLINE' || paymentMode === 'CHEQUE_ISSUED') ? Number(bankId) : undefined,
+      cheque_id: paymentMode === 'CHEQUE_ENDORSED' ? Number(chequeId) : undefined,
+      issued_cheque_no: paymentMode === 'CHEQUE_ISSUED' ? issuedChequeNo.trim() : undefined,
+      issued_cheque_date: paymentMode === 'CHEQUE_ISSUED' ? issuedChequeDate : undefined
+    };
+  };
+
+  const handleSaveExpense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const payload = buildPayload();
+    if (!payload) return;
+
+    const result = mode === 'edit' && expenseId != null
+      ? await api.expenses.update(expenseId, payload)
+      : await api.expenses.create(payload);
+
+    if (!result.ok) { fail('Failed to save expense: ' + result.error.message); return; }
+
+    // A confirmed real expense supersedes whatever draftExpenses entry it came from.
+    if (loadedDraftId != null) {
+      await api.draftExpenses.remove(loadedDraftId);
+      refreshDrafts();
+    }
+
+    setExpenseId(result.data.expense_id);
+    setExpenseStatus(result.data.status);
+    setLoadedDraftId(null);
+    setErrorMsg('');
+    flash(
+      isVendorPayment
+        ? `Vendor payment of ${formatCurrency(amount)} recorded against ${linkedVendor?.name || 'vendor'}.`
+        : (mode === 'edit' ? 'Expense updated successfully.' : 'Expense recorded successfully.')
+    );
+    setMode('view');
+    refreshExpenses();
+  };
+
+  const loadExpenseRow = async (rowIn: ExpenseRow) => {
+    // list() rows never carry cheque_no/cheque_status (only get()'s join does) — re-fetch
+    // full detail whenever a CHEQUE_ENDORSED row is opened for view/edit.
+    let row = rowIn;
+    if (row.payment_mode === 'CHEQUE_ENDORSED' && row.cheque_no === undefined) {
+      const res = await api.expenses.get(row.expense_id);
+      if (!res.ok) { fail('Failed to load expense: ' + res.error.message); return; }
+      row = res.data;
+    }
+
+    setExpenseId(row.expense_id);
+    setExpenseStatus(row.status);
+    setDate(row.expense_date.slice(0, 10));
+    setBaId(String(row.ba_id));
+    setAmount(row.amount);
+    setPaymentMode(row.payment_mode);
+    setBankId(row.bank_id != null ? String(row.bank_id) : '');
+    setChequeId(row.cheque_id != null ? String(row.cheque_id) : '');
+    setIssuedChequeNo(row.issued_cheque_no || '');
+    setIssuedChequeDate(row.issued_cheque_date ? row.issued_cheque_date.slice(0, 10) : '');
+    setDetails(row.details || '');
+    setRemarks(row.remarks || '');
+    setLoadedDraftId(null);
+    setSelectedDraftPick('');
+    setErrorMsg('');
+    setMode('view');
+  };
+
+  const handlePost = async () => {
+    if (expenseId == null) return;
+    const res = await api.expenses.post(expenseId);
+    if (!res.ok) { fail('Failed to post expense: ' + res.error.message); return; }
+    setExpenseStatus(res.data.status);
+    flash('Expense posted successfully.');
+    refreshExpenses();
+    refreshCheques();
+  };
+
+  // unpost() rejects CHEQUE_ENDORSED with USE_CHEQUE_REVERSAL — that error surfaces
+  // as-is through the banner below rather than hiding/disabling the button, matching
+  // how ReceiptsPage.tsx handles CHEQUE_IN_USE on its own unpost.
+  const handleUnpost = async () => {
+    if (expenseId == null) return;
+    const res = await api.expenses.unpost(expenseId);
+    if (!res.ok) { fail('Failed to unpost expense: ' + res.error.message); return; }
+    setExpenseStatus(res.data.status);
+    flash('Expense unposted successfully.');
+    refreshExpenses();
+    refreshCheques();
+  };
+
+  const confirmDeleteExpense = async () => {
+    if (!deleteTarget) return;
+    const res = await api.expenses.remove(deleteTarget.expense_id);
+    setDeleteTarget(null);
+    if (!res.ok) { fail('Failed to delete expense: ' + res.error.message); return; }
+    flash('Expense deleted.');
+    if (expenseId === deleteTarget.expense_id) handleNew();
+    refreshExpenses();
+  };
+
+  // ── draftExpenses (server-side, all 4 payment modes draftable) ──
+  const handleSaveDraft = async () => {
+    if (!baId) { fail('Please select an account to pay.'); return; }
+
+    const vendor = vendors.find(v => v.ba_id === Number(baId));
+    const payload: Partial<ExpenseCreateInput> = {
+      expense_date: date,
+      amount: amount || undefined,
+      payment_mode: paymentMode,
+      vendor_id: vendor ? vendor.vendor_id : undefined,
+      ba_id: vendor ? undefined : Number(baId),
+      details: details.trim() || undefined,
+      remarks: remarks.trim() || undefined,
+      bank_id: (paymentMode === 'ONLINE' || paymentMode === 'CHEQUE_ISSUED') && bankId ? Number(bankId) : undefined,
+      cheque_id: paymentMode === 'CHEQUE_ENDORSED' && chequeId ? Number(chequeId) : undefined,
+      issued_cheque_no: paymentMode === 'CHEQUE_ISSUED' ? (issuedChequeNo.trim() || undefined) : undefined,
+      issued_cheque_date: paymentMode === 'CHEQUE_ISSUED' ? (issuedChequeDate || undefined) : undefined
+    };
+
+    // draftExpenses has no update() — replace the old draft in place.
+    if (loadedDraftId != null) {
+      await api.draftExpenses.remove(loadedDraftId);
+    }
+
+    const res = await api.draftExpenses.create(payload);
+    if (!res.ok) { fail('Failed to save draft: ' + res.error.message); return; }
+
+    setLoadedDraftId(res.data.draft_id);
+    setSelectedDraftPick(String(res.data.draft_id));
+    flash('Expense saved to drafts.');
+    refreshDrafts();
+  };
+
+  const loadDraft = (row: DraftExpenseRow) => {
+    setMode('new');
+    setExpenseId(null);
+    setExpenseStatus('DRAFT');
+    setDate(row.expense_date.slice(0, 10));
+    setBaId(String(row.ba_id));
+    setAmount(row.amount || 0);
+    setPaymentMode(row.payment_mode);
+    setBankId(row.bank_id != null ? String(row.bank_id) : '');
+    setChequeId(row.cheque_id != null ? String(row.cheque_id) : '');
+    setIssuedChequeNo(row.issued_cheque_no || '');
+    setIssuedChequeDate(row.issued_cheque_date ? row.issued_cheque_date.slice(0, 10) : '');
+    setDetails(row.details || '');
+    setRemarks(row.remarks || '');
+    setLoadedDraftId(row.draft_id);
+    setErrorMsg('');
+  };
+
+  const handleDeleteDraft = async () => {
+    if (!selectedDraftPick) { fail('Please select a draft first.'); return; }
+    const id = Number(selectedDraftPick);
+    const res = await api.draftExpenses.remove(id);
+    if (!res.ok) { fail('Failed to delete draft: ' + res.error.message); return; }
+    if (loadedDraftId === id) handleNew();
+    setSelectedDraftPick('');
+    flash('Draft deleted successfully.');
+    refreshDrafts();
+  };
+
+  const handleConfirmDraft = async () => {
+    if (!selectedDraftPick) { fail('Please select a draft first.'); return; }
+    const id = Number(selectedDraftPick);
+    const res = await api.draftExpenses.confirm(id);
+    if (!res.ok) { fail('Failed to confirm draft: ' + res.error.message); return; }
+    if (loadedDraftId === id) handleNew();
+    setSelectedDraftPick('');
+    flash('Draft confirmed and posted as an expense.');
+    refreshDrafts();
+    refreshExpenses();
+    refreshCheques();
+  };
+
+  const sortedExpenses = useMemo(
+    () => [...expenseRows].sort((a, b) => b.expense_date.localeCompare(a.expense_date)),
+    [expenseRows]
+  );
+
+  const accountName = useCallback((id: number) => {
+    const ba = businessAccounts.find(b => b.ba_id === id);
+    if (!ba) return 'Unknown Account';
+    const vendor = vendors.find(v => v.ba_id === id);
+    return vendor ? vendor.name : ba.name;
+  }, [businessAccounts, vendors]);
 
   return (
     <AppLayout pageTitle="Expenses / Kharch Entry">
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
-        
+
         {/* Top Tab Navigation */}
         <div className="flex flex-wrap gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           <button
@@ -257,6 +471,9 @@ export default function ExpensesPage() {
         {activeTab === 'entry' && (
           <div className="max-w-2xl mx-auto animate-fadeIn">
             {/* Banner Alerts */}
+            {lookupError && (
+              <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>
+            )}
             {successMsg && (
               <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
             )}
@@ -275,51 +492,33 @@ export default function ExpensesPage() {
                 </div>
                 <div className="flex items-center gap-3">
                   <select
-                    value={selectedDraftId}
+                    value={selectedDraftPick}
                     onChange={e => {
                       const draftId = e.target.value;
-                      setSelectedDraftId(draftId);
-                      const selected = drafts.find(d => d.id === draftId);
-                      if (selected) {
-                        loadExpense(selected);
-                      }
+                      setSelectedDraftPick(draftId);
+                      const selected = drafts.find(d => String(d.draft_id) === draftId);
+                      if (selected) loadDraft(selected);
                     }}
                     className="soleria-input py-1 px-2.5 text-xs bg-white border cursor-pointer font-medium"
                     style={{ width: '240px' }}
                   >
                     <option value="">Select a draft to load...</option>
-                    {drafts.map(d => {
-                      const bizAcName = state.businessAccounts.find(b => b.id === d.businessAccountId)?.name || 'Unnamed Account';
-                      return (
-                        <option key={d.id} value={d.id}>
-                          {bizAcName} - {formatCurrency(d.amount)} ({d.date})
-                        </option>
-                      );
-                    })}
+                    {drafts.map(d => (
+                      <option key={d.draft_id} value={d.draft_id}>
+                        {accountName(d.ba_id)} - {formatCurrency(d.amount)} ({d.expense_date.slice(0, 10)})
+                      </option>
+                    ))}
                   </select>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (selectedDraftId) {
-                        setDrafts(prev => {
-                          const updated = prev.filter(d => d.id !== selectedDraftId);
-                          localStorage.setItem('wento_expense_drafts', JSON.stringify(updated));
-                          return updated;
-                        });
-                        setSelectedDraftId('');
-                        setExpenseId('');
-                        setBusinessAccountId('');
-                        setAmount(0);
-                        setDetails('');
-                        setRemarks('');
-                        resetModeFields('Cash');
-                        setSuccessMsg('Draft deleted successfully.');
-                        setTimeout(() => setSuccessMsg(''), 2000);
-                      } else {
-                        setErrorMsg('Please select a draft first.');
-                        setTimeout(() => setErrorMsg(''), 2000);
-                      }
-                    }}
+                    onClick={handleConfirmDraft}
+                    className="text-xs text-emerald-700 hover:text-emerald-900 font-semibold transition-colors"
+                  >
+                    Confirm Draft
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteDraft}
                     className="text-xs text-rose-600 hover:text-rose-800 font-semibold transition-colors"
                   >
                     Delete Selected Draft
@@ -330,16 +529,69 @@ export default function ExpensesPage() {
 
             {/* Entry Form Card */}
             <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print>
-              <h3 className="font-lora font-semibold text-xl border-b pb-3 mb-5 text-slate-800 flex items-center gap-2">
-                <Wallet size={20} className="text-[#B08D57]" /> Expense / Payment Entry (Kharch)
-              </h3>
-              
+              <div className="flex items-center justify-between border-b pb-3 mb-5">
+                <h3 className="font-lora font-semibold text-xl text-slate-800 flex items-center gap-2">
+                  <Wallet size={20} className="text-[#B08D57]" /> Expense / Payment Entry (Kharch)
+                </h3>
+                {mode === 'view' && (
+                  <div className="flex items-center gap-2">
+                    {!isPosted && (
+                      <button
+                        type="button"
+                        onClick={() => setMode('edit')}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
+                      >
+                        <Edit size={13} /> Edit
+                      </button>
+                    )}
+                    {!isPosted ? (
+                      <button
+                        type="button"
+                        onClick={handlePost}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
+                      >
+                        Post
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleUnpost}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
+                      >
+                        Unpost
+                      </button>
+                    )}
+                    {!isPosted && expenseId != null && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const row = expenseRows.find(r => r.expense_id === expenseId);
+                          if (row) setDeleteTarget(row);
+                        }}
+                        className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
+                        title="Delete"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleNew}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
+                    >
+                      New Expense
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <form onSubmit={handleSaveExpense} className="flex flex-col gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
                   <input
                     type="date"
                     value={date}
+                    disabled={isViewMode}
                     onChange={e => setDate(e.target.value)}
                     className="soleria-input font-semibold"
                   />
@@ -351,21 +603,21 @@ export default function ExpensesPage() {
                     Select Account (Who to Pay) <span className="text-red-500 font-bold">*</span>
                   </label>
                   <SearchableSelect
-                    options={state.businessAccounts.map(b => ({
-                      value: b.id,
-                      label: `${b.name} (${b.id})`
-                    }))}
-                    value={businessAccountId}
-                    onChange={setBusinessAccountId}
+                    options={accountOptions}
+                    value={baId}
+                    onChange={setBaId}
                     placeholder="Search account by name..."
+                    disabled={isViewMode}
                   />
                 </div>
 
                 {/* Display Parent Account Group */}
-                {selectedBizAc && (
+                {selectedBa && (
                   <div className="p-3 bg-amber-50/60 border border-amber-200/80 rounded-lg text-xs flex justify-between items-center">
                     <span className="text-amber-900 font-medium">Control Account Head:</span>
-                    <span className="font-bold text-amber-950 uppercase tracking-wide">{bizParentAcName}</span>
+                    <span className="font-bold text-amber-950 uppercase tracking-wide">
+                      {selectedBa.chart_name || 'EXPENSES ACCOUNTS'}
+                    </span>
                   </div>
                 )}
 
@@ -375,6 +627,7 @@ export default function ExpensesPage() {
                     type="number"
                     min={0}
                     value={amount || ''}
+                    disabled={isViewMode}
                     onChange={e => setAmount(Math.max(0, parseInt(e.target.value) || 0))}
                     placeholder="Enter amount in Rs..."
                     className="soleria-input font-semibold font-mono"
@@ -386,41 +639,45 @@ export default function ExpensesPage() {
                   <div className="grid grid-cols-4 gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
                     <button
                       type="button"
-                      onClick={() => resetModeFields('Cash')}
-                      className={`py-2 rounded-md transition-colors ${paymentMode === 'Cash' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                      disabled={isViewMode}
+                      onClick={() => selectPaymentMode('CASH')}
+                      className={`py-2 rounded-md transition-colors ${paymentMode === 'CASH' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
                     >
                       Cash
                     </button>
                     <button
                       type="button"
-                      onClick={() => resetModeFields('ChequeEndorsed')}
-                      className={`py-2 rounded-md transition-colors ${paymentMode === 'ChequeEndorsed' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                      disabled={isViewMode}
+                      onClick={() => selectPaymentMode('CHEQUE_ENDORSED')}
+                      className={`py-2 rounded-md transition-colors ${paymentMode === 'CHEQUE_ENDORSED' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
                     >
                       Cheque Endorsed
                     </button>
                     <button
                       type="button"
-                      onClick={() => resetModeFields('ChequeIssued')}
-                      className={`py-2 rounded-md transition-colors ${paymentMode === 'ChequeIssued' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                      disabled={isViewMode}
+                      onClick={() => selectPaymentMode('CHEQUE_ISSUED')}
+                      className={`py-2 rounded-md transition-colors ${paymentMode === 'CHEQUE_ISSUED' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
                     >
                       Cheque Issued
                     </button>
                     <button
                       type="button"
-                      onClick={() => resetModeFields('Online')}
-                      className={`py-2 rounded-md transition-colors ${paymentMode === 'Online' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                      disabled={isViewMode}
+                      onClick={() => selectPaymentMode('ONLINE')}
+                      className={`py-2 rounded-md transition-colors ${paymentMode === 'ONLINE' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
                     >
                       Online
                     </button>
                   </div>
                 </div>
 
-                {(paymentMode === 'Online' || paymentMode === 'ChequeIssued') && (
+                {(paymentMode === 'ONLINE' || paymentMode === 'CHEQUE_ISSUED') && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
                       Paid From Bank Account <span className="text-red-500 font-bold">*</span>
                     </label>
-                    {state.bankAccounts.length === 0 ? (
+                    {bankOptions.length === 0 ? (
                       <div className="soleria-input text-rose-600 text-sm flex items-center font-semibold">
                         Add a bank account first
                       </div>
@@ -430,12 +687,13 @@ export default function ExpensesPage() {
                         value={bankId}
                         onChange={setBankId}
                         placeholder="Select bank account..."
+                        disabled={isViewMode}
                       />
                     )}
                   </div>
                 )}
 
-                {paymentMode === 'ChequeIssued' && (
+                {paymentMode === 'CHEQUE_ISSUED' && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">
@@ -444,6 +702,7 @@ export default function ExpensesPage() {
                       <input
                         type="text"
                         value={issuedChequeNo}
+                        disabled={isViewMode}
                         onChange={e => setIssuedChequeNo(e.target.value)}
                         placeholder="e.g. 109283"
                         className="soleria-input font-mono"
@@ -456,6 +715,7 @@ export default function ExpensesPage() {
                       <input
                         type="date"
                         value={issuedChequeDate}
+                        disabled={isViewMode}
                         onChange={e => setIssuedChequeDate(e.target.value)}
                         className="soleria-input"
                       />
@@ -463,7 +723,7 @@ export default function ExpensesPage() {
                   </div>
                 )}
 
-                {paymentMode === 'ChequeEndorsed' && (
+                {paymentMode === 'CHEQUE_ENDORSED' && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
                       Select Cheque to Hand Over <span className="text-red-500 font-bold">*</span>
@@ -478,21 +738,23 @@ export default function ExpensesPage() {
                         value={chequeId}
                         onChange={setChequeId}
                         placeholder="Select cheque to endorse..."
+                        disabled={isViewMode}
                       />
                     )}
                   </div>
                 )}
 
-                {paymentMode !== 'Cash' && (
+                {paymentMode !== 'CASH' && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      {paymentMode === 'Online' ? 'Online Reference Code / Details' : 'Details'}
+                      {paymentMode === 'ONLINE' ? 'Online Reference Code / Details' : 'Details'}
                     </label>
                     <input
                       type="text"
                       value={details}
+                      disabled={isViewMode}
                       onChange={e => setDetails(e.target.value)}
-                      placeholder={paymentMode === 'Online' ? 'e.g. Alfa ref 980124' : 'Optional notes'}
+                      placeholder={paymentMode === 'ONLINE' ? 'e.g. Alfa ref 980124' : 'Optional notes'}
                       className="soleria-input"
                     />
                   </div>
@@ -502,6 +764,7 @@ export default function ExpensesPage() {
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
                   <textarea
                     value={remarks}
+                    disabled={isViewMode}
                     onChange={e => setRemarks(e.target.value)}
                     placeholder="Enter remarks..."
                     className="soleria-input"
@@ -510,22 +773,98 @@ export default function ExpensesPage() {
                   />
                 </div>
 
-                <div className="flex gap-3 mt-2">
-                  <button
-                    type="button"
-                    onClick={handleSaveDraft}
-                    className="btn-outline flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
-                  >
-                    <FileText size={16} /> Save in Draft
-                  </button>
-                  <button
-                    type="submit"
-                    className="btn-gold flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
-                  >
-                    <Save size={16} /> Save Expense
-                  </button>
-                </div>
+                {!isViewMode && (
+                  <div className="flex gap-3 mt-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveDraft}
+                      className="btn-outline flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
+                    >
+                      <FileText size={16} /> Save in Draft
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn-gold flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
+                    >
+                      <Save size={16} /> {mode === 'edit' ? 'Update Expense' : 'Save Expense'}
+                    </button>
+                  </div>
+                )}
               </form>
+            </div>
+
+            {/* Recorded Expenses */}
+            <div className="card-white p-6 mt-8 bg-white border border-slate-200 rounded-xl shadow-sm">
+              <h3 className="font-lora font-semibold text-lg text-slate-800 mb-4">Recorded Expenses</h3>
+              {sortedExpenses.length === 0 ? (
+                <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
+                  No expenses recorded yet.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                        <th className="p-3 pl-4">Date</th>
+                        <th className="p-3">Account</th>
+                        <th className="p-3 text-center">Mode</th>
+                        <th className="p-3 text-right">Amount</th>
+                        <th className="p-3 text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedExpenses.map(r => (
+                        <tr
+                          key={r.expense_id}
+                          onClick={() => loadExpenseRow(r)}
+                          className="border-b hover:bg-slate-50/50 cursor-pointer"
+                          style={{ borderColor: 'var(--border-table)' }}
+                        >
+                          <td className="p-3 pl-4 font-mono text-slate-600">{r.expense_date.slice(0, 10)}</td>
+                          <td className="p-3 font-semibold text-slate-900">{r.ba_name || accountName(r.ba_id)}</td>
+                          <td className="p-3 text-center text-xs text-slate-500">{r.payment_mode}</td>
+                          <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
+                          <td className="p-3 text-center">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                              r.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                            }`}>
+                              {r.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Delete confirmation ── */}
+        {deleteTarget && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+              <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
+                <AlertTriangle size={18} className="text-rose-600" /> Delete Expense
+              </h3>
+              <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+                This expense of <strong>{formatCurrency(deleteTarget.amount)}</strong> will be permanently removed. This cannot be undone.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setDeleteTarget(null)}
+                  className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDeleteExpense}
+                  className="px-4 py-2 text-sm rounded-lg bg-rose-600 text-white hover:bg-rose-700"
+                >
+                  Confirm Delete
+                </button>
+              </div>
             </div>
           </div>
         )}

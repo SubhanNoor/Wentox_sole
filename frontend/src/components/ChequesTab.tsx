@@ -1,11 +1,11 @@
-import { Fragment, useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
-import { getUnallocatedBalance, todayISO } from '@/lib/cheques';
+import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
+import { todayISO } from '@/lib/cheques';
 import { Printer, FileDown, FileSpreadsheet, Search, AlertTriangle } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
-import { filterBusinessAccountsForRole, maskedBusinessAccountName } from '@/lib/access';
-import type { Receipt, ChequeAllocation, ChequeDisposition, ChequeStatus } from '@/types';
+import * as api from '@/lib/api';
+import type { ChequeRow, ChequeAllocationRow, ChequeStatus, ChequeDispositionType, VendorRow, BankAccountRow, BusinessAccountRow } from '@/lib/api';
 
 const STATUS_STYLES: Record<ChequeStatus, string> = {
   PENDING: 'bg-amber-50 text-amber-800 border-amber-200',
@@ -17,57 +17,90 @@ const STATUS_STYLES: Record<ChequeStatus, string> = {
   RETURNED: 'bg-slate-100 text-slate-700 border-slate-300',
 };
 
-const DISPOSITION_LABELS: Record<ChequeDisposition, string> = {
+const DISPOSITION_LABELS: Record<ChequeDispositionType, string> = {
   DEPOSIT: 'Deposit to bank',
   VENDOR_PAYMENT: 'Pay a vendor',
   EXPENSE_PAYMENT: 'Pay an expense account',
 };
 
 export default function ChequesTab() {
-  const { state, dispatch } = useApp();
+  const [cheques, setCheques] = useState<ChequeRow[]>([]);
+  const [allocationsByReceipt, setAllocationsByReceipt] = useState<Record<number, ChequeAllocationRow[]>>({});
+  const [vendors, setVendors] = useState<VendorRow[]>([]);
+  const [banks, setBanks] = useState<BankAccountRow[]>([]);
+  const [businessAccounts, setBusinessAccounts] = useState<BusinessAccountRow[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | ChequeStatus>('open');
 
   // Dispose dialog state
-  const [disposingId, setDisposingId] = useState<string | null>(null);
-  const [disposition, setDisposition] = useState<ChequeDisposition>('VENDOR_PAYMENT');
+  const [disposingCheque, setDisposingCheque] = useState<ChequeRow | null>(null);
+  const [disposition, setDisposition] = useState<ChequeDispositionType>('VENDOR_PAYMENT');
   const [targetId, setTargetId] = useState('');
-  // DEPOSIT only: which of our banks the cheque lands in. Held on the CHEQUE
-  // (receipt.depositBankId), not the allocation, because one cheque is never
-  // split across two banks — cash_and_bank.md SS5.
   const [depositBankId, setDepositBankId] = useState('');
   const [allocAmount, setAllocAmount] = useState<number>(0);
   const [allocDate, setAllocDate] = useState(todayISO());
   const [allocRemarks, setAllocRemarks] = useState('');
   const [dialogError, setDialogError] = useState('');
+  const [disposeUnallocated, setDisposeUnallocated] = useState(0);
 
   // Bounce confirmation state
-  const [bouncingId, setBouncingId] = useState<string | null>(null);
+  const [bouncingCheque, setBouncingCheque] = useState<ChequeRow | null>(null);
   const [bounceDate, setBounceDate] = useState(todayISO());
 
-  // Return-to-sender confirmation state — an overdue cheque handed back to the customer
-  // voluntarily (not a bank rejection, so kept separate from the bounce flow above).
-  const [returningId, setReturningId] = useState<string | null>(null);
+  // Return-to-sender confirmation state
+  const [returningCheque, setReturningCheque] = useState<ChequeRow | null>(null);
   const [returnDate, setReturnDate] = useState(todayISO());
 
   const [successMsg, setSuccessMsg] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 5000); };
+  const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
+
+  const loadCheques = useCallback(async () => {
+    setLoading(true);
+    const res = await api.cheques.list();
+    if (res.ok) {
+      setCheques(res.data);
+      const entries = await Promise.all(
+        res.data.map(async c => {
+          const allocRes = await api.cheques.allocationsForReceipt(c.receipt_id);
+          return [c.receipt_id, allocRes.ok ? allocRes.data : []] as const;
+        })
+      );
+      setAllocationsByReceipt(Object.fromEntries(entries));
+    } else {
+      fail('Failed to load cheques: ' + res.error.message);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    loadCheques();
+    api.listVendors().then(res => { if (res.ok) setVendors(res.data); });
+    api.bankAccounts.list().then(res => { if (res.ok) setBanks(res.data); });
+    api.listBusinessAccounts().then(res => { if (res.ok) setBusinessAccounts(res.data); });
+  }, [loadCheques]);
+
+  function unallocatedFor(c: ChequeRow): number {
+    if (c.cheque_status === 'BOUNCED' || c.cheque_status === 'RETURNED') return 0;
+    const active = (allocationsByReceipt[c.receipt_id] || []).filter(a => a.status === 'ACTIVE');
+    const allocated = active.reduce((s, a) => s + a.amount, 0);
+    return Math.max(0, (c.receipt_amount ?? 0) - allocated);
+  }
 
   const chequeRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return state.receipts
-      .filter(r => r.paymentMode === 'Cheque')
-      .map(r => {
-        const customer = state.customers.find(c => c.id === r.customerId);
-        const status = (r.chequeStatus || 'PENDING') as ChequeStatus;
-        return {
-          receipt: r,
-          customerName: customer?.name || 'Unknown customer',
-          status,
-          unallocated: status === 'BOUNCED' || status === 'RETURNED' ? 0 : getUnallocatedBalance(r, state.chequeAllocations, state.expenses),
-          allocations: state.chequeAllocations.filter(a => a.receiptId === r.id),
-        };
-      })
+    return cheques
+      .map(c => ({
+        cheque: c,
+        customerName: c.customer_name || 'Unknown customer',
+        status: c.cheque_status,
+        unallocated: unallocatedFor(c),
+        allocations: allocationsByReceipt[c.receipt_id] || [],
+      }))
       .filter(row => {
         if (statusFilter === 'open') {
           if (row.status !== 'PENDING' && row.status !== 'PARTIALLY_ENDORSED') return false;
@@ -76,41 +109,36 @@ export default function ChequesTab() {
         }
         if (!q) return true;
         return (
-          (row.receipt.chequeNo || '').toLowerCase().includes(q) ||
+          row.cheque.cheque_no.toLowerCase().includes(q) ||
           row.customerName.toLowerCase().includes(q)
         );
       })
-      .sort((a, b) => (a.receipt.chequeDate || '').localeCompare(b.receipt.chequeDate || ''));
-  }, [state.receipts, state.customers, state.chequeAllocations, state.expenses, search, statusFilter]);
+      .sort((a, b) => a.cheque.cheque_date.localeCompare(b.cheque.cheque_date));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cheques, allocationsByReceipt, search, statusFilter]);
 
-  const disposingRow = chequeRows.find(r => r.receipt.id === disposingId)
-    ?? (disposingId
-      ? (() => {
-          const r = state.receipts.find(x => x.id === disposingId);
-          if (!r) return undefined;
-          return {
-            receipt: r,
-            customerName: state.customers.find(c => c.id === r.customerId)?.name || 'Unknown customer',
-            status: (r.chequeStatus || 'PENDING') as ChequeStatus,
-            unallocated: getUnallocatedBalance(r, state.chequeAllocations, state.expenses),
-            allocations: state.chequeAllocations.filter(a => a.receiptId === r.id),
-          };
-        })()
-      : undefined);
+  const disposingRow = disposingCheque
+    ? {
+        cheque: disposingCheque,
+        customerName: disposingCheque.customer_name || 'Unknown customer',
+        unallocated: disposeUnallocated,
+      }
+    : undefined;
 
-  function openDispose(receipt: Receipt) {
-    const remaining = getUnallocatedBalance(receipt, state.chequeAllocations, state.expenses);
-    setDisposingId(receipt.id);
+  function openDispose(cheque: ChequeRow) {
+    const remaining = unallocatedFor(cheque);
+    setDisposingCheque(cheque);
+    setDisposeUnallocated(remaining);
     setDisposition('VENDOR_PAYMENT');
     setTargetId('');
     setDepositBankId('');
-    setAllocAmount(remaining);          // defaults to the remaining unallocated balance
+    setAllocAmount(remaining);
     setAllocDate(todayISO());
     setAllocRemarks('');
     setDialogError('');
   }
 
-  const saveAllocation = () => {
+  const saveAllocation = async () => {
     if (!disposingRow) return;
     const remaining = disposingRow.unallocated;
 
@@ -120,115 +148,103 @@ export default function ChequesTab() {
         `Amount cannot exceed the unallocated balance of ${formatCurrency(remaining)}.`
       );
     }
-    if (disposition !== 'DEPOSIT' && !targetId) {
+    if ((disposition === 'VENDOR_PAYMENT' || disposition === 'EXPENSE_PAYMENT') && !targetId) {
       return setDialogError('Please choose who this cheque is being paid to.');
     }
-    // Without this the money leaves Cheques in Hand and lands nowhere.
     if (disposition === 'DEPOSIT' && !depositBankId) {
       return setDialogError('Please choose which bank account this cheque is deposited into.');
     }
     if (!allocDate) return setDialogError('Please pick an allocation date.');
 
-    const allocation: Omit<ChequeAllocation, 'id'> = {
-      receiptId: disposingRow.receipt.id,
-      dispositionType: disposition,
-      targetType: disposition === 'DEPOSIT'
-        ? null
-        : disposition === 'VENDOR_PAYMENT' ? 'VENDOR' : 'BUSINESS_ACCOUNT',
-      targetId: disposition === 'DEPOSIT' ? null : targetId,
-      amount: allocAmount,
-      allocationDate: allocDate,
-      remarks: allocRemarks,
-      status: 'ACTIVE',
-    };
+    const chequeId = disposingRow.cheque.cheque_id;
+    const payload = { amount: allocAmount, allocation_date: allocDate, remarks: allocRemarks || undefined };
+    const res = disposition === 'DEPOSIT'
+      ? await api.cheques.deposit(chequeId, { ...payload, bank_id: Number(depositBankId) })
+      : disposition === 'VENDOR_PAYMENT'
+      ? await api.cheques.endorseToVendor(chequeId, { ...payload, vendor_id: Number(targetId) })
+      : await api.cheques.endorseToExpense(chequeId, { ...payload, target_ba_id: Number(targetId) });
 
-    if (disposition === 'DEPOSIT') {
-      dispatch({
-        type: 'SET_DEPOSIT_BANK',
-        receiptId: disposingRow.receipt.id,
-        bankId: depositBankId
-      });
-    }
-
-    dispatch({ type: 'ADD_CHEQUE_ALLOCATION', allocation });
+    if (!res.ok) return setDialogError(res.error.message);
 
     const leftover = remaining - allocAmount;
-    setSuccessMsg(
+    flash(
       leftover > 0
         ? `Allocated ${formatCurrency(allocAmount)}. ${formatCurrency(leftover)} of this cheque is still unassigned — assign it before the cheque is fully disposed.`
         : `Allocated ${formatCurrency(allocAmount)}. This cheque is now fully disposed.`
     );
-    setTimeout(() => setSuccessMsg(''), 5000);
 
-    // Keep the dialog open while a remainder is outstanding, so it can never
-    // be silently orphaned; close once the cheque is fully allocated.
+    await loadCheques();
+
     if (leftover > 0) {
+      setDisposeUnallocated(leftover);
       setAllocAmount(leftover);
       setTargetId('');
       setDepositBankId('');
       setAllocRemarks('');
       setDialogError('');
     } else {
-      setDisposingId(null);
+      setDisposingCheque(null);
     }
   };
 
-  const confirmBounce = () => {
-    if (!bouncingId) return;
-    const row = state.receipts.find(r => r.id === bouncingId);
-    dispatch({ type: 'BOUNCE_CHEQUE', receiptId: bouncingId, bouncedDate: bounceDate });
-    const reversedCount = state.chequeAllocations.filter(
-      a => a.receiptId === bouncingId && a.status === 'ACTIVE'
-    ).length;
-    setSuccessMsg(
+  const confirmBounce = async () => {
+    if (!bouncingCheque) return;
+    const res = await api.cheques.bounce(bouncingCheque.cheque_id, { bounced_date: bounceDate });
+    if (!res.ok) { fail(res.error.message); return; }
+    const reversedCount = (allocationsByReceipt[bouncingCheque.receipt_id] || []).filter(a => a.status === 'ACTIVE').length;
+    flash(
       reversedCount > 0
-        ? `Cheque ${row?.chequeNo || ''} marked bounced. The customer's due is restored and ${reversedCount} allocation(s) were reversed.`
-        : `Cheque ${row?.chequeNo || ''} marked bounced. The customer's due is restored.`
+        ? `Cheque ${bouncingCheque.cheque_no} marked bounced. The customer's due is restored and ${reversedCount} allocation(s) were reversed.`
+        : `Cheque ${bouncingCheque.cheque_no} marked bounced. The customer's due is restored.`
     );
-    setTimeout(() => setSuccessMsg(''), 5000);
-    setBouncingId(null);
+    setBouncingCheque(null);
+    await loadCheques();
   };
 
-  const confirmReturn = () => {
-    if (!returningId) return;
-    const row = state.receipts.find(r => r.id === returningId);
-    dispatch({ type: 'RETURN_CHEQUE_TO_SENDER', receiptId: returningId, returnedDate: returnDate });
-    const reversedCount = state.chequeAllocations.filter(
-      a => a.receiptId === returningId && a.status === 'ACTIVE'
-    ).length;
-    setSuccessMsg(
+  const confirmReturn = async () => {
+    if (!returningCheque) return;
+    const res = await api.cheques.returnToSender(returningCheque.cheque_id, { returned_date: returnDate });
+    if (!res.ok) { fail(res.error.message); return; }
+    const reversedCount = (allocationsByReceipt[returningCheque.receipt_id] || []).filter(a => a.status === 'ACTIVE').length;
+    flash(
       reversedCount > 0
-        ? `Cheque ${row?.chequeNo || ''} returned to sender. The customer's due is restored and ${reversedCount} allocation(s) were reversed. They can pay again later via any payment method.`
-        : `Cheque ${row?.chequeNo || ''} returned to sender. The customer's due is restored — they can pay again later via any payment method.`
+        ? `Cheque ${returningCheque.cheque_no} returned to sender. The customer's due is restored and ${reversedCount} allocation(s) were reversed. They can pay again later via any payment method.`
+        : `Cheque ${returningCheque.cheque_no} returned to sender. The customer's due is restored — they can pay again later via any payment method.`
     );
-    setTimeout(() => setSuccessMsg(''), 5000);
-    setReturningId(null);
+    setReturningCheque(null);
+    await loadCheques();
   };
 
-  const targetOptions = useMemo(() => {
-    if (disposition === 'VENDOR_PAYMENT') {
-      return state.vendors.map(v => ({ value: v.id, label: v.name }));
-    }
-    if (disposition === 'EXPENSE_PAYMENT') {
-      return filterBusinessAccountsForRole(state.businessAccounts, state.chartAccounts, state.currentUserRole)
-        .map(b => ({ value: b.id, label: `${b.name} (${b.id})` }));
-    }
-    return [];
-  }, [disposition, state.vendors, state.businessAccounts, state.chartAccounts, state.currentUserRole]);
+  const markCleared = async (cheque: ChequeRow) => {
+    const res = await api.cheques.markCleared(cheque.cheque_id);
+    if (!res.ok) { fail(res.error.message); return; }
+    flash(`Cheque ${cheque.cheque_no} marked cleared.`);
+    await loadCheques();
+  };
 
-  function targetName(a: ChequeAllocation): string {
-    if (a.dispositionType === 'DEPOSIT') return 'Bank deposit';
-    if (a.targetType === 'VENDOR') {
-      return state.vendors.find(v => v.id === a.targetId)?.name || 'Vendor';
-    }
-    return maskedBusinessAccountName(a.targetId, state.businessAccounts, state.chartAccounts, state.currentUserRole) || 'Account';
+  const vendorOptions = useMemo(
+    () => vendors.map(v => ({ value: String(v.vendor_id), label: v.name })),
+    [vendors]
+  );
+  const businessAccountOptions = useMemo(
+    () => businessAccounts.map(b => ({ value: String(b.ba_id), label: b.name })),
+    [businessAccounts]
+  );
+  const bankOptions = useMemo(
+    () => banks.map(b => ({ value: String(b.bank_id), label: b.name })),
+    [banks]
+  );
+
+  function allocTargetName(a: ChequeAllocationRow): string {
+    if (a.disposition_type === 'DEPOSIT') return 'Bank deposit';
+    return a.vendor_name || a.target_name || 'Vendor';
   }
 
   const handleExportExcel = () => {
     const headers = ['Cheque No', 'Date on Cheque', 'Received', 'Customer', 'Amount', 'Unallocated', 'Status'];
     const rows = chequeRows.map(r => [
-      r.receipt.chequeNo || '-', r.receipt.chequeDate || '-', r.receipt.chequeReceivedDate || '-',
-      r.customerName, r.receipt.amount, r.unallocated, r.status,
+      r.cheque.cheque_no || '-', r.cheque.cheque_date || '-', r.cheque.cheque_received_date || '-',
+      r.customerName, r.cheque.receipt_amount ?? 0, r.unallocated, r.status,
     ]);
     exportRowsToExcel('cheque-register', headers, rows);
   };
@@ -237,6 +253,9 @@ export default function ChequesTab() {
     <div>
       {successMsg && (
         <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
+      )}
+      {errorMsg && (
+        <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
       )}
 
       {/* Filter bar */}
@@ -321,28 +340,26 @@ export default function ChequesTab() {
               {chequeRows.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="text-center p-8 text-slate-400">
-                    No cheques match this filter.
+                    {loading ? 'Loading…' : 'No cheques match this filter.'}
                   </td>
                 </tr>
               ) : (
                 chequeRows.map(row => {
                   const canDispose = row.status !== 'BOUNCED' && row.status !== 'CLEARED' && row.unallocated > 0;
-                  // Only makes sense for a still-open (overdue) cheque — a fully deposited/
-                  // endorsed/cleared cheque isn't "returned to sender."
                   const canReturn = row.status === 'PENDING' || row.status === 'PARTIALLY_ENDORSED';
                   return (
-                    <Fragment key={row.receipt.id}>
+                    <Fragment key={row.cheque.cheque_id}>
                       <tr
                         className="border-b hover:bg-slate-50/50"
                         style={{ borderColor: 'var(--border-table)' }}
                       >
                         <td className="p-3 pl-4 font-mono font-semibold text-slate-800">
-                          {row.receipt.chequeNo || '-'}
+                          {row.cheque.cheque_no || '-'}
                         </td>
-                        <td className="p-3 text-center text-xs text-slate-600">{row.receipt.chequeDate || '-'}</td>
-                        <td className="p-3 text-center text-xs text-slate-500">{row.receipt.chequeReceivedDate || '-'}</td>
+                        <td className="p-3 text-center text-xs text-slate-600">{row.cheque.cheque_date || '-'}</td>
+                        <td className="p-3 text-center text-xs text-slate-500">{row.cheque.cheque_received_date || '-'}</td>
                         <td className="p-3 font-semibold text-slate-800">{row.customerName}</td>
-                        <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.receipt.amount)}</td>
+                        <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.cheque.receipt_amount ?? 0)}</td>
                         <td className="p-3 text-right font-bold" style={{ color: row.unallocated > 0 ? '#b45309' : '#64748b' }}>
                           {row.unallocated > 0 ? formatCurrency(row.unallocated) : '—'}
                         </td>
@@ -355,7 +372,7 @@ export default function ChequesTab() {
                           <div className="flex flex-wrap items-center justify-center gap-1.5">
                             {canDispose && (
                               <button
-                                onClick={() => openDispose(row.receipt)}
+                                onClick={() => openDispose(row.cheque)}
                                 className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 transition-colors"
                               >
                                 Dispose
@@ -363,7 +380,7 @@ export default function ChequesTab() {
                             )}
                             {row.status === 'DEPOSITED' && (
                               <button
-                                onClick={() => dispatch({ type: 'MARK_CHEQUE_CLEARED', receiptId: row.receipt.id })}
+                                onClick={() => markCleared(row.cheque)}
                                 className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 transition-colors"
                               >
                                 Mark Cleared
@@ -371,7 +388,7 @@ export default function ChequesTab() {
                             )}
                             {row.status !== 'BOUNCED' && row.status !== 'RETURNED' && (
                               <button
-                                onClick={() => { setBouncingId(row.receipt.id); setBounceDate(todayISO()); }}
+                                onClick={() => { setBouncingCheque(row.cheque); setBounceDate(todayISO()); }}
                                 className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 transition-colors"
                               >
                                 Mark Bounced
@@ -379,7 +396,7 @@ export default function ChequesTab() {
                             )}
                             {canReturn && (
                               <button
-                                onClick={() => { setReturningId(row.receipt.id); setReturnDate(todayISO()); }}
+                                onClick={() => { setReturningCheque(row.cheque); setReturnDate(todayISO()); }}
                                 className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200 transition-colors"
                               >
                                 Return to Sender
@@ -395,13 +412,13 @@ export default function ChequesTab() {
                           <td colSpan={8} className="px-4 py-2 bg-slate-50/60">
                             <div className="flex flex-col gap-1">
                               {row.allocations.map(a => (
-                                <div key={a.id} className="flex items-center gap-3 text-[11px]">
+                                <div key={a.allocation_id} className="flex items-center gap-3 text-[11px]">
                                   <span className="font-semibold uppercase tracking-wider text-slate-400" style={{ minWidth: 90 }}>
-                                    {a.dispositionType.replace('_', ' ')}
+                                    {a.disposition_type.replace('_', ' ')}
                                   </span>
-                                  <span className="font-semibold text-slate-700">{targetName(a)}</span>
+                                  <span className="font-semibold text-slate-700">{allocTargetName(a)}</span>
                                   <span className="font-mono font-bold text-slate-800">{formatCurrency(a.amount)}</span>
-                                  <span className="text-slate-500">{a.allocationDate}</span>
+                                  <span className="text-slate-500">{a.allocation_date}</span>
                                   {a.status === 'REVERSED' && (
                                     <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 uppercase">
                                       Reversed
@@ -429,7 +446,7 @@ export default function ChequesTab() {
           <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-1">Dispose of Cheque</h3>
             <p className="text-xs text-slate-500 mb-4">
-              {disposingRow.receipt.chequeNo} &middot; {disposingRow.customerName} &middot; {formatCurrency(disposingRow.receipt.amount)}
+              {disposingRow.cheque.cheque_no} &middot; {disposingRow.customerName} &middot; {formatCurrency(disposingRow.cheque.receipt_amount ?? 0)}
             </p>
 
             <div className="flex items-center justify-between p-3 rounded-lg border mb-4"
@@ -447,22 +464,33 @@ export default function ChequesTab() {
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Disposition</label>
                 <select
                   value={disposition}
-                  onChange={e => { setDisposition(e.target.value as ChequeDisposition); setTargetId(''); }}
+                  onChange={e => { setDisposition(e.target.value as ChequeDispositionType); setTargetId(''); }}
                   className="soleria-input cursor-pointer font-semibold"
                 >
-                  {(Object.keys(DISPOSITION_LABELS) as ChequeDisposition[]).map(d => (
+                  {(Object.keys(DISPOSITION_LABELS) as ChequeDispositionType[]).map(d => (
                     <option key={d} value={d}>{DISPOSITION_LABELS[d]}</option>
                   ))}
                 </select>
               </div>
 
-              {disposition !== 'DEPOSIT' && (
+              {disposition === 'VENDOR_PAYMENT' && (
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    {disposition === 'VENDOR_PAYMENT' ? 'Vendor' : 'Expense / business account'}
-                  </label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Vendor</label>
                   <SearchableSelect
-                    options={targetOptions}
+                    options={vendorOptions}
+                    value={targetId}
+                    onChange={setTargetId}
+                    placeholder="Search & select..."
+                    searchPlaceholder="Type to search..."
+                  />
+                </div>
+              )}
+
+              {disposition === 'EXPENSE_PAYMENT' && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Expense Account</label>
+                  <SearchableSelect
+                    options={businessAccountOptions}
                     value={targetId}
                     onChange={setTargetId}
                     placeholder="Search & select..."
@@ -476,13 +504,13 @@ export default function ChequesTab() {
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
                     Deposit Into <span className="text-red-500 font-bold">*</span>
                   </label>
-                  {state.bankAccounts.length === 0 ? (
+                  {banks.length === 0 ? (
                     <div className="soleria-input text-rose-600 text-sm flex items-center font-semibold">
                       Add a bank account first
                     </div>
                   ) : (
                     <SearchableSelect
-                      options={state.bankAccounts.map(b => ({ value: b.id, label: b.name }))}
+                      options={bankOptions}
                       value={depositBankId}
                       onChange={setDepositBankId}
                       placeholder="Select bank account..."
@@ -533,7 +561,7 @@ export default function ChequesTab() {
 
             <div className="flex justify-end gap-2 mt-5">
               <button
-                onClick={() => setDisposingId(null)}
+                onClick={() => setDisposingCheque(null)}
                 className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
               >
                 Close
@@ -550,7 +578,7 @@ export default function ChequesTab() {
       )}
 
       {/* ── Bounce confirmation ── */}
-      {bouncingId && (
+      {bouncingCheque && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
           <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
@@ -576,7 +604,7 @@ export default function ChequesTab() {
 
             <div className="flex justify-end gap-2">
               <button
-                onClick={() => setBouncingId(null)}
+                onClick={() => setBouncingCheque(null)}
                 className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
               >
                 Cancel
@@ -593,7 +621,7 @@ export default function ChequesTab() {
       )}
 
       {/* ── Return-to-sender confirmation ── */}
-      {returningId && (
+      {returningCheque && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
           <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
@@ -620,7 +648,7 @@ export default function ChequesTab() {
 
             <div className="flex justify-end gap-2">
               <button
-                onClick={() => setReturningId(null)}
+                onClick={() => setReturningCheque(null)}
                 className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
               >
                 Cancel

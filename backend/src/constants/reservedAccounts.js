@@ -21,4 +21,8 @@ module.exports = {
   SALARIES_PAYABLE: '220002',
   WAGES_EXPENSE: '410001',
   SALARIES_EXPENSE: '410002',
+  // Module 4b — counter-account for Deposit's one-sided manual credit/debit adjustments (owner
+  // capital, bank fees, etc). Generic on purpose — Deposit's free-text `source` field carries the
+  // specific reason, same as how PURCHASES doesn't care what was bought.
+  MISC_ADJUSTMENTS: '400006',
 };

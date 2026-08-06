@@ -1,19 +1,44 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
-import type { Expense, BusinessAccount } from '@/types';
+import { useState, useEffect, useMemo } from 'react';
+import { formatCurrency } from '@/context/AppContext';
+import * as api from '@/lib/api';
+import type { ExpenseRow, BusinessAccountRow } from '@/lib/api';
 import { Calendar, Search, ArrowRight, ArrowLeft, FileText, DollarSign, Landmark, CreditCard } from 'lucide-react';
-import { isChequeMode, expenseModeLabel } from '@/lib/cashbank';
+
+function isChequeMode(mode: ExpenseRow['payment_mode']): boolean {
+  return mode === 'CHEQUE_ENDORSED' || mode === 'CHEQUE_ISSUED';
+}
+
+function expenseModeLabel(mode: ExpenseRow['payment_mode']): string {
+  switch (mode) {
+    case 'CHEQUE_ENDORSED': return 'Cheque (Endorsed)';
+    case 'CHEQUE_ISSUED': return 'Cheque (Issued)';
+    case 'ONLINE': return 'Online';
+    default: return 'Cash';
+  }
+}
 
 export default function OverallExpensesTab() {
-  const { state } = useApp();
+  const [rows, setRows] = useState<ExpenseRow[]>([]);
+  const [businessAccounts, setBusinessAccounts] = useState<BusinessAccountRow[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      const [e, b] = await Promise.all([
+        api.expenses.list({ range: 'overall' }),
+        api.listBusinessAccounts()
+      ]);
+      if (e.ok) setRows(e.data);
+      if (b.ok) setBusinessAccounts(b.data);
+    })();
+  }, []);
 
   // Filters
   const [nameQuery, setNameQuery] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState<string>('all'); // '0' to '11' or 'all'
+  const [selectedMonth, setSelectedMonth] = useState<string>('all'); // Default to all
   const [selectedYear, setSelectedYear] = useState<string>('all'); // Default to all
 
   // Selected business account for viewing details
-  const [selectedBizId, setSelectedBizId] = useState<string | null>(null);
+  const [selectedBizId, setSelectedBizId] = useState<number | null>(null);
 
   const monthsList = [
     { value: '0', label: 'January' },
@@ -33,9 +58,9 @@ export default function OverallExpensesTab() {
   // Extract unique years from expenses for the filter
   const yearsList = useMemo(() => {
     const years = new Set<string>();
-    state.expenses.forEach(e => {
-      if (e.date) {
-        const parts = e.date.split('-');
+    rows.forEach(e => {
+      if (e.expense_date) {
+        const parts = e.expense_date.split('-');
         if (parts[0] && parts[0].length === 4) {
           years.add(parts[0]);
         }
@@ -44,25 +69,21 @@ export default function OverallExpensesTab() {
     // Always guarantee current year is in the list
     years.add(new Date().getFullYear().toString());
     return Array.from(years).sort((a, b) => b.localeCompare(a));
-  }, [state.expenses]);
+  }, [rows]);
 
   // Filtered expenses + filter inputs
   const overallExpenses = useMemo(() => {
-    return state.expenses.filter(e => {
+    return rows.filter(e => {
       let eYear = '';
       let eMonth = '';
 
-      if (e.date) {
-        const parts = e.date.split('-');
+      if (e.expense_date) {
+        const parts = e.expense_date.split('-');
         if (parts[0]) eYear = parts[0];
         if (parts[1]) {
           const mVal = parseInt(parts[1], 10) - 1;
           eMonth = mVal.toString();
         }
-      } else {
-        const d = new Date(e.date);
-        eYear = d.getFullYear().toString();
-        eMonth = d.getMonth().toString();
       }
 
       // 1. Filter by year if selected
@@ -77,52 +98,46 @@ export default function OverallExpensesTab() {
 
       // 3. Filter by business account name or code
       if (nameQuery.trim()) {
-        const biz = state.businessAccounts.find(b => b.id === e.businessAccountId);
+        const biz = businessAccounts.find(b => b.ba_id === e.ba_id);
         const bizName = biz?.name.toLowerCase() || '';
-        const bizCode = biz?.id.toLowerCase() || '';
+        const bizCode = biz?.code.toLowerCase() || '';
         const query = nameQuery.toLowerCase();
         if (!bizName.includes(query) && !bizCode.includes(query)) return false;
       }
 
       return true;
     });
-  }, [state.expenses, state.businessAccounts, selectedYear, selectedMonth, nameQuery]);
+  }, [rows, businessAccounts, selectedYear, selectedMonth, nameQuery]);
 
   // Group expenses by business account for the card layout
   const bizCardsData = useMemo(() => {
-    const groups: { [bizId: string]: { businessAccount: BusinessAccount; expenses: Expense[]; totalAmount: number } } = {};
+    const groups: { [bizId: number]: { businessAccount: BusinessAccountRow; expenses: ExpenseRow[]; totalAmount: number } } = {};
 
     overallExpenses.forEach(e => {
-      if (!groups[e.businessAccountId]) {
-        const biz = state.businessAccounts.find(b => b.id === e.businessAccountId) || {
-          id: e.businessAccountId,
-          name: 'General Expense Account',
-          controlId: '',
-          linkCode: '',
-          region: 'LOCAL',
-          status: 'Active' as const
-        };
-        groups[e.businessAccountId] = {
+      if (!groups[e.ba_id]) {
+        const biz = businessAccounts.find(b => b.ba_id === e.ba_id) ||
+          { ba_id: e.ba_id, code: '', name: 'General Expense Account', ac_id: 0, status: 'ACTIVE' as const };
+        groups[e.ba_id] = {
           businessAccount: biz,
           expenses: [],
           totalAmount: 0
         };
       }
-      
-      const grp = groups[e.businessAccountId];
+
+      const grp = groups[e.ba_id];
       grp.expenses.push(e);
       grp.totalAmount += e.amount;
     });
 
     return Object.values(groups).sort((a, b) => b.totalAmount - a.totalAmount);
-  }, [overallExpenses, state.businessAccounts]);
+  }, [overallExpenses, businessAccounts]);
 
   const activeBizDetails = useMemo(() => {
-    if (!selectedBizId) return null;
-    return bizCardsData.find(b => b.businessAccount.id === selectedBizId);
+    if (selectedBizId == null) return null;
+    return bizCardsData.find(b => b.businessAccount.ba_id === selectedBizId);
   }, [selectedBizId, bizCardsData]);
 
-  if (selectedBizId && activeBizDetails) {
+  if (selectedBizId != null && activeBizDetails) {
     return (
       <div className="card-white p-6 bg-white border border-slate-200 shadow-sm rounded-xl animate-fadeIn">
         <div className="flex items-center justify-between border-b pb-4 mb-4" style={{ borderColor: 'var(--border-color)' }}>
@@ -164,19 +179,19 @@ export default function OverallExpensesTab() {
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
               {activeBizDetails.expenses.map(e => (
-                <tr key={e.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="p-3.5 pl-4 font-mono text-slate-600">{e.date}</td>
+                <tr key={e.expense_id} className="hover:bg-slate-50/50 transition-colors">
+                  <td className="p-3.5 pl-4 font-mono text-slate-600">{e.expense_date.slice(0, 10)}</td>
                   <td className="p-3.5 text-center">
                     <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
-                      {e.id.replace('exp_', '')}
+                      {e.expense_id}
                     </span>
                   </td>
                   <td className="p-3.5 text-center">
-                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${e.paymentMode === 'Cash' ? 'bg-green-50 text-green-700 border border-green-200' : isChequeMode(e.paymentMode) ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-indigo-50 text-indigo-700 border border-indigo-200'}`}>
-                      {e.paymentMode === 'Cash' && <DollarSign size={10} />}
-                      {isChequeMode(e.paymentMode) && <Landmark size={10} />}
-                      {e.paymentMode === 'Online' && <CreditCard size={10} />}
-                      {expenseModeLabel(e.paymentMode)}
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${e.payment_mode === 'CASH' ? 'bg-green-50 text-green-700 border border-green-200' : isChequeMode(e.payment_mode) ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-indigo-50 text-indigo-700 border border-indigo-200'}`}>
+                      {e.payment_mode === 'CASH' && <DollarSign size={10} />}
+                      {isChequeMode(e.payment_mode) && <Landmark size={10} />}
+                      {e.payment_mode === 'ONLINE' && <CreditCard size={10} />}
+                      {expenseModeLabel(e.payment_mode)}
                     </span>
                   </td>
                   <td className="p-3.5 text-slate-600 font-medium">{e.details || '-'}</td>
@@ -209,7 +224,7 @@ export default function OverallExpensesTab() {
               />
             </div>
           </div>
-          
+
           <div className="col-span-1">
             <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Filter by Month</label>
             <select
@@ -261,8 +276,8 @@ export default function OverallExpensesTab() {
           bizCardsData.map(data => {
             return (
               <div
-                key={data.businessAccount.id}
-                onClick={() => setSelectedBizId(data.businessAccount.id)}
+                key={data.businessAccount.ba_id}
+                onClick={() => setSelectedBizId(data.businessAccount.ba_id)}
                 className="card-white p-5 bg-white border border-slate-200 cursor-pointer transition-all flex flex-col justify-between hover:shadow-md hover:border-[#B08D57] hover:ring-1 hover:ring-gold-200 rounded-xl"
               >
                 <div>
@@ -270,23 +285,22 @@ export default function OverallExpensesTab() {
                     <h4 className="font-lora font-bold text-base text-slate-800 line-clamp-1">
                       {data.businessAccount.name}
                     </h4>
-                    <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{data.businessAccount.region}</span>
                   </div>
 
-                  {data.businessAccount.controlId === '210001' && (
+                  {data.businessAccount.chart_code === '210001' && (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300 mb-2">
                       Vendor Payment
                     </span>
                   )}
 
-                  <div className="font-mono text-xs text-slate-400 mb-4">Code: {data.businessAccount.id}</div>
-                  
+                  <div className="font-mono text-xs text-slate-400 mb-4">Code: {data.businessAccount.code}</div>
+
                   <div className="text-xs font-semibold text-slate-700 flex justify-between bg-slate-50 p-2.5 rounded-lg border border-slate-100">
                     <span>Total Expense:</span>
                     <span className="font-mono text-rose-700">{formatCurrency(data.totalAmount)}</span>
                   </div>
                 </div>
-                
+
                 <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-4">
                   <div className="flex items-center gap-1.5 bg-rose-50 text-rose-800 px-2.5 py-1 rounded-full text-xs font-semibold border border-rose-200">
                     <FileText size={13} className="text-rose-600" />
