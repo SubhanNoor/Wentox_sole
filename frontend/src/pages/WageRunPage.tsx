@@ -1,11 +1,11 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import { getRunBalanceBlock } from '@/lib/payroll';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { COST_FIELDS } from '@/types';
 import type { WageRun, WageRunItem, CostFieldKey } from '@/types';
-import { Plus, Trash2, Save, HardHat, AlertTriangle, Edit2, Undo2, History, Clock } from 'lucide-react';
+import { Plus, Trash2, Save, HardHat, AlertTriangle, Edit2, Undo2, History, Clock, ChevronDown, Check } from 'lucide-react';
 
 function emptyItem(): WageRunItem {
   return {
@@ -25,6 +25,16 @@ export default function WageRunPage() {
   const { state, dispatch } = useApp();
 
   const [tab, setTab] = useState<'entry' | 'history'>('entry');
+  const [tabAnimating, setTabAnimating] = useState(false);
+
+  const switchTab = (next: 'entry' | 'history') => {
+    if (next === tab) return;
+    setTabAnimating(true);
+    setTimeout(() => {
+      setTab(next);
+      setTabAnimating(false);
+    }, 180);
+  };
 
   const [editingRunId, setEditingRunId] = useState<string | null>(null);
   const [date, setDate] = useState(today());
@@ -58,7 +68,10 @@ export default function WageRunPage() {
   const availableStages = useMemo(() => {
     if (!selectedWorker) return [];
     const own = selectedWorker.stages || [];
-    return COST_FIELDS.filter(f => own.includes(f.key));
+    return own.map(st => {
+      const cf = COST_FIELDS.find(f => f.key === st);
+      return { key: st as any, label: cf ? cf.label : st, workerLabel: cf ? cf.workerLabel : st };
+    });
   }, [selectedWorker]);
 
   const productOptions = useMemo(
@@ -220,13 +233,13 @@ export default function WageRunPage() {
         <div className="flex justify-between items-center mb-6">
           <div className="flex gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
             <button
-              onClick={() => setTab('entry')}
+              onClick={() => switchTab('entry')}
               className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <HardHat size={15} /> {editingRunId ? 'Editing Run' : 'New Wage Run'}
             </button>
             <button
-              onClick={() => setTab('history')}
+              onClick={() => switchTab('history')}
               className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'history' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <History size={15} /> History ({state.wageRuns.length})
@@ -240,7 +253,7 @@ export default function WageRunPage() {
         </div>
 
         {tab === 'entry' ? (
-          <div className="flex flex-col gap-5">
+          <div className={`flex flex-col gap-5 transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
 
             {/* Header */}
             <div className="card-white p-6 bg-white border" style={{ borderColor: 'var(--border-color)' }}>
@@ -271,16 +284,51 @@ export default function WageRunPage() {
                     <div className="soleria-input text-rose-600 text-sm flex items-center font-semibold">
                       Set this worker's trades first
                     </div>
-                  ) : (
-                    <select
-                      value={stage}
-                      onChange={e => { setStage(e.target.value as CostFieldKey); setItems([emptyItem()]); }}
-                      className="soleria-input cursor-pointer"
-                    >
-                      <option value="">Select stage...</option>
-                      {availableStages.map(f => <option key={f.key} value={f.key}>{f.workerLabel}</option>)}
-                    </select>
-                  )}
+                  ) : (() => {
+                    const [isStageOpen, setIsStageOpen] = useState(false);
+                    const stageRef = useRef<HTMLDivElement>(null);
+                    useEffect(() => {
+                      const h = (e: MouseEvent) => {
+                        if (stageRef.current && !stageRef.current.contains(e.target as Node)) setIsStageOpen(false);
+                      };
+                      document.addEventListener('mousedown', h);
+                      return () => document.removeEventListener('mousedown', h);
+                    }, []);
+                    const selLabel = availableStages.find(f => f.key === stage)?.workerLabel || 'Select stage...';
+                    return (
+                      <div className="relative" ref={stageRef}>
+                        <button
+                          type="button"
+                          onClick={() => setIsStageOpen(!isStageOpen)}
+                          className="flex items-center justify-between w-full pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer shadow-2xs focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30"
+                        >
+                          <span className={`truncate font-semibold ${stage ? 'text-slate-800' : 'text-slate-400'}`}>{selLabel}</span>
+                          <ChevronDown className={`ml-2 flex-shrink-0 text-slate-400 transition-transform duration-200 ${isStageOpen ? 'rotate-180 text-[var(--brand-gold)]' : ''}`} size={16} />
+                        </button>
+                        {isStageOpen && (
+                          <div className="absolute right-0 left-0 top-[calc(100%+6px)] z-50 py-1.5 bg-white border border-slate-200/90 rounded-xl shadow-xl" style={{ boxShadow: '0 14px 34px rgba(27,42,65,0.14)' }}>
+                            <button type="button" onClick={() => { setStage(''); setItems([emptyItem()]); setIsStageOpen(false); }}
+                              className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between cursor-pointer transition-colors ${!stage ? 'bg-[var(--brand-gold)] text-white font-semibold' : 'text-slate-600 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'}`}>
+                              <span>Select stage...</span>
+                              {!stage && <Check size={13} className="text-white" />}
+                            </button>
+                            <div className="my-1 border-t border-slate-100" />
+                            {availableStages.map(f => {
+                              const isSelected = stage === f.key;
+                              return (
+                                <button key={f.key} type="button"
+                                  onClick={() => { setStage(f.key as CostFieldKey); setItems([emptyItem()]); setIsStageOpen(false); }}
+                                  className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between cursor-pointer transition-colors ${isSelected ? 'bg-[var(--brand-gold)] text-white font-semibold' : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'}`}>
+                                  <span>{f.workerLabel}</span>
+                                  {isSelected && <Check size={13} className="text-white flex-shrink-0" />}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {selectedWorker && availableStages.length > 0 && (
                     <p className="text-[10px] text-slate-400 mt-1">
                       Only {selectedWorker.name.split(' ')[0]}'s registered trades are listed.
@@ -443,7 +491,7 @@ export default function WageRunPage() {
           </div>
         ) : (
           /* History */
-          <div className="card-white p-6 md:p-8 bg-white border" style={{ borderColor: 'var(--border-color)' }}>
+          <div className={`card-white p-6 md:p-8 bg-white border transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`} style={{ borderColor: 'var(--border-color)' }}>
             <h3 className="font-lora font-semibold text-lg text-slate-800 mb-1">Wage Runs</h3>
             <p className="text-xs text-slate-500 mb-6">
               Only posted runs count toward a worker's balance. To correct one: unpost, edit, post again.

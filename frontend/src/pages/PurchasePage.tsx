@@ -3,9 +3,18 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import type { PurchaseItem, Vendor } from '@/types';
-import { Plus, Trash2, Save, ShoppingBag } from 'lucide-react';
+import { Plus, Trash2, Save, ShoppingBag, BookmarkPlus } from 'lucide-react';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
+
+interface PurchaseDraft {
+  draftId: string;
+  date: string;
+  vendorId: string;
+  remarks: string;
+  items: PurchaseItem[];
+  savedAt: string;
+}
 
 function emptyItem(): PurchaseItem {
   return {
@@ -29,6 +38,17 @@ export default function PurchasePage() {
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+
+  // Drafts state persisted in localStorage
+  const [drafts, setDrafts] = useState<PurchaseDraft[]>(() => {
+    try {
+      const saved = localStorage.getItem('wentox_purchase_drafts');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [selectedDraftId, setSelectedDraftId] = useState<string>('');
 
   // Add New Vendor modal state
   const [isAddVendorOpen, setIsAddVendorOpen] = useState(false);
@@ -156,13 +176,88 @@ export default function PurchasePage() {
       }
     });
 
+    if (selectedDraftId) {
+      handleDeleteDraft(selectedDraftId);
+    }
+
     setDate(new Date().toISOString().split('T')[0]);
     setVendorId('');
     setRemarks('');
     setItems([emptyItem()]);
     setCustomUnitRows({});
+    setSelectedDraftId('');
     setErrorMsg('');
     setSuccessMsg('Purchase recorded successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
+  const handleSaveDraft = () => {
+    const hasContent = vendorId || remarks.trim() || items.some(it => it.materialName.trim());
+    if (!hasContent) {
+      setErrorMsg('Please fill in some vendor or material information before saving a draft.');
+      setTimeout(() => setErrorMsg(''), 3000);
+      return;
+    }
+
+    const newDraft: PurchaseDraft = {
+      draftId: selectedDraftId || 'pud_' + Date.now(),
+      date,
+      vendorId,
+      remarks,
+      items,
+      savedAt: new Date().toISOString()
+    };
+
+    const nextDrafts = selectedDraftId
+      ? drafts.map(d => (d.draftId === selectedDraftId ? newDraft : d))
+      : [newDraft, ...drafts];
+
+    setDrafts(nextDrafts);
+    try {
+      localStorage.setItem('wentox_purchase_drafts', JSON.stringify(nextDrafts));
+    } catch (e) {
+      console.error(e);
+    }
+
+    setSuccessMsg('Purchase order saved to drafts.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+
+    setDate(new Date().toISOString().split('T')[0]);
+    setVendorId('');
+    setRemarks('');
+    setItems([emptyItem()]);
+    setCustomUnitRows({});
+    setSelectedDraftId('');
+  };
+
+  const handleLoadDraft = (draftId: string) => {
+    const draft = drafts.find(d => d.draftId === draftId);
+    if (!draft) return;
+    setDate(draft.date || new Date().toISOString().split('T')[0]);
+    setVendorId(draft.vendorId || '');
+    setRemarks(draft.remarks || '');
+    setItems(draft.items.length > 0 ? draft.items : [emptyItem()]);
+    setSelectedDraftId(draftId);
+    setSuccessMsg('Draft loaded into form.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
+  const handleDeleteDraft = (draftId: string) => {
+    const updated = drafts.filter(d => d.draftId !== draftId);
+    setDrafts(updated);
+    try {
+      localStorage.setItem('wentox_purchase_drafts', JSON.stringify(updated));
+    } catch (e) {
+      console.error(e);
+    }
+    if (selectedDraftId === draftId) {
+      setSelectedDraftId('');
+      setDate(new Date().toISOString().split('T')[0]);
+      setVendorId('');
+      setRemarks('');
+      setItems([emptyItem()]);
+    }
+    setSuccessMsg('Draft removed.');
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
@@ -185,6 +280,50 @@ export default function PurchasePage() {
         )}
         {errorMsg && (
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
+        )}
+
+        {/* Saved Purchase Drafts Loader Panel */}
+        {drafts.length > 0 && (
+          <div className="mb-6 p-4 bg-slate-50 border border-slate-200/90 rounded-2xl flex flex-wrap items-center justify-between gap-4 text-sm shadow-2xs" data-no-print>
+            <div className="flex items-center gap-2">
+              <BookmarkPlus size={18} className="text-[var(--brand-gold)]" />
+              <span className="font-bold text-slate-800 font-lora">Saved Purchase Drafts:</span>
+              <span className="text-xs bg-amber-100 text-amber-900 px-2.5 py-0.5 rounded-full font-semibold border border-amber-200/80">
+                {drafts.length} incomplete purchase(s)
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <select
+                value={selectedDraftId}
+                onChange={e => {
+                  const val = e.target.value;
+                  setSelectedDraftId(val);
+                  if (val) handleLoadDraft(val);
+                }}
+                className="soleria-input py-1.5 px-3 text-xs bg-white border cursor-pointer font-medium rounded-xl shadow-2xs"
+                style={{ width: '250px' }}
+              >
+                <option value="">Select a draft to load...</option>
+                {drafts.map(d => {
+                  const vName = state.vendors.find(v => v.id === d.vendorId)?.name || 'Unspecified Vendor';
+                  return (
+                    <option key={d.draftId} value={d.draftId}>
+                      {vName} ({d.date})
+                    </option>
+                  );
+                })}
+              </select>
+              {selectedDraftId && (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteDraft(selectedDraftId)}
+                  className="text-xs text-rose-600 hover:text-rose-800 font-semibold transition-colors cursor-pointer"
+                >
+                  Delete Selected Draft
+                </button>
+              )}
+            </div>
+          </div>
         )}
 
         <form onSubmit={handleSave} className="card-white p-6 bg-white border mb-8" data-no-print>
@@ -215,9 +354,10 @@ export default function PurchasePage() {
                 <button
                   type="button"
                   onClick={() => setIsAddVendorOpen(true)}
-                  className="text-[10px] font-bold underline transition-colors text-blue-600 hover:text-blue-800"
+                  className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102"
                 >
-                  + Add New Vendor
+                  <Plus size={12} className="text-blue-600" />
+                  <span>Add New Vendor</span>
                 </button>
               </div>
               <SearchableSelect
@@ -356,20 +496,29 @@ export default function PurchasePage() {
             </table>
           </div>
 
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3">
             <button
               type="button"
               onClick={addItemRow}
-              className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm"
+              className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-xl"
             >
               <Plus size={16} /> Add Line Item
             </button>
-            <button
-              type="submit"
-              className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-sm font-bold"
-            >
-              <Save size={16} /> Save Purchase
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleSaveDraft}
+                className="btn-outline flex items-center gap-1.5 px-5 py-2.5 text-sm font-semibold rounded-xl hover:border-[var(--brand-gold)] hover:text-[var(--brand-gold)] transition-all cursor-pointer shadow-2xs"
+              >
+                <BookmarkPlus size={16} /> Save Draft
+              </button>
+              <button
+                type="submit"
+                className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-sm font-bold rounded-xl shadow-sm hover:shadow-md transition-all cursor-pointer"
+              >
+                <Save size={16} /> Save Purchase
+              </button>
+            </div>
           </div>
         </form>
 

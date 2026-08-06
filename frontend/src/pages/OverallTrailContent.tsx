@@ -1,6 +1,7 @@
-import { useState, useMemo, useRef, useEffect, Fragment } from 'react';
+import { useState, useMemo, Fragment } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
-import { Search, Printer, FileDown, FileSpreadsheet, ArrowLeft, ChevronRight, Filter, ChevronDown } from 'lucide-react';
+import SearchableSelect from '@/components/SearchableSelect';
+import { Search, Printer, FileDown, FileSpreadsheet, ArrowLeft, ChevronRight, Filter } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import { isChartAccountRestrictedForRole, isBusinessAccountRestrictedForRole } from '@/lib/access';
@@ -34,28 +35,21 @@ export default function OverallTrailContent() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<AccountGroupType>('all');
   
-  // Custom Searchable Dropdown State
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [dropdownSearch, setDropdownSearch] = useState('');
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
   // Selected account for drill-down detailed ledger
   const [selectedAccount, setSelectedAccount] = useState<AccountBalanceRow | null>(null);
+  const [isClosing, setIsClosing] = useState(false);
+
+  const handleCloseDetail = () => {
+    setIsClosing(true);
+    setTimeout(() => {
+      setSelectedAccount(null);
+      setIsClosing(false);
+    }, 200);
+  };
 
   // Date range for drill-down ledger view
   const [ledgerFromDate, setLedgerFromDate] = useState(getThreeMonthsAgoDate());
   const [ledgerToDate, setLedgerToDate] = useState(getTodayDate());
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
 
   // ── Calculate Trail Balances for All Accounts ─────────────────────────────
   const trailBalances = useMemo<AccountBalanceRow[]>(() => {
@@ -278,15 +272,9 @@ export default function OverallTrailContent() {
   const dropdownAccounts = useMemo(() => {
     return trailBalances.filter(r => {
       if (selectedGroup !== 'all' && r.type !== selectedGroup) return false;
-      if (!dropdownSearch.trim()) return true;
-      const q = dropdownSearch.toLowerCase();
-      return (
-        r.description.toLowerCase().includes(q) ||
-        r.code.toLowerCase().includes(q) ||
-        r.typeLabel.toLowerCase().includes(q)
-      );
+      return true;
     });
-  }, [trailBalances, selectedGroup, dropdownSearch]);
+  }, [trailBalances, selectedGroup]);
 
   // Main table filtered rows
   const filteredBalances = useMemo(() => {
@@ -502,15 +490,15 @@ export default function OverallTrailContent() {
       {/* VIEW 1: Business Accounts Balances Details (Overall Trial Balance) */}
       {!selectedAccount ? (
         <div>
-          {/* Top Filter Container with Searchable Dropdown & Action Buttons */}
-          <div className="p-4 rounded-xl border mb-4 bg-white shadow-sm flex flex-col gap-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+          {/* Top Filter Container with Searchable Select & Action Buttons */}
+          <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-5 shadow-2xs" data-no-print>
             
-            {/* ROW 1: Search Input, Custom Searchable Dropdown, As On Date, & Actions */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            {/* ROW 1: Search Input, SearchableSelect Dropdown, As On Date, & Actions */}
+            <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
                 
                 {/* Search Text Input */}
-                <div className="relative min-w-[220px] flex-1 max-w-xs">
+                <div className="relative min-w-[200px] flex-1 max-w-xs">
                   <Search className="absolute left-3 top-2.5 text-slate-400" size={15} />
                   <input
                     type="text"
@@ -521,79 +509,31 @@ export default function OverallTrailContent() {
                   />
                 </div>
 
-                {/* Custom Searchable Dropdown Component (Filtered by Active Category Tab) */}
-                <div className="relative min-w-[260px] flex-1 max-w-xs" ref={dropdownRef}>
-                  <button
-                    type="button"
-                    onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                    className="soleria-input py-2 px-3 w-full text-xs font-semibold bg-white border border-slate-300 rounded-lg text-slate-800 flex items-center justify-between shadow-xs hover:border-slate-400"
-                  >
-                    <span className="truncate">
-                      {selectedGroup === 'all'
-                        ? 'Jump to Account (All Accounts)...'
-                        : `Jump to Account in ${selectedGroup === 'customer' ? 'Customers' : selectedGroup === 'subcustomer' ? 'Sub-Customers' : selectedGroup === 'vendor' ? 'Vendors' : selectedGroup === 'employee' ? 'Employees' : selectedGroup === 'chart_account' ? 'Chart Accounts' : 'Business Accounts'}...`}
-                    </span>
-                    <ChevronDown size={14} className="text-slate-500 shrink-0 ml-1" />
-                  </button>
-
-                  {/* Dropdown Popup Menu */}
-                  {isDropdownOpen && (
-                    <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-2 flex flex-col gap-2 max-h-72">
-                      <div className="relative">
-                        <Search className="absolute left-2.5 top-2 text-slate-400" size={14} />
-                        <input
-                          type="text"
-                          placeholder="Type to search sub-accounts..."
-                          value={dropdownSearch}
-                          onChange={e => setDropdownSearch(e.target.value)}
-                          className="w-full text-xs font-semibold pl-8 py-1.5 border border-slate-200 rounded-md outline-none focus:border-amber-500"
-                          autoFocus
-                        />
-                      </div>
-
-                      <div className="overflow-y-auto max-h-56 divide-y divide-slate-100">
-                        {dropdownAccounts.length === 0 ? (
-                          <div className="p-3 text-center text-xs text-slate-400 italic">
-                            No matching accounts in this category.
-                          </div>
-                        ) : (
-                          dropdownAccounts.map(acc => (
-                            <div
-                              key={`${acc.type}-${acc.code}`}
-                              onClick={() => {
-                                setSelectedAccount(acc);
-                                setIsDropdownOpen(false);
-                                setDropdownSearch('');
-                              }}
-                              className="p-2 hover:bg-slate-50 rounded-lg cursor-pointer flex items-center justify-between text-xs transition-colors group"
-                            >
-                              <div className="flex items-center gap-2 truncate">
-                                <span className="font-mono font-bold text-[11px] px-2 py-0.5 rounded-full bg-[#111c2a] text-[#B08D57] shrink-0">
-                                  {acc.code}
-                                </span>
-                                <span className="font-bold text-slate-800 group-hover:text-[#B08D57] truncate">
-                                  {acc.description}
-                                </span>
-                              </div>
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border uppercase shrink-0">
-                                {acc.typeLabel}
-                              </span>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  )}
+                {/* SearchableSelect Account Jump Dropdown */}
+                <div className="min-w-[260px] flex-1 max-w-xs">
+                  <SearchableSelect
+                    options={dropdownAccounts.map(acc => ({
+                      value: `${acc.type}-${acc.code}`,
+                      label: `${acc.code} — ${acc.description} (${acc.typeLabel})`
+                    }))}
+                    value=""
+                    onChange={(val: string) => {
+                      const acc = dropdownAccounts.find(a => `${a.type}-${a.code}` === val);
+                      if (acc) setSelectedAccount(acc);
+                    }}
+                    placeholder="Jump to Account..."
+                    searchPlaceholder="Type to search sub-accounts..."
+                  />
                 </div>
 
                 {/* As On Date Selector */}
-                <div className="flex items-center gap-1.5 bg-slate-50 py-1.5 px-3 rounded-lg border border-slate-200">
-                  <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">As On:</label>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-500 uppercase">As On:</span>
                   <input
                     type="date"
                     value={asOfDate}
                     onChange={e => setAsOfDate(e.target.value)}
-                    className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                    className="soleria-input py-1.5 px-3 text-xs font-semibold"
                   />
                 </div>
               </div>
@@ -612,19 +552,17 @@ export default function OverallTrailContent() {
               </div>
             </div>
 
-            {/* ROW 2: Category Filter Tabs */}
-            <div className="flex flex-wrap items-center gap-1.5 border-t pt-3" style={{ borderColor: 'var(--border-color)' }}>
-              <span className="text-xs font-bold text-slate-500 mr-1 flex items-center gap-1">
-                <Filter size={13} /> Category:
+            {/* ROW 2: Category Filter Pills */}
+            <div className="flex flex-wrap items-center gap-1.5 border-t pt-3 mt-3 border-slate-100">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider mr-1 flex items-center gap-1">
+                <Filter size={13} /> Quick Filter:
               </span>
               {(['all', 'customer', 'subcustomer', 'vendor', 'employee', 'chart_account', 'business_account'] as const).map(grp => (
                 <button
                   key={grp}
-                  onClick={() => {
-                    setSelectedGroup(grp);
-                    setDropdownSearch('');
-                  }}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                  type="button"
+                  onClick={() => setSelectedGroup(grp)}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
                     selectedGroup === grp
                       ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold'
                       : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
@@ -777,13 +715,13 @@ export default function OverallTrailContent() {
         </div>
       ) : (
         /* VIEW 2: Drill-down Specific Account Ledger */
-        <div>
+        <div className={`transition-all duration-200 ${isClosing ? 'opacity-0 translate-y-2 scale-98' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
           {/* Header & Back Button */}
           <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
             <div className="flex items-center gap-3">
               <button
-                onClick={() => setSelectedAccount(null)}
-                className="p-2 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 transition-all flex items-center gap-1 text-xs font-semibold shadow-sm"
+                onClick={handleCloseDetail}
+                className="bg-amber-50/80 hover:bg-amber-100/90 text-amber-900 border border-amber-200/80 rounded-xl px-4 py-2 text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5"
               >
                 <ArrowLeft size={16} /> Back to Overall Trail Balances
               </button>

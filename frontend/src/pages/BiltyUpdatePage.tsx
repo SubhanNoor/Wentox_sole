@@ -4,6 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import type { SaleBill } from '@/types';
 import { Search, Edit2, RefreshCw, Printer, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import SearchableSelect from '@/components/SearchableSelect';
 
 export default function BiltyUpdatePage() {
   const { state, dispatch } = useApp();
@@ -194,20 +195,19 @@ export default function BiltyUpdatePage() {
                 <label className="block text-xs font-semibold text-slate-600 mb-1">
                   Transport Adda
                 </label>
-                <select
+                <SearchableSelect
+                  options={[
+                    { value: '', label: 'Select Adda...' },
+                    ...state.addas.map(ad => ({ value: ad.id, label: ad.name }))
+                  ]}
                   value={updateAddaId}
-                  onChange={e => setUpdateAddaId(e.target.value)}
-                  className="soleria-input cursor-pointer"
-                >
-                  <option value="">Select Adda...</option>
-                  {state.addas.map(ad => (
-                    <option key={ad.id} value={ad.id}>{ad.name}</option>
-                  ))}
-                </select>
+                  onChange={setUpdateAddaId}
+                  placeholder="Select Adda..."
+                />
               </div>
               <button
                 type="submit"
-                className="btn-gold w-full mt-2"
+                className="btn-gold w-full mt-2 cursor-pointer"
                 disabled={!selectedBillId}
               >
                 Update Bilty &amp; Adda
@@ -245,39 +245,53 @@ export default function BiltyUpdatePage() {
             </div>
 
             {/* Radio Sorting / Filters Options */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t" style={{ borderColor: 'var(--border-table)' }}>
               <div>
-                <span className="block text-[11px] font-semibold text-slate-500 mb-2 uppercase tracking-wide">Bilty Status</span>
-                <div className="flex flex-wrap gap-4 text-xs font-medium">
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input type="radio" checked={biltyStatusFilter === 'all'} onChange={() => setBiltyStatusFilter('all')} className="accent-slate-800" />
-                    All Invoices
-                  </label>
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input type="radio" checked={biltyStatusFilter === 'no-bilty'} onChange={() => setBiltyStatusFilter('no-bilty')} className="accent-slate-800" />
-                    Without Bilty
-                  </label>
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input type="radio" checked={biltyStatusFilter === 'no-adda'} onChange={() => setBiltyStatusFilter('no-adda')} className="accent-slate-800" />
-                    Without Adda
-                  </label>
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input type="radio" checked={biltyStatusFilter === 'has-bilty'} onChange={() => setBiltyStatusFilter('has-bilty')} className="accent-slate-800" />
-                    With Bilty
-                  </label>
+                <span className="block text-[11px] font-semibold text-slate-500 mb-2 uppercase tracking-wide">BILTY STATUS</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  {[
+                    { id: 'all', label: 'All Invoices' },
+                    { id: 'no-bilty', label: 'Without Bilty' },
+                    { id: 'no-adda', label: 'Without Adda' },
+                    { id: 'has-bilty', label: 'With Bilty' },
+                  ].map(opt => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setBiltyStatusFilter(opt.id as any)}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold cursor-pointer transition-all select-none ${
+                        biltyStatusFilter === opt.id
+                          ? 'bg-[#111c2a] text-white border-[#111c2a] shadow-sm font-bold'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className="w-2 h-2 rounded-full flex-shrink-0 bg-slate-300" />
+                      {opt.label}
+                    </button>
+                  ))}
                 </div>
               </div>
               <div>
-                <span className="block text-[11px] font-semibold text-slate-500 mb-2 uppercase tracking-wide">Sort Results By</span>
-                <div className="flex gap-4 text-xs font-medium">
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input type="radio" checked={sortBy === 'inv-no'} onChange={() => setSortBy('inv-no')} className="accent-slate-800" />
-                    Invoice No.
-                  </label>
-                  <label className="flex items-center gap-1.5 cursor-pointer">
-                    <input type="radio" checked={sortBy === 'bill-no'} onChange={() => setSortBy('bill-no')} className="accent-slate-800" />
-                    Manual Bill No.
-                  </label>
+                <span className="block text-[11px] font-semibold text-slate-500 mb-2 uppercase tracking-wide">SORT RESULTS BY</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  {[
+                    { id: 'inv-no', label: 'Invoice No.' },
+                    { id: 'bill-no', label: 'Manual Bill No.' },
+                  ].map(opt => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setSortBy(opt.id as any)}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold cursor-pointer transition-all select-none ${
+                        sortBy === opt.id
+                          ? 'bg-[#111c2a] text-white border-[#111c2a] shadow-sm font-bold'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className="w-2 h-2 rounded-full flex-shrink-0 bg-slate-300" />
+                      {opt.label}
+                    </button>
+                  ))}
                 </div>
               </div>
             </div>
@@ -291,13 +305,13 @@ export default function BiltyUpdatePage() {
             Found {filteredInvoices.length} invoices matching filters
           </span>
           <div className="flex items-center gap-2">
-            <button onClick={handlePrint} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
+            <button onClick={handlePrint} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer">
               <Printer size={14} /> Print Report
             </button>
-            <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
+            <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer">
               <FileDown size={14} /> Export PDF
             </button>
-            <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
+            <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer">
               <FileSpreadsheet size={14} /> Export Excel
             </button>
           </div>
@@ -364,9 +378,10 @@ export default function BiltyUpdatePage() {
                       <td className="p-3 text-center" data-no-print>
                         <button
                           onClick={() => handleSelectBill(bill)}
-                          className="text-blue-600 hover:text-blue-800 p-1 flex items-center gap-1 mx-auto text-xs font-semibold"
+                          title="Select Invoice"
+                          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer mx-auto"
                         >
-                          <Edit2 size={12} /> Select
+                          <Edit2 size={15} />
                         </button>
                       </td>
                     </tr>

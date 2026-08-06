@@ -1,7 +1,7 @@
-import { Fragment, useState, useMemo } from 'react';
+import { Fragment, useState, useMemo, useRef, useEffect } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import { getUnallocatedBalance, todayISO } from '@/lib/cheques';
-import { Printer, FileDown, FileSpreadsheet, Search, AlertTriangle } from 'lucide-react';
+import { Printer, FileDown, FileSpreadsheet, Search, AlertTriangle, ChevronDown, Check } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
 import { filterBusinessAccountsForRole, maskedBusinessAccountName } from '@/lib/access';
@@ -28,6 +28,34 @@ export default function ChequesTab() {
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | ChequeStatus>('open');
+  const [isStatusDropdownOpen, setIsStatusDropdownOpen] = useState(false);
+  const statusDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (statusDropdownRef.current && !statusDropdownRef.current.contains(e.target as Node)) {
+        setIsStatusDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const statusOptionsList: { value: 'all' | 'open' | ChequeStatus; label: string }[] = [
+    { value: 'open', label: 'Open (Pending / Partial)' },
+    { value: 'all', label: 'All cheques' },
+    { value: 'PENDING', label: 'Pending' },
+    { value: 'PARTIALLY_ENDORSED', label: 'Partially Endorsed' },
+    { value: 'ENDORSED', label: 'Endorsed' },
+    { value: 'DEPOSITED', label: 'Deposited' },
+    { value: 'CLEARED', label: 'Cleared' },
+    { value: 'BOUNCED', label: 'Bounced' },
+    { value: 'RETURNED', label: 'Returned to Sender' },
+  ];
+
+  const selectedStatusLabel = useMemo(() => {
+    return statusOptionsList.find(o => o.value === statusFilter)?.label || 'Open (Pending / Partial)';
+  }, [statusFilter]);
 
   // Dispose dialog state
   const [disposingId, setDisposingId] = useState<string | null>(null);
@@ -261,21 +289,42 @@ export default function ChequesTab() {
           </div>
           <div>
             <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Status:</span>
-            <select
-              value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value as typeof statusFilter)}
-              className="soleria-input py-1.5 cursor-pointer text-xs min-w-[170px]"
-            >
-              <option value="open">Open (Pending / Partial)</option>
-              <option value="all">All cheques</option>
-              <option value="PENDING">Pending</option>
-              <option value="PARTIALLY_ENDORSED">Partially Endorsed</option>
-              <option value="ENDORSED">Endorsed</option>
-              <option value="DEPOSITED">Deposited</option>
-              <option value="CLEARED">Cleared</option>
-              <option value="BOUNCED">Bounced</option>
-              <option value="RETURNED">Returned to Sender</option>
-            </select>
+            <div className="relative min-w-[210px]" ref={statusDropdownRef}>
+              <button
+                type="button"
+                onClick={() => setIsStatusDropdownOpen(!isStatusDropdownOpen)}
+                className="flex items-center justify-between w-full px-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-xs font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs"
+              >
+                <span className="truncate text-slate-800 font-semibold">{selectedStatusLabel}</span>
+                <ChevronDown className={`text-slate-400 transition-transform duration-200 ${isStatusDropdownOpen ? 'rotate-180 text-[var(--brand-gold)]' : ''}`} size={15} />
+              </button>
+
+              {isStatusDropdownOpen && (
+                <div
+                  className="absolute left-0 w-56 top-[calc(100%+6px)] z-50 py-1.5 bg-white border border-slate-200/90 rounded-xl shadow-xl max-h-60 overflow-y-auto scrollbar-thin"
+                  style={{ boxShadow: '0 14px 34px rgba(27,42,65,0.14)' }}
+                >
+                  {statusOptionsList.map(opt => {
+                    const isSelected = statusFilter === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => { setStatusFilter(opt.value); setIsStatusDropdownOpen(false); }}
+                        className={`w-full text-left px-3.5 py-2 text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
+                          isSelected
+                            ? 'bg-[var(--brand-gold)] text-white font-semibold'
+                            : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'
+                        }`}
+                      >
+                        <span>{opt.label}</span>
+                        {isSelected && <Check size={14} className="text-white" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2">

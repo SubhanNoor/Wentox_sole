@@ -34,6 +34,15 @@ export default function OverallSearchPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [entityFilter, setEntityFilter] = useState<'all' | EntityType>('all');
   const [selectedPerson, setSelectedPerson] = useState<PersonEntity | null>(null);
+  const [isClosing, setIsClosing] = useState(false);
+
+  const handleCloseDetail = () => {
+    setIsClosing(true);
+    setTimeout(() => {
+      setSelectedPerson(null);
+      setIsClosing(false);
+    }, 200);
+  };
 
   const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(getTodayDate());
@@ -412,7 +421,7 @@ export default function OverallSearchPage() {
 
   return (
     <AppLayout pageTitle="Overall Searching & Person Ledger">
-      <div className="mx-auto" style={{ maxWidth: 1150 }}>
+      <div className="mx-auto" style={{ maxWidth: 1400 }}>
         
         {/* VIEW 1: Directory & Person Search */}
         {!selectedPerson ? (
@@ -426,30 +435,32 @@ export default function OverallSearchPage() {
             </div>
 
             {/* Filter & Search Bar */}
-            <div className="p-3 rounded-lg border mb-6 bg-white shadow-sm flex flex-wrap items-center justify-between gap-3" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-0">
-                <div className="relative min-w-[240px] max-w-sm flex-1">
-                  <Search className="absolute left-3 top-2 text-slate-400" size={16} />
+            <div className="p-4 rounded-xl border mb-6 bg-white shadow-2xs flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }}>
+              <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
+                <div className="relative min-w-[260px] max-w-md flex-1">
+                  <Search className="absolute left-3.5 top-2.5 text-slate-400" size={16} />
                   <input
                     type="text"
                     placeholder="Search by name, code, city, or phone..."
                     value={searchQuery}
                     onChange={e => setSearchQuery(e.target.value)}
-                    className="soleria-input pl-9 py-1.5 w-full text-xs font-semibold"
+                    className="soleria-input pl-10 py-2 w-full text-sm font-semibold"
                   />
                 </div>
 
-                <div className="flex flex-wrap items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-2">
                   {(['all', 'customer', 'vendor', 'employee', 'subcustomer', 'account'] as const).map(tab => (
                     <button
                       key={tab}
+                      type="button"
                       onClick={() => setEntityFilter(tab)}
-                      className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
+                      className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs font-semibold cursor-pointer transition-all select-none ${
                         entityFilter === tab
-                          ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                          : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
+                          ? 'bg-[#111c2a] text-white border-[#111c2a] shadow-sm font-bold'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                       }`}
                     >
+                      <span className="w-2 h-2 rounded-full flex-shrink-0 bg-slate-300" />
                       {tab === 'all' ? 'All Entities' : tab === 'customer' ? 'Customers' : tab === 'vendor' ? 'Vendors' : tab === 'employee' ? 'Employees' : tab === 'subcustomer' ? 'Sub-Customers' : 'Accounts'}
                     </button>
                   ))}
@@ -465,7 +476,7 @@ export default function OverallSearchPage() {
                 <p className="text-xs text-slate-400 mt-1">Try typing a different name or clearing your filter criteria.</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {filteredPeople.map(person => {
                   const initialLetter = person.name.trim().charAt(0).toUpperCase();
 
@@ -473,13 +484,12 @@ export default function OverallSearchPage() {
                     <div
                       key={`${person.type}-${person.id}`}
                       onClick={() => setSelectedPerson(person)}
-                      className="bg-white border rounded-xl p-4 hover:border-amber-500 hover:-translate-y-1 hover:shadow-md transition-all duration-200 flex flex-col justify-between group cursor-pointer"
-                      style={{ borderColor: 'var(--border-color)' }}
+                      className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
                     >
                       <div>
                         {/* Top: Code badge & Type badge */}
-                        <div className="flex items-center justify-between mb-3">
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border uppercase tracking-wider">
+                        <div className="flex items-center justify-between mb-3.5">
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
                             ID: {person.id}
                           </span>
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase tracking-wider flex items-center gap-1 ${getTypeBadgeStyle(person.type)}`}>
@@ -489,15 +499,15 @@ export default function OverallSearchPage() {
                         </div>
 
                         {/* Middle: Avatar + Name */}
-                        <div className="flex items-start gap-3 mb-3">
-                          <div className="w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm bg-slate-100 text-slate-700 group-hover:bg-[#111c2a] group-hover:text-[#B08D57] transition-colors duration-200 flex-shrink-0">
+                        <div className="flex items-start gap-3 mb-4">
+                          <div className="w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm bg-slate-50 text-slate-600 group-hover:bg-[#111c2a] group-hover:text-[#B08D57] transition-all duration-300 flex-shrink-0">
                             {initialLetter}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-slate-900 group-hover:text-amber-800 transition-colors leading-tight text-sm truncate">
+                            <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors leading-tight truncate">
                               {person.name}
                             </h4>
-                            <p className="text-[11px] text-slate-500 font-medium mt-0.5 truncate">
+                            <p className="font-mono text-xs text-slate-400 mt-0.5 truncate">
                               {person.subtitle}
                             </p>
                           </div>
@@ -505,11 +515,9 @@ export default function OverallSearchPage() {
                       </div>
 
                       {/* Card Bottom: Action */}
-                      <div className="border-t pt-2.5 mt-2 flex items-center justify-between">
-                        <span className="text-[11px] text-slate-400 font-semibold uppercase">Financial Ledger</span>
-                        <span className="text-xs font-bold text-[#B08D57] group-hover:underline flex items-center gap-1">
-                          View Ledger &rarr;
-                        </span>
+                      <div className="border-t pt-3 mt-1 flex items-center justify-between text-xs font-semibold text-slate-400 group-hover:text-[var(--brand-navy)] transition-colors">
+                        <span>Financial Ledger</span>
+                        <span className="text-sm font-bold group-hover:translate-x-1 transition-transform">&rarr;</span>
                       </div>
                     </div>
                   );
@@ -519,13 +527,13 @@ export default function OverallSearchPage() {
           </div>
         ) : (
           /* VIEW 2: Selected Person Detailed Financial Ledger */
-          <div>
+          <div className={`transition-all duration-200 ${isClosing ? 'opacity-0 translate-y-2 scale-98' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
             {/* Top Navigation Back Arrow & Title Bar */}
             <div className="flex flex-wrap items-center justify-between gap-4 mb-6" data-no-print>
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => setSelectedPerson(null)}
-                  className="p-2 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 transition-all flex items-center gap-1 text-xs font-semibold shadow-sm"
+                  onClick={handleCloseDetail}
+                  className="bg-amber-50/80 hover:bg-amber-100/90 text-amber-900 border border-amber-200/80 rounded-xl px-4 py-2 text-sm font-semibold transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs hover:shadow-xs"
                 >
                   <ArrowLeft size={16} /> Back to Search
                 </button>
@@ -542,20 +550,20 @@ export default function OverallSearchPage() {
 
               {/* Action Buttons */}
               <div className="flex items-center gap-2">
-                <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold">
+                <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer">
                   <Printer size={14} /> Print Ledger
                 </button>
-                <button onClick={() => exportToPDF()} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold">
+                <button onClick={() => exportToPDF()} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer">
                   <FileDown size={14} /> Export PDF
                 </button>
-                <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold">
+                <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer">
                   <FileSpreadsheet size={14} /> Export Excel
                 </button>
               </div>
             </div>
 
             {/* Date Filters Card */}
-            <div className="p-3 rounded-lg border mb-6 bg-white shadow-sm flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+            <div className="p-4 rounded-xl border mb-6 bg-white shadow-2xs flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }} data-no-print>
               <div className="flex flex-wrap items-center gap-4">
                 <div className="flex items-center gap-2">
                   <label className="text-xs font-semibold text-slate-500 uppercase">From Date:</label>
@@ -578,9 +586,9 @@ export default function OverallSearchPage() {
               </div>
 
               {/* Net Balance Status Pill */}
-              <div className="px-3.5 py-1.5 bg-slate-900 text-white rounded-lg flex items-center gap-2 text-xs font-semibold">
+              <div className="px-3.5 py-1.5 bg-slate-900 text-white rounded-xl flex items-center gap-2 text-xs font-semibold">
                 <span className="text-slate-400">Net Ending Balance:</span>
-                <span className="text-[#B08D57] font-bold">{formatCurrency(endingBalance)}</span>
+                <span className="text-[var(--brand-gold)] font-bold font-mono text-sm">{formatCurrency(endingBalance)}</span>
               </div>
             </div>
 

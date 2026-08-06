@@ -107,12 +107,12 @@ export default function SearchableSelect({
         type="button"
         disabled={disabled}
         onClick={toggle}
-        className="w-full flex items-center justify-between soleria-input bg-white disabled:bg-slate-100 disabled:text-slate-500 cursor-pointer disabled:cursor-not-allowed min-h-[38px] px-3 text-left font-medium"
+        className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
       >
-        <span className={selectedOption ? 'text-slate-800' : 'text-slate-400'}>
+        <span className={selectedOption ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
           {selectedOption ? selectedOption.label : placeholder}
         </span>
-        <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+        <ChevronDown size={16} className={`text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180 text-[var(--brand-gold)]' : ''}`} />
       </button>
 
       {isOpen && pos && createPortal(
@@ -155,15 +155,15 @@ export default function SearchableSelect({
                       onChange(opt.value);
                       setIsOpen(false);
                     }}
-                    className={`w-full text-left px-3 py-2 text-xs font-semibold transition-colors flex items-center justify-between ${
+                    className={`w-full text-left px-3.5 py-2 text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
                       isSelected
-                        ? 'bg-[#111c2a] text-[#B08D57]'
-                        : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900'
+                        ? 'bg-[var(--brand-gold)] text-white font-semibold'
+                        : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'
                     }`}
                   >
                     <span>{opt.label}</span>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
-                      isSelected ? 'bg-slate-800 text-[#B08D57]' : 'bg-slate-100 text-slate-500'
+                      isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
                     }`}>
                       {opt.value}
                     </span>

@@ -20,6 +20,16 @@ export default function SalaryRunPage() {
   const { state, dispatch } = useApp();
 
   const [tab, setTab] = useState<'entry' | 'history'>('entry');
+  const [tabAnimating, setTabAnimating] = useState(false);
+
+  const switchTab = (next: 'entry' | 'history') => {
+    if (next === tab) return;
+    setTabAnimating(true);
+    setTimeout(() => {
+      setTab(next);
+      setTabAnimating(false);
+    }, 180);
+  };
   const [editingRunId, setEditingRunId] = useState<string | null>(null);
   const [periodMonth, setPeriodMonth] = useState(thisMonth());
 
@@ -146,7 +156,7 @@ export default function SalaryRunPage() {
     setPeriodMonth(run.periodMonth);
     setEditingItems(run.items.map(i => ({ ...i })));
     setOverrides({});
-    setTab('entry');
+    switchTab('entry');
   };
 
   const unpost = (run: SalaryRun) => {
@@ -171,7 +181,7 @@ export default function SalaryRunPage() {
 
   return (
     <AppLayout pageTitle="Salary Run (Monthly)">
-      <div className="mx-auto" style={{ maxWidth: 1100 }}>
+      <div className="mx-auto" style={{ maxWidth: 768 }}>
 
         {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>}
         {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>}
@@ -179,13 +189,13 @@ export default function SalaryRunPage() {
         <div className="flex justify-between items-center mb-6">
           <div className="flex gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
             <button
-              onClick={() => setTab('entry')}
+              onClick={() => switchTab('entry')}
               className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <BadgeDollarSign size={15} /> {editingRunId ? 'Editing Run' : 'New Salary Run'}
             </button>
             <button
-              onClick={() => setTab('history')}
+              onClick={() => switchTab('history')}
               className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'history' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <History size={15} /> History ({state.salaryRuns.length})
@@ -199,7 +209,7 @@ export default function SalaryRunPage() {
         </div>
 
         {tab === 'entry' ? (
-          <div className="card-white p-6 md:p-8 bg-white border" style={{ borderColor: 'var(--border-color)' }}>
+          <div className={`card-white p-8 md:p-10 bg-white border min-h-[480px] transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`} style={{ borderColor: 'var(--border-color)' }}>
 
             <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
               <div>
@@ -229,7 +239,7 @@ export default function SalaryRunPage() {
                   <strong>{monthLabel(periodMonth)} has already been posted</strong> —{' '}
                   {formatCurrency(existingPosted.totalAmount)} across {existingPosted.items.length} employee(s).
                   <button
-                    onClick={() => { setTab('history'); }}
+                    onClick={() => { switchTab('history'); }}
                     className="ml-2 underline font-semibold hover:text-amber-900"
                   >
                     Open it in History
@@ -335,7 +345,7 @@ export default function SalaryRunPage() {
           </div>
         ) : (
           /* History */
-          <div className="card-white p-6 md:p-8 bg-white border" style={{ borderColor: 'var(--border-color)' }}>
+          <div className={`card-white p-6 md:p-8 bg-white border transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`} style={{ borderColor: 'var(--border-color)' }}>
             <h3 className="font-lora font-semibold text-lg text-slate-800 mb-1">Salary Runs</h3>
             <p className="text-xs text-slate-500 mb-6">
               One posted run per month. Only posted runs count toward a balance.

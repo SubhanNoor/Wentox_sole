@@ -6,8 +6,8 @@ import { SaleReportContent } from '@/pages/SaleReportPage';
 import { VendorReportContent } from '@/pages/VendorReportPage';
 import { PaymentTrailContent } from '@/pages/PaymentTrailPage';
 import { ReportKhaataContent } from '@/pages/ReportKhaataPage';
-import { ReportCashBookContent } from '@/pages/ReportCashBookPage';
 import BusinessLedgerContent from '@/pages/BusinessLedgerContent';
+import { ReportCashBookContent } from '@/pages/ReportCashBookPage';
 import ProductLedgerContent from '@/pages/ProductLedgerContent';
 import OverallTrailContent from '@/pages/OverallTrailContent';
 
@@ -34,6 +34,17 @@ export default function ReportsHubPage() {
     return (state.currentTab as ReportTab) || 'sale-analysis';
   });
 
+  const [tabAnimating, setTabAnimating] = useState(false);
+
+  const switchTab = (next: ReportTab) => {
+    if (next === activeTab) return;
+    setTabAnimating(true);
+    setTimeout(() => {
+      setActiveTab(next);
+      setTabAnimating(false);
+    }, 180);
+  };
+
   useEffect(() => {
     if (state.currentTab && TABS.some(t => t.key === state.currentTab)) {
       setActiveTab(state.currentTab as ReportTab);
@@ -54,7 +65,7 @@ export default function ReportsHubPage() {
               onDragStart={(e) => {
                 e.dataTransfer.setData('text/plain', JSON.stringify({ page: 'reports', tab: tab.key, label: tab.label }));
               }}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => switchTab(tab.key)}
               title="Drag tab to Quick Access Menu Bar to pin"
               className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
                 activeTab === tab.key
@@ -67,15 +78,17 @@ export default function ReportsHubPage() {
           ))}
         </div>
 
-        {activeTab === 'sale-analysis' && <SaleAnalysisContent />}
-        {activeTab === 'sale-report' && <SaleReportContent />}
-        {activeTab === 'vendor' && <VendorReportContent />}
-        {activeTab === 'payment-trail' && <PaymentTrailContent />}
-        {activeTab === 'account-ledger' && <ReportKhaataContent />}
-        {activeTab === 'business-ledger' && <BusinessLedgerContent />}
-        {activeTab === 'cash-book' && <ReportCashBookContent />}
-        {activeTab === 'product-ledger' && <ProductLedgerContent />}
-        {activeTab === 'overall-trail' && <OverallTrailContent />}
+        <div className={`transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
+          {activeTab === 'sale-analysis' && <SaleAnalysisContent />}
+          {activeTab === 'sale-report' && <SaleReportContent />}
+          {activeTab === 'vendor' && <VendorReportContent />}
+          {activeTab === 'payment-trail' && <PaymentTrailContent />}
+          {activeTab === 'account-ledger' && <ReportKhaataContent />}
+          {activeTab === 'business-ledger' && <BusinessLedgerContent />}
+          {activeTab === 'cash-book' && <ReportCashBookContent />}
+          {activeTab === 'product-ledger' && <ProductLedgerContent />}
+          {activeTab === 'overall-trail' && <OverallTrailContent />}
+        </div>
       </div>
     </AppLayout>
   );

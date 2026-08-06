@@ -1,18 +1,17 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Trash2, X, Globe, ArrowRight } from 'lucide-react';
 import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
 import type { Region } from '@/types';
 
 export default function RegionSetupPage() {
   const { state, dispatch } = useApp();
 
-  // Tab State: 'list' | 'form'
-  const [activeTab, setActiveTab] = useState<'list' | 'form'>('list');
   const [regionSearch, setRegionSearch] = useState('');
 
-  // Editing state
+  // Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
 
   // Duplicate Check Modal state
@@ -24,18 +23,25 @@ export default function RegionSetupPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const handleAddNew = () => {
+  const handleOpenAddModal = () => {
     setSelectedRegionId(null);
     setRegionName('');
     setErrorMsg('');
-    setActiveTab('form');
+    setIsModalOpen(true);
   };
 
-  const handleSelectRegion = (region: { id: string; name: string }) => {
+  const handleOpenEditModal = (region: { id: string; name: string }) => {
     setSelectedRegionId(region.id);
     setRegionName(region.name);
     setErrorMsg('');
-    setActiveTab('form');
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedRegionId(null);
+    setRegionName('');
+    setErrorMsg('');
   };
 
   const handleSaveRegion = (e: React.FormEvent) => {
@@ -46,14 +52,12 @@ export default function RegionSetupPage() {
     }
 
     if (selectedRegionId) {
-      // Edit mode
       dispatch({
         type: 'UPDATE_REGION',
         region: { id: selectedRegionId, name: typed }
       });
       setSuccessMsg('Region details updated successfully.');
     } else {
-      // Add mode - duplicate check
       const match = state.regions.find(r => r.name.toLowerCase() === typed.toLowerCase());
       if (match) {
         if (match.isActive !== false) {
@@ -74,10 +78,7 @@ export default function RegionSetupPage() {
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
-    setRegionName('');
-    setSelectedRegionId(null);
-    setErrorMsg('');
-    setActiveTab('list');
+    handleCloseModal();
   };
 
   const handleActivateDuplicate = (id: string) => {
@@ -92,10 +93,7 @@ export default function RegionSetupPage() {
     }
     setIsDupModalOpen(false);
     setDupMatch(null);
-    setRegionName('');
-    setSelectedRegionId(null);
-    setErrorMsg('');
-    setActiveTab('list');
+    handleCloseModal();
   };
 
   const handleDeleteRegion = (id: string) => {
@@ -109,8 +107,7 @@ export default function RegionSetupPage() {
       dispatch({ type: 'DELETE_REGION', id });
       setSuccessMsg('Region deleted successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
-      setSelectedRegionId(null);
-      setActiveTab('list');
+      handleCloseModal();
     }
   };
 
@@ -126,7 +123,7 @@ export default function RegionSetupPage() {
 
   return (
     <AppLayout pageTitle="Region Setup">
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto" style={{ maxWidth: 1400 }}>
 
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
@@ -135,181 +132,162 @@ export default function RegionSetupPage() {
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
         )}
 
-        {/* Tab Selection Header */}
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+        {/* Directory Header Card */}
+        <div className="card-white p-6 md:p-8 bg-white border mb-6">
+          <div className="border-b pb-4 mb-5 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
+                <Globe size={20} className="text-[#B08D57]" /> Regions Directory
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">Search and manage regions used for primary customer identification.</p>
+            </div>
+            
             <button
-              onClick={() => {
-                setActiveTab('list');
-                setSelectedRegionId(null);
-              }}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'list' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              Active Regions
-            </button>
-            <button
-              onClick={handleAddNew}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'form' && !selectedRegionId ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              Add New Region
-            </button>
-          </div>
-
-          {activeTab === 'list' && (
-            <button
-              onClick={handleAddNew}
-              className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm"
+              onClick={handleOpenAddModal}
+              className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
             >
               <Plus size={16} /> Create Region
             </button>
-          )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="relative flex-1 max-w-md">
+              <input
+                type="text"
+                placeholder="Search by code, region name..."
+                value={regionSearch}
+                onChange={e => setRegionSearch(e.target.value)}
+                className="soleria-input w-full py-2 text-xs pr-10 font-semibold"
+              />
+              <Search className="absolute right-3.5 top-2.5 text-slate-400" size={14} />
+            </div>
+
+            <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-2 rounded-xl border border-slate-200">
+              Total: {filteredRegions.length} Regions
+            </div>
+          </div>
         </div>
 
-        {/* View 1: Regions Directory List */}
-        {activeTab === 'list' ? (
-          <div className="mb-6">
-            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">Regions Directory</h3>
-                <p className="text-xs text-slate-500 font-medium">Search and manage regions used for primary customer identification (checked before City).</p>
-              </div>
-
-              <div className="relative min-w-[240px]">
-                <input
-                  type="text"
-                  placeholder="Search by code, region name..."
-                  value={regionSearch}
-                  onChange={e => setRegionSearch(e.target.value)}
-                  className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold bg-white"
-                />
-                <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
-              </div>
-            </div>
-
-            {filteredRegions.length === 0 ? (
-              <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
-                No registered regions found matching your search.
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredRegions.map(region => {
-                  const initialLetter = region.name.charAt(0).toUpperCase();
-
-                  return (
-                    <div
-                      key={region.id}
-                      className="bg-white border rounded-xl p-5 hover:border-amber-500 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
-                      style={{ borderColor: 'var(--border-color)' }}
-                      onClick={() => handleSelectRegion(region)}
-                    >
-                      <div>
-                        {/* Card Top: Code & Status badge */}
-                        <div className="flex items-center justify-between mb-3.5">
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
-                            CODE: {region.id}
-                          </span>
-                          <span className="text-[10px] font-bold text-[#B08D57] uppercase tracking-wider">
-                            ACTIVE
-                          </span>
-                        </div>
-
-                        {/* Card Middle: Avatar circle + Name */}
-                        <div className="flex items-start gap-3 mb-4">
-                          <div className="w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm bg-slate-50 text-slate-600 group-hover:bg-[#111c2a] group-hover:text-[#B08D57] transition-all duration-300 flex-shrink-0">
-                            {initialLetter}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
-                              {region.name}
-                            </h4>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Card Bottom: Actions */}
-                      <div className="border-t pt-3 mt-1 flex items-center justify-end gap-3" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => handleSelectRegion(region)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
-                          title="Edit Region"
-                        >
-                          <Edit2 size={15} />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteRegion(region.id)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                          title="Delete Region"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+        {/* Regions Cards Grid (§1 Standard) */}
+        {filteredRegions.length === 0 ? (
+          <div className="card-white p-12 text-center text-slate-400">
+            <Globe size={36} className="mx-auto mb-3 text-slate-300" />
+            <p className="font-semibold text-slate-600">No registered regions found matching your search.</p>
           </div>
         ) : (
-          /* View 2: Add New / Edit Region Form */
-          <div className="card-white p-6 md:p-8 bg-white border">
-            <div className="flex items-center gap-2 border-b pb-3 mb-6">
-              <button
-                onClick={() => {
-                  setActiveTab('list');
-                  setSelectedRegionId(null);
-                }}
-                className="p-1.5 hover:bg-slate-100 rounded text-slate-500 hover:text-slate-800 transition-colors"
-              >
-                <ArrowLeft size={16} />
-              </button>
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-[#111c2a]">
-                  {selectedRegionId ? `Edit Region: ${regionName}` : 'Register New Region'}
-                </h3>
-                <p className="text-xs text-slate-500 font-medium">Specify the name of the active region below.</p>
-              </div>
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredRegions.map(region => {
+              const customerCount = state.customers.filter(c => c.regionId === region.id && c.isActive !== false).length;
 
-            <form onSubmit={handleSaveRegion} className="flex flex-col gap-6">
-              {/* Region Details */}
-              <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-4" style={{ borderColor: 'var(--border-color)' }}>
-                <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
-                  <Settings size={15} className="text-[#B08D57]" /> Region Configuration
-                </div>
-                <div className="flex flex-col gap-3">
+              return (
+                <div
+                  key={region.id}
+                  onClick={() => handleOpenEditModal(region)}
+                  className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
+                >
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Region Name</label>
-                    <input
-                      type="text"
-                      value={regionName}
-                      onChange={e => setRegionName(e.target.value)}
-                      placeholder="e.g. NORTH, SOUTH, LOCAL"
-                      className="soleria-input font-semibold"
-                    />
+                    {/* Header: Title */}
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
+                        {region.name}
+                      </h4>
+                      <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 uppercase tracking-wider flex-shrink-0">
+                        ACTIVE
+                      </span>
+                    </div>
+
+                    {/* Subtitle: Code in mono */}
+                    <div className="font-mono text-xs text-slate-400 mb-3">
+                      Region Code: <span className="font-semibold text-slate-600">#{region.id}</span>
+                    </div>
+
+                    <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5">
+                      Customers Assigned: <span className="font-semibold text-slate-700">{customerCount}</span>
+                    </div>
+                  </div>
+
+                  {/* Footer Bar */}
+                  <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
+                    <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => handleOpenEditModal(region)}
+                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                        title="Edit Region"
+                      >
+                        <Edit2 size={15} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteRegion(region.id)}
+                        className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                        title="Delete Region"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+
+                    <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
+                      Edit Region <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
+                    </span>
                   </div>
                 </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Modal Dialogue Box Pop-up */}
+        {isModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}>
+            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
+                <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
+                  <Settings size={18} className="text-[#B08D57]" />
+                  {selectedRegionId ? 'Edit Region Details' : 'Register New Region'}
+                </h3>
+                <button
+                  onClick={handleCloseModal}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
               </div>
 
-              {/* Form Actions */}
-              <div className="flex gap-3 justify-end border-t pt-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab('list');
-                    setSelectedRegionId(null);
-                  }}
-                  className="btn-outline px-5 py-2"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn-gold px-6 py-2 flex items-center gap-1.5"
-                >
-                  <Save size={16} /> Save Region Details
-                </button>
-              </div>
-            </form>
+              <form onSubmit={handleSaveRegion} className="p-5 flex flex-col gap-4">
+                {errorMsg && (
+                  <div className="banner-error rounded-lg px-3 py-2 text-xs">{errorMsg}</div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                    Region Name <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={regionName}
+                    onChange={e => setRegionName(e.target.value)}
+                    placeholder="e.g. LOCAL, SOUTH, NORTH"
+                    className="soleria-input w-full font-semibold"
+                    autoFocus
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={handleCloseModal}
+                    className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn-gold px-5 py-2 text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Save size={14} /> Save Region
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
 

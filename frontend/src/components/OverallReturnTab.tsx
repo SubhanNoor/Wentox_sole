@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { SaleReturnRow, CustomerRow, SubCustomerRow, CityRow } from '@/lib/api';
-import { Calendar, Search, ArrowRight, ArrowLeft, FileText, Edit2, Printer } from 'lucide-react';
+import { Calendar, Search, ArrowRight, ArrowLeft, FileText, Edit2, Printer, ChevronDown, Check } from 'lucide-react';
 
 interface OverallReturnTabProps {
   onEditReturn: (ret: SaleReturnRow) => void;
@@ -28,13 +28,41 @@ export default function OverallReturnTab({ onEditReturn, onPrintReturn }: Overal
     })();
   }, []);
 
-  // Filters
+  // Filters & Popover Dropdown States
   const [nameQuery, setNameQuery] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState<string>('all'); // Default to all
-  const [selectedYear, setSelectedYear] = useState<string>('all'); // Default to all
+  const [selectedMonth, setSelectedMonth] = useState<string>('all');
+  const [selectedYear, setSelectedYear] = useState<string>('all');
 
-  // Selected customer for viewing details
+  const [isMonthDropdownOpen, setIsMonthDropdownOpen] = useState(false);
+  const [isYearDropdownOpen, setIsYearDropdownOpen] = useState(false);
+
+  const monthDropdownRef = useRef<HTMLDivElement>(null);
+  const yearDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (monthDropdownRef.current && !monthDropdownRef.current.contains(e.target as Node)) {
+        setIsMonthDropdownOpen(false);
+      }
+      if (yearDropdownRef.current && !yearDropdownRef.current.contains(e.target as Node)) {
+        setIsYearDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Selected customer for viewing details & Exit Animation State
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
+  const [isClosing, setIsClosing] = useState(false);
+
+  const handleBack = () => {
+    setIsClosing(true);
+    setTimeout(() => {
+      setSelectedCustomerId(null);
+      setIsClosing(false);
+    }, 200);
+  };
 
   const monthsList = [
     { value: '0', label: 'January' },
@@ -51,48 +79,46 @@ export default function OverallReturnTab({ onEditReturn, onPrintReturn }: Overal
     { value: '11', label: 'December' },
   ];
 
-  // Extract unique years from sale returns for the filter
-  const yearsList = useMemo(() => {
-    const years = new Set<string>();
-    returns.forEach(ret => {
-      if (ret.return_date) {
-        const parts = ret.return_date.split('-');
-        if (parts[0] && parts[0].length === 4) {
-          years.add(parts[0]);
-        }
+  const availableYears = useMemo(() => {
+    const yearsSet = new Set<string>();
+    const currentYr = new Date().getFullYear().toString();
+    yearsSet.add(currentYr);
+
+    returns.forEach(r => {
+      if (r.return_date) {
+        const yr = new Date(r.return_date).getFullYear().toString();
+        if (!isNaN(Number(yr))) yearsSet.add(yr);
       }
     });
-    // Always guarantee current year is in the list
-    years.add(new Date().getFullYear().toString());
-    return Array.from(years).sort((a, b) => b.localeCompare(a));
+
+    return Array.from(yearsSet).sort((a, b) => Number(b) - Number(a));
   }, [returns]);
 
-  // Filtered returns + filter inputs
+  const selectedMonthLabel = useMemo(() => {
+    if (selectedMonth === 'all') return 'All Months';
+    return monthsList.find(m => m.value === selectedMonth)?.label || 'All Months';
+  }, [selectedMonth]);
+
+  const selectedYearLabel = useMemo(() => {
+    if (selectedYear === 'all') return 'All Years';
+    return selectedYear;
+  }, [selectedYear]);
+
+  // Client-side post-filter over the fetched returns
   const overallReturns = useMemo(() => {
     return returns.filter(ret => {
-      let retYear = '';
-      let retMonth = '';
+      const retDate = new Date(ret.return_date);
+      const retMonth = retDate.getMonth().toString();
+      const retYear = retDate.getFullYear().toString();
 
-      if (ret.return_date) {
-        const parts = ret.return_date.split('-');
-        if (parts[0]) retYear = parts[0];
-        if (parts[1]) {
-          const mVal = parseInt(parts[1], 10) - 1;
-          retMonth = mVal.toString();
-        }
-      }
-
-      // 1. Filter by year if selected
       if (selectedYear !== 'all') {
         if (retYear !== selectedYear) return false;
       }
 
-      // 2. Filter by month if selected
       if (selectedMonth !== 'all') {
         if (retMonth !== selectedMonth) return false;
       }
 
-      // 3. Filter by customer name
       if (nameQuery.trim()) {
         const custName = customers.find(c => c.customer_id === ret.customer_id)?.name.toLowerCase() || '';
         if (!custName.includes(nameQuery.toLowerCase())) return false;
@@ -140,157 +166,248 @@ export default function OverallReturnTab({ onEditReturn, onPrintReturn }: Overal
 
   if (selectedCustomerId != null && activeCustomerDetails) {
     return (
-      <div className="card-white p-6 bg-white border border-slate-200 shadow-sm rounded-xl animate-fadeIn">
-        <div className="flex items-center justify-between border-b pb-4 mb-4" style={{ borderColor: 'var(--border-color)' }}>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setSelectedCustomerId(null)}
-              className="w-10 h-10 rounded-full border border-slate-200 hover:bg-slate-50 text-slate-600 flex items-center justify-center transition-all shadow-sm hover:scale-105"
-            >
-              <ArrowLeft size={16} />
-            </button>
-            <div>
-              <h3 className="font-lora font-bold text-lg text-slate-800">
-                Returns for {activeCustomerDetails.customer.name}
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5 font-inter">
-                Overall Summary: {activeCustomerDetails.returns.length} Return Record(s)
-              </p>
+      <div className={`mx-auto px-2 transition-all duration-200 ${
+        isClosing ? 'opacity-0 translate-y-2 scale-98' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'
+      }`} style={{ maxWidth: 1400 }}>
+        <div className="card-white p-6 bg-white border border-slate-200/80 shadow-md rounded-2xl mb-6">
+          <div className="flex items-center justify-between border-b pb-4 mb-4" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleBack}
+                className="w-10 h-10 rounded-full border border-slate-200/80 hover:bg-slate-50 text-slate-600 flex items-center justify-center transition-all shadow-2xs hover:scale-105 cursor-pointer"
+              >
+                <ArrowLeft size={16} />
+              </button>
+              <div>
+                <h3 className="font-lora font-bold text-xl text-slate-900">
+                  Returns for {activeCustomerDetails.customer.name}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5 font-inter">
+                  Overall Summary: {activeCustomerDetails.returns.length} Return Record(s)
+                </p>
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={handleBack}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-50/80 hover:bg-amber-100/90 text-amber-900 border border-amber-200/80 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all shadow-2xs hover:shadow-xs cursor-pointer hover:-translate-x-0.5"
+            >
+              <ArrowLeft size={14} className="text-amber-700" />
+              <span>Back to Customers</span>
+            </button>
           </div>
-          <button
-            onClick={() => setSelectedCustomerId(null)}
-            className="text-xs text-amber-600 hover:text-amber-700 font-semibold uppercase tracking-wider transition-colors"
-          >
-            Back to Customers
-          </button>
-        </div>
 
-        <div className="overflow-hidden rounded-xl border border-slate-200 shadow-sm">
-          <table className="w-full text-left border-collapse text-sm font-inter">
-            <thead>
-              <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500 border-slate-200">
-                <th className="p-3.5 pl-4">Date</th>
-                <th className="p-3.5 text-center">Sys ID</th>
-                <th className="p-3.5 text-center">Return No.</th>
-                <th className="p-3.5">Delivery Agent</th>
-                <th className="p-3.5 text-center">Cartons</th>
-                <th className="p-3.5 text-center">Pairs</th>
-                <th className="p-3.5">Bilty No. / GP No.</th>
-                <th className="p-3.5 text-right pr-4">Total Credit</th>
-                <th className="p-3.5 text-center pr-4" style={{ width: '120px' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 bg-white">
-              {activeCustomerDetails.returns.map(ret => {
-                const subCust = ret.sub_customer_id ? subCustomers.find(sc => sc.sub_customer_id === ret.sub_customer_id) : null;
-                const retCartons = ret.total_cartons;
-                const retPairs = ret.total_pairs;
+          <div className="overflow-hidden rounded-xl border border-slate-200 shadow-sm">
+            <table className="w-full text-left border-collapse text-sm font-inter">
+              <thead>
+                <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500 border-slate-200">
+                  <th className="p-3.5 pl-4">Date</th>
+                  <th className="p-3.5 text-center">Sys ID</th>
+                  <th className="p-3.5 text-center">Return No.</th>
+                  <th className="p-3.5">Delivery Agent</th>
+                  <th className="p-3.5 text-center">Cartons</th>
+                  <th className="p-3.5 text-center">Pairs</th>
+                  <th className="p-3.5">Bilty No. / GP No.</th>
+                  <th className="p-3.5 text-right pr-4">Total Credit</th>
+                  <th className="p-3.5 text-center pr-4" style={{ width: '120px' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {activeCustomerDetails.returns.map(ret => {
+                  const subCust = ret.sub_customer_id ? subCustomers.find(sc => sc.sub_customer_id === ret.sub_customer_id) : null;
+                  const retCartons = ret.total_cartons;
+                  const retPairs = ret.total_pairs;
 
-                return (
-                  <tr key={ret.return_id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="p-3.5 pl-4 font-mono text-slate-600">{ret.return_date.slice(0, 10)}</td>
-                    <td className="p-3.5 text-center">
-                      <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
-                        {ret.return_id}
-                      </span>
-                    </td>
-                    <td className="p-3.5 text-center font-mono font-bold text-slate-800">{ret.bill_no}</td>
-                    <td className="p-3.5 text-slate-600 font-medium">
-                      {subCust ? (
-                        <span className="text-slate-700">{subCust.name}</span>
-                      ) : (
-                        <span className="text-slate-400 italic text-xs">SAME (Direct)</span>
-                      )}
-                    </td>
-                    <td className="p-3.5 text-center font-mono font-semibold text-slate-700">{retCartons}</td>
-                    <td className="p-3.5 text-center font-mono font-semibold text-slate-700">{retPairs}</td>
-                    <td className="p-3.5">
-                      <div className="text-xs">
-                        <span className="font-semibold block text-slate-700">Bilty: {ret.bilty_no || '-'}</span>
-                        <span className="text-slate-400 block">GP: {ret.gp_no || '-'}</span>
-                      </div>
-                    </td>
-                    <td className="p-3.5 text-right font-mono font-bold text-amber-800 pr-4">{formatCurrency(ret.net_value)}</td>
-                    <td className="p-3.5 text-center pr-4">
-                      <div className="flex justify-center items-center gap-3">
+                  return (
+                    <tr key={ret.return_id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="p-3.5 pl-4 font-mono text-slate-600">{ret.return_date.slice(0, 10)}</td>
+                      <td className="p-3.5 text-center">
+                        <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
+                          {ret.return_id}
+                        </span>
+                      </td>
+                      <td className="p-3.5 text-center font-mono font-bold text-slate-800">{ret.bill_no}</td>
+                      <td className="p-3.5 text-slate-600 font-medium">
+                        {subCust ? (
+                          <span className="text-slate-700">{subCust.name}</span>
+                        ) : (
+                          <span className="text-slate-400 italic text-xs">SAME (Direct)</span>
+                        )}
+                      </td>
+                      <td className="p-3.5 text-center font-mono font-semibold text-slate-700">{retCartons}</td>
+                      <td className="p-3.5 text-center font-mono font-semibold text-slate-700">{retPairs}</td>
+                      <td className="p-3.5">
+                        <div className="text-xs">
+                          <span className="font-semibold block text-slate-700">Bilty: {ret.bilty_no || '-'}</span>
+                          <span className="text-slate-400 block">GP: {ret.gp_no || '-'}</span>
+                        </div>
+                      </td>
+                      <td className="p-3.5 text-right font-mono font-bold text-amber-800 pr-4">{formatCurrency(ret.net_value)}</td>
+                      <td className="p-3.5 text-center pr-4">
+                        <div className="flex justify-center items-center gap-2">
                           <button
+                            type="button"
                             onClick={() => onEditReturn(ret)}
                             title="Edit Return"
-                            className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
+                            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
                           >
                             <Edit2 size={15} />
                           </button>
                           <button
+                            type="button"
                             onClick={() => onPrintReturn(ret)}
                             title="Print Return"
-                            className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
+                            className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-500 hover:text-[var(--brand-gold)] transition-colors cursor-pointer"
                           >
                             <Printer size={15} />
                           </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto" style={{ maxWidth: 1200 }}>
+    <div className="mx-auto px-2" style={{ maxWidth: 1400 }}>
       {/* Filter Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }}>
-        <div className="flex flex-wrap items-center gap-3 flex-1">
-          <div className="relative flex-1 min-w-[240px]">
-            <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
-            <input
-              type="text"
-              placeholder="Search by customer name..."
-              value={nameQuery}
-              onChange={e => setNameQuery(e.target.value)}
-              className="soleria-input pl-10 py-2 w-full text-sm"
-            />
-          </div>
-
-          <select
-            value={selectedMonth}
-            onChange={e => setSelectedMonth(e.target.value)}
-            className="soleria-input py-2 cursor-pointer text-sm max-w-[200px]"
-          >
-            <option value="all">All Months</option>
-            {monthsList.map(m => (
-              <option key={m.value} value={m.value}>{m.label}</option>
-            ))}
-          </select>
-
-          <select
-            value={selectedYear}
-            onChange={e => setSelectedYear(e.target.value)}
-            className="soleria-input py-2 cursor-pointer text-sm max-w-[150px]"
-          >
-            <option value="all">All Years</option>
-            {yearsList.map(y => (
-              <option key={y} value={y}>{y}</option>
-            ))}
-          </select>
+      <div className="w-full flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white shadow-2xs" style={{ borderColor: 'var(--border-color)' }}>
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3.5 top-2.5 text-slate-400" size={17} />
+          <input
+            type="text"
+            placeholder="Search by customer name..."
+            value={nameQuery}
+            onChange={e => setNameQuery(e.target.value)}
+            className="soleria-input pl-10 py-2 w-full text-sm font-medium"
+          />
         </div>
 
-        <div className="text-sm font-semibold text-slate-500 font-mono">
-          {overallReturns.length} Return Records
+        <div className="flex items-center gap-3">
+          {/* Custom Popover Dropdown for Month */}
+          <div className="relative min-w-[160px]" ref={monthDropdownRef}>
+            <button
+              type="button"
+              onClick={() => { setIsMonthDropdownOpen(!isMonthDropdownOpen); setIsYearDropdownOpen(false); }}
+              className="flex items-center justify-between w-full pl-10 pr-3 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-xs font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs"
+            >
+              <Calendar className="absolute left-3 top-2.5 text-slate-400" size={15} />
+              <span className="truncate text-slate-800 font-semibold">{selectedMonthLabel}</span>
+              <ChevronDown className={`text-slate-400 transition-transform duration-200 ${isMonthDropdownOpen ? 'rotate-180 text-[var(--brand-gold)]' : ''}`} size={15} />
+            </button>
+
+            {isMonthDropdownOpen && (
+              <div
+                className="absolute right-0 w-44 top-[calc(100%+6px)] z-50 py-1.5 bg-white border border-slate-200/90 rounded-xl shadow-xl max-h-60 overflow-y-auto scrollbar-thin"
+                style={{ boxShadow: '0 14px 34px rgba(27,42,65,0.14)' }}
+              >
+                <button
+                  type="button"
+                  onClick={() => { setSelectedMonth('all'); setIsMonthDropdownOpen(false); }}
+                  className={`w-full text-left px-3 py-1.5 text-xs font-semibold transition-colors flex items-center justify-between cursor-pointer ${
+                    selectedMonth === 'all'
+                      ? 'bg-[var(--brand-gold)] text-white'
+                      : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'
+                  }`}
+                >
+                  <span>All Months</span>
+                  {selectedMonth === 'all' && <Check size={14} className="text-white" />}
+                </button>
+                <div className="my-1 border-t border-slate-100" />
+                {monthsList.map(m => {
+                  const isSelected = selectedMonth === m.value;
+                  return (
+                    <button
+                      key={m.value}
+                      type="button"
+                      onClick={() => { setSelectedMonth(m.value); setIsMonthDropdownOpen(false); }}
+                      className={`w-full text-left px-3 py-1.5 text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
+                        isSelected
+                          ? 'bg-[var(--brand-gold)] text-white font-semibold'
+                          : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'
+                      }`}
+                    >
+                      <span>{m.label}</span>
+                      {isSelected && <Check size={14} className="text-white" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Custom Popover Dropdown for Year */}
+          <div className="relative min-w-[140px]" ref={yearDropdownRef}>
+            <button
+              type="button"
+              onClick={() => { setIsYearDropdownOpen(!isYearDropdownOpen); setIsMonthDropdownOpen(false); }}
+              className="flex items-center justify-between w-full pl-9 pr-3 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-xs font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs"
+            >
+              <Calendar className="absolute left-3 top-2.5 text-slate-400" size={15} />
+              <span className="truncate text-slate-800 font-semibold">{selectedYearLabel}</span>
+              <ChevronDown className={`text-slate-400 transition-transform duration-200 ${isYearDropdownOpen ? 'rotate-180 text-[var(--brand-gold)]' : ''}`} size={15} />
+            </button>
+
+            {isYearDropdownOpen && (
+              <div
+                className="absolute right-0 w-40 top-[calc(100%+6px)] z-50 py-1.5 bg-white border border-slate-200/90 rounded-xl shadow-xl max-h-60 overflow-y-auto scrollbar-thin"
+                style={{ boxShadow: '0 14px 34px rgba(27,42,65,0.14)' }}
+              >
+                <button
+                  type="button"
+                  onClick={() => { setSelectedYear('all'); setIsYearDropdownOpen(false); }}
+                  className={`w-full text-left px-3 py-1.5 text-xs font-semibold transition-colors flex items-center justify-between cursor-pointer ${
+                    selectedYear === 'all'
+                      ? 'bg-[var(--brand-gold)] text-white'
+                      : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'
+                  }`}
+                >
+                  <span>All Years</span>
+                  {selectedYear === 'all' && <Check size={14} className="text-white" />}
+                </button>
+                <div className="my-1 border-t border-slate-100" />
+                {availableYears.map(yr => {
+                  const isSelected = selectedYear === yr;
+                  return (
+                    <button
+                      key={yr}
+                      type="button"
+                      onClick={() => { setSelectedYear(yr); setIsYearDropdownOpen(false); }}
+                      className={`w-full text-left px-3 py-1.5 text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
+                        isSelected
+                          ? 'bg-[var(--brand-gold)] text-white font-semibold'
+                          : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'
+                      }`}
+                    >
+                      <span>{yr}</span>
+                      {isSelected && <Check size={14} className="text-white" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="text-xs font-semibold text-amber-900 bg-amber-50/90 border border-amber-200/70 px-3 py-2 rounded-xl flex items-center gap-1.5 shadow-2xs">
+            <FileText size={14} className="text-amber-600" />
+            <span>{overallReturns.length} Return Records</span>
+          </div>
         </div>
       </div>
 
       {/* Customer Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {customerCardsData.length === 0 ? (
-          <div className="col-span-full card-white p-12 bg-slate-50/50 border text-center flex flex-col items-center justify-center text-slate-400">
+          <div className="col-span-full card-white p-12 bg-slate-50/50 border border-slate-200 rounded-2xl text-center flex flex-col items-center justify-center text-slate-400">
             <Calendar size={48} className="text-slate-300 mb-3" />
-            <p className="font-lora text-lg font-semibold text-slate-500 mb-1">No Records Found</p>
-            <p className="text-sm max-w-sm">No sale returns were recorded matching your search filters.</p>
+            <p className="font-lora text-lg font-bold text-slate-600 mb-1">No Overall Returns Found</p>
+            <p className="text-sm max-w-sm">No sale returns were recorded matching your filters.</p>
           </div>
         ) : (
           customerCardsData.map(data => {
@@ -300,26 +417,30 @@ export default function OverallReturnTab({ onEditReturn, onPrintReturn }: Overal
               <div
                 key={data.customer.customer_id}
                 onClick={() => setSelectedCustomerId(data.customer.customer_id)}
-                className="card-white p-5 bg-white border border-slate-200 cursor-pointer transition-all flex flex-col justify-between hover:shadow-md hover:border-amber-400 hover:ring-1 hover:ring-amber-200 rounded-xl"
+                className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
               >
                 <div>
-                  <div className="flex items-start justify-between mb-1">
-                    <h4 className="font-lora font-bold text-base text-slate-800 line-clamp-1">
-                      {data.customer.name} {city !== 'Local' && `(${city.substring(0,3).toUpperCase()})`}
+                  <div className="flex items-start justify-between gap-2 mb-1.5">
+                    <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors line-clamp-1">
+                      {data.customer.name}
                     </h4>
-                    <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{city}</span>
+                    <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider flex-shrink-0">
+                      {city}
+                    </span>
                   </div>
 
-                  <div className="font-mono text-xs text-slate-400 mb-4">Code: {data.customer.customer_id}</div>
-
+                  <div className="font-mono text-xs text-slate-400 mb-2">
+                    Customer ID: <span className="font-semibold text-slate-600">#{data.customer.customer_id}</span>
+                  </div>
                 </div>
-                <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-4">
-                  <div className="flex items-center gap-1.5 bg-amber-50 text-amber-800 px-2.5 py-1 rounded-full text-xs font-semibold border border-amber-200">
+
+                <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-2">
+                  <div className="flex items-center gap-1.5 bg-amber-50/90 text-amber-900 px-3 py-1 rounded-full text-xs font-semibold border border-amber-200/70">
                     <FileText size={13} className="text-amber-600" />
                     <span>{data.returns.length} {data.returns.length === 1 ? 'Return' : 'Returns'}</span>
                   </div>
-                  <span className="text-amber-600 font-semibold text-xs flex items-center gap-1 hover:text-amber-700 transition-colors">
-                    View Returns <ArrowRight size={14} />
+                  <span className="text-amber-700 font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
+                    View Details <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
                   </span>
                 </div>
               </div>

@@ -1,8 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import type { Expense, ExpenseMode } from '@/types';
-import { Save, Wallet, FileText } from 'lucide-react';
+import { Save, Wallet, FileText, ChevronDown, Check } from 'lucide-react';
 import { getUnallocatedCheque } from '@/lib/cashbank';
 import SearchableSelect from '@/components/SearchableSelect';
 import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
@@ -204,46 +204,42 @@ export default function ExpensesPage() {
   return (
     <AppLayout pageTitle="Expenses / Kharch Entry">
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
-        
+
         {/* Top Tab Navigation */}
         <div className="flex flex-wrap gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           <button
             onClick={() => setActiveTab('entry')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'entry'
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${activeTab === 'entry'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                 : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
+              }`}
           >
             Expense Entry
           </button>
           <button
             onClick={() => setActiveTab('weekly')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'weekly'
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${activeTab === 'weekly'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                 : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
+              }`}
           >
             Weekly Records
           </button>
           <button
             onClick={() => setActiveTab('monthly')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'monthly'
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${activeTab === 'monthly'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                 : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
+              }`}
           >
             Monthly Records
           </button>
           <button
             onClick={() => setActiveTab('overall')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'overall'
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${activeTab === 'overall'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
                 : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
+              }`}
           >
             Overall Records
           </button>
@@ -274,29 +270,56 @@ export default function ExpensesPage() {
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <select
-                    value={selectedDraftId}
-                    onChange={e => {
-                      const draftId = e.target.value;
-                      setSelectedDraftId(draftId);
-                      const selected = drafts.find(d => d.id === draftId);
-                      if (selected) {
-                        loadExpense(selected);
-                      }
-                    }}
-                    className="soleria-input py-1 px-2.5 text-xs bg-white border cursor-pointer font-medium"
-                    style={{ width: '240px' }}
-                  >
-                    <option value="">Select a draft to load...</option>
-                    {drafts.map(d => {
-                      const bizAcName = state.businessAccounts.find(b => b.id === d.businessAccountId)?.name || 'Unnamed Account';
-                      return (
-                        <option key={d.id} value={d.id}>
-                          {bizAcName} - {formatCurrency(d.amount)} ({d.date})
-                        </option>
-                      );
-                    })}
-                  </select>
+                  {/* Custom popover draft picker */}
+                  {(() => {
+                    const [isDraftOpen, setIsDraftOpen] = useState(false);
+                    const draftRef = useRef<HTMLDivElement>(null);
+                    useEffect(() => {
+                      const h = (e: MouseEvent) => {
+                        if (draftRef.current && !draftRef.current.contains(e.target as Node)) setIsDraftOpen(false);
+                      };
+                      document.addEventListener('mousedown', h);
+                      return () => document.removeEventListener('mousedown', h);
+                    }, []);
+                    const selDraft = drafts.find(d => d.id === selectedDraftId);
+                    const selLabel = selDraft
+                      ? (() => { const n = state.businessAccounts.find(b => b.id === selDraft.businessAccountId)?.name || 'Draft'; return `${n} — ${formatCurrency(selDraft.amount)}`; })()
+                      : 'Select a draft...';
+                    return (
+                      <div className="relative min-w-[220px]" ref={draftRef}>
+                        <button
+                          type="button"
+                          onClick={() => setIsDraftOpen(!isDraftOpen)}
+                          className="flex items-center justify-between w-full pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-xs font-medium text-slate-700 transition-all cursor-pointer shadow-2xs"
+                        >
+                          <span className="truncate text-slate-800 font-semibold">{selLabel}</span>
+                          <ChevronDown className={`ml-2 flex-shrink-0 text-slate-400 transition-transform duration-200 ${isDraftOpen ? 'rotate-180 text-[var(--brand-gold)]' : ''}`} size={14} />
+                        </button>
+                        {isDraftOpen && (
+                          <div className="absolute right-0 left-0 top-[calc(100%+6px)] z-50 py-1.5 bg-white border border-slate-200/90 rounded-xl shadow-xl max-h-60 overflow-y-auto" style={{ boxShadow: '0 14px 34px rgba(27,42,65,0.14)' }}>
+                            <button type="button" onClick={() => { setSelectedDraftId(''); setIsDraftOpen(false); }}
+                              className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between cursor-pointer transition-colors ${'all' === selectedDraftId || !selectedDraftId ? 'bg-[var(--brand-gold)] text-white font-semibold' : 'text-slate-600 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'}`}>
+                              <span>Select a draft...</span>
+                              {!selectedDraftId && <Check size={13} className="text-white" />}
+                            </button>
+                            <div className="my-1 border-t border-slate-100" />
+                            {drafts.map(d => {
+                              const bizAcName = state.businessAccounts.find(b => b.id === d.businessAccountId)?.name || 'Unnamed Account';
+                              const isSelected = selectedDraftId === d.id;
+                              return (
+                                <button key={d.id} type="button"
+                                  onClick={() => { setSelectedDraftId(d.id); loadExpense(d); setIsDraftOpen(false); }}
+                                  className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between cursor-pointer transition-colors ${isSelected ? 'bg-[var(--brand-gold)] text-white font-semibold' : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'}`}>
+                                  <span className="truncate">{bizAcName} — {formatCurrency(d.amount)} ({d.date})</span>
+                                  {isSelected && <Check size={13} className="text-white flex-shrink-0" />}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <button
                     type="button"
                     onClick={() => {
@@ -333,7 +356,7 @@ export default function ExpensesPage() {
               <h3 className="font-lora font-semibold text-xl border-b pb-3 mb-5 text-slate-800 flex items-center gap-2">
                 <Wallet size={20} className="text-[#B08D57]" /> Expense / Payment Entry (Kharch)
               </h3>
-              
+
               <form onSubmit={handleSaveExpense} className="flex flex-col gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>

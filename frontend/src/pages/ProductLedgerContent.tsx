@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import SearchableSelect from '@/components/SearchableSelect';
 
 interface ProductLedgerEntry {
   date: string;
@@ -112,26 +113,30 @@ export default function ProductLedgerContent() {
             onChange={e => setSearchQuery(e.target.value)}
             className="soleria-input py-2 text-sm flex-1 min-w-[200px]"
           />
-          <select
-            value={selectedCategory}
-            onChange={e => setSelectedCategory(e.target.value)}
-            className="soleria-input py-2 cursor-pointer text-sm max-w-[200px]"
-          >
-            <option value="all">All Categories</option>
-            {state.categories.map(cat => (
-              <option key={cat.id} value={cat.id}>{cat.name}</option>
-            ))}
-          </select>
-          <select
-            value={vendorFilter}
-            onChange={e => setVendorFilter(e.target.value)}
-            className="soleria-input py-2 cursor-pointer text-sm max-w-[200px]"
-          >
-            <option value="all">All Vendors</option>
-            {state.vendors.map(v => (
-              <option key={v.id} value={v.id}>{v.name}</option>
-            ))}
-          </select>
+          <div className="w-48">
+            <SearchableSelect
+              options={[
+                { value: 'all', label: 'All Categories' },
+                ...state.categories.map(cat => ({ value: cat.id, label: cat.name }))
+              ]}
+              value={selectedCategory}
+              onChange={setSelectedCategory}
+              placeholder="All Categories"
+              searchPlaceholder="Filter category..."
+            />
+          </div>
+          <div className="w-48">
+            <SearchableSelect
+              options={[
+                { value: 'all', label: 'All Vendors' },
+                ...state.vendors.map(v => ({ value: v.id, label: v.name }))
+              ]}
+              value={vendorFilter}
+              onChange={setVendorFilter}
+              placeholder="All Vendors"
+              searchPlaceholder="Filter vendor..."
+            />
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">

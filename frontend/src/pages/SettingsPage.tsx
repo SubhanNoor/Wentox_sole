@@ -2,30 +2,43 @@ import { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
-import { Save, Lock, User } from 'lucide-react';
+import { Save, Lock, User, RefreshCw, Download, CheckCircle2, AlertTriangle, ShieldCheck, Cpu, Sparkles, Server } from 'lucide-react';
+
+type SettingsTab = 'credentials' | 'updates';
+type UpdateStatus = 'idle' | 'checking' | 'no-internet' | 'error' | 'up-to-date' | 'update-available' | 'downloading' | 'installed';
 
 export default function SettingsPage() {
   const { state, dispatch } = useApp();
 
+  const [activeTab, setActiveTab] = useState<SettingsTab>('credentials');
+
+  // Credentials State
   const [currentPassword, setCurrentPassword] = useState('');
   const [username, setUsername] = useState(state.currentUsername || '');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-
-  const [successMsg, setSuccessMsg] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
+  const [credSuccessMsg, setCredSuccessMsg] = useState('');
+  const [credErrorMsg, setCredErrorMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const handleUpdateSettings = async (e: React.FormEvent) => {
+  // Updates State
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
+  const [updateMessage, setUpdateMessage] = useState('');
+  const [updateInfo, setUpdateInfo] = useState<{ currentVersion?: string; latestVersion?: string }>({
+    currentVersion: '1.0.4',
+    latestVersion: '1.0.4'
+  });
+
+  const handleUpdateCredentials = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMsg('');
-    if (!currentPassword.trim()) return setErrorMsg('Enter your current password to confirm this change.');
-    if (!username.trim()) return setErrorMsg('Username cannot be empty.');
-    if (password && password !== confirmPassword) return setErrorMsg('Passwords do not match.');
+    setCredErrorMsg('');
+    if (!currentPassword.trim()) return setCredErrorMsg('Enter your current password to confirm this change.');
+    if (!username.trim()) return setCredErrorMsg('Username cannot be empty.');
+    if (password && password !== confirmPassword) return setCredErrorMsg('Passwords do not match.');
 
     const usernameChanged = username.trim() !== state.currentUsername;
     if (!usernameChanged && !password) {
-      return setErrorMsg('Change the username or enter a new password — nothing to update otherwise.');
+      return setCredErrorMsg('Change the username or enter a new password — nothing to update otherwise.');
     }
 
     setSubmitting(true);
@@ -37,7 +50,7 @@ export default function SettingsPage() {
     setSubmitting(false);
 
     if (!result.ok) {
-      setErrorMsg(result.error.message);
+      setCredErrorMsg(result.error.message);
       return;
     }
 
@@ -48,79 +61,279 @@ export default function SettingsPage() {
     setCurrentPassword('');
     setPassword('');
     setConfirmPassword('');
-    setSuccessMsg('Settings updated successfully.');
-    setTimeout(() => setSuccessMsg(''), 3000);
+    setCredSuccessMsg('Admin credentials updated successfully.');
+    setTimeout(() => setCredSuccessMsg(''), 3000);
+  };
+
+  const handleCheckForUpdates = async () => {
+    setUpdateStatus('checking');
+    setUpdateMessage('');
+
+    if (!window.api?.updates) {
+      // Preview mode in browser
+      setTimeout(() => {
+        setUpdateStatus('up-to-date');
+        setUpdateMessage("You're on the latest release of WentoX (v1.0.4).");
+      }, 1000);
+      return;
+    }
+
+    const res = await window.api.updates.check();
+
+    if (!res.ok) {
+      setUpdateStatus(res.error?.code === 'NO_INTERNET' ? 'no-internet' : 'error');
+      setUpdateMessage(res.error?.message || 'Could not check for updates.');
+      return;
+    }
+
+    const data = res.data!;
+    setUpdateInfo({ currentVersion: data.currentVersion || '1.0.4', latestVersion: data.latestVersion || '1.0.4' });
+    if (data.updateAvailable) {
+      setUpdateStatus('update-available');
+    } else {
+      setUpdateStatus('up-to-date');
+      setUpdateMessage(data.packaged === false ? 'Update checking is enabled for packaged desktop releases.' : "You are running the latest version of WentoX.");
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    setUpdateStatus('downloading');
+    setUpdateMessage('');
+    if (!window.api?.updates) return;
+    const res = await window.api.updates.install();
+    if (!res.ok) {
+      setUpdateStatus('error');
+      setUpdateMessage(res.error?.message || 'Could not install the update.');
+      return;
+    }
+    setUpdateStatus('installed');
+    setUpdateMessage('Update downloaded — WentoX will restart automatically to finish installing.');
+  };
+
+  const declineUpdate = () => {
+    setUpdateStatus('idle');
+    setUpdateMessage('');
   };
 
   return (
-    <AppLayout pageTitle="System Settings">
-      <div className="mx-auto" style={{ maxWidth: 600 }}>
+    <AppLayout pageTitle="Settings">
+      <div className="mx-auto" style={{ maxWidth: 900 }}>
 
-        {successMsg && (
-          <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
-        )}
-        {errorMsg && (
-          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
-        )}
-
-        <div className="card-white p-5 bg-white border">
-          <h3 className="font-lora font-semibold text-lg border-b pb-2 mb-4 text-slate-800 flex items-center gap-2">
-            <Lock size={18} className="text-amber-600" /> Admin Credentials Configuration
-          </h3>
-
-          <form onSubmit={handleUpdateSettings} className="flex flex-col gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
-                <Lock size={12} /> Current Password
-              </label>
-              <input
-                type="password"
-                value={currentPassword}
-                onChange={e => setCurrentPassword(e.target.value)}
-                placeholder="Required to confirm any change"
-                className="soleria-input"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
-                <User size={12} /> Administrator Username
-              </label>
-              <input
-                type="text"
-                value={username}
-                onChange={e => setUsername(e.target.value)}
-                className="soleria-input"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
-                <Lock size={12} /> New Password
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="Leave blank to keep current password"
-                className="soleria-input"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
-                <Lock size={12} /> Confirm New Password
-              </label>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={e => setConfirmPassword(e.target.value)}
-                placeholder="Confirm password..."
-                className="soleria-input"
-              />
-            </div>
-            <button type="submit" className="btn-gold w-full mt-2 flex items-center justify-center gap-1" disabled={submitting}>
-              <Save size={16} /> {submitting ? 'Saving…' : 'Save Admin Settings'}
-            </button>
-          </form>
+        {/* Subpage Pill-Tabs */}
+        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 gap-1 mb-6 self-start max-w-md">
+          <button
+            type="button"
+            onClick={() => setActiveTab('credentials')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${activeTab === 'credentials' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+          >
+            <Lock size={14} /> Profile & Credentials
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('updates')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${activeTab === 'updates' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+          >
+            <RefreshCw size={14} /> Check for Updates
+          </button>
         </div>
+
+        {/* SUBPAGE 1: Profile & Credentials */}
+        {activeTab === 'credentials' && (
+          <div className="animate-in fade-in duration-200">
+            <div className="card-white p-6 md:p-8 bg-white border max-w-xl mx-auto">
+              <div className="border-b pb-4 mb-6">
+                <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
+                  <ShieldCheck size={20} className="text-[#B08D57]" /> Admin Credentials Configuration
+                </h3>
+                <p className="text-xs text-slate-500 font-medium">Update your administrator username and secret access password.</p>
+              </div>
+
+              {credSuccessMsg && (
+                <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{credSuccessMsg}</div>
+              )}
+              {credErrorMsg && (
+                <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{credErrorMsg}</div>
+              )}
+
+              <form onSubmit={handleUpdateCredentials} className="flex flex-col gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
+                    <Lock size={12} className="text-slate-400" /> Current Password <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    value={currentPassword}
+                    onChange={e => setCurrentPassword(e.target.value)}
+                    placeholder="Required to confirm any changes"
+                    className="soleria-input w-full font-semibold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
+                    <User size={12} className="text-slate-400" /> Administrator Username <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={e => setUsername(e.target.value)}
+                    className="soleria-input w-full font-semibold"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
+                      <Lock size={12} className="text-slate-400" /> New Password
+                    </label>
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      placeholder="Leave blank to keep unchanged"
+                      className="soleria-input w-full font-semibold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
+                      <Lock size={12} className="text-slate-400" /> Confirm New Password
+                    </label>
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={e => setConfirmPassword(e.target.value)}
+                      placeholder="Confirm password..."
+                      className="soleria-input w-full font-semibold"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="btn-gold w-full mt-3 py-2.5 flex items-center justify-center gap-1.5 text-xs font-semibold cursor-pointer shadow-2xs hover:shadow-xs"
+                  disabled={submitting}
+                >
+                  <Save size={15} /> {submitting ? 'Saving Credentials…' : 'Save Admin Settings'}
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* SUBPAGE 2: Check for Updates */}
+        {activeTab === 'updates' && (
+          <div className="animate-in fade-in duration-200 flex flex-col gap-6">
+            
+            {/* Version & Status Banner */}
+            <div className="card-white p-6 md:p-8 bg-white border">
+              <div className="flex flex-wrap items-center justify-between gap-4 border-b pb-4 mb-6">
+                <div>
+                  <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
+                    <RefreshCw size={20} className="text-[#B08D57]" /> Software Updates & System Version
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">Verify software integrity, check for online updates, and manage app version releases.</p>
+                </div>
+
+                <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="text-xs font-mono font-bold text-slate-700">v{updateInfo.currentVersion || '1.0.4'} (Stable)</span>
+                </div>
+              </div>
+
+              {/* Status Alert Banners */}
+              {(updateStatus === 'no-internet' || updateStatus === 'error') && (
+                <div className="banner-error rounded-xl px-4 py-3 text-xs mb-5 flex items-center gap-2">
+                  <AlertTriangle size={16} className="shrink-0" /> {updateMessage}
+                </div>
+              )}
+              {(updateStatus === 'up-to-date' || updateStatus === 'installed') && (
+                <div className="banner-success rounded-xl px-4 py-3 text-xs mb-5 flex items-center gap-2">
+                  <CheckCircle2 size={16} className="shrink-0" /> {updateMessage}
+                </div>
+              )}
+
+              {updateStatus === 'update-available' ? (
+                <div className="rounded-xl border border-amber-300 bg-amber-50/70 p-5 mb-5">
+                  <h4 className="font-bold text-sm text-amber-900 mb-1">New Update Available!</h4>
+                  <p className="text-xs text-amber-800 mb-4">
+                    A newer release (v{updateInfo.latestVersion}) is ready to download. Your current build is v{updateInfo.currentVersion}.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={declineUpdate}
+                      className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer"
+                    >
+                      Not Now
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleInstallUpdate}
+                      className="btn-gold flex items-center gap-1.5 px-5 py-2 text-xs font-semibold cursor-pointer"
+                    >
+                      <Download size={14} /> Update Now
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-slate-50 rounded-xl border border-slate-200/80 mb-6">
+                  <div className="text-xs text-slate-600 font-medium">
+                    Last update check: <span className="font-semibold text-slate-800">Today</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleCheckForUpdates}
+                    disabled={updateStatus === 'checking' || updateStatus === 'downloading'}
+                    className="btn-gold flex items-center justify-center gap-2 px-6 py-2.5 text-xs font-semibold disabled:opacity-60 cursor-pointer w-full sm:w-auto"
+                  >
+                    <RefreshCw size={15} className={updateStatus === 'checking' ? 'animate-spin' : ''} />
+                    {updateStatus === 'checking'
+                      ? 'Checking Online Server...'
+                      : updateStatus === 'downloading'
+                      ? 'Downloading Update...'
+                      : 'Check for Updates'}
+                  </button>
+                </div>
+              )}
+
+              {/* Rich System Status Cards Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 flex items-start gap-3">
+                  <div className="p-2 bg-amber-50 rounded-lg text-[var(--brand-gold)] border border-amber-200/60">
+                    <Cpu size={18} />
+                  </div>
+                  <div>
+                    <h5 className="font-bold text-xs text-slate-800 mb-0.5">Desktop Engine</h5>
+                    <p className="text-[11px] text-slate-500 font-medium">High-speed SQLite native database bridge</p>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 flex items-start gap-3">
+                  <div className="p-2 bg-blue-50 rounded-lg text-blue-600 border border-blue-200/60">
+                    <Server size={18} />
+                  </div>
+                  <div>
+                    <h5 className="font-bold text-xs text-slate-800 mb-0.5">Auto Backup</h5>
+                    <p className="text-[11px] text-slate-500 font-medium">Encrypted daily database snapshots active</p>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 flex items-start gap-3">
+                  <div className="p-2 bg-emerald-50 rounded-lg text-emerald-600 border border-emerald-200/60">
+                    <Sparkles size={18} />
+                  </div>
+                  <div>
+                    <h5 className="font-bold text-xs text-slate-800 mb-0.5">UI Design System</h5>
+                    <p className="text-[11px] text-slate-500 font-medium">Gold & Navy Soleria guidelines standard v2.4</p>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        )}
 
       </div>
     </AppLayout>

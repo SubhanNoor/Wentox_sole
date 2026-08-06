@@ -1,7 +1,8 @@
 import { Fragment, useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Search, Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet, LayoutList, X, Plus, Minus } from 'lucide-react';
+import SearchableSelect from '@/components/SearchableSelect';
+import { Search, Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet, LayoutList, X } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
@@ -92,7 +93,19 @@ const getMonthName = (m: number): string => {
 export default function ReportStockPage() {
   const { state, dispatch } = useApp();
 
-  const [activeStockTab, setActiveStockTab] = useState<'current' | 'material' | 'ledger' | 'daily' | 'weekly' | 'monthly' | 'overall'>('current');
+  type StockTab = 'current' | 'material' | 'ledger' | 'daily' | 'weekly' | 'monthly' | 'overall';
+  const [activeStockTab, setActiveStockTab] = useState<StockTab>('current');
+  const [tabAnimating, setTabAnimating] = useState(false);
+
+  const switchStockTab = (next: StockTab) => {
+    if (next === activeStockTab) return;
+    setTabAnimating(true);
+    setTimeout(() => {
+      setActiveStockTab(next);
+      setTabAnimating(false);
+    }, 180);
+  };
+
   const [materialVendorFilter, setMaterialVendorFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -459,7 +472,7 @@ export default function ReportStockPage() {
         {/* Top Tab Navigation - hidden on print */}
         <div className="flex flex-wrap gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           <button
-            onClick={() => setActiveStockTab('current')}
+            onClick={() => switchStockTab('current')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'current'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -469,7 +482,7 @@ export default function ReportStockPage() {
             Current Stock
           </button>
           <button
-            onClick={() => setActiveStockTab('material')}
+            onClick={() => switchStockTab('material')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'material'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -479,7 +492,7 @@ export default function ReportStockPage() {
             Material Stock
           </button>
           <button
-            onClick={() => setActiveStockTab('ledger')}
+            onClick={() => switchStockTab('ledger')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'ledger'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -489,7 +502,7 @@ export default function ReportStockPage() {
             Product Ledger
           </button>
           <button
-            onClick={() => setActiveStockTab('daily')}
+            onClick={() => switchStockTab('daily')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'daily'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -499,7 +512,7 @@ export default function ReportStockPage() {
             Daily Production
           </button>
           <button
-            onClick={() => setActiveStockTab('weekly')}
+            onClick={() => switchStockTab('weekly')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'weekly'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -509,7 +522,7 @@ export default function ReportStockPage() {
             Weekly Production
           </button>
           <button
-            onClick={() => setActiveStockTab('monthly')}
+            onClick={() => switchStockTab('monthly')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'monthly'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -519,7 +532,7 @@ export default function ReportStockPage() {
             Monthly Production
           </button>
           <button
-            onClick={() => setActiveStockTab('overall')}
+            onClick={() => switchStockTab('overall')}
             className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
               activeStockTab === 'overall'
                 ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
@@ -531,7 +544,7 @@ export default function ReportStockPage() {
         </div>
 
         {/* On-screen View - hidden on print */}
-        <div data-no-print>
+        <div data-no-print className={`transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
           {/* Search and Filters */}
           <div className="p-3 rounded-lg border mb-4 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }}>
             <div className="flex flex-wrap items-center gap-2.5">
@@ -546,16 +559,18 @@ export default function ReportStockPage() {
                 />
               </div>
               
-              <select
-                value={selectedCategory}
-                onChange={e => setSelectedCategory(e.target.value)}
-                className="soleria-input py-1.5 px-2.5 cursor-pointer text-xs font-semibold w-40 shrink-0"
-              >
-                <option value="all">All Categories</option>
-                {state.categories.map(cat => (
-                  <option key={cat.id} value={cat.id}>{cat.name}</option>
-                ))}
-              </select>
+              <div className="w-44 shrink-0">
+                <SearchableSelect
+                  options={[
+                    { value: 'all', label: 'All Categories' },
+                    ...state.categories.map(cat => ({ value: cat.id, label: cat.name }))
+                  ]}
+                  value={selectedCategory}
+                  onChange={setSelectedCategory}
+                  placeholder="All Categories"
+                  searchPlaceholder="Filter category..."
+                />
+              </div>
 
               {activeStockTab === 'current' && (
                 <button
@@ -579,20 +594,22 @@ export default function ReportStockPage() {
 
             {/* Timeframe Filters based on Active Tab */}
             {activeStockTab !== 'current' && (
-              <div className="flex flex-wrap items-center gap-4 pt-3 border-t" style={{ borderColor: 'var(--border-color)' }}>
+              <div className="flex flex-wrap items-center gap-4 mt-3 pt-3 border-t border-slate-200/80">
                 {activeStockTab === 'material' && (
                   <div className="flex items-center gap-2">
                     <label className="text-xs font-semibold text-slate-500 uppercase">Vendor:</label>
-                    <select
-                      value={materialVendorFilter}
-                      onChange={e => setMaterialVendorFilter(e.target.value)}
-                      className="soleria-input py-1.5 px-3 text-sm font-semibold cursor-pointer"
-                    >
-                      <option value="all">All Vendors</option>
-                      {state.vendors.map(v => (
-                        <option key={v.id} value={v.id}>{v.name}</option>
-                      ))}
-                    </select>
+                    <div className="w-48">
+                      <SearchableSelect
+                        options={[
+                          { value: 'all', label: 'All Vendors' },
+                          ...state.vendors.map(v => ({ value: v.id, label: v.name }))
+                        ]}
+                        value={materialVendorFilter}
+                        onChange={setMaterialVendorFilter}
+                        placeholder="All Vendors"
+                        searchPlaceholder="Filter vendor..."
+                      />
+                    </div>
                   </div>
                 )}
                 {activeStockTab === 'ledger' && (
@@ -617,16 +634,18 @@ export default function ReportStockPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <label className="text-xs font-semibold text-slate-500 uppercase">Vendor:</label>
-                      <select
-                        value={ledgerVendorFilter}
-                        onChange={e => setLedgerVendorFilter(e.target.value)}
-                        className="soleria-input py-1.5 px-3 text-sm font-semibold cursor-pointer"
-                      >
-                        <option value="all">All Vendors</option>
-                        {state.vendors.map(v => (
-                          <option key={v.id} value={v.id}>{v.name}</option>
-                        ))}
-                      </select>
+                      <div className="w-48">
+                        <SearchableSelect
+                          options={[
+                            { value: 'all', label: 'All Vendors' },
+                            ...state.vendors.map(v => ({ value: v.id, label: v.name }))
+                          ]}
+                          value={ledgerVendorFilter}
+                          onChange={setLedgerVendorFilter}
+                          placeholder="All Vendors"
+                          searchPlaceholder="Filter vendor..."
+                        />
+                      </div>
                     </div>
                   </div>
                 )}
@@ -667,15 +686,17 @@ export default function ReportStockPage() {
                   <div className="flex items-center gap-3">
                     <div className="flex items-center gap-2">
                       <label className="text-xs font-semibold text-slate-500 uppercase">Month:</label>
-                      <select
-                        value={monthlyMonth}
-                        onChange={e => setMonthlyMonth(parseInt(e.target.value))}
-                        className="soleria-input py-1.5 px-3 text-sm font-semibold cursor-pointer"
-                      >
-                        {Array.from({ length: 12 }, (_, i) => (
-                          <option key={i} value={i}>{getMonthName(i)}</option>
-                        ))}
-                      </select>
+                      <div className="w-40">
+                        <SearchableSelect
+                          options={Array.from({ length: 12 }, (_, i) => ({
+                            value: String(i),
+                            label: getMonthName(i)
+                          }))}
+                          value={String(monthlyMonth)}
+                          onChange={(val: string) => setMonthlyMonth(parseInt(val, 10))}
+                          placeholder="Select month..."
+                        />
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -909,10 +930,10 @@ export default function ReportStockPage() {
                                     setMaterialAdjError('');
                                   }}
                                   title="Deduct / Reduce Material Stock"
-                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 transition-colors"
+                                  className="border border-slate-900 rounded bg-transparent text-slate-900 hover:bg-slate-100 transition-colors flex items-center justify-center font-bold text-xs cursor-pointer"
+                                  style={{ width: '24px', height: '24px' }}
                                 >
-                                  <Minus size={13} />
-                                  Deduct
+                                  -
                                 </button>
                                 <button
                                   onClick={() => {
@@ -930,10 +951,10 @@ export default function ReportStockPage() {
                                     setMaterialAdjError('');
                                   }}
                                   title="Add Material Stock"
-                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors"
+                                  className="border border-slate-900 rounded bg-transparent text-slate-900 hover:bg-slate-100 transition-colors flex items-center justify-center font-bold text-xs cursor-pointer"
+                                  style={{ width: '24px', height: '24px' }}
                                 >
-                                  <Plus size={13} />
-                                  Add
+                                  +
                                 </button>
                               </div>
                             </td>

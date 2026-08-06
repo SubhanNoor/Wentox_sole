@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { SaleReturnRow, SaleReturnItemRow, CustomerRow, SubCustomerRow, ProductRow } from '@/lib/api';
-import { Search, Printer, Calendar, FileText, User, Edit2, Package, Layers, FileDown, FileSpreadsheet } from 'lucide-react';
+import { Search, Printer, Calendar, FileText, User, Edit2, Package, Layers, FileDown, FileSpreadsheet, RotateCcw } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
@@ -142,17 +142,22 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
   return (
     <>
       {/* ── Screen-only UI Container ── */}
-      <div className="mx-auto print:hidden" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto print:hidden px-2" style={{ maxWidth: 1400 }}>
 
         {/* ── Search Filters Card ── */}
-        <div className="card-white p-5 bg-white border border-slate-200 rounded-xl mb-5 shadow-sm">
-          <div className="flex items-center justify-between border-b pb-2 mb-4">
+        <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-5 shadow-2xs">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
             <h3 className="font-lora font-semibold text-base text-slate-800 flex items-center gap-2">
               <Search size={16} className="text-blue-600" /> Search Filters
             </h3>
             {hasFilters && (
-              <button onClick={clearAllFilters} className="text-xs text-red-500 hover:text-red-700 font-semibold transition-colors">
-                Clear All
+              <button
+                type="button"
+                onClick={clearAllFilters}
+                className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-rose-600 bg-rose-50/80 hover:bg-rose-100/80 border border-rose-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:shadow-xs"
+              >
+                <RotateCcw size={13} className="text-rose-500" />
+                <span>Clear All</span>
               </button>
             )}
           </div>
@@ -261,32 +266,32 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
         </div>
 
         {/* Summary Dashboard Panels (Visible on Screen only) */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
-          <div className="card-white p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between shadow-sm">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+          <div className="group relative bg-white p-5 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex items-center justify-between">
             <div>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Return Cartons</span>
-              <h4 className="text-xl font-bold font-mono text-slate-800 mt-1">{totalCartons} ctn</h4>
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider group-hover:text-[var(--brand-navy)] transition-colors">Total Return Cartons</span>
+              <h4 className="text-2xl font-bold font-mono text-slate-900 mt-1">{totalCartons} ctn</h4>
             </div>
-            <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-              <Package size={20} />
+            <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center transition-transform group-hover:scale-110">
+              <Package size={22} />
             </div>
           </div>
-          <div className="card-white p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between shadow-sm">
+          <div className="group relative bg-white p-5 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex items-center justify-between">
             <div>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Return Pairs</span>
-              <h4 className="text-xl font-bold font-mono text-slate-800 mt-1">{totalPairs.toLocaleString()} prs</h4>
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider group-hover:text-[var(--brand-navy)] transition-colors">Total Return Pairs</span>
+              <h4 className="text-2xl font-bold font-mono text-slate-900 mt-1">{totalPairs.toLocaleString()} prs</h4>
             </div>
-            <div className="w-10 h-10 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
-              <Layers size={18} className="rotate-12" />
+            <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center transition-transform group-hover:scale-110">
+              <Layers size={20} className="rotate-12" />
             </div>
           </div>
-          <div className="card-white p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between shadow-sm">
+          <div className="group relative bg-white p-5 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex items-center justify-between">
             <div>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Cumulative Credit Value</span>
-              <h4 className="text-xl font-bold font-mono text-rose-800 mt-1">{formatCurrency(totalValue)}</h4>
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider group-hover:text-[var(--brand-navy)] transition-colors">Cumulative Credit Value</span>
+              <h4 className="text-2xl font-bold font-mono text-[var(--brand-gold)] mt-1">{formatCurrency(totalValue)}</h4>
             </div>
-            <div className="w-10 h-10 rounded-lg bg-red-50 text-red-600 flex items-center justify-center">
-              <FileText size={20} />
+            <div className="w-12 h-12 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center transition-transform group-hover:scale-110">
+              <FileText size={22} />
             </div>
           </div>
         </div>

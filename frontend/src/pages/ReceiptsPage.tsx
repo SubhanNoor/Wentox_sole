@@ -1,9 +1,9 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import { getCustomerBalance } from '@/lib/cheques';
 import AppLayout from '@/components/AppLayout';
 import type { Receipt } from '@/types';
-import { Save, DollarSign, Search, FileText } from 'lucide-react';
+import { Save, DollarSign, Search, FileText, ChevronDown, Check } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
@@ -45,7 +45,7 @@ export default function ReceiptsPage() {
   const [customerId, setCustomerId] = useState('');
   const [amount, setAmount] = useState<number>(0);
   const [commission, setCommission] = useState<number>(0);
-  const [paymentMode, setPaymentMode] = useState<'Cash' | 'Cheque' | 'Online'>('Cash');
+  const [paymentMode, setPaymentMode] = useState<'Cash' | 'Cheque' | 'Online' | 'Bank Transfer'>('Cash');
   // ONLINE only — which of our accounts the money landed in. Without it the
   // receipt is one-sided and no bank balance can be trusted.
   const [bankId, setBankId] = useState('');
@@ -65,6 +65,18 @@ export default function ReceiptsPage() {
   // Dropdown search state
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [customerSearchQuery, setCustomerSearchQuery] = useState('');
+
+  // Draft popover state
+  const [isDraftOpen, setIsDraftOpen] = useState(false);
+  const draftRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const h = (e: MouseEvent) => {
+      if (draftRef.current && !draftRef.current.contains(e.target as Node)) setIsDraftOpen(false);
+    };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
 
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
@@ -340,29 +352,47 @@ export default function ReceiptsPage() {
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <select
-                    value={selectedDraftId}
-                    onChange={e => {
-                      const draftId = e.target.value;
-                      setSelectedDraftId(draftId);
-                      const selected = drafts.find(d => d.id === draftId);
-                      if (selected) {
-                        loadReceipt(selected);
-                      }
-                    }}
-                    className="soleria-input py-1 px-2.5 text-xs bg-white border cursor-pointer font-medium"
-                    style={{ width: '240px' }}
-                  >
-                    <option value="">Select a draft to load...</option>
-                    {drafts.map(d => {
-                      const custName = state.customers.find(c => c.id === d.customerId)?.name || 'Unnamed Customer';
-                      return (
-                        <option key={d.id} value={d.id}>
-                          {custName} - {formatCurrency(d.amount)} ({d.date})
-                        </option>
-                      );
-                    })}
-                  </select>
+                  {/* Custom popover draft picker */}
+                  {(() => {
+                    const selDraft = drafts.find(d => d.id === selectedDraftId);
+                    const selLabel = selDraft
+                      ? (() => { const n = state.customers.find(c => c.id === selDraft.customerId)?.name || 'Draft'; return `${n} — ${formatCurrency(selDraft.amount)}`; })()
+                      : 'Select a draft...';
+                    return (
+                      <div className="relative min-w-[220px]" ref={draftRef}>
+                        <button
+                          type="button"
+                          onClick={() => setIsDraftOpen(!isDraftOpen)}
+                          className="flex items-center justify-between w-full pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-xs font-medium text-slate-700 transition-all cursor-pointer shadow-2xs"
+                        >
+                          <span className="truncate text-slate-800 font-semibold">{selLabel}</span>
+                          <ChevronDown className={`ml-2 flex-shrink-0 text-slate-400 transition-transform duration-200 ${isDraftOpen ? 'rotate-180 text-[var(--brand-gold)]' : ''}`} size={14} />
+                        </button>
+                        {isDraftOpen && (
+                          <div className="absolute right-0 left-0 top-[calc(100%+6px)] z-50 py-1.5 bg-white border border-slate-200/90 rounded-xl shadow-xl max-h-60 overflow-y-auto" style={{ boxShadow: '0 14px 34px rgba(27,42,65,0.14)' }}>
+                            <button type="button" onClick={() => { setSelectedDraftId(''); setIsDraftOpen(false); }}
+                              className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between cursor-pointer transition-colors ${!selectedDraftId ? 'bg-[var(--brand-gold)] text-white font-semibold' : 'text-slate-600 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'}`}>
+                              <span>Select a draft...</span>
+                              {!selectedDraftId && <Check size={13} className="text-white" />}
+                            </button>
+                            <div className="my-1 border-t border-slate-100" />
+                            {drafts.map(d => {
+                              const custName = state.customers.find(c => c.id === d.customerId)?.name || 'Unnamed Customer';
+                              const isSelected = selectedDraftId === d.id;
+                              return (
+                                <button key={d.id} type="button"
+                                  onClick={() => { setSelectedDraftId(d.id); loadReceipt(d); setIsDraftOpen(false); }}
+                                  className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between cursor-pointer transition-colors ${isSelected ? 'bg-[var(--brand-gold)] text-white font-semibold' : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'}`}>
+                                  <span className="truncate">{custName} — {formatCurrency(d.amount)} ({d.date})</span>
+                                  {isSelected && <Check size={13} className="text-white flex-shrink-0" />}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <button
                     type="button"
                     onClick={() => {

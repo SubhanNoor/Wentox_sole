@@ -1,14 +1,18 @@
 import { useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, ArrowLeft, Settings, Save, Edit2, Trash2, ChevronRight, X } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Trash2, X, ListCollapse, ArrowRight } from 'lucide-react';
 import { filterChartAccountsForRole } from '@/lib/access';
 
 export default function GroupAcSetupPage() {
   const { state, dispatch } = useApp();
 
-  // Tab State: 'list' | 'form'
-  const [activeTab, setActiveTab] = useState<'list' | 'form'>('list');
+  // Search & Sort State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'code' | 'name'>('code');
+
+  // Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Form State
@@ -16,33 +20,38 @@ export default function GroupAcSetupPage() {
   const [name, setName] = useState('');
   const [acClass, setAcClass] = useState<'ASSETS' | 'LIABILITY' | 'INCOME' | 'EXPENSES'>('ASSETS');
 
-  // Search State
-  const [searchQuery, setSearchQuery] = useState('');
-
-  // Drill-down: clicking a card opens a details window showing every Chart
-  // of Account registered under that group, instead of jumping to edit.
+  // Drill-down Modal State
   const [viewingGroupId, setViewingGroupId] = useState<string | null>(null);
 
   // Messages
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const handleAddNew = () => {
+  const handleOpenAddModal = () => {
     setSelectedId(null);
     setId('');
     setName('');
     setAcClass('ASSETS');
     setErrorMsg('');
-    setActiveTab('form');
+    setIsModalOpen(true);
   };
 
-  const handleSelectGroup = (grp: any) => {
+  const handleOpenEditModal = (grp: any) => {
     setSelectedId(grp.id);
     setId(grp.id);
     setName(grp.name);
     setAcClass(grp.class);
     setErrorMsg('');
-    setActiveTab('form');
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedId(null);
+    setId('');
+    setName('');
+    setAcClass('ASSETS');
+    setErrorMsg('');
   };
 
   const handleSave = (e: React.FormEvent) => {
@@ -50,7 +59,6 @@ export default function GroupAcSetupPage() {
     if (!id.trim()) return setErrorMsg('Group Account code is required.');
     if (!name.trim()) return setErrorMsg('Group Account name is required.');
 
-    // Duplicate check if adding new
     if (!selectedId && state.groupAccounts.some(g => g.id.toLowerCase() === id.trim().toLowerCase())) {
       return setErrorMsg('A Group Account with this code already exists.');
     }
@@ -70,12 +78,10 @@ export default function GroupAcSetupPage() {
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
-    setActiveTab('list');
-    setSelectedId(null);
+    handleCloseModal();
   };
 
   const handleDeleteGroup = (grpId: string) => {
-    // Safety check: is it linked to any chart accounts?
     const inUse = state.chartAccounts.some(c => c.groupId === grpId);
     if (inUse) {
       setErrorMsg('Cannot delete: This group account is linked to active chart accounts.');
@@ -87,10 +93,9 @@ export default function GroupAcSetupPage() {
       dispatch({ type: 'DELETE_GROUP_ACCOUNT', id: grpId });
       setSuccessMsg('Group Account deleted successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
+      handleCloseModal();
     }
   };
-
-  const [sortBy, setSortBy] = useState<'code' | 'name'>('code');
 
   const filteredAndSortedGroups = useMemo(() => {
     let list = state.groupAccounts;
@@ -111,9 +116,21 @@ export default function GroupAcSetupPage() {
     });
   }, [state.groupAccounts, searchQuery, sortBy]);
 
+  const viewingGroup = useMemo(() => {
+    return state.groupAccounts.find(g => g.id === viewingGroupId);
+  }, [viewingGroupId, state.groupAccounts]);
+
+  const viewingChildCharts = useMemo(() => {
+    if (!viewingGroupId) return [];
+    return filterChartAccountsForRole(
+      state.chartAccounts.filter(c => c.groupId === viewingGroupId),
+      state.currentUserRole
+    );
+  }, [viewingGroupId, state.chartAccounts, state.currentUserRole]);
+
   return (
     <AppLayout pageTitle="Group Accounts Setup">
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto" style={{ maxWidth: 1400 }}>
         
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
@@ -122,209 +139,240 @@ export default function GroupAcSetupPage() {
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
         )}
 
-        {/* Tab Selection Header */}
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+        {/* Directory Header Card */}
+        <div className="card-white p-6 md:p-8 bg-white border mb-6">
+          <div className="border-b pb-4 mb-5 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
+                <ListCollapse size={20} className="text-[#B08D57]" /> Group Accounts Directory
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">Manage high-level Group accounts specifying financial classification category rules.</p>
+            </div>
+            
             <button
-              onClick={() => {
-                setActiveTab('list');
-                setSelectedId(null);
-              }}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'list' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              Group Accounts Directory
-            </button>
-            <button
-              onClick={handleAddNew}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${activeTab === 'form' && !selectedId ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              Add New Group Account
-            </button>
-          </div>
-
-          {activeTab === 'list' && (
-            <button
-              onClick={handleAddNew}
-              className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm"
+              onClick={handleOpenAddModal}
+              className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
             >
               <Plus size={16} /> Register Group Account
             </button>
-          )}
-        </div>
+          </div>
 
-        {/* View 1: Group Accounts Cards Directory */}
-        {activeTab === 'list' ? (
-          <div className="mb-6">
-            <div className="flex flex-col gap-4 mb-6">
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">Group Accounts Directory</h3>
-                <p className="text-xs text-slate-500 font-medium">Search and manage high-level Group accounts specifying financial classification category rules.</p>
-              </div>
-              
-              {/* Row: Sort and Search */}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2 border-t border-slate-100">
-                {/* Sort Filters */}
-                <div className="flex bg-slate-100 p-0.5 rounded-lg text-xs font-semibold border border-slate-200 self-start">
-                  <button
-                    type="button"
-                    onClick={() => setSortBy('code')}
-                    className={`px-3.5 py-2 rounded-md transition-all ${sortBy === 'code' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold scale-[1.02]' : 'text-slate-500 hover:text-slate-800'}`}
-                  >
-                    Sort by Code
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSortBy('name')}
-                    className={`px-3.5 py-2 rounded-md transition-all ${sortBy === 'name' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold scale-[1.02]' : 'text-slate-500 hover:text-slate-800'}`}
-                  >
-                    Sort by Name
-                  </button>
-                </div>
-
-                {/* Search Bar */}
-                <div className="relative flex-1 min-w-[240px] sm:max-w-sm">
-                  <input
-                    type="text"
-                    placeholder="Search by code, name..."
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    className="soleria-input w-full py-2 px-3.5 text-sm pr-10 font-semibold bg-white shadow-sm hover:border-[#B08D57] transition-all"
-                  />
-                  <Search className="absolute right-3.5 top-2.5 text-slate-400" size={16} />
-                </div>
-              </div>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            <div className="flex bg-slate-100 p-0.5 rounded-xl text-xs font-semibold border border-slate-200 self-start">
+              <button
+                type="button"
+                onClick={() => setSortBy('code')}
+                className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${sortBy === 'code' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold' : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                Sort by Code
+              </button>
+              <button
+                type="button"
+                onClick={() => setSortBy('name')}
+                className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${sortBy === 'name' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold' : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                Sort by Name
+              </button>
             </div>
 
-            {filteredAndSortedGroups.length === 0 ? (
-              <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl bg-white">
-                No registered group accounts found matching your search.
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredAndSortedGroups.map(grp => {
-                  const initialLetter = grp.name.charAt(0).toUpperCase();
-                  // UC-03: a User must not see a restricted chart account (Bank
-                  // Accounts, Directors Expenses) even indirectly via its parent
-                  // group's child count or drill-down.
-                  const childCharts = filterChartAccountsForRole(
-                    state.chartAccounts.filter(c => c.groupId === grp.id),
-                    state.currentUserRole
-                  );
+            <div className="relative flex-1 min-w-[270px] sm:max-w-sm">
+              <input
+                type="text"
+                placeholder="Search by code, name, class..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="soleria-input w-full py-2 px-3.5 text-xs pr-10 font-semibold"
+              />
+              <Search className="absolute right-3.5 top-2.5 text-slate-400" size={14} />
+            </div>
+          </div>
+        </div>
 
-                  return (
-                    <div
-                      key={grp.id}
-                      className="bg-white border rounded-xl p-5 hover:border-amber-500 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 flex flex-col justify-between group cursor-pointer"
-                      style={{ borderColor: 'var(--border-color)' }}
-                      onClick={() => setViewingGroupId(grp.id)}
-                    >
-                      <div>
-                        {/* Card Top: Code badge */}
-                        <div className="flex items-center justify-between mb-3.5 gap-2">
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider flex-shrink-0">
-                            CODE: {grp.id}
-                          </span>
-                          <ChevronRight size={16} className="text-slate-400" />
-                        </div>
-
-                        {/* Card Middle: Avatar circle + Name & Subheading (Class) */}
-                        <div className="flex items-start gap-3 mb-4">
-                          <div className="w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm bg-slate-50 text-slate-600 group-hover:bg-[#111c2a] group-hover:text-[#B08D57] transition-all duration-300 flex-shrink-0">
-                            {initialLetter}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
-                              {grp.name}
-                            </h4>
-                            <p className="text-[11px] text-[#B08D57] font-semibold mt-0.5 uppercase tracking-wider truncate">
-                              {grp.class} <span className="text-slate-400 normal-case">· {childCharts.length} account{childCharts.length !== 1 ? 's' : ''}</span>
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Card Bottom: Actions */}
-                      <div className="border-t pt-3 mt-1 flex items-center justify-end gap-3" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => handleSelectGroup(grp)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
-                          title="Edit Group Account"
-                        >
-                          <Edit2 size={15} />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteGroup(grp.id)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                          title="Delete Group Account"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+        {/* Group Accounts Cards Grid (§1 Standard) */}
+        {filteredAndSortedGroups.length === 0 ? (
+          <div className="card-white p-12 text-center text-slate-400">
+            <ListCollapse size={36} className="mx-auto mb-3 text-slate-300" />
+            <p className="font-semibold text-slate-600">No registered group accounts found matching your search.</p>
           </div>
         ) : (
-          /* View 2: Form View */
-          <div className="max-w-2xl mx-auto">
-            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm">
-              <div className="flex items-center gap-3 border-b pb-4 mb-6">
-                <button 
-                  onClick={() => {
-                    setActiveTab('list');
-                    setSelectedId(null);
-                  }}
-                  className="p-1.5 rounded-lg border hover:bg-slate-50 transition-colors"
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredAndSortedGroups.map(grp => {
+              const childCharts = filterChartAccountsForRole(
+                state.chartAccounts.filter(c => c.groupId === grp.id),
+                state.currentUserRole
+              );
+
+              return (
+                <div
+                  key={grp.id}
+                  onClick={() => setViewingGroupId(grp.id)}
+                  className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
                 >
-                  <ArrowLeft size={16} className="text-slate-600" />
-                </button>
-                <div>
-                  <h3 className="font-lora font-semibold text-lg text-slate-800">
-                    {selectedId ? 'Edit Group Account' : 'Register New Group Account'}
-                  </h3>
-                  <p className="text-xs text-slate-500 font-medium">Configure high-level reporting class and tracking parameters.</p>
+                  <div>
+                    {/* Header: Title + Class Badge */}
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
+                        {grp.name}
+                      </h4>
+                      <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider flex-shrink-0">
+                        {grp.class}
+                      </span>
+                    </div>
+
+                    {/* Subtitle: Code in mono */}
+                    <div className="font-mono text-xs text-slate-400 mb-3">
+                      Group Code: <span className="font-semibold text-slate-600">#{grp.id}</span>
+                    </div>
+
+                    <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5">
+                      Child Accounts: <span className="font-semibold text-slate-700">{childCharts.length}</span>
+                    </div>
+                  </div>
+
+                  {/* Footer Bar */}
+                  <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
+                    <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => handleOpenEditModal(grp)}
+                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                        title="Edit Group Account"
+                      >
+                        <Edit2 size={15} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteGroup(grp.id)}
+                        className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                        title="Delete Group Account"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+
+                    <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
+                      View Accounts <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
+                    </span>
+                  </div>
                 </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Drill-down Modal showing child chart accounts */}
+        {viewingGroupId && viewingGroup && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={() => setViewingGroupId(null)}>
+            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
+                <div>
+                  <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
+                    <ListCollapse size={18} className="text-[#B08D57]" /> {viewingGroup.name}
+                  </h3>
+                  <p className="text-xs text-slate-500">Group Code #{viewingGroup.id} · {viewingGroup.class} Category</p>
+                </div>
+                <button
+                  onClick={() => setViewingGroupId(null)}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
               </div>
 
-              <form onSubmit={handleSave} className="flex flex-col gap-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Settings size={15} className="text-[#B08D57]" />
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Group Account Configuration</span>
+              <div className="p-5 max-h-96 overflow-y-auto">
+                <div className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-3">
+                  Registered Chart Accounts ({viewingChildCharts.length})
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {viewingChildCharts.length === 0 ? (
+                  <div className="text-center p-6 text-slate-400 italic text-xs">
+                    No chart of accounts registered under this group head.
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {viewingChildCharts.map(c => (
+                      <div key={c.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
+                        <div>
+                          <div className="font-semibold text-xs text-slate-900">{c.name}</div>
+                          <div className="font-mono text-[11px] text-slate-400">Code: #{c.id}</div>
+                        </div>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase border ${c.status === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                          {c.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="p-4 border-t border-slate-100 flex justify-end">
+                <button onClick={() => setViewingGroupId(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Dialogue Box Pop-up */}
+        {isModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}>
+            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
+                <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
+                  <Settings size={18} className="text-[#B08D57]" />
+                  {selectedId ? 'Edit Group Account' : 'Register New Group Account'}
+                </h3>
+                <button
+                  onClick={handleCloseModal}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSave} className="p-5 flex flex-col gap-4">
+                {errorMsg && (
+                  <div className="banner-error rounded-lg px-3 py-2 text-xs">{errorMsg}</div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Group Code</label>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                      Group Code <span className="text-rose-500">*</span>
+                    </label>
                     <input
                       type="text"
                       value={id}
                       onChange={e => setId(e.target.value)}
-                      placeholder="e.g. 5000"
+                      placeholder="e.g. 1100"
                       disabled={!!selectedId}
-                      className="soleria-input font-mono font-semibold disabled:bg-slate-100 disabled:text-slate-500"
+                      className="soleria-input w-full font-mono font-semibold disabled:bg-slate-100 disabled:text-slate-500"
+                      autoFocus={!selectedId}
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Group Name</label>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                      Account Title <span className="text-rose-500">*</span>
+                    </label>
                     <input
                       type="text"
                       value={name}
                       onChange={e => setName(e.target.value)}
-                      placeholder="e.g. MANUFACTURING OVERHEADS"
-                      className="soleria-input font-semibold"
+                      placeholder="e.g. Current Assets"
+                      className="soleria-input w-full font-semibold"
+                      autoFocus={!!selectedId}
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Account Class</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                    Account Class Category <span className="text-rose-500">*</span>
+                  </label>
                   <select
                     value={acClass}
                     onChange={e => setAcClass(e.target.value as any)}
-                    className="soleria-input cursor-pointer font-medium"
+                    className="soleria-input w-full cursor-pointer font-semibold"
                   >
                     <option value="ASSETS">ASSETS</option>
                     <option value="LIABILITY">LIABILITY</option>
@@ -333,22 +381,19 @@ export default function GroupAcSetupPage() {
                   </select>
                 </div>
 
-                <div className="flex justify-end gap-3 mt-6 border-t pt-4">
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                   <button
                     type="button"
-                    onClick={() => {
-                      setActiveTab('list');
-                      setSelectedId(null);
-                    }}
-                    className="px-5 py-2.5 text-xs font-bold text-slate-500 hover:text-slate-700 transition-colors uppercase tracking-wider"
+                    onClick={handleCloseModal}
+                    className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-xs font-bold text-slate-900 uppercase tracking-wider"
+                    className="btn-gold px-5 py-2 text-xs font-semibold cursor-pointer flex items-center gap-1.5"
                   >
-                    <Save size={14} /> Save Details
+                    <Save size={14} /> Save Group Account
                   </button>
                 </div>
               </form>
@@ -357,76 +402,6 @@ export default function GroupAcSetupPage() {
         )}
 
       </div>
-
-      {/* Details window: every Chart of Account registered under this group */}
-      {viewingGroupId && (() => {
-        const grp = state.groupAccounts.find(g => g.id === viewingGroupId);
-        if (!grp) return null;
-        const childCharts = filterChartAccountsForRole(
-          state.chartAccounts.filter(c => c.groupId === grp.id),
-          state.currentUserRole
-        );
-
-        return (
-          <div
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn"
-            data-no-print
-            onClick={() => setViewingGroupId(null)}
-          >
-            <div
-              className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-2xl mx-4 animate-scaleUp max-h-[80vh] overflow-y-auto"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between border-b pb-3 mb-4">
-                <div>
-                  <h3 className="font-lora font-bold text-lg text-slate-800">{grp.name}</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Code: {grp.id} · {grp.class} · {childCharts.length} account{childCharts.length !== 1 ? 's' : ''}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setViewingGroupId(null)}
-                  className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
-                  title="Close"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              {childCharts.length === 0 ? (
-                <p className="text-sm text-slate-400 text-center py-8">No Chart of Accounts registered under this group yet.</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-sm">
-                    <thead>
-                      <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                        <th className="p-2 pl-3">Code</th>
-                        <th className="p-2">Account Name</th>
-                        <th className="p-2 text-center">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {childCharts.map(c => (
-                        <tr key={c.id} className="border-t hover:bg-slate-50" style={{ borderColor: 'var(--border-table)' }}>
-                          <td className="p-2 pl-3 font-mono text-slate-600">{c.id}</td>
-                          <td className="p-2 font-semibold text-slate-700">{c.name}</td>
-                          <td className="p-2 text-center">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
-                              c.status === 'Active' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
-                            }`}>
-                              {c.status || 'Active'}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })()}
     </AppLayout>
   );
 }

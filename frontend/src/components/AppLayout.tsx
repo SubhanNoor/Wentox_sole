@@ -2,10 +2,9 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
   ShoppingCart, Receipt, Package, FileText, Layers,
-  Settings, LogOut, Lock, Menu, X, ChevronDown, MapPin, Home,
+  Settings, LogOut, Menu, X, ChevronDown, MapPin, Home,
   Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search, HardHat,
-  BadgeDollarSign, ArrowLeftRight, Landmark, Pin, BookmarkPlus, Trash2, GripHorizontal, ArrowDownToLine, Warehouse, RotateCcw,
-  RefreshCw
+  BadgeDollarSign, ArrowLeftRight, Landmark, Pin, BookmarkPlus, Trash2, GripHorizontal, ArrowDownToLine, Warehouse, RotateCcw
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
@@ -70,7 +69,6 @@ const navSections: NavSection[] = [
       { page: 'setup-region', label: 'Regions', icon: MapPin },
       { page: 'setup-adda', label: 'Transport Addas', icon: Milestone },
       { page: 'setup-store', label: 'Store Setup', icon: Warehouse },
-      { page: 'check-updates', label: 'Check for Updates', icon: RefreshCw, adminOnly: true },
     ]
   },
   {
@@ -340,11 +338,11 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
               {state.currentUserRole === 'Admin' && (
                 <button
                   onClick={() => navigate('settings')}
-                  className="flex items-center gap-2 w-full px-3.5 py-3 text-sm transition-colors hover:bg-white/5"
+                  className="flex items-center gap-2 w-full px-3.5 py-3 text-sm transition-colors hover:bg-white/5 cursor-pointer"
                   style={{ color: 'rgba(250,248,243,0.85)' }}
                 >
-                  <Lock size={14} />
-                  <span>Change Password</span>
+                  <Settings size={14} />
+                  <span>Settings & Updates</span>
                 </button>
               )}
               <div style={{ borderTop: '1px solid var(--sidebar-sep)' }} />

@@ -142,19 +142,23 @@ export default function TransferPage() {
         {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>}
 
         {/* Mode switcher */}
-        <div className="flex border-b mb-6 text-sm font-semibold" style={{ borderColor: 'var(--border-color)' }}>
+        <div className="flex flex-wrap gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }}>
           <button
             onClick={() => { setMode('transfer'); setErrorMsg(''); }}
-            className={`px-4 py-2 border-b-2 transition-colors flex items-center gap-1.5 ${
-              mode === 'transfer' ? 'border-[#B08D57] text-[#111c2a]' : 'border-transparent text-slate-500 hover:text-slate-700'
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 ${
+              mode === 'transfer'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
             }`}
           >
             <ArrowLeftRight size={15} /> Transfer Between Accounts
           </button>
           <button
             onClick={() => { setMode('deposit'); setErrorMsg(''); }}
-            className={`px-4 py-2 border-b-2 transition-colors flex items-center gap-1.5 ${
-              mode === 'deposit' ? 'border-[#B08D57] text-[#111c2a]' : 'border-transparent text-slate-500 hover:text-slate-700'
+            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 ${
+              mode === 'deposit'
+                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
             }`}
           >
             <PiggyBank size={15} /> Add Amount to Bank
@@ -309,15 +313,25 @@ export default function TransferPage() {
         ) : (
           <>
             {/* Live balances — every own account at a glance */}
-            <div className="card-white p-4 bg-white border mb-6" style={{ borderColor: 'var(--border-color)' }}>
-              <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Live Balances</h4>
-              <div className="flex flex-wrap gap-3">
-                {ownAccounts.map(a => (
-                  <div key={a.id} className="flex-1 min-w-[160px] p-3 rounded-lg border bg-slate-50" style={{ borderColor: 'var(--border-color)' }}>
-                    <span className="block text-[11px] font-semibold text-slate-500 truncate">{a.name}</span>
-                    <span className="block text-base font-bold text-slate-800">{formatCurrency(getAccountBalance(state, a.id))}</span>
-                  </div>
-                ))}
+            <div className="card-white p-4 bg-white border mb-6 rounded-2xl" style={{ borderColor: 'var(--border-color)' }}>
+              <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 px-1">Live Balances</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                {ownAccounts.map(a => {
+                  const bal = getAccountBalance(state, a.id);
+                  return (
+                    <div
+                      key={a.id}
+                      className="group relative bg-white p-4 rounded-xl border border-slate-200/80 transition-all duration-300 transform hover:-translate-y-1 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_10px_25px_rgba(176,141,87,0.15)] flex flex-col justify-between"
+                    >
+                      <span className="block text-xs font-semibold text-slate-500 group-hover:text-[var(--brand-navy)] transition-colors truncate mb-1">
+                        {a.name}
+                      </span>
+                      <span className={`block text-base font-bold font-mono ${bal > 0 ? 'text-emerald-600' : bal < 0 ? 'text-rose-600' : 'text-slate-800'}`}>
+                        {formatCurrency(bal)}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
