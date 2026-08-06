@@ -946,6 +946,7 @@ const initialState: State = {
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'LOGIN_SUCCESS':
+      localStorage.setItem('wento_sidebar_hidden', 'true');
       return {
         ...state,
         isLoggedIn: true,
@@ -953,7 +954,20 @@ function reducer(state: State, action: Action): State {
         currentUsername: action.payload.username,
         currentPage: 'home'
       };
+    case 'LOGIN': {
+      const { username, password } = action.payload;
+      if (username === state.settings.username && password === state.settings.password) {
+        localStorage.setItem('wento_sidebar_hidden', 'true');
+        return { ...state, isLoggedIn: true, currentUserRole: 'Admin', currentUsername: username, currentPage: 'home' };
+      }
+      if (username === DEMO_USER_ACCOUNT.username && password === DEMO_USER_ACCOUNT.password) {
+        localStorage.setItem('wento_sidebar_hidden', 'true');
+        return { ...state, isLoggedIn: true, currentUserRole: 'User', currentUsername: username, currentPage: 'home' };
+      }
+      return state;
+    }
     case 'LOGOUT':
+      localStorage.setItem('wento_sidebar_hidden', 'true');
       return { ...state, isLoggedIn: false, currentUserRole: null, currentUsername: null, currentPage: 'login' };
     case 'RENAME_CURRENT_USER':
       return { ...state, currentUsername: action.username };
