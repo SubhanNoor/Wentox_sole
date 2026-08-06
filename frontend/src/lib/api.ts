@@ -299,6 +299,10 @@ declare global {
       cities: {
         list: (payload?: { is_active?: boolean; region_id?: number }) => Promise<ApiResult<CityRow[]>>;
       };
+      updates: {
+        check: () => Promise<ApiResult<{ updateAvailable: boolean; currentVersion?: string; latestVersion?: string; packaged?: boolean }>>;
+        install: () => Promise<ApiResult<{ ok: true }>>;
+      };
     };
   }
 }

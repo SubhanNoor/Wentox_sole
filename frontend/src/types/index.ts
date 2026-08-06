@@ -441,6 +441,17 @@ export interface PurchaseReturn {
   totalValue: number;
 }
 
+export interface MaterialAdjustment {
+  id: string;
+  date: string;
+  vendorId: string;
+  materialName: string;
+  unit: string;
+  type: 'ADD' | 'DEDUCT';
+  quantity: number;
+  remarks?: string;
+}
+
 export interface ProductionLog {
   id: string;
   date: string;
