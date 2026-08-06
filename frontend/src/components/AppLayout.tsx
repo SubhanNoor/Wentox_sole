@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
+import NotificationSidePanel from '@/components/NotificationSidePanel';
 
 interface NavItem {
   page: NavPage;
@@ -95,11 +96,12 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
   const { state, dispatch } = useApp();
   const [showAdminPopup, setShowAdminPopup] = useState(false);
 
-  // Sidebar toggle state (desktop collapse & mobile drawer)
+  // Sidebar toggle state (desktop collapse & mobile drawer) - Default is HIDDEN until three lines button is pressed
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isSidebarHidden, setIsSidebarHidden] = useState<boolean>(() => {
-    return localStorage.getItem('wento_sidebar_hidden') === 'true';
-  });
+  const [isSidebarHidden, setIsSidebarHidden] = useState<boolean>(true);
+
+  // Home Page Notification Side Panel state (opens automatically on home page, hideable)
+  const [isHomeSidePanelOpen, setIsHomeSidePanelOpen] = useState(true);
 
   // Top Menu Bar Shortcuts State - Default is completely empty (none)
   const SHORTCUTS_STORAGE_KEY = 'wento_quick_shortcuts_clean_v3';
@@ -146,6 +148,9 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
 
   useEffect(() => {
     setSidebarOpen(false);
+    if (state.currentPage !== 'home') {
+      setIsHomeSidePanelOpen(false);
+    }
   }, [state.currentPage]);
 
   function navigate(page: string, tab?: string) {
@@ -481,7 +486,10 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
           {headerAction && (
             <div>{headerAction}</div>
           )}
-          <NotificationBell />
+          <NotificationBell
+            isHomePage={state.currentPage === 'home'}
+            onToggleSidePanel={() => setIsHomeSidePanelOpen(!isHomeSidePanelOpen)}
+          />
         </header>
 
         {/* Top Quick Access Shortcut Drop Zone / Menu Bar */}
@@ -626,6 +634,12 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
           </div>
         </div>
       )}
+
+      {/* Notification Side Panel (Drawer shown automatically on Home Page, hideable) */}
+      <NotificationSidePanel
+        isOpen={state.currentPage === 'home' && isHomeSidePanelOpen}
+        onClose={() => setIsHomeSidePanelOpen(false)}
+      />
     </div>
   );
 }

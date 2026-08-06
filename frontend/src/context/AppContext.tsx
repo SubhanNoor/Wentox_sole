@@ -6,7 +6,7 @@ import type {
   Customer, SubCustomer, SaleBill, SaleReturn, Purchase, PurchaseReturn,
   Receipt, Expense, ProductionLog, UserRole,
   ChequeAllocation, ChequeStatus, AlertDismissal,
-  WageRun, SalaryRun, BankAccount, Transfer, Deposit
+  WageRun, SalaryRun, BankAccount, Transfer, Deposit, MaterialAdjustment
 } from '@/types';
 import { deriveChequeStatus } from '@/lib/cheques';
 
@@ -777,6 +777,7 @@ export interface State {
   alertDismissals: AlertDismissal[];
   wageRuns: WageRun[];
   salaryRuns: SalaryRun[];
+  materialAdjustments: MaterialAdjustment[];
 
   settings: { username: string; password: string };
 }
@@ -904,6 +905,9 @@ type Action =
   | { type: 'POST_SALARY_RUN'; runId: string }
   | { type: 'UNPOST_SALARY_RUN'; runId: string; unpostedAt: string }
 
+  | { type: 'ADD_MATERIAL_ADJUSTMENT'; adjustment: MaterialAdjustment }
+  | { type: 'DELETE_MATERIAL_ADJUSTMENT'; id: string }
+
   | { type: 'UPDATE_SETTINGS'; settings: { username: string; password: string } };
 
 const initialState: State = {
@@ -945,6 +949,7 @@ const initialState: State = {
   alertDismissals: [],
   wageRuns: demoWageRuns,
   salaryRuns: demoSalaryRuns,
+  materialAdjustments: [],
 
   settings: { username: 'admin', password: 'admin' },
 };
@@ -1586,6 +1591,17 @@ function reducer(state: State, action: Action): State {
             ? { ...r, status: 'Unposted', unpostedAt: action.unpostedAt, amountBefore: r.totalAmount }
             : r
         )
+      };
+
+    case 'ADD_MATERIAL_ADJUSTMENT':
+      return {
+        ...state,
+        materialAdjustments: [action.adjustment, ...state.materialAdjustments]
+      };
+    case 'DELETE_MATERIAL_ADJUSTMENT':
+      return {
+        ...state,
+        materialAdjustments: state.materialAdjustments.filter(a => a.id !== action.id)
       };
 
     case 'UPDATE_SETTINGS':

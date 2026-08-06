@@ -10,7 +10,12 @@ import type { AppAlert } from '@/types';
 // `GET /api/notifications` will run server-side.
 const POLL_INTERVAL_MS = 60_000;
 
-export default function NotificationBell() {
+interface NotificationBellProps {
+  onToggleSidePanel?: () => void;
+  isHomePage?: boolean;
+}
+
+export default function NotificationBell({ onToggleSidePanel, isHomePage }: NotificationBellProps = {}) {
   const { state, dispatch } = useApp();
   const [open, setOpen] = useState(false);
   const [today, setToday] = useState(todayISO());
@@ -102,7 +107,13 @@ export default function NotificationBell() {
   return (
     <div className="relative" ref={panelRef} data-no-print>
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          if (isHomePage && onToggleSidePanel) {
+            onToggleSidePanel();
+          } else {
+            setOpen(!open);
+          }
+        }}
         className="relative flex items-center justify-center rounded-lg transition-colors hover:bg-slate-100"
         style={{ width: 36, height: 36 }}
         title="Alerts"

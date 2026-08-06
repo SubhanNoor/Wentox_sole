@@ -1,7 +1,7 @@
 import { Fragment, useState, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Search, Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet, LayoutList, X } from 'lucide-react';
+import { Search, Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet, LayoutList, X, Plus, Minus } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 
@@ -113,6 +113,52 @@ export default function ReportStockPage() {
   // line (no click-to-expand), ending with a combined Total Pairs across all colors.
   const [showColorReport, setShowColorReport] = useState(false);
 
+  // Material stock adjustment modal state (+ and -)
+  const [materialAdjModal, setMaterialAdjModal] = useState<{
+    isOpen: boolean;
+    type: 'ADD' | 'DEDUCT';
+    vendorId: string;
+    vendorName: string;
+    materialName: string;
+    unit: string;
+    currentQty: number;
+  } | null>(null);
+  const [materialAdjQty, setMaterialAdjQty] = useState('');
+  const [materialAdjRemarks, setMaterialAdjRemarks] = useState('');
+  const [materialAdjError, setMaterialAdjError] = useState('');
+
+  function handleSaveMaterialAdjustment() {
+    if (!materialAdjModal) return;
+    const qty = Number(materialAdjQty);
+    if (isNaN(qty) || qty <= 0) {
+      setMaterialAdjError('Quantity must be greater than 0.');
+      return;
+    }
+    if (materialAdjModal.type === 'DEDUCT' && materialAdjModal.currentQty - qty < 0) {
+      setMaterialAdjError(`Total stock after reduction cannot be less than 0. Maximum allowed reduction is ${materialAdjModal.currentQty.toLocaleString()} ${materialAdjModal.unit}.`);
+      return;
+    }
+
+    dispatch({
+      type: 'ADD_MATERIAL_ADJUSTMENT',
+      adjustment: {
+        id: 'madj_' + Date.now(),
+        date: getTodayDate(),
+        vendorId: materialAdjModal.vendorId,
+        materialName: materialAdjModal.materialName,
+        unit: materialAdjModal.unit,
+        type: materialAdjModal.type,
+        quantity: qty,
+        remarks: materialAdjRemarks
+      }
+    });
+
+    setMaterialAdjModal(null);
+    setMaterialAdjQty('');
+    setMaterialAdjRemarks('');
+    setMaterialAdjError('');
+  }
+
   const getProductLedgerEntries = (productIds: string[]): ProductLedgerEntry[] => {
     const idSet = new Set(productIds);
     const entries: ProductLedgerEntry[] = [];
@@ -218,19 +264,25 @@ export default function ReportStockPage() {
   }, [filteredProducts]);
 
   // Material Stock: raw materials purchased from vendors, grouped by
-  // vendor + material name + unit, running qty = Purchase - Purchase Return.
-  // Separate from Current Stock (finished-goods pairs) — Purchase never
-  // touches Product.stock, so this is the only place raw material stock
-  // is visible.
+  // vendor + material name + unit, running qty = Purchase + Added - Purchase Return - Deducted.
   const materialStockRows = useMemo(() => {
-    const groups: Record<string, { vendorId: string; vendorName: string; materialName: string; unit: string; purchasedQty: number; returnedQty: number }> = {};
+    const groups: Record<string, {
+      vendorId: string;
+      vendorName: string;
+      materialName: string;
+      unit: string;
+      purchasedQty: number;
+      returnedQty: number;
+      addedQty: number;
+      deductedQty: number;
+    }> = {};
 
     state.purchases.forEach(p => {
       const vendorName = state.vendors.find(v => v.id === p.vendorId)?.name || 'Unknown Vendor';
       p.items.forEach(it => {
         const key = `${p.vendorId}::${it.materialName.trim().toLowerCase()}::${it.unit.trim().toLowerCase()}`;
         if (!groups[key]) {
-          groups[key] = { vendorId: p.vendorId, vendorName, materialName: it.materialName, unit: it.unit, purchasedQty: 0, returnedQty: 0 };
+          groups[key] = { vendorId: p.vendorId, vendorName, materialName: it.materialName, unit: it.unit, purchasedQty: 0, returnedQty: 0, addedQty: 0, deductedQty: 0 };
         }
         groups[key].purchasedQty += it.quantity;
       });
@@ -241,13 +293,29 @@ export default function ReportStockPage() {
       r.items.forEach(it => {
         const key = `${r.vendorId}::${it.materialName.trim().toLowerCase()}::${it.unit.trim().toLowerCase()}`;
         if (!groups[key]) {
-          groups[key] = { vendorId: r.vendorId, vendorName, materialName: it.materialName, unit: it.unit, purchasedQty: 0, returnedQty: 0 };
+          groups[key] = { vendorId: r.vendorId, vendorName, materialName: it.materialName, unit: it.unit, purchasedQty: 0, returnedQty: 0, addedQty: 0, deductedQty: 0 };
         }
         groups[key].returnedQty += it.quantity;
       });
     });
 
-    let rows = Object.values(groups).map(g => ({ ...g, currentQty: g.purchasedQty - g.returnedQty }));
+    (state.materialAdjustments || []).forEach(adj => {
+      const vendorName = state.vendors.find(v => v.id === adj.vendorId)?.name || 'Unknown Vendor';
+      const key = `${adj.vendorId}::${adj.materialName.trim().toLowerCase()}::${adj.unit.trim().toLowerCase()}`;
+      if (!groups[key]) {
+        groups[key] = { vendorId: adj.vendorId, vendorName, materialName: adj.materialName, unit: adj.unit, purchasedQty: 0, returnedQty: 0, addedQty: 0, deductedQty: 0 };
+      }
+      if (adj.type === 'ADD') {
+        groups[key].addedQty += adj.quantity;
+      } else {
+        groups[key].deductedQty += adj.quantity;
+      }
+    });
+
+    let rows = Object.values(groups).map(g => ({
+      ...g,
+      currentQty: g.purchasedQty + g.addedQty - g.returnedQty - g.deductedQty
+    }));
 
     if (materialVendorFilter !== 'all') {
       rows = rows.filter(r => r.vendorId === materialVendorFilter);
@@ -258,7 +326,7 @@ export default function ReportStockPage() {
     }
 
     return rows.sort((a, b) => a.vendorName.localeCompare(b.vendorName) || a.materialName.localeCompare(b.materialName));
-  }, [state.purchases, state.purchaseReturns, state.vendors, materialVendorFilter, searchQuery]);
+  }, [state.purchases, state.purchaseReturns, state.materialAdjustments, state.vendors, materialVendorFilter, searchQuery]);
 
   // 2. Production logs filter memo
   const filteredLogs = useMemo(() => {
@@ -797,27 +865,81 @@ export default function ReportStockPage() {
                       <th className="p-3">Unit</th>
                       <th className="p-3 text-right">Purchased</th>
                       <th className="p-3 text-right">Returned</th>
+                      <th className="p-3 text-right">Manual Adj</th>
                       <th className="p-3 text-right">Current Stock</th>
+                      <th className="p-3 text-right pr-4">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {materialStockRows.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="text-center p-8 text-slate-400">
+                        <td colSpan={8} className="text-center p-8 text-slate-400">
                           No raw material purchases recorded yet.
                         </td>
                       </tr>
                     ) : (
-                      materialStockRows.map((r, idx) => (
-                        <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                          <td className="p-3 pl-4 font-semibold text-slate-700">{r.vendorName}</td>
-                          <td className="p-3 text-slate-800">{r.materialName}</td>
-                          <td className="p-3 text-slate-500">{r.unit}</td>
-                          <td className="p-3 text-right font-semibold text-emerald-700">{r.purchasedQty.toLocaleString()}</td>
-                          <td className="p-3 text-right font-semibold text-rose-700">{r.returnedQty > 0 ? r.returnedQty.toLocaleString() : '-'}</td>
-                          <td className={`p-3 text-right font-bold ${r.currentQty <= 0 ? 'text-red-600' : 'text-slate-900'}`}>{r.currentQty.toLocaleString()}</td>
-                        </tr>
-                      ))
+                      materialStockRows.map((r, idx) => {
+                        const netAdj = r.addedQty - r.deductedQty;
+                        return (
+                          <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                            <td className="p-3 pl-4 font-semibold text-slate-700">{r.vendorName}</td>
+                            <td className="p-3 text-slate-800">{r.materialName}</td>
+                            <td className="p-3 text-slate-500">{r.unit}</td>
+                            <td className="p-3 text-right font-semibold text-emerald-700">{r.purchasedQty.toLocaleString()}</td>
+                            <td className="p-3 text-right font-semibold text-rose-700">{r.returnedQty > 0 ? r.returnedQty.toLocaleString() : '-'}</td>
+                            <td className="p-3 text-right text-xs font-semibold text-slate-600">
+                              {netAdj > 0 ? `+${netAdj.toLocaleString()}` : netAdj < 0 ? `${netAdj.toLocaleString()}` : '-'}
+                            </td>
+                            <td className={`p-3 text-right font-bold ${r.currentQty <= 0 ? 'text-red-600' : 'text-slate-900'}`}>{r.currentQty.toLocaleString()}</td>
+                            <td className="p-3 text-right pr-4">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => {
+                                    setMaterialAdjModal({
+                                      isOpen: true,
+                                      type: 'DEDUCT',
+                                      vendorId: r.vendorId,
+                                      vendorName: r.vendorName,
+                                      materialName: r.materialName,
+                                      unit: r.unit,
+                                      currentQty: r.currentQty
+                                    });
+                                    setMaterialAdjQty('');
+                                    setMaterialAdjRemarks('');
+                                    setMaterialAdjError('');
+                                  }}
+                                  title="Deduct / Reduce Material Stock"
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 transition-colors"
+                                >
+                                  <Minus size={13} />
+                                  Deduct
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setMaterialAdjModal({
+                                      isOpen: true,
+                                      type: 'ADD',
+                                      vendorId: r.vendorId,
+                                      vendorName: r.vendorName,
+                                      materialName: r.materialName,
+                                      unit: r.unit,
+                                      currentQty: r.currentQty
+                                    });
+                                    setMaterialAdjQty('');
+                                    setMaterialAdjRemarks('');
+                                    setMaterialAdjError('');
+                                  }}
+                                  title="Add Material Stock"
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors"
+                                >
+                                  <Plus size={13} />
+                                  Add
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1546,6 +1668,79 @@ export default function ReportStockPage() {
           </div>
         );
       })()}
+
+      {/* Material Stock Adjustment Modal Dialog (+ and -) */}
+      {materialAdjModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 border border-slate-200" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="flex items-center justify-between pb-4 border-b">
+              <h3 className="text-lg font-bold text-slate-800 font-lora">
+                {materialAdjModal.type === 'DEDUCT' ? 'Deduct Material Stock' : 'Add Material Stock'}
+              </h3>
+              <button
+                onClick={() => setMaterialAdjModal(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="py-4 space-y-4">
+              <div className="bg-slate-50 p-3 rounded-lg border text-xs space-y-1.5 text-slate-700">
+                <div><span className="font-semibold text-slate-500 uppercase tracking-wider text-[10px]">Vendor:</span> <span className="font-bold text-slate-800">{materialAdjModal.vendorName}</span></div>
+                <div><span className="font-semibold text-slate-500 uppercase tracking-wider text-[10px]">Material:</span> <span className="font-bold text-slate-800">{materialAdjModal.materialName}</span></div>
+                <div><span className="font-semibold text-slate-500 uppercase tracking-wider text-[10px]">Unit:</span> <span className="font-semibold text-slate-800">{materialAdjModal.unit}</span></div>
+                <div><span className="font-semibold text-slate-500 uppercase tracking-wider text-[10px]">Current Available Stock:</span> <strong className="text-slate-900 text-sm">{materialAdjModal.currentQty.toLocaleString()} {materialAdjModal.unit}</strong></div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {materialAdjModal.type === 'DEDUCT' ? 'Quantity to Deduct / Reduce *' : 'Quantity to Add *'}
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={materialAdjQty}
+                  onChange={e => {
+                    setMaterialAdjQty(e.target.value);
+                    setMaterialAdjError('');
+                  }}
+                  placeholder={`Enter quantity in ${materialAdjModal.unit}`}
+                  className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  autoFocus
+                />
+              </div>
+
+              {materialAdjError && (
+                <div className="p-3 text-xs bg-rose-50 text-rose-700 rounded-lg border border-rose-200 font-semibold">
+                  {materialAdjError}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3 border-t">
+              <button
+                type="button"
+                onClick={() => setMaterialAdjModal(null)}
+                className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveMaterialAdjustment}
+                className={`px-4 py-2 text-sm font-semibold text-white rounded-lg transition-colors ${
+                  materialAdjModal.type === 'DEDUCT'
+                    ? 'bg-rose-600 hover:bg-rose-700'
+                    : 'bg-emerald-600 hover:bg-emerald-700'
+                }`}
+              >
+                {materialAdjModal.type === 'DEDUCT' ? 'Confirm Reduction' : 'Confirm Addition'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppLayout>
   );
 }
