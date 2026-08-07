@@ -29,7 +29,8 @@ async function list(filters = {}) {
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT wr.*, e.name AS employee_name, s.worker_label AS stage_label
+    `SELECT wr.*, e.name AS employee_name, s.worker_label AS stage_label,
+       (SELECT COUNT(*) FROM dbo.wage_run_items wri WHERE wri.wage_run_id = wr.wage_run_id) AS item_count
      FROM dbo.wage_runs wr
      JOIN dbo.employees e ON e.employee_id = wr.employee_id
      JOIN dbo.stages s ON s.stage_key = wr.stage_key

@@ -1,42 +1,20 @@
-import { useState, useMemo, Fragment } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback, Fragment } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Search, Printer, FileDown, FileSpreadsheet, ArrowLeft, ChevronRight, Filter } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
-import { isChartAccountRestrictedForRole, isBusinessAccountRestrictedForRole } from '@/lib/access';
+import * as api from '@/lib/api';
+import type { OverallTrailRow, LedgerRow } from '@/lib/api';
 
-type AccountGroupType = 'all' | 'customer' | 'subcustomer' | 'vendor' | 'employee' | 'chart_account' | 'business_account';
-
-interface AccountBalanceRow {
-  code: string;
-  description: string;
-  type: AccountGroupType;
-  typeLabel: string;
-  debit: number;
-  credit: number;
-  netBalance: number; // positive = debit (Naam), negative = credit (Jamma)
-  rawObj: any;
-}
-
-interface GenericLedgerRow {
-  date: string;
-  type: string;
-  ref: string;
-  narration: string;
-  debit: number;
-  credit: number;
-}
+type AccountGroupType = 'all' | 'customer' | 'vendor' | 'employee' | 'bank' | 'chart_account' | 'business_account';
 
 export default function OverallTrailContent() {
-  const { state } = useApp();
-
   const [asOfDate, setAsOfDate] = useState(getTodayDate());
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<AccountGroupType>('all');
-  
-  // Selected account for drill-down detailed ledger
-  const [selectedAccount, setSelectedAccount] = useState<AccountBalanceRow | null>(null);
+
+  const [selectedAccount, setSelectedAccount] = useState<OverallTrailRow | null>(null);
   const [isClosing, setIsClosing] = useState(false);
 
   const handleCloseDetail = () => {
@@ -47,236 +25,25 @@ export default function OverallTrailContent() {
     }, 200);
   };
 
-  // Date range for drill-down ledger view
   const [ledgerFromDate, setLedgerFromDate] = useState(getThreeMonthsAgoDate());
   const [ledgerToDate, setLedgerToDate] = useState(getTodayDate());
 
-  // ── Calculate Trail Balances for All Accounts ─────────────────────────────
-  const trailBalances = useMemo<AccountBalanceRow[]>(() => {
-    const list: AccountBalanceRow[] = [];
+  const [trailBalances, setTrailBalances] = useState<OverallTrailRow[]>([]);
+  const [loading, setLoading] = useState(false);
 
-    // 1. Customers
-    state.customers.forEach(c => {
-      let debit = 0;
-      let credit = 0;
+  const loadTrail = useCallback(async () => {
+    setLoading(true);
+    const res = await api.reports.overallTrail({ as_of_date: asOfDate || undefined });
+    if (res.ok) setTrailBalances(res.data.rows);
+    setLoading(false);
+  }, [asOfDate]);
 
-      // Sale Bills (+)
-      state.saleBills
-        .filter(b => b.customerId === c.id && (!asOfDate || b.date <= asOfDate))
-        .forEach(b => { debit += (b.totalValue || 0); });
+  useEffect(() => { loadTrail(); }, [loadTrail]);
 
-      // Sale Returns (-)
-      state.saleReturns
-        .filter(r => r.customerId === c.id && (!asOfDate || r.date <= asOfDate))
-        .forEach(r => {
-          const val = r.items.reduce((s, i) => s + (i.value || 0), 0) - (r.invoiceDiscount || 0);
-          credit += val;
-        });
-
-      // Receipts (-)
-      state.receipts
-        .filter(rc => rc.customerId === c.id && (!asOfDate || rc.date <= asOfDate))
-        .forEach(rc => {
-          credit += (rc.amount || 0);
-          if (rc.commission) credit += rc.commission;
-          if (rc.chequeStatus === 'BOUNCED' && rc.bouncedDate && (!asOfDate || rc.bouncedDate <= asOfDate)) {
-            debit += (rc.amount + (rc.commission || 0));
-          }
-          if (rc.chequeStatus === 'RETURNED' && rc.returnedDate && (!asOfDate || rc.returnedDate <= asOfDate)) {
-            debit += (rc.amount + (rc.commission || 0));
-          }
-        });
-
-      const net = debit - credit;
-      list.push({
-        code: c.id,
-        description: c.name,
-        type: 'customer',
-        typeLabel: 'Customer',
-        debit: net > 0 ? net : 0,
-        credit: net < 0 ? Math.abs(net) : 0,
-        netBalance: net,
-        rawObj: c
-      });
-    });
-
-    // 2. Sub-Customers
-    state.subCustomers.forEach(s => {
-      let debit = 0;
-      let credit = 0;
-
-      state.saleBills
-        .filter(b => b.subCustomerId === s.id && (!asOfDate || b.date <= asOfDate))
-        .forEach(b => {
-          debit += (b.totalValue || 0);
-        });
-
-      state.saleReturns
-        .filter(r => r.subCustomerId === s.id && (!asOfDate || r.date <= asOfDate))
-        .forEach(r => {
-          const val = r.items.reduce((acc, it) => acc + (it.value || 0), 0) - (r.invoiceDiscount || 0);
-          credit += val;
-        });
-
-      const net = debit - credit;
-      list.push({
-        code: s.id,
-        description: s.name,
-        type: 'subcustomer',
-        typeLabel: 'Sub-Customer',
-        debit: net > 0 ? net : 0,
-        credit: net < 0 ? Math.abs(net) : 0,
-        netBalance: net,
-        rawObj: s
-      });
-    });
-
-    // 3. Vendors
-    state.vendors.forEach(v => {
-      let debit = 0;
-      let credit = 0;
-
-      state.purchases
-        .filter(pr => pr.vendorId === v.id && (!asOfDate || pr.date <= asOfDate))
-        .forEach(pr => { debit += (pr.totalValue || 0); });
-
-      state.purchaseReturns
-        .filter(prr => prr.vendorId === v.id && (!asOfDate || prr.date <= asOfDate))
-        .forEach(prr => { credit += (prr.totalValue || 0); });
-
-      if (v.baId) {
-        state.expenses
-          .filter(ex => ex.businessAccountId === v.baId && (!asOfDate || ex.date <= asOfDate))
-          .forEach(ex => { credit += (ex.amount || 0); });
-      }
-
-      state.chequeAllocations
-        .filter(a => a.dispositionType === 'VENDOR_PAYMENT' && a.targetId === v.id && (!asOfDate || a.allocationDate <= asOfDate))
-        .forEach(a => {
-          credit += (a.amount || 0);
-          const src = state.receipts.find(rc => rc.id === a.receiptId);
-          if (a.status === 'REVERSED' && src?.bouncedDate && (!asOfDate || src.bouncedDate <= asOfDate)) {
-            debit += a.amount;
-          }
-        });
-
-      const net = debit - credit;
-      list.push({
-        code: v.id,
-        description: v.name,
-        type: 'vendor',
-        typeLabel: 'Vendor Partner',
-        debit: net > 0 ? net : 0,
-        credit: net < 0 ? Math.abs(net) : 0,
-        netBalance: net,
-        rawObj: v
-      });
-    });
-
-    // 4. Employees / Workers
-    state.employees.forEach(e => {
-      let debit = 0;
-      let credit = 0;
-
-      if (state.wageRuns) {
-        state.wageRuns
-          .filter(wr => wr.employeeId === e.id && wr.status === 'Posted' && (!asOfDate || wr.date <= asOfDate))
-          .forEach(wr => { debit += (wr.totalAmount || 0); });
-      }
-
-      if (state.salaryRuns) {
-        state.salaryRuns
-          .filter(sr => sr.status === 'Posted' && (!asOfDate || sr.date <= asOfDate))
-          .forEach(sr => {
-            const item = sr.items.find(it => it.employeeId === e.id);
-            if (item) debit += (item.amount || 0);
-          });
-      }
-
-      if (e.baId) {
-        state.expenses
-          .filter(ex => ex.businessAccountId === e.baId && (!asOfDate || ex.date <= asOfDate))
-          .forEach(ex => { credit += (ex.amount || 0); });
-      }
-
-      const net = debit - credit;
-      list.push({
-        code: e.id,
-        description: e.name,
-        type: 'employee',
-        typeLabel: e.employeeType === 'WORKER' ? 'Worker' : 'Salaried Employee',
-        debit: net > 0 ? net : 0,
-        credit: net < 0 ? Math.abs(net) : 0,
-        netBalance: net,
-        rawObj: e
-      });
-    });
-
-    // 5. Chart of Accounts (e.g. Director Expenses, Utilities, Rent, Cash, Banks)
-    // UC-03: a User must never see a restricted chart head's balance here.
-    state.chartAccounts.forEach(ca => {
-      if (isChartAccountRestrictedForRole(ca, state.currentUserRole)) return;
-      let debit = 0;
-      let credit = 0;
-
-      const childBAs = state.businessAccounts.filter(ba => ba.controlId === ca.id);
-      childBAs.forEach(ba => {
-        debit += (ba.openingBalance || 0);
-        state.expenses
-          .filter(ex => ex.businessAccountId === ba.id && (!asOfDate || ex.date <= asOfDate))
-          .forEach(ex => { debit += (ex.amount || 0); });
-      });
-
-      const net = debit - credit;
-      list.push({
-        code: ca.id,
-        description: ca.name,
-        type: 'chart_account',
-        typeLabel: 'Chart of Account',
-        debit: net > 0 ? net : 0,
-        credit: net < 0 ? Math.abs(net) : 0,
-        netBalance: net,
-        rawObj: ca
-      });
-    });
-
-    // 6. Business Accounts
-    // UC-03: skip any business account whose parent chart head is restricted
-    // for this role (named banks, directors' personal draw accounts, etc).
-    state.businessAccounts.forEach(ba => {
-      if (isBusinessAccountRestrictedForRole(ba, state.chartAccounts, state.currentUserRole)) return;
-      let debit = ba.openingBalance || 0;
-      let credit = 0;
-
-      state.expenses
-        .filter(ex => ex.businessAccountId === ba.id && (!asOfDate || ex.date <= asOfDate))
-        .forEach(ex => { debit += (ex.amount || 0); });
-
-      const net = debit - credit;
-      list.push({
-        code: ba.id,
-        description: ba.name,
-        type: 'business_account',
-        typeLabel: 'Business Account',
-        debit: net > 0 ? net : 0,
-        credit: net < 0 ? Math.abs(net) : 0,
-        netBalance: net,
-        rawObj: ba
-      });
-    });
-
-    return list;
-  }, [state, asOfDate]);
-
-  // Accounts filtered strictly by the active category tab
   const dropdownAccounts = useMemo(() => {
-    return trailBalances.filter(r => {
-      if (selectedGroup !== 'all' && r.type !== selectedGroup) return false;
-      return true;
-    });
+    return trailBalances.filter(r => selectedGroup === 'all' || r.type === selectedGroup);
   }, [trailBalances, selectedGroup]);
 
-  // Main table filtered rows
   const filteredBalances = useMemo(() => {
     return trailBalances.filter(r => {
       if (selectedGroup !== 'all' && r.type !== selectedGroup) return false;
@@ -285,202 +52,58 @@ export default function OverallTrailContent() {
       return (
         r.description.toLowerCase().includes(q) ||
         r.code.toLowerCase().includes(q) ||
-        r.typeLabel.toLowerCase().includes(q)
+        r.type_label.toLowerCase().includes(q)
       );
     });
   }, [trailBalances, selectedGroup, searchQuery]);
 
-  // Grouped rows for section subtotals
   const groupedBalances = useMemo(() => {
-    const map = new Map<string, AccountBalanceRow[]>();
+    const map = new Map<string, OverallTrailRow[]>();
     filteredBalances.forEach(row => {
-      const label = row.typeLabel;
+      const label = row.type_label;
       if (!map.has(label)) map.set(label, []);
       map.get(label)!.push(row);
     });
     return Array.from(map.entries());
   }, [filteredBalances]);
 
-  // Grand Totals
-  const totals = useMemo(() => {
+  const filteredTotals = useMemo(() => {
     return filteredBalances.reduce((acc, r) => ({
       totalDebit: acc.totalDebit + r.debit,
       totalCredit: acc.totalCredit + r.credit,
-      netTotal: acc.netTotal + r.netBalance
-    }), { totalDebit: 0, totalCredit: 0, netTotal: 0 });
+    }), { totalDebit: 0, totalCredit: 0 });
   }, [filteredBalances]);
 
-  // ── Drill-down Detailed Ledger Entries Generator ───────────────────────────
-  const selectedAccountLedger = useMemo<GenericLedgerRow[]>(() => {
-    if (!selectedAccount) return [];
+  // Drill-down: every row already carries either ba_id or ac_id — reuse the same
+  // reports.accountLedger() channel every other ledger view uses.
+  const [ledger, setLedger] = useState<{ opening_balance: number; rows: LedgerRow[]; closing_balance: number } | null>(null);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
 
-    const entries: GenericLedgerRow[] = [];
-    const acc = selectedAccount;
-
-    if (acc.type === 'customer') {
-      const cId = acc.code;
-      state.saleBills.filter(b => b.customerId === cId).forEach(b => {
-        const pairs = b.items.reduce((s, i) => s + (i.pairs || 0), 0);
-        entries.push({
-          date: b.date,
-          type: 'Sale Bill',
-          ref: b.billNo || b.id,
-          narration: `Sale Bill (${pairs} pairs)`,
-          debit: b.totalValue,
-          credit: 0
-        });
-      });
-
-      state.saleReturns.filter(r => r.customerId === cId).forEach(r => {
-        const pairs = r.items.reduce((s, i) => s + (i.pairs || 0), 0);
-        const val = r.items.reduce((s, i) => s + (i.value || 0), 0) - (r.invoiceDiscount || 0);
-        entries.push({
-          date: r.date,
-          type: 'Sale Return',
-          ref: r.billNo || r.id,
-          narration: `Sale Return (${pairs} pairs)`,
-          debit: 0,
-          credit: val
-        });
-      });
-
-      state.receipts.filter(rc => rc.customerId === cId).forEach(rc => {
-        entries.push({
-          date: rc.date,
-          type: 'Receipt (Jamma)',
-          ref: rc.id,
-          narration: rc.paymentMode === 'Cheque' ? `Cheque #${rc.chequeNo || ''}` : `Cash Receipt`,
-          debit: 0,
-          credit: rc.amount
-        });
-        if (rc.commission) {
-          entries.push({
-            date: rc.date,
-            type: 'Commission',
-            ref: rc.id,
-            narration: 'Invoice Discount / Commission',
-            debit: 0,
-            credit: rc.commission
-          });
-        }
-      });
-    } else if (acc.type === 'vendor') {
-      const vId = acc.code;
-      state.purchases.filter(pr => pr.vendorId === vId).forEach(pr => {
-        entries.push({
-          date: pr.date,
-          type: 'Purchase',
-          ref: pr.id,
-          narration: `Material Purchase`,
-          debit: pr.totalValue,
-          credit: 0
-        });
-      });
-
-      state.purchaseReturns.filter(prr => prr.vendorId === vId).forEach(prr => {
-        entries.push({
-          date: prr.date,
-          type: 'Purchase Return',
-          ref: prr.id,
-          narration: `Purchase Return`,
-          debit: 0,
-          credit: prr.totalValue
-        });
-      });
-
-      if (acc.rawObj?.baId) {
-        state.expenses.filter(ex => ex.businessAccountId === acc.rawObj.baId).forEach(ex => {
-          entries.push({
-            date: ex.date,
-            type: 'Vendor Payment',
-            ref: ex.id,
-            narration: ex.remarks || 'Payment paid to vendor',
-            debit: 0,
-            credit: ex.amount
-          });
-        });
-      }
-    } else if (acc.type === 'employee') {
-      const empId = acc.code;
-      if (state.wageRuns) {
-        state.wageRuns.filter(wr => wr.employeeId === empId && wr.status === 'Posted').forEach(wr => {
-          entries.push({
-            date: wr.date,
-            type: 'Wage Run Accrual',
-            ref: wr.id,
-            narration: `Piece-rate wage for stage ${wr.stage}`,
-            debit: wr.totalAmount,
-            credit: 0
-          });
-        });
-      }
-      if (acc.rawObj?.baId) {
-        state.expenses.filter(ex => ex.businessAccountId === acc.rawObj.baId).forEach(ex => {
-          entries.push({
-            date: ex.date,
-            type: 'Employee Payment',
-            ref: ex.id,
-            narration: ex.remarks || 'Payment Paid',
-            debit: 0,
-            credit: ex.amount
-          });
-        });
-      }
-    } else if ((acc.type === 'business_account' || acc.type === 'chart_account') && acc.code) {
-      const targetId = acc.code;
-      state.expenses.filter(ex => ex.businessAccountId === targetId).forEach(ex => {
-        entries.push({
-          date: ex.date,
-          type: 'Expense Entry',
-          ref: ex.id,
-          narration: ex.remarks || 'Expense Out',
-          debit: ex.amount,
-          credit: 0
-        });
-      });
-    }
-
-    entries.sort((a, b) => a.date.localeCompare(b.date));
-    return entries;
-  }, [selectedAccount, state]);
-
-  const { openingBal, filteredLedgerRows, endingBal } = useMemo(() => {
-    let openB = 0;
-    let before = selectedAccountLedger;
-    let filtered = selectedAccountLedger;
-
-    if (ledgerFromDate) {
-      before = selectedAccountLedger.filter(e => e.date < ledgerFromDate);
-      filtered = selectedAccountLedger.filter(e => e.date >= ledgerFromDate);
-      openB = before.reduce((acc, e) => acc + (e.debit - e.credit), 0);
-    }
-
-    if (ledgerToDate) {
-      filtered = filtered.filter(e => e.date <= ledgerToDate);
-    }
-
-    let running = openB;
-    const rows = filtered.map(e => {
-      running += (e.debit - e.credit);
-      return { ...e, balance: running };
+  const loadLedger = useCallback(async () => {
+    if (!selectedAccount) return;
+    setLedgerLoading(true);
+    const res = await api.reports.accountLedger({
+      ba_id: selectedAccount.ba_id,
+      ac_id: selectedAccount.ac_id,
+      date_from: ledgerFromDate || undefined,
+      date_to: ledgerToDate || undefined,
     });
+    if (res.ok) setLedger(res.data); else setLedger(null);
+    setLedgerLoading(false);
+  }, [selectedAccount, ledgerFromDate, ledgerToDate]);
 
-    return { openingBal: openB, filteredLedgerRows: rows, endingBal: running };
-  }, [selectedAccountLedger, ledgerFromDate, ledgerToDate]);
+  useEffect(() => { if (selectedAccount) loadLedger(); }, [selectedAccount, loadLedger]);
 
-  // Handle Export Excel & PDF
   const handleExportExcel = () => {
     const headers = ['Account Code', 'Account Description', 'Category', 'Debit (Naam)', 'Credit (Jamma)', 'Net Balance'];
     const rows = [
       ...filteredBalances.map(r => [
-        r.code,
-        r.description,
-        r.typeLabel,
+        r.code, r.description, r.type_label,
         r.debit > 0 ? r.debit : '-',
         r.credit > 0 ? `(${r.credit})` : '-',
-        r.netBalance
+        r.net_balance
       ]),
-      ['Total', '', '', totals.totalDebit, `(${totals.totalCredit})`, totals.netTotal]
+      ['Total', '', '', filteredTotals.totalDebit, `(${filteredTotals.totalCredit})`, filteredTotals.totalDebit - filteredTotals.totalCredit]
     ];
     exportRowsToExcel(`overall-trail-balances-${asOfDate}`, headers, rows);
   };
@@ -492,11 +115,11 @@ export default function OverallTrailContent() {
         <div>
           {/* Top Filter Container with Searchable Select & Action Buttons */}
           <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-5 shadow-2xs" data-no-print>
-            
+
             {/* ROW 1: Search Input, SearchableSelect Dropdown, As On Date, & Actions */}
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
-                
+
                 {/* Search Text Input */}
                 <div className="relative min-w-[200px] flex-1 max-w-xs">
                   <Search className="absolute left-3 top-2.5 text-slate-400" size={15} />
@@ -514,7 +137,7 @@ export default function OverallTrailContent() {
                   <SearchableSelect
                     options={dropdownAccounts.map(acc => ({
                       value: `${acc.type}-${acc.code}`,
-                      label: `${acc.code} — ${acc.description} (${acc.typeLabel})`
+                      label: `${acc.code} — ${acc.description} (${acc.type_label})`
                     }))}
                     value=""
                     onChange={(val: string) => {
@@ -557,7 +180,7 @@ export default function OverallTrailContent() {
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider mr-1 flex items-center gap-1">
                 <Filter size={13} /> Quick Filter:
               </span>
-              {(['all', 'customer', 'subcustomer', 'vendor', 'employee', 'chart_account', 'business_account'] as const).map(grp => (
+              {(['all', 'customer', 'vendor', 'employee', 'bank', 'chart_account', 'business_account'] as const).map(grp => (
                 <button
                   key={grp}
                   type="button"
@@ -568,13 +191,13 @@ export default function OverallTrailContent() {
                       : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
                   }`}
                 >
-                  {grp === 'all' ? 'All Accounts' : grp === 'customer' ? 'Customers' : grp === 'subcustomer' ? 'Sub-Customers' : grp === 'vendor' ? 'Vendors' : grp === 'employee' ? 'Employees' : grp === 'chart_account' ? 'Chart Accounts' : 'Business Accounts'}
+                  {grp === 'all' ? 'All Accounts' : grp === 'customer' ? 'Customers' : grp === 'vendor' ? 'Vendors' : grp === 'employee' ? 'Employees' : grp === 'bank' ? 'Banks' : grp === 'chart_account' ? 'Chart Accounts' : 'Business Accounts'}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Main Balances Table (Formatted with Rounded Account Code Pill Badges & Section Subtotals) */}
+          {/* Main Balances Table */}
           <div className="card-white p-5 md:p-6 bg-white border">
             {/* Header metadata */}
             <div className="border-b pb-3 mb-4 flex justify-between items-start">
@@ -591,7 +214,6 @@ export default function OverallTrailContent() {
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  {/* Sidebar Navy & Gold Header */}
                   <tr className="bg-[#111c2a] text-[#B08D57] font-bold uppercase tracking-wider text-[11px] border-b border-[#1a293d]">
                     <th className="p-3 border-r border-[#1a293d]" style={{ width: '160px' }}>Account Code</th>
                     <th className="p-3 border-r border-[#1a293d]">Account Description</th>
@@ -609,7 +231,9 @@ export default function OverallTrailContent() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredBalances.length === 0 ? (
+                  {loading ? (
+                    <tr><td colSpan={6} className="text-center p-8 text-slate-400 italic">Loading…</td></tr>
+                  ) : filteredBalances.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="text-center p-8 text-slate-400 italic">
                         No account balances found for the selected filter.
@@ -622,21 +246,18 @@ export default function OverallTrailContent() {
 
                       return (
                         <Fragment key={groupName}>
-                          {/* Category Section Header Banner - Sidebar Wentox Navy & Gold (Icon Removed) */}
                           <tr className="bg-[#111c2a] text-[#B08D57] font-bold text-xs border-y border-[#B08D57]/30">
                             <td colSpan={6} className="py-2.5 px-4 font-lora font-bold text-xs text-[#B08D57] uppercase tracking-wider">
                               CATEGORY SECTION: {groupName.toUpperCase()} ({groupRows.length} ACCOUNTS)
                             </td>
                           </tr>
 
-                          {/* Account Rows */}
                           {groupRows.map((row, idx) => (
                             <tr
                               key={`${row.type}-${row.code}-${idx}`}
                               onClick={() => setSelectedAccount(row)}
                               className="hover:bg-slate-50/80 transition-colors cursor-pointer group even:bg-slate-50/30"
                             >
-                              {/* Account Code Pill Badge */}
                               <td className="p-2.5 pl-3 border-r border-slate-100">
                                 <span className="inline-block px-3 py-1 text-xs font-mono font-bold rounded-full bg-[#111c2a] text-[#B08D57] border border-[#B08D57]/30 shadow-xs">
                                   {row.code}
@@ -650,7 +271,7 @@ export default function OverallTrailContent() {
                               </td>
                               <td className="p-2.5 border-r border-slate-100">
                                 <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border uppercase tracking-wider">
-                                  {row.typeLabel}
+                                  {row.type_label}
                                 </span>
                               </td>
                               <td className="p-2.5 text-right font-bold text-slate-900 border-r border-slate-100 font-mono">
@@ -681,7 +302,6 @@ export default function OverallTrailContent() {
                             </tr>
                           ))}
 
-                          {/* Section Subtotal / Summary Row Banner - Left Aligned Text */}
                           <tr className="bg-[#111c2a] text-[#B08D57] font-bold text-xs border-y-2 border-[#B08D57]">
                             <td colSpan={3} className="p-3 text-left pl-4 font-bold text-[#B08D57] uppercase tracking-wider border-r border-[#1a293d] font-lora">
                               SUBTOTAL SUMMARY FOR {groupName.toUpperCase()} ({groupRows.length} ACCOUNTS):
@@ -704,8 +324,8 @@ export default function OverallTrailContent() {
                     <td colSpan={3} className="p-3 text-right uppercase tracking-wider text-[#B08D57] border-r border-slate-800 font-bold">
                       Grand Total Trail Balances
                     </td>
-                    <td className="p-3 text-right border-r border-slate-800 text-emerald-400 font-bold font-mono">{formatCurrency(totals.totalDebit)}</td>
-                    <td className="p-3 text-right border-r border-slate-800 text-rose-300 font-bold font-mono">({formatCurrency(totals.totalCredit)})</td>
+                    <td className="p-3 text-right border-r border-slate-800 text-emerald-400 font-bold font-mono">{formatCurrency(filteredTotals.totalDebit)}</td>
+                    <td className="p-3 text-right border-r border-slate-800 text-rose-300 font-bold font-mono">({formatCurrency(filteredTotals.totalCredit)})</td>
                     <td className="p-3"></td>
                   </tr>
                 </tfoot>
@@ -730,7 +350,7 @@ export default function OverallTrailContent() {
                   {selectedAccount.description} — Detailed Ledger
                 </h2>
                 <p className="text-xs text-slate-500 font-medium mt-0.5">
-                  Code: {selectedAccount.code} • Category: {selectedAccount.typeLabel}
+                  Code: {selectedAccount.code} • Category: {selectedAccount.type_label}
                 </p>
               </div>
             </div>
@@ -771,7 +391,7 @@ export default function OverallTrailContent() {
 
             <div className="px-3.5 py-1.5 bg-slate-900 text-white rounded-lg flex items-center gap-2 text-xs font-semibold">
               <span className="text-slate-400">Net Ending Balance:</span>
-              <span className="text-[#B08D57] font-bold">{formatCurrency(endingBal)}</span>
+              <span className="text-[#B08D57] font-bold">{formatCurrency(ledger?.closing_balance || 0)}</span>
             </div>
           </div>
 
@@ -809,21 +429,23 @@ export default function OverallTrailContent() {
                     <td className="p-3 italic text-slate-500">Opening Balance brought forward</td>
                     <td className="p-3 text-right">0</td>
                     <td className="p-3 text-right">0</td>
-                    <td className="p-3 text-right font-bold text-amber-900">{formatCurrency(openingBal)}</td>
+                    <td className="p-3 text-right font-bold text-amber-900">{formatCurrency(ledger?.opening_balance || 0)}</td>
                   </tr>
 
-                  {filteredLedgerRows.length === 0 ? (
+                  {ledgerLoading ? (
+                    <tr><td colSpan={7} className="text-center p-6 text-slate-400 italic">Loading…</td></tr>
+                  ) : !ledger || ledger.rows.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="text-center p-6 text-slate-400 italic">
                         No ledger transactions found for this date range.
                       </td>
                     </tr>
                   ) : (
-                    filteredLedgerRows.map((row, idx) => (
-                      <tr key={idx} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                    ledger.rows.map((row) => (
+                      <tr key={row.entry_id} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
                         <td className="p-3 font-medium text-slate-600">{row.date}</td>
                         <td className="p-3 font-semibold text-slate-800">{row.type}</td>
-                        <td className="p-3 text-slate-500 font-mono">{row.ref}</td>
+                        <td className="p-3 text-slate-500 font-mono">{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                         <td className="p-3 text-slate-700">{row.narration}</td>
                         <td className="p-3 text-right font-semibold text-slate-900">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
                         <td className="p-3 text-right font-semibold text-slate-900">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>

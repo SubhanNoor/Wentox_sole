@@ -1,4 +1,4 @@
-import type { State } from '@/context/AppContext';
+import type { WageRunRow, ExpenseRow } from '@/lib/api';
 
 /**
  * Payroll balances — the whole balance block on both run screens and the
@@ -9,48 +9,62 @@ import type { State } from '@/context/AppContext';
  * snapshot on every LATER run, with nothing to flag it. Deriving live, there is
  * no snapshot to go stale.
  *
- * Only POSTED runs count. An unposted run contributes nothing, which is what
- * makes unpost meaningful rather than cosmetic.
+ * Only CONFIRMED (posted) runs count. A DRAFT run contributes nothing, which is
+ * what makes unpost meaningful rather than cosmetic.
  *
- * Lives in lib/ rather than AppContext for the same reason deriveChequeStatus
- * does: it is domain arithmetic over state, not state management.
+ * Real backend `list()` calls never carry a salary run's line items (only
+ * `item_count`) — a caller that needs per-employee salary accrual must flatten
+ * `salaryRuns.get(id).items` for every CONFIRMED run itself and pass the result
+ * in as `salaryItems`. Wage runs don't have this problem: `list()` already
+ * carries `total_amount` per run, one row per employee, so no flattening step
+ * is needed there.
  */
 
-/** Everything an employee has EARNED on or before `upto` (inclusive). */
-export function accruedUpto(state: State, employeeId: string, upto?: string): number {
-  const emp = state.employees.find(e => e.id === employeeId);
-  if (!emp) return 0;
+export interface FlatSalaryItem {
+  employee_id: number;
+  amount: number;
+  run_date: string;
+  status: 'DRAFT' | 'CONFIRMED';
+}
 
-  if (emp.employeeType === 'WORKER') {
-    return state.wageRuns
-      .filter(r => r.employeeId === employeeId && r.status === 'Posted')
-      .filter(r => !upto || r.date <= upto)
-      .reduce((s, r) => s + r.totalAmount, 0);
+/** Everything an employee has EARNED on or before `upto` (inclusive). */
+export function accruedUpto(
+  employee: { employee_id: number; employee_type: 'WORKER' | 'SALARIED' },
+  wageRuns: WageRunRow[],
+  salaryItems: FlatSalaryItem[],
+  upto?: string,
+): number {
+  if (employee.employee_type === 'WORKER') {
+    return wageRuns
+      .filter(r => r.employee_id === employee.employee_id && r.status === 'CONFIRMED')
+      .filter(r => !upto || r.run_date <= upto)
+      .reduce((s, r) => s + r.total_amount, 0);
   }
 
   // A salaried employee's accrual is their LINE on each posted month, not the
   // run's total — the run covers everyone.
-  return state.salaryRuns
-    .filter(r => r.status === 'Posted')
-    .filter(r => !upto || r.date <= upto)
-    .reduce((s, r) => s + r.items
-      .filter(i => i.employeeId === employeeId)
-      .reduce((t, i) => t + i.amount, 0), 0);
+  return salaryItems
+    .filter(i => i.employee_id === employee.employee_id && i.status === 'CONFIRMED')
+    .filter(i => !upto || i.run_date <= upto)
+    .reduce((s, i) => s + i.amount, 0);
 }
 
-/** Everything PAID to an employee on or before `upto` (inclusive). */
-export function paidUpto(state: State, employeeId: string, upto?: string): number {
-  const emp = state.employees.find(e => e.id === employeeId);
-  if (!emp) return 0;
-  return state.expenses
-    .filter(ex => ex.businessAccountId === emp.baId)
-    .filter(ex => !upto || ex.date <= upto)
+/** Everything PAID to an employee (via their linked business account) on or before `upto` (inclusive). */
+export function paidUpto(baId: number, expenses: ExpenseRow[], upto?: string): number {
+  return expenses
+    .filter(ex => ex.ba_id === baId && ex.status === 'CONFIRMED')
+    .filter(ex => !upto || ex.expense_date <= upto)
     .reduce((s, ex) => s + ex.amount, 0);
 }
 
 /** What an employee is owed right now: everything earned minus everything paid. */
-export function getEmployeeBalance(state: State, employeeId: string): number {
-  return accruedUpto(state, employeeId) - paidUpto(state, employeeId);
+export function getEmployeeBalance(
+  employee: { employee_id: number; employee_type: 'WORKER' | 'SALARIED'; ba_id: number },
+  wageRuns: WageRunRow[],
+  salaryItems: FlatSalaryItem[],
+  expenses: ExpenseRow[],
+): number {
+  return accruedUpto(employee, wageRuns, salaryItems) - paidUpto(employee.ba_id, expenses);
 }
 
 function dayBefore(date: string): string {
@@ -69,29 +83,31 @@ function dayBefore(date: string): string {
  * baqaya stops — the cash handed over at this settlement and after.
  *
  * `excludeRunId`: when re-opening an existing run, its own total must not be
- * counted into its own baqaya.
+ * counted into its own baqaya. Worker-only (Wage Run screen never shows a
+ * salaried employee), so no `salaryItems` param is needed here.
  */
 export function getRunBalanceBlock(
-  state: State,
-  employeeId: string,
+  employee: { employee_id: number; ba_id: number },
   date: string,
   grandTotal: number,
-  excludeRunId?: string
+  wageRuns: WageRunRow[],
+  expenses: ExpenseRow[],
+  excludeRunId?: number,
 ): { baqaya: number; banam: number; net: number } {
   const cut = dayBefore(date);
-  const emp = state.employees.find(e => e.id === employeeId);
+  const worker = { employee_id: employee.employee_id, employee_type: 'WORKER' as const };
 
-  let earnedBefore = accruedUpto(state, employeeId, cut);
-  if (excludeRunId && emp?.employeeType === 'WORKER') {
-    const self = state.wageRuns.find(r => r.id === excludeRunId);
-    if (self && self.status === 'Posted' && self.date <= cut) {
-      earnedBefore -= self.totalAmount;
+  let earnedBefore = accruedUpto(worker, wageRuns, [], cut);
+  if (excludeRunId) {
+    const self = wageRuns.find(r => r.wage_run_id === excludeRunId);
+    if (self && self.status === 'CONFIRMED' && self.run_date <= cut) {
+      earnedBefore -= self.total_amount;
     }
   }
 
-  const paidBefore = paidUpto(state, employeeId, cut);
+  const paidBefore = paidUpto(employee.ba_id, expenses, cut);
   const baqaya = earnedBefore - paidBefore;
-  const banam = paidUpto(state, employeeId) - paidBefore;
+  const banam = paidUpto(employee.ba_id, expenses) - paidBefore;
 
   return { baqaya, banam, net: baqaya + grandTotal - banam };
 }

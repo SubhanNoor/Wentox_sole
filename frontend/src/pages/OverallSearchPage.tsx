@@ -1,36 +1,35 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Search, Printer, FileDown, FileSpreadsheet, ArrowLeft, Users, User, Truck, HardHat, Landmark, BookOpen } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import * as api from '@/lib/api';
+import type { OverallDirectoryRow, OverallEntityType, LedgerRow } from '@/lib/api';
 
-type EntityType = 'customer' | 'vendor' | 'employee' | 'subcustomer' | 'account';
+type EntityType = 'customer' | 'vendor' | 'employee' | 'subcustomer' | 'account' | 'bank';
+
+// Backend's entity_type enum -> this page's own lowercase union, mapped once at the API edge.
+const ENTITY_TYPE_MAP: Record<OverallEntityType, { type: EntityType; label: string }> = {
+  CUSTOMER: { type: 'customer', label: 'Customer' },
+  VENDOR: { type: 'vendor', label: 'Vendor Partner' },
+  EMPLOYEE: { type: 'employee', label: 'Employee' },
+  SUB_CUSTOMER: { type: 'subcustomer', label: 'Sub-Customer' },
+  BUSINESS_ACCOUNT: { type: 'account', label: 'Business Account' },
+  BANK: { type: 'bank', label: 'Bank Account' },
+};
 
 interface PersonEntity {
-  id: string;
+  id: number;
   name: string;
   type: EntityType;
   typeLabel: string;
   subtitle: string;
-  phone?: string;
-  city?: string;
-  baId?: string;
-  rawObj: any;
-}
-
-interface GenericLedgerRow {
-  date: string;
-  type: string;
-  ref: string;
-  narration: string;
-  debit: number;
-  credit: number;
+  entityType: OverallEntityType;
+  baId: number | null;
 }
 
 export default function OverallSearchPage() {
-  const { state } = useApp();
-
   const [searchQuery, setSearchQuery] = useState('');
   const [entityFilter, setEntityFilter] = useState<'all' | EntityType>('all');
   const [selectedPerson, setSelectedPerson] = useState<PersonEntity | null>(null);
@@ -47,345 +46,71 @@ export default function OverallSearchPage() {
   const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(getTodayDate());
 
-  // ── Unified Search Directory ────────────────────────────────────────────────
+  const [directory, setDirectory] = useState<OverallDirectoryRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const loadDirectory = useCallback(async () => {
+    setLoading(true);
+    const res = await api.reports.overallSearch({ search: searchQuery.trim() || undefined });
+    if (res.ok) setDirectory(res.data);
+    setLoading(false);
+  }, [searchQuery]);
+
+  useEffect(() => { loadDirectory(); }, [loadDirectory]);
+
   const allPeople = useMemo<PersonEntity[]>(() => {
-    const list: PersonEntity[] = [];
-
-    // 1. Customers
-    state.customers.forEach(c => {
-      const city = state.cities.find(ci => ci.id === c.cityId)?.name || '';
-      list.push({
-        id: c.id,
-        name: c.name,
-        type: 'customer',
-        typeLabel: 'Customer',
-        subtitle: `Code: ${c.id}${city ? ` • ${city}` : ''}`,
-        city,
-        baId: c.baId,
-        rawObj: c
-      });
-    });
-
-    // 2. Vendors
-    state.vendors.forEach(v => {
-      list.push({
-        id: v.id,
-        name: v.name,
-        type: 'vendor',
-        typeLabel: 'Vendor Partner',
-        subtitle: `Code: ${v.id}${v.city ? ` • ${v.city}` : ''}`,
-        phone: v.phone,
-        city: v.city,
-        baId: v.baId,
-        rawObj: v
-      });
-    });
-
-    // 3. Employees / Workers
-    state.employees.forEach(e => {
-      const city = state.cities.find(ci => ci.id === e.cityId)?.name || '';
-      list.push({
-        id: e.id,
-        name: e.name,
-        type: 'employee',
-        typeLabel: e.employeeType === 'WORKER' ? 'Worker (Piece Rate)' : 'Staff (Salaried)',
-        subtitle: `Code: ${e.id}${city ? ` • ${city}` : ''}`,
-        phone: e.phone,
-        city,
-        baId: e.baId,
-        rawObj: e
-      });
-    });
-
-    // 4. Sub-Customers
-    state.subCustomers.forEach(s => {
-      list.push({
-        id: s.id,
-        name: s.name,
-        type: 'subcustomer',
-        typeLabel: 'Sub-Customer',
-        subtitle: `Sub-Customer Code: ${s.id}`,
-        rawObj: s
-      });
-    });
-
-    // 5. Business Accounts
-    state.businessAccounts.forEach(ba => {
-      const chartName = state.chartAccounts.find(ca => ca.id === ba.controlId)?.name || '';
-      list.push({
-        id: ba.id,
-        name: ba.name,
-        type: 'account',
-        typeLabel: 'Business Account',
-        subtitle: `BA Code: ${ba.id}${chartName ? ` • ${chartName}` : ''}`,
-        baId: ba.id,
-        rawObj: ba
-      });
-    });
-
-    return list;
-  }, [state]);
-
-  const filteredPeople = useMemo(() => {
-    return allPeople.filter(p => {
-      if (entityFilter !== 'all' && p.type !== entityFilter) return false;
-      if (!searchQuery.trim()) return true;
-      const q = searchQuery.toLowerCase();
-      return (
-        p.name.toLowerCase().includes(q) ||
-        p.id.toLowerCase().includes(q) ||
-        p.subtitle.toLowerCase().includes(q) ||
-        (p.phone && p.phone.toLowerCase().includes(q))
-      );
-    });
-  }, [allPeople, entityFilter, searchQuery]);
-
-  // ── Unified Ledger Generator ────────────────────────────────────────────────
-  const personLedgerEntries = useMemo<GenericLedgerRow[]>(() => {
-    if (!selectedPerson) return [];
-
-    const entries: GenericLedgerRow[] = [];
-    const p = selectedPerson;
-
-    if (p.type === 'customer') {
-      // Customer Ledger
-      const custId = p.id;
-      state.saleBills.filter(b => b.customerId === custId).forEach(b => {
-        const cartons = b.items.reduce((s, i) => s + (i.cartons || 0), 0);
-        const pairs = b.items.reduce((s, i) => s + (i.pairs || 0), 0);
-        entries.push({
-          date: b.date,
-          type: 'Sale Bill',
-          ref: b.billNo || b.id,
-          narration: `Sale Bill (${cartons} ctn / ${pairs} pairs)`,
-          debit: b.totalValue,
-          credit: 0
-        });
-      });
-
-      state.saleReturns.filter(r => r.customerId === custId).forEach(r => {
-        const cartons = r.items.reduce((s, i) => s + (i.cartons || 0), 0);
-        const pairs = r.items.reduce((s, i) => s + (i.pairs || 0), 0);
-        const totalVal = r.items.reduce((s, i) => s + (i.value || 0), 0) - (r.invoiceDiscount || 0);
-        entries.push({
-          date: r.date,
-          type: 'Sale Return',
-          ref: r.billNo || r.id,
-          narration: `Sale Return (${cartons} ctn / ${pairs} pairs)`,
-          debit: 0,
-          credit: totalVal
-        });
-      });
-
-      state.receipts.filter(rc => rc.customerId === custId).forEach(rc => {
-        entries.push({
-          date: rc.date,
-          type: 'Receipt (Jamma)',
-          ref: rc.id,
-          narration: rc.paymentMode === 'Cheque' ? `Cheque #${rc.chequeNo || ''}` : `Cash Receipt (${rc.remarks || 'Cash'})`,
-          debit: 0,
-          credit: rc.amount
-        });
-        if (rc.commission && rc.commission > 0) {
-          entries.push({
-            date: rc.date,
-            type: 'Commission',
-            ref: rc.id,
-            narration: 'Invoice Discount / Commission',
-            debit: 0,
-            credit: rc.commission
-          });
-        }
-        if (rc.chequeStatus === 'BOUNCED' && rc.bouncedDate) {
-          entries.push({
-            date: rc.bouncedDate,
-            type: 'Cheque Bounced',
-            ref: rc.id,
-            narration: `Cheque #${rc.chequeNo || ''} bounced — reverses receipt`,
-            debit: rc.amount + (rc.commission || 0),
-            credit: 0
-          });
-        }
-        if (rc.chequeStatus === 'RETURNED' && rc.returnedDate) {
-          entries.push({
-            date: rc.returnedDate,
-            type: 'Cheque Returned',
-            ref: rc.id,
-            narration: `Cheque #${rc.chequeNo || ''} returned to sender — reverses receipt`,
-            debit: rc.amount + (rc.commission || 0),
-            credit: 0
-          });
-        }
-      });
-    } else if (p.type === 'vendor') {
-      // Vendor Ledger
-      const vendId = p.id;
-      state.purchases.filter(pr => pr.vendorId === vendId).forEach(pr => {
-        const matName = pr.items[0]?.materialName || 'Goods';
-        entries.push({
-          date: pr.date,
-          type: 'Purchase',
-          ref: pr.id,
-          narration: `Material Purchase (${matName})`,
-          debit: pr.totalValue,
-          credit: 0
-        });
-      });
-
-      state.purchaseReturns.filter(prr => prr.vendorId === vendId).forEach(prr => {
-        entries.push({
-          date: prr.date,
-          type: 'Purchase Return',
-          ref: prr.id,
-          narration: `Material Purchase Return`,
-          debit: 0,
-          credit: prr.totalValue
-        });
-      });
-
-      if (p.baId) {
-        state.expenses.filter(ex => ex.businessAccountId === p.baId).forEach(ex => {
-          entries.push({
-            date: ex.date,
-            type: 'Vendor Payment',
-            ref: ex.id,
-            narration: ex.remarks || 'Payment paid to vendor',
-            debit: 0,
-            credit: ex.amount
-          });
-        });
-      }
-
-      state.chequeAllocations.filter(a => a.dispositionType === 'VENDOR_PAYMENT' && a.targetId === vendId).forEach(a => {
-        const src = state.receipts.find(rc => rc.id === a.receiptId);
-        entries.push({
-          date: a.allocationDate,
-          type: 'Cheque Endorsed',
-          ref: src?.chequeNo || a.id,
-          narration: `Cheque #${src?.chequeNo || ''} endorsed to vendor`,
-          debit: 0,
-          credit: a.amount
-        });
-        if (a.status === 'REVERSED' && src?.bouncedDate) {
-          entries.push({
-            date: src.bouncedDate,
-            type: 'Endorsement Reversed',
-            ref: src.chequeNo || a.id,
-            narration: `Endorsed cheque bounced — reverses payment`,
-            debit: a.amount,
-            credit: 0
-          });
-        }
-      });
-    } else if (p.type === 'employee') {
-      // Employee / Worker Ledger
-      const empId = p.id;
-      if (state.wageRuns) {
-        state.wageRuns.filter(wr => wr.employeeId === empId && wr.status === 'Posted').forEach(wr => {
-          entries.push({
-            date: wr.date,
-            type: 'Wage Run Accrual',
-            ref: wr.id,
-            narration: `Piece-rate wage for stage ${wr.stage}`,
-            debit: wr.totalAmount,
-            credit: 0
-          });
-        });
-      }
-
-      if (state.salaryRuns) {
-        state.salaryRuns.filter(sr => sr.status === 'Posted').forEach(sr => {
-          const item = sr.items.find(it => it.employeeId === empId);
-          if (item) {
-            entries.push({
-              date: sr.date,
-              type: 'Salary Run Accrual',
-              ref: sr.id,
-              narration: `Monthly Salary for ${sr.periodMonth}`,
-              debit: item.amount,
-              credit: 0
-            });
-          }
-        });
-      }
-
-      if (p.baId) {
-        state.expenses.filter(ex => ex.businessAccountId === p.baId).forEach(ex => {
-          entries.push({
-            date: ex.date,
-            type: 'Employee Payment',
-            ref: ex.id,
-            narration: ex.remarks || 'Wage/Salary Payment Paid',
-            debit: 0,
-            credit: ex.amount
-          });
-        });
-      }
-    } else if (p.type === 'account' && p.baId) {
-      // Business Account Ledger
-      const baId = p.baId;
-      state.expenses.filter(ex => ex.businessAccountId === baId).forEach(ex => {
-        entries.push({
-          date: ex.date,
-          type: 'Expense Entry',
-          ref: ex.id,
-          narration: ex.remarks || 'Expense Payment Out',
-          debit: ex.amount,
-          credit: 0
-        });
-      });
-    }
-
-    entries.sort((a, b) => a.date.localeCompare(b.date));
-    return entries;
-  }, [selectedPerson, state]);
-
-  // Compute Running Ledger & Date Filtered Rows
-  const { openingBalance, filteredRows, totalDebit, totalCredit, endingBalance } = useMemo(() => {
-    let openBal = 0;
-    let before = personLedgerEntries;
-    let filtered = personLedgerEntries;
-
-    if (fromDate) {
-      before = personLedgerEntries.filter(e => e.date < fromDate);
-      filtered = personLedgerEntries.filter(e => e.date >= fromDate);
-      openBal = before.reduce((acc, e) => acc + (e.debit - e.credit), 0);
-    }
-
-    if (toDate) {
-      filtered = filtered.filter(e => e.date <= toDate);
-    }
-
-    let running = openBal;
-    let sumDebit = 0;
-    let sumCredit = 0;
-
-    const rowsWithBalance = filtered.map(e => {
-      running += (e.debit - e.credit);
-      sumDebit += e.debit;
-      sumCredit += e.credit;
+    return directory.map(d => {
+      const mapped = ENTITY_TYPE_MAP[d.entity_type];
       return {
-        ...e,
-        balance: running
+        id: d.entity_id,
+        name: d.name,
+        type: mapped.type,
+        typeLabel: mapped.label,
+        subtitle: `Code: ${d.entity_id}${d.city_name ? ` • ${d.city_name}` : ''}`,
+        entityType: d.entity_type,
+        baId: d.ba_id,
       };
     });
+  }, [directory]);
 
-    return {
-      openingBalance: openBal,
-      filteredRows: rowsWithBalance,
-      totalDebit: sumDebit,
-      totalCredit: sumCredit,
-      endingBalance: running
-    };
-  }, [personLedgerEntries, fromDate, toDate]);
+  // Search itself is server-side (reports.overallSearch already filters by name/id) — only the
+  // entity-type quick filter is applied client-side here.
+  const filteredPeople = useMemo(() => {
+    if (entityFilter === 'all') return allPeople;
+    return allPeople.filter(p => p.type === entityFilter);
+  }, [allPeople, entityFilter]);
 
-  // Handle Export Excel & PDF
+  // ── Ledger drill-down ──
+  const [ledger, setLedger] = useState<{ has_account: boolean; message?: string; opening_balance?: number; rows?: LedgerRow[]; total_debit?: number; total_credit?: number; closing_balance?: number } | null>(null);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
+
+  const loadLedger = useCallback(async () => {
+    if (!selectedPerson) return;
+    setLedgerLoading(true);
+    const res = await api.reports.overallSearchLedger({
+      entity_type: selectedPerson.entityType,
+      ba_id: selectedPerson.baId,
+      date_from: fromDate || undefined,
+      date_to: toDate || undefined,
+    });
+    if (res.ok) setLedger(res.data); else setLedger(null);
+    setLedgerLoading(false);
+  }, [selectedPerson, fromDate, toDate]);
+
+  useEffect(() => { if (selectedPerson) loadLedger(); }, [selectedPerson, loadLedger]);
+
+  const openingBalance = ledger?.opening_balance || 0;
+  const totalDebit = ledger?.total_debit || 0;
+  const totalCredit = ledger?.total_credit || 0;
+  const endingBalance = ledger?.closing_balance || 0;
+  const filteredRows = ledger?.rows || [];
+
   const handleExportExcel = () => {
     if (!selectedPerson) return;
     const headers = ['Date', 'Type', 'Reference', 'Narration', 'Debit (PKR)', 'Credit (PKR)', 'Balance (PKR)'];
     const rows = [
       [fromDate ? `Before ${fromDate}` : '---', 'Opening Balance', '-', 'Opening Balance brought forward', '0', '0', openingBalance],
-      ...filteredRows.map(r => [r.date, r.type, r.ref, r.narration, r.debit, r.credit, r.balance]),
+      ...filteredRows.map(r => [r.date, r.type, r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, r.narration || '', r.debit, r.credit, r.balance]),
       ['Total', '', '', '', totalDebit, totalCredit, endingBalance]
     ];
     exportRowsToExcel(`ledger-${selectedPerson.name.toLowerCase().replace(/\s+/g, '-')}`, headers, rows);
@@ -403,6 +128,8 @@ export default function OverallSearchPage() {
         return 'bg-emerald-100 text-emerald-800 border-emerald-200';
       case 'account':
         return 'bg-purple-100 text-purple-800 border-purple-200';
+      case 'bank':
+        return 'bg-cyan-100 text-cyan-800 border-cyan-200';
       default:
         return 'bg-slate-100 text-slate-700 border-slate-200';
     }
@@ -415,6 +142,7 @@ export default function OverallSearchPage() {
       case 'employee': return <HardHat size={16} />;
       case 'subcustomer': return <Users size={16} />;
       case 'account': return <Landmark size={16} />;
+      case 'bank': return <Landmark size={16} />;
       default: return <BookOpen size={16} />;
     }
   };
@@ -422,7 +150,7 @@ export default function OverallSearchPage() {
   return (
     <AppLayout pageTitle="Overall Searching & Person Ledger">
       <div className="mx-auto" style={{ maxWidth: 1400 }}>
-        
+
         {/* VIEW 1: Directory & Person Search */}
         {!selectedPerson ? (
           <div>
@@ -449,7 +177,7 @@ export default function OverallSearchPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  {(['all', 'customer', 'vendor', 'employee', 'subcustomer', 'account'] as const).map(tab => (
+                  {(['all', 'customer', 'vendor', 'employee', 'subcustomer', 'account', 'bank'] as const).map(tab => (
                     <button
                       key={tab}
                       type="button"
@@ -461,7 +189,7 @@ export default function OverallSearchPage() {
                       }`}
                     >
                       <span className="w-2 h-2 rounded-full flex-shrink-0 bg-slate-300" />
-                      {tab === 'all' ? 'All Entities' : tab === 'customer' ? 'Customers' : tab === 'vendor' ? 'Vendors' : tab === 'employee' ? 'Employees' : tab === 'subcustomer' ? 'Sub-Customers' : 'Accounts'}
+                      {tab === 'all' ? 'All Entities' : tab === 'customer' ? 'Customers' : tab === 'vendor' ? 'Vendors' : tab === 'employee' ? 'Employees' : tab === 'subcustomer' ? 'Sub-Customers' : tab === 'account' ? 'Accounts' : 'Banks'}
                     </button>
                   ))}
                 </div>
@@ -469,7 +197,9 @@ export default function OverallSearchPage() {
             </div>
 
             {/* Entity Directory Cards Grid */}
-            {filteredPeople.length === 0 ? (
+            {loading ? (
+              <div className="card-white p-12 text-center text-slate-400">Loading…</div>
+            ) : filteredPeople.length === 0 ? (
               <div className="card-white p-12 text-center text-slate-400">
                 <Users size={36} className="mx-auto mb-3 text-slate-300" />
                 <p className="font-semibold text-slate-600">No person or account matches your search query.</p>
@@ -608,7 +338,13 @@ export default function OverallSearchPage() {
                 </div>
               </div>
 
-              {/* Table */}
+              {ledgerLoading ? (
+                <div className="text-center p-8 text-slate-400">Loading…</div>
+              ) : ledger && !ledger.has_account ? (
+                <div className="text-center p-8 text-slate-400 italic">
+                  {ledger.message || 'This party has no financial account.'}
+                </div>
+              ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
@@ -642,15 +378,15 @@ export default function OverallSearchPage() {
                         </td>
                       </tr>
                     ) : (
-                      filteredRows.map((row, idx) => (
+                      filteredRows.map((row) => (
                         <tr
-                          key={idx}
+                          key={row.entry_id}
                           className="border-b hover:bg-slate-50/60 transition-colors"
                           style={{ borderColor: 'var(--border-table)' }}
                         >
                           <td className="p-3 font-medium text-slate-600">{row.date}</td>
                           <td className="p-3 font-semibold text-slate-800">{row.type}</td>
-                          <td className="p-3 text-slate-500 font-mono">{row.ref}</td>
+                          <td className="p-3 text-slate-500 font-mono">{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                           <td className="p-3 text-slate-700">{row.narration}</td>
                           <td className="p-3 text-right font-semibold text-slate-900">
                             {row.debit > 0 ? formatCurrency(row.debit) : '-'}
@@ -678,6 +414,7 @@ export default function OverallSearchPage() {
                   </tfoot>
                 </table>
               </div>
+              )}
             </div>
           </div>
         )}

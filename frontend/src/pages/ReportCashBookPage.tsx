@@ -1,309 +1,53 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Printer, Search, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
-import { expenseModeLabel, getAccountBalance, getCashAccount } from '@/lib/cashbank';
-import { maskedBusinessAccountName } from '@/lib/access';
-import type { ReceiptMode, ExpenseMode } from '@/types';
-
-interface CashBookRow {
-  date: string;
-  accountName: string;
-  remarks: string;
-  // Widened for the two outgoing cheque modes. Rendered through
-  // expenseModeLabel so the column still reads "Cheque (Issued)" rather than
-  // exposing the internal spelling.
-  mode: ReceiptMode | ExpenseMode;
-  chequeNo: string;
-  direction: 'Receipt' | 'Payment';
-  amount: number;
-  // The Cash Book is usually viewed one day at a time, where every row shares the same `date` —
-  // sorting by date alone leaves same-day rows grouped by category (all receipts, then all
-  // expenses, ...) instead of the order they actually happened. Every id in this app embeds
-  // Date.now() at creation (`extractSortKey` below), so this recovers true FIFO order even
-  // within a single day. Reversal rows (bounce/return) reuse the *original* record's key, since
-  // they don't have one of their own and slotting them in true entry order isn't the point —
-  // they just need to not disrupt the same-day ordering of everything else.
-  sortKey: number;
-}
-
-// Every id in this app is '<prefix>_' + Date.now() (see ReceiptsPage/ExpensesPage/TransferPage) —
-// pulls the trailing digits back out as a real creation-order tiebreaker for same-day rows.
-function extractSortKey(id: string): number {
-  const match = id.match(/(\d+)$/);
-  return match ? Number(match[1]) : 0;
-}
+import * as api from '@/lib/api';
+import type { CashBookResult } from '@/lib/api';
 
 export function ReportCashBookContent() {
-  const { state } = useApp();
-
   const [filterBy, setFilterBy] = useState<'date' | 'month'>('date');
   const [searchQuery, setSearchQuery] = useState('');
   const [specificDate, setSpecificDate] = useState(new Date().toISOString().split('T')[0]);
   const [filterMonth, setFilterMonth] = useState<number>(new Date().getMonth());
   const [filterYear, setFilterYear] = useState<number>(new Date().getFullYear());
 
+  const [result, setResult] = useState<CashBookResult>({ opening_cash: 0, cash_received: 0, total_cash: 0, cash_paid: 0, cash_in_hand: 0, rows: [] });
+  const [loading, setLoading] = useState(false);
+
   const months = [
     'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'
   ];
 
-  // Period boundaries (as ISO date strings) for the selected filter
-  const { periodStart, periodEnd, periodLabel } = useMemo(() => {
-    if (filterBy === 'date') {
-      return { periodStart: specificDate, periodEnd: specificDate, periodLabel: specificDate };
-    }
-    const start = `${filterYear}-${String(filterMonth + 1).padStart(2, '0')}-01`;
-    const lastDay = new Date(filterYear, filterMonth + 1, 0).getDate();
-    const end = `${filterYear}-${String(filterMonth + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-    return { periodStart: start, periodEnd: end, periodLabel: `${months[filterMonth]} ${filterYear}` };
+  const periodLabel = filterBy === 'date' ? specificDate : `${months[filterMonth]} ${filterYear}`;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const payload = filterBy === 'date'
+      ? { date: specificDate }
+      : { month: `${filterYear}-${String(filterMonth + 1).padStart(2, '0')}` };
+    const res = await api.reports.cashBook(payload);
+    if (res.ok) setResult(res.data);
+    setLoading(false);
   }, [filterBy, specificDate, filterMonth, filterYear]);
 
-  // All cash book rows (Receipts = inflow, Expenses = outflow) within the period
-  const cashBookRows = useMemo(() => {
-    const rows: CashBookRow[] = [];
-
-    state.receipts
-      .filter(r => r.date >= periodStart && r.date <= periodEnd)
-      .forEach(r => {
-        const cust = state.customers.find(c => c.id === r.customerId);
-        rows.push({
-          date: r.date,
-          accountName: cust?.name || 'Walk-in Client',
-          remarks: r.remarks || r.details || '-',
-          mode: r.paymentMode,
-          chequeNo: r.chequeNo || '-',
-          direction: 'Receipt',
-          amount: r.amount,
-          sortKey: extractSortKey(r.id)
-        });
-      });
-
-    state.expenses
-      .filter(e => e.date >= periodStart && e.date <= periodEnd)
-      .forEach(e => {
-        const accountName = maskedBusinessAccountName(
-          e.businessAccountId, state.businessAccounts, state.chartAccounts, state.currentUserRole,
-        );
-        rows.push({
-          date: e.date,
-          accountName: accountName || 'General Expense Account',
-          remarks: e.remarks || e.details || '-',
-          mode: e.paymentMode,
-          chequeNo: '-',
-          direction: 'Payment',
-          amount: e.amount,
-          sortKey: extractSortKey(e.id)
-        });
-      });
-
-    // §13 — an endorsed cheque is real cash flow, not an off-books transfer.
-    // The receipt already counted as Jamma on the day it arrived; the
-    // endorsement counts as Naam on its own allocation date. A plain DEPOSIT
-    // is only moving the cheque to the bank, so it is NOT an outflow.
-    // Reversed allocations stay on their original date — the bounce posts its
-    // counter-entry separately below, so past days never change.
-    state.chequeAllocations
-      .filter(a =>
-        a.dispositionType !== 'DEPOSIT' &&
-        a.allocationDate >= periodStart && a.allocationDate <= periodEnd
-      )
-      .forEach(a => {
-        const sourceReceipt = state.receipts.find(r => r.id === a.receiptId);
-        const name = a.targetType === 'VENDOR'
-          ? state.vendors.find(v => v.id === a.targetId)?.name
-          : maskedBusinessAccountName(a.targetId, state.businessAccounts, state.chartAccounts, state.currentUserRole);
-        rows.push({
-          date: a.allocationDate,
-          accountName: name || 'Cheque endorsement',
-          remarks: a.remarks || `Cheque endorsed — ${a.dispositionType.replace('_', ' ').toLowerCase()}`,
-          mode: 'Cheque',
-          chequeNo: sourceReceipt?.chequeNo || '-',
-          direction: 'Payment',
-          amount: a.amount,
-          sortKey: extractSortKey(a.id)
-        });
-      });
-
-    // Transfers and Deposits that touch the Cash account are real cash
-    // movements on the day they happen (cash banked, cash withdrawn from a
-    // bank, owner capital handed over as cash) — without a row here, the
-    // day's own totals would miss them even though tomorrow's Opening Cash
-    // (sourced from the same shared ledger helper) already reflects them.
-    const cash = getCashAccount(state);
-    if (cash) {
-      state.transfers
-        .filter(t => (t.fromBaId === cash.id || t.toBaId === cash.id) && t.date >= periodStart && t.date <= periodEnd)
-        .forEach(t => {
-          const isIn = t.toBaId === cash.id;
-          const other = state.businessAccounts.find(b => b.id === (isIn ? t.fromBaId : t.toBaId));
-          rows.push({
-            date: t.date,
-            accountName: other?.name || 'Transfer',
-            remarks: t.remarks || (isIn ? `Transfer in from ${other?.name || 'account'}` : `Transfer out to ${other?.name || 'account'}`),
-            mode: 'Cash',
-            chequeNo: '-',
-            direction: isIn ? 'Receipt' : 'Payment',
-            amount: t.amount,
-            sortKey: extractSortKey(t.id)
-          });
-        });
-
-      state.deposits
-        .filter(d => d.toBaId === cash.id && d.date >= periodStart && d.date <= periodEnd)
-        .forEach(d => {
-          rows.push({
-            date: d.date,
-            accountName: d.source,
-            remarks: d.remarks || `${d.direction === 'debit' ? 'Debit' : 'Credit'} — ${d.source}`,
-            mode: 'Cash',
-            chequeNo: '-',
-            direction: d.direction === 'debit' ? 'Payment' : 'Receipt',
-            amount: d.amount,
-            sortKey: extractSortKey(d.id)
-          });
-        });
-    }
-
-    // Bounce reversals, dated the day the bounce was recorded.
-    state.receipts
-      .filter(r => r.chequeStatus === 'BOUNCED' && r.bouncedDate &&
-                   r.bouncedDate >= periodStart && r.bouncedDate <= periodEnd)
-      .forEach(r => {
-        const cust = state.customers.find(c => c.id === r.customerId);
-        // Cancels the original Jamma.
-        rows.push({
-          date: r.bouncedDate!,
-          accountName: cust?.name || 'Walk-in Client',
-          remarks: `Cheque ${r.chequeNo || ''} BOUNCED — reverses receipt of ${r.date}`,
-          mode: 'Cheque',
-          chequeNo: r.chequeNo || '-',
-          direction: 'Payment',
-          amount: r.amount,
-          sortKey: extractSortKey(r.id)
-        });
-        // Cancels each endorsement made from it.
-        state.chequeAllocations
-          .filter(a => a.receiptId === r.id && a.status === 'REVERSED' && a.dispositionType !== 'DEPOSIT')
-          .forEach(a => {
-            const name = a.targetType === 'VENDOR'
-              ? state.vendors.find(v => v.id === a.targetId)?.name
-              : maskedBusinessAccountName(a.targetId, state.businessAccounts, state.chartAccounts, state.currentUserRole);
-            rows.push({
-              date: r.bouncedDate!,
-              accountName: name || 'Cheque endorsement',
-              remarks: `Endorsement reversed — cheque ${r.chequeNo || ''} bounced`,
-              mode: 'Cheque',
-              chequeNo: r.chequeNo || '-',
-              direction: 'Receipt',
-              amount: a.amount,
-              sortKey: extractSortKey(a.id)
-            });
-          });
-      });
-
-    // Return-to-sender reversals, dated the day the return was recorded. Mirrors the bounce
-    // block above — same reversal shape, distinct wording (not a bank rejection).
-    state.receipts
-      .filter(r => r.chequeStatus === 'RETURNED' && r.returnedDate &&
-                   r.returnedDate >= periodStart && r.returnedDate <= periodEnd)
-      .forEach(r => {
-        const cust = state.customers.find(c => c.id === r.customerId);
-        rows.push({
-          date: r.returnedDate!,
-          accountName: cust?.name || 'Walk-in Client',
-          remarks: `Cheque ${r.chequeNo || ''} RETURNED to sender — reverses receipt of ${r.date}`,
-          mode: 'Cheque',
-          chequeNo: r.chequeNo || '-',
-          direction: 'Payment',
-          amount: r.amount,
-          sortKey: extractSortKey(r.id)
-        });
-        state.chequeAllocations
-          .filter(a => a.receiptId === r.id && a.status === 'REVERSED' && a.dispositionType !== 'DEPOSIT')
-          .forEach(a => {
-            const name = a.targetType === 'VENDOR'
-              ? state.vendors.find(v => v.id === a.targetId)?.name
-              : maskedBusinessAccountName(a.targetId, state.businessAccounts, state.chartAccounts, state.currentUserRole);
-            rows.push({
-              date: r.returnedDate!,
-              accountName: name || 'Cheque endorsement',
-              remarks: `Endorsement reversed — cheque ${r.chequeNo || ''} returned to sender`,
-              mode: 'Cheque',
-              chequeNo: r.chequeNo || '-',
-              direction: 'Receipt',
-              amount: a.amount,
-              sortKey: extractSortKey(a.id)
-            });
-          });
-      });
-
-    return rows.sort((a, b) => a.date.localeCompare(b.date) || a.sortKey - b.sortKey);
-  }, [state.receipts, state.expenses, state.customers, state.businessAccounts,
-      state.chequeAllocations, state.vendors, state.transfers, state.deposits,
-      state.chartAccounts, state.currentUserRole,
-      periodStart, periodEnd]);
+  useEffect(() => { load(); }, [load]);
 
   const filteredRows = useMemo(() => {
-    if (!searchQuery.trim()) return cashBookRows;
+    if (!searchQuery.trim()) return result.rows;
     const q = searchQuery.toLowerCase();
-    return cashBookRows.filter(r =>
-      r.accountName.toLowerCase().includes(q) ||
-      r.remarks.toLowerCase().includes(q) ||
-      expenseModeLabel(r.mode as never).toLowerCase().includes(q)
+    return result.rows.filter(r =>
+      (r.narration || '').toLowerCase().includes(q) ||
+      r.type.toLowerCase().includes(q)
     );
-  }, [cashBookRows, searchQuery]);
-
-  const totals = useMemo(() => {
-    return filteredRows.reduce((acc, r) => {
-      const isCash = r.mode === 'Cash';
-      if (r.direction === 'Receipt') {
-        if (isCash) acc.receiptsCash += r.amount;
-        else acc.receiptsChequeOnline += r.amount;
-      } else {
-        if (isCash) acc.paymentsCash += r.amount;
-        else acc.paymentsChequeOnline += r.amount;
-      }
-      return acc;
-    }, { receiptsChequeOnline: 0, paymentsChequeOnline: 0, receiptsCash: 0, paymentsCash: 0 });
-  }, [filteredRows]);
-
-  // Opening Cash: what the cash account held at the close of the previous day.
-  //
-  // Was a local sum of prior CASH receipts minus expenses, which is now wrong
-  // twice over: it ignores the account's opening balance, and it ignores
-  // transfers — and banking the day's takings is a cash movement that no
-  // receipt or expense records. Deferring to the shared helper keeps this page,
-  // the Bank Accounts page and the account ledgers on one definition.
-  const openingCash = useMemo(() => {
-    const cash = getCashAccount(state);
-    if (!cash) return 0;
-    const dayBefore = (() => {
-      const d = new Date(periodStart);
-      d.setDate(d.getDate() - 1);
-      return d.toISOString().split('T')[0];
-    })();
-    return getAccountBalance(state, cash.id, dayBefore);
-  }, [state, periodStart]);
-
-  const totalCash = openingCash + totals.receiptsCash;
-  const cashInHand = totalCash - totals.paymentsCash;
+  }, [result.rows, searchQuery]);
 
   const handleExportExcel = () => {
-    const headers = ['No.', 'Account Name', 'Remarks', 'Type', 'Cheque No.', 'Receipts Cheq./Online', 'Payments Cheq./Online', 'Receipts Cash', 'Payments Cash'];
-    const rows = filteredRows.map((row, idx) => {
-      const isCash = row.mode === 'Cash';
-      const isReceipt = row.direction === 'Receipt';
-      return [
-        idx + 1, row.accountName, row.remarks, expenseModeLabel(row.mode as never), row.chequeNo,
-        isReceipt && !isCash ? row.amount : '',
-        !isReceipt && !isCash ? row.amount : '',
-        isReceipt && isCash ? row.amount : '',
-        !isReceipt && isCash ? row.amount : ''
-      ];
-    });
+    const headers = ['No.', 'Date', 'Type', 'Narration', 'Cash Received', 'Cash Paid', 'Balance'];
+    const rows = filteredRows.map((row, idx) => [idx + 1, row.date, row.type, row.narration || '', row.debit, row.credit, row.balance]);
     exportRowsToExcel(`cash-book-${periodLabel}`, headers, rows);
   };
 
@@ -334,7 +78,7 @@ export function ReportCashBookContent() {
               <div className="relative">
                 <input
                   type="text"
-                  placeholder="Search by account, remarks, mode..."
+                  placeholder="Search by type, narration..."
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   className="soleria-input w-full py-2 text-sm pr-10 font-semibold"
@@ -411,27 +155,27 @@ export function ReportCashBookContent() {
             </div>
           </div>
 
-          {/* Summary Box (bottom-left per spec, shown up top here for visibility) */}
+          {/* Summary Box */}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6" data-no-print>
             <div className="p-3 rounded-xl border bg-white" style={{ borderColor: 'var(--border-color)' }}>
               <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">Opening Cash</span>
-              <span className="text-base font-bold text-slate-800">{formatCurrency(openingCash)}</span>
+              <span className="text-base font-bold text-slate-800">{formatCurrency(result.opening_cash)}</span>
             </div>
             <div className="p-3 rounded-xl border bg-white" style={{ borderColor: 'var(--border-color)' }}>
               <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">Cash Received (Jamma)</span>
-              <span className="text-base font-bold text-emerald-700">{formatCurrency(totals.receiptsCash)}</span>
+              <span className="text-base font-bold text-emerald-700">{formatCurrency(result.cash_received)}</span>
             </div>
             <div className="p-3 rounded-xl border bg-white" style={{ borderColor: 'var(--border-color)' }}>
               <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">Total Cash</span>
-              <span className="text-base font-bold text-slate-800">{formatCurrency(totalCash)}</span>
+              <span className="text-base font-bold text-slate-800">{formatCurrency(result.total_cash)}</span>
             </div>
             <div className="p-3 rounded-xl border bg-white" style={{ borderColor: 'var(--border-color)' }}>
               <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">Cash Paid (Naam)</span>
-              <span className="text-base font-bold text-rose-700">{formatCurrency(totals.paymentsCash)}</span>
+              <span className="text-base font-bold text-rose-700">{formatCurrency(result.cash_paid)}</span>
             </div>
             <div className="p-3 rounded-xl border bg-[#111c2a]" style={{ borderColor: '#B08D57' }}>
               <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-300 mb-1">Cash In Hand</span>
-              <span className="text-lg font-bold text-[#B08D57]">{formatCurrency(cashInHand)}</span>
+              <span className="text-lg font-bold text-[#B08D57]">{formatCurrency(result.cash_in_hand)}</span>
             </div>
           </div>
 
@@ -440,63 +184,46 @@ export function ReportCashBookContent() {
               <thead>
                 <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                   <th className="p-3 pl-4">No.</th>
-                  <th className="p-3">Account Name</th>
-                  <th className="p-3">Remarks</th>
-                  <th className="p-3 text-center">Type</th>
-                  <th className="p-3 text-center">Cheque No.</th>
-                  <th className="p-3 text-right">Receipts Cheq./Online</th>
-                  <th className="p-3 text-right">Payments Cheq./Online</th>
-                  <th className="p-3 text-right">Receipts Cash</th>
-                  <th className="p-3 text-right">Payments Cash</th>
+                  <th className="p-3">Type</th>
+                  <th className="p-3">Narration</th>
+                  <th className="p-3 text-right">Cash Received</th>
+                  <th className="p-3 text-right">Cash Paid</th>
+                  <th className="p-3 text-right">Balance</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.length === 0 ? (
+                {loading ? (
+                  <tr><td colSpan={6} className="text-center p-8 text-slate-400">Loading…</td></tr>
+                ) : filteredRows.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="text-center p-8 text-slate-400">
+                    <td colSpan={6} className="text-center p-8 text-slate-400">
                       No cash book entries found for this selection.
                     </td>
                   </tr>
                 ) : (
-                  filteredRows.map((row, idx) => {
-                    const isCash = row.mode === 'Cash';
-                    const isReceipt = row.direction === 'Receipt';
-                    return (
-                      <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-3 pl-4 font-mono text-slate-500">{idx + 1}</td>
-                        <td className="p-3 font-semibold text-slate-800">{row.accountName}</td>
-                        <td className="p-3 text-xs text-slate-500">{row.remarks}</td>
-                        <td className="p-3 text-center">
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700 border uppercase">
-                            {expenseModeLabel(row.mode as never)}
-                          </span>
-                        </td>
-                        <td className="p-3 text-center font-mono text-xs text-slate-500">{row.chequeNo}</td>
-                        <td className="p-3 text-right font-bold text-emerald-700">
-                          {isReceipt && !isCash ? formatCurrency(row.amount) : '-'}
-                        </td>
-                        <td className="p-3 text-right font-bold text-rose-700">
-                          {!isReceipt && !isCash ? formatCurrency(row.amount) : '-'}
-                        </td>
-                        <td className="p-3 text-right font-bold text-emerald-700">
-                          {isReceipt && isCash ? formatCurrency(row.amount) : '-'}
-                        </td>
-                        <td className="p-3 text-right font-bold text-rose-700">
-                          {!isReceipt && isCash ? formatCurrency(row.amount) : '-'}
-                        </td>
-                      </tr>
-                    );
-                  })
+                  filteredRows.map((row, idx) => (
+                    <tr key={row.entry_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                      <td className="p-3 pl-4 font-mono text-slate-500">{idx + 1}</td>
+                      <td className="p-3">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700 border uppercase">
+                          {row.type}
+                        </span>
+                      </td>
+                      <td className="p-3 text-xs text-slate-500">{row.narration || '-'}</td>
+                      <td className="p-3 text-right font-bold text-emerald-700">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
+                      <td className="p-3 text-right font-bold text-rose-700">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
+                      <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.balance)}</td>
+                    </tr>
+                  ))
                 )}
               </tbody>
 
               <tfoot>
                 <tr className="bg-slate-50 font-bold border-t-2 border-b text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                  <td colSpan={5} className="p-4 text-left font-lora">TOTAL</td>
-                  <td className="p-4 text-right text-emerald-800">{formatCurrency(totals.receiptsChequeOnline)}</td>
-                  <td className="p-4 text-right text-rose-800">{formatCurrency(totals.paymentsChequeOnline)}</td>
-                  <td className="p-4 text-right text-emerald-800">{formatCurrency(totals.receiptsCash)}</td>
-                  <td className="p-4 text-right text-rose-800">{formatCurrency(totals.paymentsCash)}</td>
+                  <td colSpan={3} className="p-4 text-left font-lora">TOTAL</td>
+                  <td className="p-4 text-right text-emerald-800">{formatCurrency(result.cash_received)}</td>
+                  <td className="p-4 text-right text-rose-800">{formatCurrency(result.cash_paid)}</td>
+                  <td className="p-4 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(result.cash_in_hand)}</td>
                 </tr>
               </tfoot>
             </table>

@@ -1,115 +1,48 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
-import { filterBusinessAccountsForRole } from '@/lib/access';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
+import * as api from '@/lib/api';
+import type { BusinessLedgerSummaryRow, LedgerRow } from '@/lib/api';
 
-interface ActivityEntry {
-  date: string;
-  type: string;
-  ref: string;
-  debit: number;
-  credit: number;
-}
-
-// Business Accounts Ledger (TASK-19 item 6) — a general-purpose ledger over
-// ALL business accounts (not just customers), since Account Ledger (Khaata)
-// is scoped to customers only and Vendor Report is scoped to vendors only.
+// Business Accounts Ledger — a general-purpose ledger over ALL business accounts (not just
+// customers), since Account Ledger (Khaata) is scoped to customers only and Vendor Report is
+// scoped to vendors only.
 export default function BusinessLedgerContent() {
-  const { state } = useApp();
-
   const [viewMode, setViewMode] = useState<'summary' | 'detail' | 'customer'>('summary');
-  const [accountFilter, setAccountFilter] = useState('all');
+  const [accountFilter, setAccountFilter] = useState<number | null>(null);
   const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(getTodayDate());
 
-  const inRange = (date: string) => (!fromDate || date >= fromDate) && (!toDate || date <= toDate);
+  const [summaryRows, setSummaryRows] = useState<BusinessLedgerSummaryRow[]>([]);
+  const [detail, setDetail] = useState<{ opening_balance: number; rows: LedgerRow[]; total_debit: number; total_credit: number; closing_balance: number } | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const accessibleAccounts = useMemo(() => {
-    return filterBusinessAccountsForRole(state.businessAccounts, state.chartAccounts, state.currentUserRole);
-  }, [state.businessAccounts, state.chartAccounts, state.currentUserRole]);
+  const loadSummary = useCallback(async () => {
+    setLoading(true);
+    const res = await api.reports.businessLedger({ view: 'summary', date_to: toDate || undefined });
+    if (res.ok && Array.isArray(res.data)) setSummaryRows(res.data);
+    setLoading(false);
+  }, [toDate]);
 
-  const visibleAccounts = useMemo(() => {
-    if (viewMode === 'customer') {
-      return accessibleAccounts.filter(b => b.controlId === '110001');
-    }
-    return accessibleAccounts;
-  }, [accessibleAccounts, viewMode]);
+  useEffect(() => { if (viewMode !== 'detail') loadSummary(); }, [viewMode, loadSummary]);
 
-  // Net activity (Debit - Credit) for a business account within the range,
-  // sourced from whichever ledger applies to that account's type.
-  const getAccountActivity = (baId: string): { debit: number; credit: number } => {
-    const cust = state.customers.find(c => c.baId === baId);
-    if (cust) {
-      const debit = state.saleBills
-        .filter(b => b.customerId === cust.id && b.status === 'Posted' && inRange(b.date))
-        .reduce((s, b) => s + b.totalValue, 0);
-      const credit = state.saleReturns
-        .filter(r => r.customerId === cust.id && r.status === 'Posted' && inRange(r.date))
-        .reduce((s, r) => s + r.items.reduce((si, it) => si + it.value, 0), 0)
-        + state.receipts
-        .filter(r => r.customerId === cust.id && inRange(r.date))
-        .reduce((s, r) => s + r.amount + (r.commission || 0), 0);
-      return { debit, credit };
-    }
+  const visibleSummaryRows = useMemo(() => {
+    if (viewMode === 'customer') return summaryRows.filter(r => r.category === 'CUSTOMER');
+    return summaryRows;
+  }, [summaryRows, viewMode]);
 
-    const vendor = state.vendors.find(v => v.baId === baId);
-    if (vendor) {
-      const debit = state.purchases
-        .filter(p => p.vendorId === vendor.id && inRange(p.date))
-        .reduce((s, p) => s + p.totalValue, 0);
-      const credit = state.purchaseReturns
-        .filter(r => r.vendorId === vendor.id && inRange(r.date))
-        .reduce((s, r) => s + r.totalValue, 0)
-        + state.expenses
-        .filter(e => e.businessAccountId === baId && inRange(e.date))
-        .reduce((s, e) => s + e.amount, 0);
-      return { debit, credit };
-    }
+  const loadDetail = useCallback(async () => {
+    if (!accountFilter) return;
+    setLoading(true);
+    const res = await api.reports.businessLedger({ view: 'detail', ba_id: accountFilter, date_from: fromDate || undefined, date_to: toDate || undefined });
+    if (res.ok && !Array.isArray(res.data)) setDetail(res.data); else setDetail(null);
+    setLoading(false);
+  }, [accountFilter, fromDate, toDate]);
 
-    const credit = state.expenses
-      .filter(e => e.businessAccountId === baId && inRange(e.date))
-      .reduce((s, e) => s + e.amount, 0);
-    return { debit: 0, credit };
-  };
+  useEffect(() => { if (viewMode === 'detail' && accountFilter) loadDetail(); }, [viewMode, accountFilter, loadDetail]);
 
-  const summaryRows = useMemo(() => {
-    return visibleAccounts.map(b => {
-      const chartName = state.chartAccounts.find(c => c.id === b.controlId)?.name || 'UNKNOWN';
-      const activity = getAccountActivity(b.id);
-      return { ...b, chartName, ...activity };
-    });
-  }, [visibleAccounts, state.chartAccounts, state.customers, state.vendors, state.saleBills, state.saleReturns, state.receipts, state.purchases, state.purchaseReturns, state.expenses, fromDate, toDate]);
-
-  const selectedAccount = useMemo(() => accessibleAccounts.find(b => b.id === accountFilter), [accountFilter, accessibleAccounts]);
-
-  const detailEntries = useMemo((): ActivityEntry[] => {
-    if (!selectedAccount) return [];
-    const entries: ActivityEntry[] = [];
-    const cust = state.customers.find(c => c.baId === selectedAccount.id);
-    const vendor = state.vendors.find(v => v.baId === selectedAccount.id);
-
-    if (cust) {
-      state.saleBills.filter(b => b.customerId === cust.id && b.status === 'Posted' && inRange(b.date))
-        .forEach(b => entries.push({ date: b.date, type: 'Sale Bill', ref: b.billNo, debit: b.totalValue, credit: 0 }));
-      state.saleReturns.filter(r => r.customerId === cust.id && r.status === 'Posted' && inRange(r.date))
-        .forEach(r => entries.push({ date: r.date, type: 'Sale Return', ref: r.billNo, debit: 0, credit: r.items.reduce((s, it) => s + it.value, 0) }));
-      state.receipts.filter(r => r.customerId === cust.id && inRange(r.date))
-        .forEach(r => entries.push({ date: r.date, type: 'Receipt', ref: r.id, debit: 0, credit: r.amount }));
-    } else if (vendor) {
-      state.purchases.filter(p => p.vendorId === vendor.id && inRange(p.date))
-        .forEach(p => entries.push({ date: p.date, type: 'Purchase', ref: p.id, debit: p.totalValue, credit: 0 }));
-      state.purchaseReturns.filter(r => r.vendorId === vendor.id && inRange(r.date))
-        .forEach(r => entries.push({ date: r.date, type: 'Purchase Return', ref: r.id, debit: 0, credit: r.totalValue }));
-      state.expenses.filter(e => e.businessAccountId === selectedAccount.id && inRange(e.date))
-        .forEach(e => entries.push({ date: e.date, type: 'Payment', ref: e.id, debit: 0, credit: e.amount }));
-    } else {
-      state.expenses.filter(e => e.businessAccountId === selectedAccount.id && inRange(e.date))
-        .forEach(e => entries.push({ date: e.date, type: 'Expense', ref: e.id, debit: 0, credit: e.amount }));
-    }
-
-    return entries.sort((a, b) => a.date.localeCompare(b.date));
-  }, [selectedAccount, state.customers, state.vendors, state.saleBills, state.saleReturns, state.receipts, state.purchases, state.purchaseReturns, state.expenses, fromDate, toDate]);
+  const selectedAccount = useMemo(() => summaryRows.find(b => b.ba_id === accountFilter), [accountFilter, summaryRows]);
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1100 }}>
@@ -125,12 +58,12 @@ export default function BusinessLedgerContent() {
           {viewMode === 'detail' && (
             <div className="min-w-[240px]">
               <SearchableSelect
-                options={accessibleAccounts.map(b => ({
-                  value: b.id,
-                  label: `${b.name} (${b.id})`
+                options={summaryRows.map(b => ({
+                  value: String(b.ba_id),
+                  label: `${b.name} (${b.code})`
                 }))}
-                value={accountFilter}
-                onChange={setAccountFilter}
+                value={accountFilter != null ? String(accountFilter) : ''}
+                onChange={val => setAccountFilter(val ? Number(val) : null)}
                 placeholder="Select an account..."
               />
             </div>
@@ -149,13 +82,20 @@ export default function BusinessLedgerContent() {
 
       <div className="card-white p-6 md:p-8 bg-white border">
         {viewMode === 'detail' ? (
-          !selectedAccount ? (
+          !accountFilter ? (
             <div className="text-center p-8 text-slate-400">Select an account above to view its transaction detail.</div>
+          ) : loading ? (
+            <div className="text-center p-8 text-slate-400">Loading…</div>
           ) : (
             <div className="overflow-x-auto">
-              <div className="mb-4">
-                <h3 className="font-lora font-semibold text-lg text-slate-800">{selectedAccount.name}</h3>
-                <p className="text-xs text-slate-500">Code: {selectedAccount.id}</p>
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h3 className="font-lora font-semibold text-lg text-slate-800">{selectedAccount?.name}</h3>
+                  <p className="text-xs text-slate-500">Code: {selectedAccount?.code}</p>
+                </div>
+                <div className="text-right text-xs font-semibold text-slate-500">
+                  Opening Balance: <span className="text-slate-800 font-bold">{formatCurrency(detail?.opening_balance || 0)}</span>
+                </div>
               </div>
               <table className="w-full text-left border-collapse text-sm">
                 <thead>
@@ -165,23 +105,35 @@ export default function BusinessLedgerContent() {
                     <th className="p-3">Ref</th>
                     <th className="p-3 text-right">Debit</th>
                     <th className="p-3 text-right">Credit</th>
+                    <th className="p-3 text-right">Balance</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {detailEntries.length === 0 ? (
-                    <tr><td colSpan={5} className="text-center p-8 text-slate-400">No transactions found for this account / date range.</td></tr>
+                  {!detail || detail.rows.length === 0 ? (
+                    <tr><td colSpan={6} className="text-center p-8 text-slate-400">No transactions found for this account / date range.</td></tr>
                   ) : (
-                    detailEntries.map((e, idx) => (
-                      <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                    detail.rows.map((e) => (
+                      <tr key={e.entry_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                         <td className="p-3 pl-4 font-mono text-slate-600">{e.date}</td>
                         <td className="p-3 text-slate-700">{e.type}</td>
-                        <td className="p-3 text-slate-500">{e.ref}</td>
+                        <td className="p-3 text-slate-500">{e.inv_no ?? e.bill_no ?? `#${e.entry_id}`}</td>
                         <td className="p-3 text-right font-bold text-rose-700">{e.debit > 0 ? formatCurrency(e.debit) : '-'}</td>
                         <td className="p-3 text-right font-bold text-emerald-700">{e.credit > 0 ? formatCurrency(e.credit) : '-'}</td>
+                        <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(e.balance)}</td>
                       </tr>
                     ))
                   )}
                 </tbody>
+                {detail && detail.rows.length > 0 && (
+                  <tfoot>
+                    <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
+                      <td colSpan={3} className="p-4 text-left font-lora">TOTAL</td>
+                      <td className="p-4 text-right text-rose-800">{formatCurrency(detail.total_debit)}</td>
+                      <td className="p-4 text-right text-emerald-800">{formatCurrency(detail.total_credit)}</td>
+                      <td className="p-4 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(detail.closing_balance)}</td>
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             </div>
           )
@@ -194,22 +146,22 @@ export default function BusinessLedgerContent() {
                   <th className="p-3">Description</th>
                   <th className="p-3">Main Account</th>
                   <th className="p-3">City / Region</th>
-                  <th className="p-3 text-right">Debit</th>
-                  <th className="p-3 text-right">Credit</th>
+                  <th className="p-3 text-right">Closing Balance</th>
                 </tr>
               </thead>
               <tbody>
-                {summaryRows.length === 0 ? (
-                  <tr><td colSpan={6} className="text-center p-8 text-slate-400">No business accounts found.</td></tr>
+                {loading ? (
+                  <tr><td colSpan={5} className="text-center p-8 text-slate-400">Loading…</td></tr>
+                ) : visibleSummaryRows.length === 0 ? (
+                  <tr><td colSpan={5} className="text-center p-8 text-slate-400">No business accounts found.</td></tr>
                 ) : (
-                  summaryRows.map(row => (
-                    <tr key={row.id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                      <td className="p-3 pl-4 font-mono text-slate-600">{row.id}</td>
+                  visibleSummaryRows.map(row => (
+                    <tr key={row.ba_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                      <td className="p-3 pl-4 font-mono text-slate-600">{row.code}</td>
                       <td className="p-3 font-semibold text-slate-800">{row.name}</td>
-                      <td className="p-3 text-slate-500">{row.chartName}</td>
-                      <td className="p-3 text-slate-500">{row.region}</td>
-                      <td className="p-3 text-right font-bold text-rose-700">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-                      <td className="p-3 text-right font-bold text-emerald-700">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
+                      <td className="p-3 text-slate-500">{row.main_account}</td>
+                      <td className="p-3 text-slate-500">{row.city_name || '—'}</td>
+                      <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.closing_balance)}</td>
                     </tr>
                   ))
                 )}

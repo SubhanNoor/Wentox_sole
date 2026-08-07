@@ -14,6 +14,135 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Milestone 5 — Reports frontend wiring (Current Stock, Reports Hub's 9 sub-reports, Bilty/Adda Updation, Overall Searching)
+
+### 2026-08-07 — Connected all of Milestone 5's frontend to real `window.api` — wire-only pass, not live-verified
+- **What:** `ReportStockPage.tsx` (all 7 tabs), the 9 Reports Hub sub-report components
+  (`SaleAnalysisPage`, `SaleReportPage`, `VendorReportPage`, `PaymentTrailPage`,
+  `ReportKhaataPage`, `BusinessLedgerContent`, `ReportCashBookPage`, `ProductLedgerContent`,
+  `OverallTrailContent`), `BiltyUpdatePage.tsx`, and `OverallSearchPage.tsx` all rewired off the
+  demo `AppContext` reducer onto real `reports`/`stock`/`saleBills` IPC calls. `lib/api.ts` gained
+  `stock`/`reports` wrapper objects plus every row/result type for the ~15 report channels, a
+  `CategoryRow`/`listCategories()` (Milestone 6 backend, previously unwired), and a `ProductRow`
+  widening to include the 12 cost columns (already returned by `a.*`, just not typed).
+- **How:**
+  - Per explicit instruction, **this pass has no live Electron/CDP verification** — only
+    `npx tsc -b` (clean) and direct SQL-level checks against `wentox_db` for the one backend
+    change. Flagging this explicitly: none of Milestone 5's ~15 report views have been exercised
+    against real data end-to-end the way every prior module was.
+  - Real semantic simplifications made where the demo's shape had no backend equivalent: Cash
+    Book dropped its Cheque/Online columns (the real `reports:cash-book` is CASH_IN_HAND-only by
+    design, per its own code comment); Business Ledger's summary view shows `closing_balance`
+    instead of a Debit/Credit split (the backend computes a point-in-time balance, not a
+    period activity split, for the summary — only `view: 'detail'` has real Debit/Credit rows);
+    Overall Trail dropped the `subcustomer` filter pill (sub-customers have no `ba_id` and never
+    appear in `reports:overall-trail`, confirmed by the service's own code comment) and gained a
+    `bank` one (the real `entity_type`/`category` enums distinguish `BANK` from generic
+    `BUSINESS_ACCOUNT`, which the demo data model never did).
+  - Material Stock Adjustment modal (`ReportStockPage.tsx`) dropped the Add-material direction —
+    only `stock:reduce-vendor-stock` (consume) is real; user-approved decision from planning.
+  - Every "opening balance" and "running balance" figure across Vendor Report, Khaata, Business
+    Ledger, Overall Trail, and Overall Search now comes directly from the backend's own
+    `accountLedger()`/`netBalance()` computation (`business_accounts.opening_balance` + ledger sum
+    to date) instead of being derived client-side from raw demo arrays — these were never
+    equivalent, so this is a full replacement, not a like-for-like port.
+- **Files:** `backend/src/repositories/reports.repository.js` (see the widening entry above),
+  `frontend/src/lib/api.ts`, `frontend/src/pages/ReportStockPage.tsx`,
+  `frontend/src/pages/SaleAnalysisPage.tsx`, `frontend/src/pages/SaleReportPage.tsx`,
+  `frontend/src/pages/VendorReportPage.tsx`, `frontend/src/pages/PaymentTrailPage.tsx`,
+  `frontend/src/pages/ReportKhaataPage.tsx`, `frontend/src/pages/BusinessLedgerContent.tsx`,
+  `frontend/src/pages/ReportCashBookPage.tsx`, `frontend/src/pages/ProductLedgerContent.tsx`,
+  `frontend/src/pages/OverallTrailContent.tsx`, `frontend/src/pages/BiltyUpdatePage.tsx`,
+  `frontend/src/pages/OverallSearchPage.tsx`.
+
+## Milestone 5, Module 5.1 — Vendor Stock breakdown widening for frontend wiring
+
+### 2026-08-07 — Widened `reports:vendor-stock` with purchased/returned breakdown
+- **What:** `reports.repository.js#vendorStock()` now returns `purchased_qty`/`returned_qty`
+  alongside the existing `on_hand`, needed to preserve the frontend Current Stock page's existing
+  Material Stock breakdown view (rather than simplifying the UI to net-only, per explicit user
+  decision). No schema change — `dbo.vendor_stock_movements.movement_type` was already a real,
+  CHECK-constrained discriminator (`PURCHASE`/`PURCHASE_RETURN`/`CONSUMPTION`/`ADJUSTMENT`) with
+  sign-constrained `qty`, conditional aggregation was all that was needed.
+- **How:** Also dropped the existing `HAVING SUM(vsm.qty) <> 0` — it would hide a material that
+  was purchased and later fully consumed (on_hand = 0 but real purchased/returned history exists),
+  which the breakdown view needs to show. Verified live: query executes cleanly against
+  `wentox_db`.
+- **Files:** `backend/src/repositories/reports.repository.js`.
+
+## Milestone 4, Modules 4.5/4.6/4.7 — Payroll frontend wiring (Employees & Stages, Wage Run, Salary Run)
+
+### 2026-08-07 — Connected all three Payroll pages to real `window.api` — Milestone 4 frontend now fully complete
+- **What:** `EmployeeSetupPage.tsx`, `WageRunPage.tsx`, `SalaryRunPage.tsx` rewired off the demo
+  `AppContext` reducer onto real `employees`/`stages`/`wageRuns`/`salaryRuns` IPC calls — the last
+  remaining frontend gap in Milestone 4. `frontend/src/lib/api.ts` gained `StageRow`/`EmployeeRow`/
+  `WageRunRow`/`WageRunItemRow`/`SalaryRunRow`/`SalaryRunItemRow` types and matching wrapper
+  objects (`stages`, `employees`, `wageRuns`, `salaryRuns`), plus a `ProductRow` widening to
+  include the 12 manufacturing-stage cost columns (`a.*` in `products.repository.js` already
+  returned them — the typed wrapper just hadn't caught up).
+- **How:**
+  - Dropped the frontend's free-text "Register Custom Trade" escape hatch — the real `stages`
+    table is a closed, seeded set of 12, and `employees.service.js#validate()` rejects any
+    unknown `stage_key`. The trade grid now sources from `stages:list()` directly.
+  - Dropped the 100%-frontend business-account-code computation
+    (`getNextAccountCode`/`ADD_BUSINESS_ACCOUNT`) — `employees:create()` already creates the
+    linked `business_accounts` row server-side in its own transaction.
+  - Duplicate-name (`DUPLICATE_NAME`/`INACTIVE_DUPLICATE`) handling added to
+    `EmployeeSetupPage.tsx`, same reactivate-offer pattern as `BankSetupPage.tsx`/`vendors`.
+  - `lib/payroll.ts`'s `accruedUpto`/`paidUpto`/`getEmployeeBalance`/`getRunBalanceBlock` used to
+    read `state.wageRuns`/`state.salaryRuns`/`state.expenses` directly — since (matching every
+    other connected module) `AppContext`'s demo arrays stay untouched and real data lives in each
+    page's own local state, these were rewritten to take explicit arrays as parameters instead.
+    Since `salaryRuns:list()` carries no line items (only the new `item_count`), a salaried
+    employee's accrual across multiple runs required flattening each CONFIRMED run's `items` via
+    `salaryRuns.get(id)` once on `EmployeeSetupPage` mount — small, bounded by run count (roughly
+    one per month), not per employee.
+  - **Found and fixed a real bug during live verification, not introduced by this change but
+    exposed by it**: the stage-picker dropdown on `WageRunPage.tsx` called `useState`/`useRef`/
+    `useEffect` inside an IIFE that only executed once a selected worker had ≥1 registered trade —
+    a Rules-of-Hooks violation (conditionally-called hooks) that had been sitting in the demo code
+    unnoticed because nothing had exercised that exact state transition before. Selecting a worker
+    with a trade threw "Rendered more hooks than during the previous render" and blanked the whole
+    page (no error boundary). Fixed by hoisting the hooks to the component's top level,
+    unconditional.
+  - Live-verified via Electron + CDP (Node `WebSocket`, same technique as every prior module):
+    worker with 0 trades rejected; worker with 1 real trade created, linked BA under `220001`
+    confirmed; salaried employee created, linked BA under `220002` confirmed; duplicate name+phone
+    against an active employee correctly rejected with no crash; Wage Run — worker/stage picker
+    correctly restricted to the real registered trade, article pick correctly snapshotted
+    rate/packing, 20×5×12=1200 computed correctly, post → `Dr WAGES EXPENSE(410001) 1200 /
+    Cr worker.ba_id 1200` confirmed in `ledger_entries`, unpost → ledger rows removed + audit
+    columns set, edit-and-repost round-tripped correctly; Salary Run — roster built from the real
+    salaried employee, override to 55000 with remarks posted → `Dr SALARIES EXPENSE(410002) 55000
+    / Cr employee.ba_id 55000` confirmed, `salary_run_items` snapshot correct
+    (`salary_amount=60000`, `amount=55000`); a second CONFIRMED run for the same month correctly
+    shown as already-posted with Post disabled; Employees directory's Current Balance column
+    verified correct for both the worker (Rs 1,200 accrued, nothing paid) and the salaried
+    employee (Rs 55,000 accrued from the posted run).
+- **Files:** `frontend/src/lib/api.ts`, `frontend/src/lib/payroll.ts`,
+  `frontend/src/pages/EmployeeSetupPage.tsx`, `frontend/src/pages/WageRunPage.tsx`,
+  `frontend/src/pages/SalaryRunPage.tsx`.
+
+## Milestone 4, Modules 4.5/4.6/4.7 — Payroll `list()` widenings for frontend wiring
+
+### 2026-08-07 — Widened `employees`/`wageRuns`/`salaryRuns` list() to close the list-lacks-detail gap
+- **What:** Three small, additive `list()` widenings needed to start wiring the Payroll frontend
+  (Employees & Stages, Wage Run, Salary Run) to real data — the same "list rows lack detail"
+  gotcha every prior connected module has hit. No new tables/columns, no service changes, no
+  migration.
+- **How:** `employees.repository.js#list()` gained a correlated `STRING_AGG(ws.stage_key, ',')
+  WITHIN GROUP (ORDER BY s.sort_order)` subquery over `worker_stages`↔`stages`, returned as
+  `stage_keys` — lets the Employees directory show a worker's trades, and lets the Wage Run
+  screen restrict its stage picker to the selected worker's trades, both off the list alone (no
+  N+1 `get()` per row/selection). `wageRuns.repository.js#list()` and
+  `salaryRuns.repository.js#list()` each gained a scalar `item_count` subquery (`COUNT(*)` over
+  `wage_run_items`/`salary_run_items`) so their History tables can show line/employee counts
+  without fetching full `items` per row. Verified live against `wentox_db` (currently 0 rows in
+  all three tables, but the STRING_AGG/subquery syntax executes cleanly).
+- **Files:** `backend/src/repositories/employees.repository.js`,
+  `backend/src/repositories/wageRuns.repository.js`,
+  `backend/src/repositories/salaryRuns.repository.js`.
+
 ## Milestone 4 — new `businessAccounts:list` (read-only)
 
 ### 2026-08-07 — New `businessAccounts:list` channel (+ a bug fixed same-day)

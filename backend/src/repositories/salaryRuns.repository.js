@@ -21,7 +21,9 @@ async function list(filters = {}) {
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT * FROM dbo.salary_runs ${where} ORDER BY period_month DESC, salary_run_id DESC`,
+    `SELECT sr.*,
+       (SELECT COUNT(*) FROM dbo.salary_run_items sri WHERE sri.salary_run_id = sr.salary_run_id) AS item_count
+     FROM dbo.salary_runs sr ${where} ORDER BY sr.period_month DESC, sr.salary_run_id DESC`,
     params,
   );
   return result.recordset;

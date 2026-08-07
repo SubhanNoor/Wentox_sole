@@ -1,14 +1,12 @@
-import { useState, useMemo } from 'react';
-import { useApp } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import type { SaleBill } from '@/types';
 import { Search, Edit2, RefreshCw, Printer, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
+import * as api from '@/lib/api';
+import type { SaleBillRow, AddaRow } from '@/lib/api';
 
 export default function BiltyUpdatePage() {
-  const { state, dispatch } = useApp();
-
   // Search Filters State
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -21,7 +19,7 @@ export default function BiltyUpdatePage() {
   const [sortBy, setSortBy] = useState<'inv-no' | 'bill-no'>('inv-no');
 
   // Selected Invoice for Updation
-  const [selectedBillId, setSelectedBillId] = useState<string | null>(null);
+  const [selectedBillId, setSelectedBillId] = useState<number | null>(null);
   const [updateBillNo, setUpdateBillNo] = useState('');
   const [updateBiltyNo, setUpdateBiltyNo] = useState('');
   const [updateAddaId, setUpdateAddaId] = useState('');
@@ -30,17 +28,36 @@ export default function BiltyUpdatePage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  const [addas, setAddas] = useState<AddaRow[]>([]);
+  const [invoices, setInvoices] = useState<SaleBillRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => { api.listAddas().then(r => { if (r.ok) setAddas(r.data); }); }, []);
+
+  const loadInvoices = useCallback(async () => {
+    setLoading(true);
+    const res = await api.saleBills.biltySearch({
+      date_from: startDate || undefined,
+      date_to: endDate || undefined,
+      bill_no: billNoQuery.trim() || undefined,
+    });
+    if (res.ok) setInvoices(res.data);
+    setLoading(false);
+  }, [startDate, endDate, billNoQuery]);
+
+  useEffect(() => { loadInvoices(); }, [loadInvoices]);
+
   // Select a bill from table
-  const handleSelectBill = (bill: SaleBill) => {
-    setSelectedBillId(bill.id);
-    setUpdateBillNo(bill.billNo);
-    setUpdateBiltyNo(bill.biltyNo || '');
-    setUpdateAddaId(bill.addaId || state.addas[0]?.id || '');
+  const handleSelectBill = (bill: SaleBillRow) => {
+    setSelectedBillId(bill.bill_id);
+    setUpdateBillNo(bill.bill_no);
+    setUpdateBiltyNo(bill.bilty_no || '');
+    setUpdateAddaId(bill.adda_id ? String(bill.adda_id) : (addas[0] ? String(addas[0].adda_id) : ''));
     setErrorMsg('');
   };
 
   // Perform Update
-  const handleUpdateBilty = (e: React.FormEvent) => {
+  const handleUpdateBilty = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedBillId) {
       setErrorMsg('Please select an invoice from the table below first.');
@@ -55,21 +72,21 @@ export default function BiltyUpdatePage() {
       return;
     }
 
-    dispatch({
-      type: 'UPDATE_BILTY_INFO',
-      billId: selectedBillId,
-      biltyNo: updateBiltyNo,
-      addaId: updateAddaId
-    });
+    const res = await api.saleBills.updateBilty(selectedBillId, updateBiltyNo, Number(updateAddaId));
+    if (!res.ok) {
+      setErrorMsg(res.error.message);
+      return;
+    }
 
     setSuccessMsg(`Bilty updated successfully for Bill No: ${updateBillNo}`);
     setTimeout(() => setSuccessMsg(''), 3000);
-    
+
     // Clear selection
     setSelectedBillId(null);
     setUpdateBillNo('');
     setUpdateBiltyNo('');
     setErrorMsg('');
+    loadInvoices();
   };
 
   // Print results
@@ -79,76 +96,55 @@ export default function BiltyUpdatePage() {
 
   const handleExportExcel = () => {
     const headers = ['Invoice Date', 'Inv. No (Sys)', 'Manual No.', 'Customer Name', 'Sub Customer Name', 'Bilty No.', 'Transport Adda', 'Adda Code'];
-    const rows = filteredInvoices.map(bill => {
-      const custName = state.customers.find(c => c.id === bill.customerId)?.name || '-';
-      const subCustName = bill.subCustomerId ? state.subCustomers.find(sc => sc.id === bill.subCustomerId)?.name : 'SAME (Direct)';
-      const addaName = bill.addaId ? state.addas.find(ad => ad.id === bill.addaId)?.name : 'Not Assigned';
-      return [bill.date, bill.id, bill.billNo, custName, subCustName || '-', bill.biltyNo || '-', addaName || '-', bill.addaId || '-'];
-    });
+    const rows = filteredInvoices.map(bill => [
+      bill.bill_date, bill.bill_id, bill.bill_no,
+      bill.customer_name || '-',
+      bill.sub_customer_name || 'SAME (Direct)',
+      bill.bilty_no || '-',
+      bill.adda_name || 'Not Assigned',
+      bill.adda_id || '-'
+    ]);
     exportRowsToExcel('bilty-adda-search', headers, rows);
   };
 
-  // Filter and Sort Logic
+  // Client-side filters not covered by biltySearch() (customer/sub-customer name substring, bilty
+  // status) + sorting — biltySearch() itself only takes customer_id/sub_customer_id/bill_no/dates.
   const filteredInvoices = useMemo(() => {
-    let result = [...state.saleBills];
+    let result = [...invoices];
 
-    // Filter by Date
-    if (startDate) {
-      result = result.filter(b => b.date >= startDate);
-    }
-    if (endDate) {
-      result = result.filter(b => b.date <= endDate);
-    }
-
-    // Filter by Bill No
-    if (billNoQuery.trim()) {
-      result = result.filter(b => b.billNo.includes(billNoQuery.trim()));
-    }
-
-    // Filter by Customer Name
     if (customerQuery.trim()) {
       const q = customerQuery.toLowerCase();
-      result = result.filter(b => {
-        const custName = state.customers.find(c => c.id === b.customerId)?.name.toLowerCase() || '';
-        return custName.includes(q);
-      });
+      result = result.filter(b => (b.customer_name || '').toLowerCase().includes(q));
     }
 
-    // Filter by Sub-customer Name
     if (subCustomerQuery.trim()) {
       const q = subCustomerQuery.toLowerCase();
-      result = result.filter(b => {
-        if (!b.subCustomerId) return false;
-        const subName = state.subCustomers.find(sc => sc.id === b.subCustomerId)?.name.toLowerCase() || '';
-        return subName.includes(q);
-      });
+      result = result.filter(b => (b.sub_customer_name || '').toLowerCase().includes(q));
     }
 
-    // Filter by Bilty / Adda Status
     if (biltyStatusFilter === 'no-bilty') {
-      result = result.filter(b => !b.biltyNo || b.biltyNo === '0' || b.biltyNo.trim() === '');
+      result = result.filter(b => !b.bilty_no || b.bilty_no.trim() === '');
     } else if (biltyStatusFilter === 'no-adda') {
-      result = result.filter(b => !b.addaId);
+      result = result.filter(b => !b.adda_id);
     } else if (biltyStatusFilter === 'has-bilty') {
-      result = result.filter(b => b.biltyNo && b.biltyNo !== '0' && b.biltyNo.trim() !== '');
+      result = result.filter(b => b.bilty_no && b.bilty_no.trim() !== '');
     }
 
-    // Sorting
     result.sort((a, b) => {
       if (sortBy === 'inv-no') {
-        return a.id.localeCompare(b.id);
+        return a.bill_id - b.bill_id;
       } else {
-        return a.billNo.localeCompare(b.billNo);
+        return a.bill_no.localeCompare(b.bill_no);
       }
     });
 
     return result;
-  }, [state.saleBills, state.customers, state.subCustomers, startDate, endDate, billNoQuery, customerQuery, subCustomerQuery, biltyStatusFilter, sortBy]);
+  }, [invoices, customerQuery, subCustomerQuery, biltyStatusFilter, sortBy]);
 
   return (
     <AppLayout pageTitle="Search & Bilty Adda Updation">
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
-        
+
         {/* Success/Error Alerts */}
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
@@ -159,7 +155,7 @@ export default function BiltyUpdatePage() {
 
         {/* Update Form & Search Filters */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6" data-no-print>
-          
+
           {/* Update Bilty Box */}
           <div className="card-white p-5 bg-white border flex flex-col gap-4">
             <h3 className="font-lora font-semibold text-lg border-b pb-2 text-slate-800 flex items-center gap-2">
@@ -198,7 +194,7 @@ export default function BiltyUpdatePage() {
                 <SearchableSelect
                   options={[
                     { value: '', label: 'Select Adda...' },
-                    ...state.addas.map(ad => ({ value: ad.id, label: ad.name }))
+                    ...addas.map(ad => ({ value: String(ad.adda_id), label: ad.name }))
                   ]}
                   value={updateAddaId}
                   onChange={setUpdateAddaId}
@@ -220,7 +216,7 @@ export default function BiltyUpdatePage() {
             <h3 className="font-lora font-semibold text-lg border-b pb-2 text-slate-800 flex items-center gap-2">
               <Search size={18} className="text-blue-600" /> Search Filters
             </h3>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">Start Date</label>
@@ -258,7 +254,7 @@ export default function BiltyUpdatePage() {
                     <button
                       key={opt.id}
                       type="button"
-                      onClick={() => setBiltyStatusFilter(opt.id as any)}
+                      onClick={() => setBiltyStatusFilter(opt.id as 'all' | 'no-bilty' | 'no-adda' | 'has-bilty')}
                       className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold cursor-pointer transition-all select-none ${
                         biltyStatusFilter === opt.id
                           ? 'bg-[#111c2a] text-white border-[#111c2a] shadow-sm font-bold'
@@ -281,7 +277,7 @@ export default function BiltyUpdatePage() {
                     <button
                       key={opt.id}
                       type="button"
-                      onClick={() => setSortBy(opt.id as any)}
+                      onClick={() => setSortBy(opt.id as 'inv-no' | 'bill-no')}
                       className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold cursor-pointer transition-all select-none ${
                         sortBy === opt.id
                           ? 'bg-[#111c2a] text-white border-[#111c2a] shadow-sm font-bold'
@@ -334,7 +330,9 @@ export default function BiltyUpdatePage() {
               </tr>
             </thead>
             <tbody>
-              {filteredInvoices.length === 0 ? (
+              {loading ? (
+                <tr><td colSpan={9} className="text-center p-8 text-slate-400 text-sm">Loading…</td></tr>
+              ) : filteredInvoices.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="text-center p-8 text-slate-400 text-sm">
                     No invoices match your selected search criteria.
@@ -342,38 +340,35 @@ export default function BiltyUpdatePage() {
                 </tr>
               ) : (
                 filteredInvoices.map(bill => {
-                  const custName = state.customers.find(c => c.id === bill.customerId)?.name || '-';
-                  const subCustName = bill.subCustomerId ? state.subCustomers.find(sc => sc.id === bill.subCustomerId)?.name : 'SAME (Direct)';
-                  const addaName = bill.addaId ? state.addas.find(ad => ad.id === bill.addaId)?.name : 'Not Assigned';
-                  const isSelected = selectedBillId === bill.id;
+                  const isSelected = selectedBillId === bill.bill_id;
 
                   return (
                     <tr
-                      key={bill.id}
+                      key={bill.bill_id}
                       className={`border-b text-sm transition-colors ${isSelected ? 'bg-amber-50/70 hover:bg-amber-50' : 'hover:bg-slate-50/50'}`}
                       style={{ borderColor: 'var(--border-table)' }}
                     >
-                      <td className="p-3 pl-4 font-mono">{bill.date}</td>
-                      <td className="p-3 text-center font-mono">{bill.id}</td>
-                      <td className="p-3 text-center font-mono font-semibold">{bill.billNo}</td>
-                      <td className="p-3 font-semibold text-slate-700">{custName}</td>
-                      <td className="p-3 text-slate-600">{subCustName}</td>
+                      <td className="p-3 pl-4 font-mono">{bill.bill_date}</td>
+                      <td className="p-3 text-center font-mono">{bill.bill_id}</td>
+                      <td className="p-3 text-center font-mono font-semibold">{bill.bill_no}</td>
+                      <td className="p-3 font-semibold text-slate-700">{bill.customer_name || '-'}</td>
+                      <td className="p-3 text-slate-600">{bill.sub_customer_name || 'SAME (Direct)'}</td>
                       <td className="p-3 font-mono">
-                        {bill.biltyNo ? (
-                          <span className="font-semibold text-slate-800">{bill.biltyNo}</span>
+                        {bill.bilty_no ? (
+                          <span className="font-semibold text-slate-800">{bill.bilty_no}</span>
                         ) : (
                           <span className="text-red-500 italic text-xs">Missing</span>
                         )}
                       </td>
                       <td className="p-3">
-                        {bill.addaId ? (
-                          <span className="text-slate-700">{addaName}</span>
+                        {bill.adda_id ? (
+                          <span className="text-slate-700">{bill.adda_name}</span>
                         ) : (
                           <span className="text-slate-400 italic text-xs">Unassigned</span>
                         )}
                       </td>
                       <td className="p-3 text-center font-mono text-xs text-slate-500">
-                        {bill.addaId || '-'}
+                        {bill.adda_id || '-'}
                       </td>
                       <td className="p-3 text-center" data-no-print>
                         <button

@@ -1,28 +1,36 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
+import * as api from '@/lib/api';
+import type { EmployeeRow, ProductRow, StageRow, WageRunRow, ExpenseRow } from '@/lib/api';
 import { getRunBalanceBlock } from '@/lib/payroll';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
-import { COST_FIELDS } from '@/types';
-import type { WageRun, WageRunItem, CostFieldKey } from '@/types';
 import { Plus, Trash2, Save, HardHat, AlertTriangle, Edit2, Undo2, History, Clock, ChevronDown, Check } from 'lucide-react';
 
-function emptyItem(): WageRunItem {
-  return {
-    id: 'wri_' + Date.now() + Math.random().toString(36).slice(2, 7),
-    productId: '',
-    productName: '',
-    rate: 0,
-    cartons: 0,
-    packing: 0,
-    amount: 0
-  };
+interface FormItem {
+  key: string;
+  articleId: number | '';
+  articleName: string;
+  rate: number;
+  cartons: number;
+  packing: number;
+  amount: number;
+}
+
+function emptyItem(): FormItem {
+  return { key: 'wri_' + Date.now() + Math.random().toString(36).slice(2, 7), articleId: '', articleName: '', rate: 0, cartons: 0, packing: 0, amount: 0 };
 }
 
 const today = () => new Date().toISOString().split('T')[0];
 
 export default function WageRunPage() {
-  const { state, dispatch } = useApp();
+  const [workers, setWorkers] = useState<EmployeeRow[]>([]);
+  const [products, setProducts] = useState<ProductRow[]>([]);
+  const [stageList, setStageList] = useState<StageRow[]>([]);
+  const [runs, setRuns] = useState<WageRunRow[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
+  const [recentRuns, setRecentRuns] = useState<{ wage_run_id: number; run_date: string; total_amount: number; status: 'DRAFT' | 'CONFIRMED' }[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const [tab, setTab] = useState<'entry' | 'history'>('entry');
   const [tabAnimating, setTabAnimating] = useState(false);
@@ -36,102 +44,127 @@ export default function WageRunPage() {
     }, 180);
   };
 
-  const [editingRunId, setEditingRunId] = useState<string | null>(null);
+  const [editingRunId, setEditingRunId] = useState<number | null>(null);
   const [date, setDate] = useState(today());
   const [employeeId, setEmployeeId] = useState('');
-  const [stage, setStage] = useState<CostFieldKey | ''>('');
-  const [items, setItems] = useState<WageRunItem[]>([emptyItem()]);
+  const [stage, setStage] = useState('');
+  const [items, setItems] = useState<FormItem[]>([emptyItem()]);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
+  const [isStageOpen, setIsStageOpen] = useState(false);
+  const stageRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const h = (e: MouseEvent) => {
+      if (stageRef.current && !stageRef.current.contains(e.target as Node)) setIsStageOpen(false);
+    };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, []);
+
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
 
-  const workers = useMemo(
-    () => state.employees.filter(e => e.employeeType === 'WORKER'),
-    [state.employees]
-  );
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    const [empRes, prodRes, stageRes, runRes, exRes] = await Promise.all([
+      api.employees.list({ employee_type: 'WORKER' }),
+      api.listProducts(),
+      api.stages.list(),
+      api.wageRuns.list(),
+      api.expenses.list({ status: 'CONFIRMED' }),
+    ]);
+    if (empRes.ok) setWorkers(empRes.data);
+    if (prodRes.ok) setProducts(prodRes.data);
+    if (stageRes.ok) setStageList(stageRes.data);
+    if (runRes.ok) setRuns(runRes.data);
+    if (exRes.ok) setExpenses(exRes.data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
 
   const workerOptions = useMemo(
-    () => workers.map(w => ({ value: w.id, label: w.name })),
+    () => workers.map(w => ({ value: String(w.employee_id), label: w.name })),
     [workers]
   );
 
   const selectedWorker = useMemo(
-    () => workers.find(w => w.id === employeeId),
+    () => workers.find(w => String(w.employee_id) === employeeId),
     [workers, employeeId]
   );
 
   // The stage list shows ONLY this worker's trades. A man registered for
   // Bottom cannot be paid for Cutting by accident.
   const availableStages = useMemo(() => {
-    if (!selectedWorker) return [];
-    const own = selectedWorker.stages || [];
-    return own.map(st => {
-      const cf = COST_FIELDS.find(f => f.key === st);
-      return { key: st as any, label: cf ? cf.label : st, workerLabel: cf ? cf.workerLabel : st };
+    if (!selectedWorker?.stage_keys) return [];
+    const own = selectedWorker.stage_keys.split(',');
+    return own.map(key => {
+      const s = stageList.find(f => f.stage_key === key);
+      return { key, label: s ? s.worker_label : key };
     });
-  }, [selectedWorker]);
+  }, [selectedWorker, stageList]);
+
+  const stageObj = useMemo(() => stageList.find(s => s.stage_key === stage), [stageList, stage]);
 
   const productOptions = useMemo(
-    () => state.products.map(p => ({ value: p.id, label: `${p.id} — ${p.name}` })),
-    [state.products]
+    () => products.map(p => ({ value: String(p.article_id), label: `${p.code} — ${p.name}` })),
+    [products]
   );
 
   /* ── line editing ─────────────────────────────────────────── */
 
-  const recalc = (it: WageRunItem): WageRunItem => ({
+  const recalc = (it: FormItem): FormItem => ({
     ...it,
     amount: Number(it.rate) * Number(it.cartons) * Number(it.packing)
   });
 
-  const pickProduct = (itemId: string, productId: string) => {
-    const p = state.products.find(pr => pr.id === productId);
-    if (!p || !stage) return;
-    setItems(prev => prev.map(it => it.id !== itemId ? it : recalc({
+  const pickProduct = (itemKey: string, articleIdStr: string) => {
+    const p = products.find(pr => String(pr.article_id) === articleIdStr);
+    if (!p || !stageObj) return;
+    setItems(prev => prev.map(it => it.key !== itemKey ? it : recalc({
       ...it,
-      productId: p.id,
-      productName: p.name,
+      articleId: p.article_id,
+      articleName: p.name,
       // SNAPSHOTS, both of them. Editing the product later must not rewrite a
       // wage already paid — and without packing stored, nobody could tell
       // afterwards whether this article packed 12 or 24.
-      rate: p[stage as CostFieldKey],
+      rate: (p as unknown as Record<string, number>)[stageObj.cost_column],
       packing: p.packing
     })));
   };
 
-  const updateItem = (itemId: string, field: 'cartons' | 'rate', value: number) => {
-    setItems(prev => prev.map(it => it.id !== itemId ? it : recalc({ ...it, [field]: value })));
+  const updateItem = (itemKey: string, field: 'cartons' | 'rate', value: number) => {
+    setItems(prev => prev.map(it => it.key !== itemKey ? it : recalc({ ...it, [field]: value })));
   };
 
   const addRow = () => setItems(prev => [...prev, emptyItem()]);
-  const removeRow = (id: string) =>
-    setItems(prev => prev.length === 1 ? [emptyItem()] : prev.filter(it => it.id !== id));
+  const removeRow = (key: string) =>
+    setItems(prev => prev.length === 1 ? [emptyItem()] : prev.filter(it => it.key !== key));
 
   /* ── derived figures ──────────────────────────────────────── */
 
-  const filledItems = items.filter(it => it.productId && Number(it.cartons) > 0);
+  const filledItems = items.filter(it => it.articleId !== '' && Number(it.cartons) > 0);
   const grandTotal = filledItems.reduce((s, it) => s + it.amount, 0);
 
-  // Computed straight through rather than memoized: it is a handful of reduces
-  // over in-memory arrays, and memoizing on `grandTotal` (itself derived from
-  // `items` each render) is what the React Compiler flags as unpreservable.
-  const block = employeeId
-    ? getRunBalanceBlock(state, employeeId, date, grandTotal, editingRunId || undefined)
+  const block = employeeId && selectedWorker
+    ? getRunBalanceBlock(selectedWorker, date, grandTotal, runs, expenses, editingRunId ?? undefined)
     : { baqaya: 0, banam: 0, net: 0 };
 
   // Settling by PERIOD rather than by day makes a same-date duplicate check
   // close to worthless — the real risk is paying the same fortnight twice, a
   // week apart, which a date-equality warning never catches. Showing the last
   // few runs instead lets the operator see it.
-  const recentRuns = useMemo(() => {
-    if (!employeeId || !stage) return [];
-    return state.wageRuns
-      .filter(r => r.employeeId === employeeId && r.stage === stage && r.id !== editingRunId)
-      .sort((a, b) => b.date.localeCompare(a.date))
-      .slice(0, 3);
-  }, [state.wageRuns, employeeId, stage, editingRunId]);
+  useEffect(() => {
+    if (!employeeId || !stage) { setRecentRuns([]); return; }
+    let cancelled = false;
+    api.wageRuns.recent(Number(employeeId), stage).then(res => {
+      if (cancelled) return;
+      setRecentRuns(res.ok ? res.data.filter(r => r.wage_run_id !== editingRunId) : []);
+    });
+    return () => { cancelled = true; };
+  }, [employeeId, stage, editingRunId]);
 
   const zeroRateRows = filledItems.filter(it => Number(it.rate) === 0);
 
@@ -145,80 +178,83 @@ export default function WageRunPage() {
     setItems([emptyItem()]);
   };
 
-  const buildRun = (status: 'Posted' | 'Unposted'): WageRun | null => {
-    if (!employeeId) { fail('Pick a worker first.'); return null; }
-    if (!stage) { fail('Pick which stage this settlement is for.'); return null; }
-    if (filledItems.length === 0) { fail('Add at least one article line with a quantity.'); return null; }
+  const save = async (shouldPost: boolean) => {
+    if (!employeeId) return fail('Pick a worker first.');
+    if (!stage) return fail('Pick which stage this settlement is for.');
+    if (filledItems.length === 0) return fail('Add at least one article line with a quantity.');
 
-    const existing = editingRunId ? state.wageRuns.find(r => r.id === editingRunId) : undefined;
-    return {
-      id: editingRunId || 'wr_' + Date.now(),
-      employeeId,
-      stage: stage as CostFieldKey,
-      date,
-      totalAmount: grandTotal,
-      status,
-      unpostedAt: existing?.unpostedAt,
-      amountBefore: existing?.amountBefore,
-      items: filledItems
+    const payload: api.WageRunCreateInput = {
+      employee_id: Number(employeeId),
+      stage_key: stage,
+      run_date: date,
+      items: filledItems.map(it => ({ article_id: it.articleId as number, cartons: it.cartons, rate: it.rate })),
     };
-  };
 
-  const save = (status: 'Posted' | 'Unposted') => {
-    const run = buildRun(status);
-    if (!run) return;
+    const res = editingRunId
+      ? await api.wageRuns.update(editingRunId, payload)
+      : await api.wageRuns.create(payload);
+    if (!res.ok) return fail(res.error.message);
 
-    if (editingRunId) {
-      dispatch({ type: 'UPDATE_WAGE_RUN', runId: editingRunId, run });
-      flash(status === 'Posted' ? 'Wage run updated and posted.' : 'Wage run saved as unposted.');
+    if (shouldPost) {
+      const postRes = await api.wageRuns.post(res.data.wage_run_id);
+      if (!postRes.ok) return fail(postRes.error.message);
+      flash(`Wage run posted — ${formatCurrency(postRes.data.total_amount)} credited to ${selectedWorker?.name}.`);
     } else {
-      dispatch({ type: 'ADD_WAGE_RUN', run });
-      flash(status === 'Posted'
-        ? `Wage run posted — ${formatCurrency(run.totalAmount)} credited to ${selectedWorker?.name}.`
-        : 'Wage run saved as unposted. It counts toward nothing until posted.');
+      flash('Wage run saved as unposted. It counts toward nothing until posted.');
     }
     resetForm();
+    loadAll();
   };
 
   /* ── history actions ──────────────────────────────────────── */
 
-  const editRun = (run: WageRun) => {
+  const editRun = async (run: WageRunRow) => {
     // A Posted run is never edited in place — unpost first. That keeps
     // "posted" meaning one thing: counted, and not currently being changed.
-    if (run.status === 'Posted') {
+    if (run.status === 'CONFIRMED') {
       return fail('Unpost this run before editing it — a posted run is counted in the worker\'s balance.');
     }
-    setEditingRunId(run.id);
-    setDate(run.date);
-    setEmployeeId(run.employeeId);
-    setStage(run.stage);
-    setItems(run.items.length ? run.items.map(i => ({ ...i })) : [emptyItem()]);
+    // list() rows have no items — fetch the full row before opening the form.
+    const res = await api.wageRuns.get(run.wage_run_id);
+    if (!res.ok) return fail(res.error.message);
+    const full = res.data;
+    setEditingRunId(full.wage_run_id);
+    setDate(full.run_date);
+    setEmployeeId(String(full.employee_id));
+    setStage(full.stage_key);
+    setItems(full.items && full.items.length
+      ? full.items.map(i => ({ key: 'wri_' + i.item_id, articleId: i.article_id, articleName: i.article_name || '', rate: i.rate, cartons: i.cartons, packing: i.packing, amount: i.amount }))
+      : [emptyItem()]);
     setTab('entry');
   };
 
-  const unpost = (run: WageRun) => {
-    if (!window.confirm(`Unpost this run? ${formatCurrency(run.totalAmount)} will stop counting toward ${nameOf(run.employeeId)}'s balance until it is posted again.`)) return;
-    dispatch({ type: 'UNPOST_WAGE_RUN', runId: run.id, unpostedAt: new Date().toISOString() });
+  const unpost = async (run: WageRunRow) => {
+    if (!window.confirm(`Unpost this run? ${formatCurrency(run.total_amount)} will stop counting toward ${nameOf(run.employee_id)}'s balance until it is posted again.`)) return;
+    const res = await api.wageRuns.unpost(run.wage_run_id);
+    if (!res.ok) return fail(res.error.message);
     flash('Run unposted. It now counts toward nothing and can be edited.');
+    loadAll();
   };
 
-  const removeRun = (run: WageRun) => {
-    if (run.status === 'Posted') {
+  const removeRun = async (run: WageRunRow) => {
+    if (run.status === 'CONFIRMED') {
       return fail('A posted run cannot be deleted — unpost it first, so the change to the balance is deliberate.');
     }
     if (!window.confirm('Delete this unposted run? It counts toward nothing, so nothing will move.')) return;
-    dispatch({ type: 'DELETE_WAGE_RUN', runId: run.id });
+    const res = await api.wageRuns.remove(run.wage_run_id);
+    if (!res.ok) return fail(res.error.message);
     flash('Unposted run deleted.');
+    loadAll();
   };
 
-  function nameOf(id: string) {
-    return state.employees.find(e => e.id === id)?.name || '—';
+  function nameOf(id: number) {
+    return workers.find(e => e.employee_id === id)?.name || '—';
   }
-  const stageLabel = (k: CostFieldKey) => COST_FIELDS.find(f => f.key === k)?.workerLabel || k;
+  const stageLabel = (k: string) => stageList.find(f => f.stage_key === k)?.worker_label || k;
 
   const sortedRuns = useMemo(
-    () => [...state.wageRuns].sort((a, b) => b.date.localeCompare(a.date)),
-    [state.wageRuns]
+    () => [...runs].sort((a, b) => b.run_date.localeCompare(a.run_date)),
+    [runs]
   );
 
   /* ── render ───────────────────────────────────────────────── */
@@ -242,7 +278,7 @@ export default function WageRunPage() {
               onClick={() => switchTab('history')}
               className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'history' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
-              <History size={15} /> History ({state.wageRuns.length})
+              <History size={15} /> History ({runs.length})
             </button>
           </div>
           {editingRunId && (
@@ -285,16 +321,7 @@ export default function WageRunPage() {
                       Set this worker's trades first
                     </div>
                   ) : (() => {
-                    const [isStageOpen, setIsStageOpen] = useState(false);
-                    const stageRef = useRef<HTMLDivElement>(null);
-                    useEffect(() => {
-                      const h = (e: MouseEvent) => {
-                        if (stageRef.current && !stageRef.current.contains(e.target as Node)) setIsStageOpen(false);
-                      };
-                      document.addEventListener('mousedown', h);
-                      return () => document.removeEventListener('mousedown', h);
-                    }, []);
-                    const selLabel = availableStages.find(f => f.key === stage)?.workerLabel || 'Select stage...';
+                    const selLabel = availableStages.find(f => f.key === stage)?.label || 'Select stage...';
                     return (
                       <div className="relative" ref={stageRef}>
                         <button
@@ -317,9 +344,9 @@ export default function WageRunPage() {
                               const isSelected = stage === f.key;
                               return (
                                 <button key={f.key} type="button"
-                                  onClick={() => { setStage(f.key as CostFieldKey); setItems([emptyItem()]); setIsStageOpen(false); }}
+                                  onClick={() => { setStage(f.key); setItems([emptyItem()]); setIsStageOpen(false); }}
                                   className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between cursor-pointer transition-colors ${isSelected ? 'bg-[var(--brand-gold)] text-white font-semibold' : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'}`}>
-                                  <span>{f.workerLabel}</span>
+                                  <span>{f.label}</span>
                                   {isSelected && <Check size={13} className="text-white flex-shrink-0" />}
                                 </button>
                               );
@@ -341,13 +368,13 @@ export default function WageRunPage() {
               {recentRuns.length > 0 && (
                 <div className="mt-4 p-3 rounded-lg bg-amber-50 border border-amber-200">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-amber-800 uppercase tracking-wide mb-2">
-                    <Clock size={13} /> Recent {stage ? stageLabel(stage as CostFieldKey) : ''} runs for {nameOf(employeeId)}
+                    <Clock size={13} /> Recent {stage ? stageLabel(stage) : ''} runs for {nameOf(Number(employeeId))}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     {recentRuns.map(r => (
-                      <span key={r.id} className="px-2 py-1 rounded bg-white border border-amber-200 text-xs font-semibold text-slate-700">
-                        {r.date} — {formatCurrency(r.totalAmount)}
-                        {r.status === 'Unposted' && <span className="ml-1 text-slate-400 font-medium">(unposted)</span>}
+                      <span key={r.wage_run_id} className="px-2 py-1 rounded bg-white border border-amber-200 text-xs font-semibold text-slate-700">
+                        {r.run_date} — {formatCurrency(r.total_amount)}
+                        {r.status === 'DRAFT' && <span className="ml-1 text-slate-400 font-medium">(unposted)</span>}
                       </span>
                     ))}
                   </div>
@@ -396,21 +423,21 @@ export default function WageRunPage() {
                     </thead>
                     <tbody>
                       {items.map(it => {
-                        const zero = it.productId && Number(it.rate) === 0;
+                        const zero = it.articleId !== '' && Number(it.rate) === 0;
                         return (
-                          <tr key={it.id} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
+                          <tr key={it.key} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
                             <td className="p-2 pl-4">
                               <SearchableSelect
                                 options={productOptions}
-                                value={it.productId}
-                                onChange={val => pickProduct(it.id, val)}
+                                value={it.articleId === '' ? '' : String(it.articleId)}
+                                onChange={val => pickProduct(it.key, val)}
                                 placeholder="Select article..."
                               />
                               {zero && (
                                 <div className="flex items-start gap-1.5 mt-1.5 text-[11px] text-amber-700">
                                   <AlertTriangle size={13} className="mt-0.5 shrink-0" />
                                   <span>
-                                    This article has no cost set for {stageLabel(stage as CostFieldKey)}.
+                                    This article has no cost set for {stageLabel(stage)}.
                                     Type a rate, or fix it on the product form.
                                   </span>
                                 </div>
@@ -420,8 +447,8 @@ export default function WageRunPage() {
                               <input
                                 type="number" min={0}
                                 value={it.rate || ''}
-                                onChange={e => updateItem(it.id, 'rate', Number(e.target.value))}
-                                disabled={!it.productId}
+                                onChange={e => updateItem(it.key, 'rate', Number(e.target.value))}
+                                disabled={it.articleId === ''}
                                 className={`soleria-input py-1.5 text-right text-sm ${zero ? 'border-amber-400 bg-amber-50' : ''}`}
                               />
                             </td>
@@ -429,19 +456,19 @@ export default function WageRunPage() {
                               <input
                                 type="number" min={0}
                                 value={it.cartons || ''}
-                                onChange={e => updateItem(it.id, 'cartons', Number(e.target.value))}
-                                disabled={!it.productId}
+                                onChange={e => updateItem(it.key, 'cartons', Number(e.target.value))}
+                                disabled={it.articleId === ''}
                                 className="soleria-input py-1.5 text-right text-sm font-semibold"
                               />
                             </td>
                             <td className="p-2 text-right text-slate-500 font-mono text-sm">
-                              {it.productId ? it.packing : '—'}
+                              {it.articleId !== '' ? it.packing : '—'}
                             </td>
                             <td className="p-2 text-right font-bold text-slate-800">
                               {it.amount ? formatCurrency(it.amount) : <span className="text-slate-300">—</span>}
                             </td>
                             <td className="p-2 text-center">
-                              <button onClick={() => removeRow(it.id)} className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600" title="Remove line">
+                              <button onClick={() => removeRow(it.key)} className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600" title="Remove line">
                                 <Trash2 size={15} />
                               </button>
                             </td>
@@ -467,7 +494,7 @@ export default function WageRunPage() {
                   <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
                     <AlertTriangle size={14} className="mt-0.5 shrink-0" />
                     <span>
-                      Net balance is negative — {nameOf(employeeId)} has been paid more than they have
+                      Net balance is negative — {nameOf(Number(employeeId))} has been paid more than they have
                       earned. That usually means a payment was recorded for work not yet entered here.
                     </span>
                   </div>
@@ -479,10 +506,10 @@ export default function WageRunPage() {
                 )}
 
                 <div className="flex gap-3 justify-end border-t pt-4 mt-4">
-                  <button onClick={() => save('Unposted')} className="px-5 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
+                  <button onClick={() => save(false)} className="px-5 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
                     Save as Unposted
                   </button>
-                  <button onClick={() => save('Posted')} className="btn-gold flex items-center gap-1.5 px-5 py-2 text-sm">
+                  <button onClick={() => save(true)} className="btn-gold flex items-center gap-1.5 px-5 py-2 text-sm">
                     <Save size={16} /> {editingRunId ? 'Save & Post' : 'Post Wage Run'}
                   </button>
                 </div>
@@ -510,32 +537,34 @@ export default function WageRunPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedRuns.length === 0 ? (
+                  {loading ? (
+                    <tr><td colSpan={7} className="text-center p-8 text-slate-400">Loading…</td></tr>
+                  ) : sortedRuns.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="text-center p-8 text-slate-400">
                         No wage runs yet. Post one to start accruing what workers are owed.
                       </td>
                     </tr>
                   ) : sortedRuns.map(r => (
-                    <tr key={r.id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                      <td className="p-3 pl-4 font-mono text-slate-600">{r.date}</td>
-                      <td className="p-3 font-semibold text-slate-900">{nameOf(r.employeeId)}</td>
-                      <td className="p-3 text-slate-600">{stageLabel(r.stage)}</td>
-                      <td className="p-3 text-center text-slate-600">{r.items.length}</td>
-                      <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.totalAmount)}</td>
+                    <tr key={r.wage_run_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                      <td className="p-3 pl-4 font-mono text-slate-600">{r.run_date}</td>
+                      <td className="p-3 font-semibold text-slate-900">{r.employee_name || nameOf(r.employee_id)}</td>
+                      <td className="p-3 text-slate-600">{r.stage_label || stageLabel(r.stage_key)}</td>
+                      <td className="p-3 text-center text-slate-600">{r.item_count ?? '—'}</td>
+                      <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.total_amount)}</td>
                       <td className="p-3 text-center">
-                        <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${r.status === 'Posted' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
-                          {r.status}
+                        <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${r.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
+                          {r.status === 'CONFIRMED' ? 'Posted' : 'Unposted'}
                         </span>
-                        {r.unpostedAt && (
+                        {r.unposted_at && (
                           <div className="text-[10px] text-slate-400 mt-1">
-                            was {formatCurrency(r.amountBefore || 0)}
+                            was {formatCurrency(r.amount_before || 0)}
                           </div>
                         )}
                       </td>
                       <td className="p-3">
                         <div className="flex items-center justify-center gap-1.5">
-                          {r.status === 'Posted' ? (
+                          {r.status === 'CONFIRMED' ? (
                             <button onClick={() => unpost(r)} title="Unpost" className="p-1.5 rounded hover:bg-amber-50 text-slate-500 hover:text-amber-700">
                               <Undo2 size={15} />
                             </button>

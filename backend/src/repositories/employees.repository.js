@@ -17,7 +17,10 @@ async function list(filters = {}) {
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT e.*, c.name AS city_name
+    `SELECT e.*, c.name AS city_name,
+       (SELECT STRING_AGG(ws.stage_key, ',') WITHIN GROUP (ORDER BY s.sort_order)
+        FROM dbo.worker_stages ws JOIN dbo.stages s ON s.stage_key = ws.stage_key
+        WHERE ws.employee_id = e.employee_id) AS stage_keys
      FROM dbo.employees e
      LEFT JOIN dbo.cities c ON c.city_id = e.city_id
      ${where}

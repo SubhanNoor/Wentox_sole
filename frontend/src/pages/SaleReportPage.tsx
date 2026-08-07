@@ -1,15 +1,18 @@
-import { Fragment, useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
-import { isReceiptLive } from '@/lib/cheques';
+import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import * as api from '@/lib/api';
+import type { SaleReportRow as ApiSaleReportRow } from '@/lib/api';
 
 interface SaleReportRow {
   key: string;
   label: string;
+  regionId: number | null;
+  regionName: string | null;
   totalSales: number;
   totalCartons: number;
   commission: number;
@@ -23,16 +26,32 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
-export function SaleReportContent() {
-  const { state } = useApp();
+function mapRow(r: ApiSaleReportRow): SaleReportRow {
+  return {
+    key: String(r.customer_id),
+    label: r.customer_name,
+    regionId: r.region_id,
+    regionName: r.region_name,
+    totalSales: r.total_sales,
+    totalCartons: r.total_cartons,
+    commission: r.commission,
+    saleReturn: r.sale_return,
+    netSales: r.net_sales,
+    payment: r.payment,
+  };
+}
 
+export function SaleReportContent() {
   const [groupMode, setGroupMode] = useState<'overall' | 'customer' | 'region'>('overall');
   const [viewMode, setViewMode] = useState<'overall' | 'month' | 'range'>('overall');
   const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
   const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(getTodayDate());
-  const [expandedRegionId, setExpandedRegionId] = useState<string | null>(null);
+  const [expandedRegionId, setExpandedRegionId] = useState<number | null>(null);
+
+  const [customerRows, setCustomerRows] = useState<SaleReportRow[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const { periodStart, periodEnd, periodLabel } = useMemo(() => {
     if (viewMode === 'month') {
@@ -43,60 +62,38 @@ export function SaleReportContent() {
     }
     if (viewMode === 'range') {
       return {
-        periodStart: fromDate || '0000-01-01',
-        periodEnd: toDate || '9999-12-31',
+        periodStart: fromDate || undefined,
+        periodEnd: toDate || undefined,
         periodLabel: `${fromDate || 'Start'} to ${toDate || 'End'}`
       };
     }
-    return { periodStart: '0000-01-01', periodEnd: '9999-12-31', periodLabel: 'Overall (All Time)' };
+    return { periodStart: undefined, periodEnd: undefined, periodLabel: 'Overall (All Time)' };
   }, [viewMode, filterMonth, filterYear, fromDate, toDate]);
 
-  const computeRowFor = (customerId: string | null): Omit<SaleReportRow, 'key' | 'label'> => {
-    const bills = state.saleBills.filter(b =>
-      (customerId === null || b.customerId === customerId) &&
-      b.status === 'Posted' && b.date >= periodStart && b.date <= periodEnd
-    );
-    const returns = state.saleReturns.filter(r =>
-      (customerId === null || r.customerId === customerId) &&
-      r.status === 'Posted' && r.date >= periodStart && r.date <= periodEnd
-    );
-    // Bounced cheques are excluded — they were never really received (§13).
-    const receipts = state.receipts.filter(rec =>
-      (customerId === null || rec.customerId === customerId) &&
-      rec.date >= periodStart && rec.date <= periodEnd &&
-      isReceiptLive(rec)
-    );
+  const loadRows = useCallback(async () => {
+    setLoading(true);
+    const res = await api.reports.saleReport({ date_from: periodStart, date_to: periodEnd });
+    if (res.ok) setCustomerRows((res.data as ApiSaleReportRow[]).map(mapRow).filter(r => r.totalSales > 0 || r.saleReturn > 0 || r.payment > 0));
+    setLoading(false);
+  }, [periodStart, periodEnd]);
 
-    const totalSales = bills.reduce((s, b) => s + b.totalValue, 0);
-    const totalCartons = bills.reduce((s, b) => s + b.items.reduce((si, it) => si + it.cartons, 0), 0);
-    const saleReturn = returns.reduce((s, r) => s + r.items.reduce((si, it) => si + it.value, 0), 0);
-    const commission = receipts.reduce((s, rec) => s + (rec.commission || 0), 0);
-    const payment = receipts.reduce((s, rec) => s + rec.amount, 0);
-    const netSales = totalSales - commission - saleReturn;
+  useEffect(() => { loadRows(); }, [loadRows]);
 
-    return { totalSales, totalCartons, commission, saleReturn, netSales, payment };
-  };
-
-  const overallRow: SaleReportRow = useMemo(() => ({
-    key: 'overall',
-    label: 'Overall',
-    ...computeRowFor(null)
-  }), [state.saleBills, state.saleReturns, state.receipts, periodStart, periodEnd]);
-
-  const customerRows = useMemo((): SaleReportRow[] => {
-    return state.customers
-      .map(c => ({ key: c.id, label: c.name, ...computeRowFor(c.id) }))
-      .filter(r => r.totalSales > 0 || r.saleReturn > 0 || r.payment > 0);
-  }, [state.customers, state.saleBills, state.saleReturns, state.receipts, periodStart, periodEnd]);
+  const overallRow: SaleReportRow = useMemo(() => customerRows.reduce((acc, r) => ({
+    key: 'overall', label: 'Overall', regionId: null, regionName: null,
+    totalSales: acc.totalSales + r.totalSales,
+    totalCartons: acc.totalCartons + r.totalCartons,
+    commission: acc.commission + r.commission,
+    saleReturn: acc.saleReturn + r.saleReturn,
+    netSales: acc.netSales + r.netSales,
+    payment: acc.payment + r.payment,
+  }), { key: 'overall', label: 'Overall', regionId: null, regionName: null, totalSales: 0, totalCartons: 0, commission: 0, saleReturn: 0, netSales: 0, payment: 0 }), [customerRows]);
 
   const regionGroups = useMemo(() => {
-    const groups: Record<string, { regionId: string; regionName: string; customers: SaleReportRow[] }> = {};
-    state.customers.forEach(c => {
-      const row = customerRows.find(r => r.key === c.id);
-      if (!row) return;
-      const regionName = state.regions.find(r => r.id === c.regionId)?.name || 'No Region';
-      const key = c.regionId || 'none';
-      if (!groups[key]) groups[key] = { regionId: key, regionName, customers: [] };
+    const groups: Record<string, { regionId: number | null; regionName: string; customers: SaleReportRow[] }> = {};
+    customerRows.forEach(row => {
+      const key = String(row.regionId ?? 'none');
+      if (!groups[key]) groups[key] = { regionId: row.regionId, regionName: row.regionName || 'No Region', customers: [] };
       groups[key].customers.push(row);
     });
     return Object.values(groups)
@@ -110,7 +107,7 @@ export function SaleReportContent() {
         payment: g.customers.reduce((s, c) => s + c.payment, 0)
       }))
       .sort((a, b) => a.regionName.localeCompare(b.regionName));
-  }, [state.customers, state.regions, customerRows]);
+  }, [customerRows]);
 
   const handleExportExcel = () => {
     const headers = [groupMode === 'region' ? 'Region' : groupMode === 'customer' ? 'Customer' : 'Summary', 'Total Sales', 'Total Cartons', 'Commission', 'Sale Return', 'Net Sales', 'Payment'];
@@ -255,7 +252,9 @@ export function SaleReportContent() {
                 </tr>
               </thead>
               <tbody>
-                {groupMode === 'overall' && (
+                {loading ? (
+                  <tr><td colSpan={7} className="text-center p-8 text-slate-400">Loading…</td></tr>
+                ) : groupMode === 'overall' ? (
                   <tr className="border-b" style={{ borderColor: 'var(--border-table)' }}>
                     <td className="p-3 pl-4 font-semibold text-slate-800">{overallRow.label}</td>
                     <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(overallRow.totalSales)}</td>
@@ -265,9 +264,7 @@ export function SaleReportContent() {
                     <td className="p-3 text-right font-bold" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(overallRow.netSales)}</td>
                     <td className="p-3 text-right font-bold text-emerald-700">{formatCurrency(overallRow.payment)}</td>
                   </tr>
-                )}
-
-                {groupMode === 'customer' && (
+                ) : groupMode === 'customer' ? (
                   customerRows.length === 0 ? (
                     <tr><td colSpan={7} className="text-center p-8 text-slate-400">No sales activity found for this period.</td></tr>
                   ) : (
@@ -283,16 +280,14 @@ export function SaleReportContent() {
                       </tr>
                     ))
                   )
-                )}
-
-                {groupMode === 'region' && (
+                ) : (
                   regionGroups.length === 0 ? (
                     <tr><td colSpan={7} className="text-center p-8 text-slate-400">No sales activity found for this period.</td></tr>
                   ) : (
                     regionGroups.map(region => {
                       const isExpanded = expandedRegionId === region.regionId;
                       return (
-                        <Fragment key={region.regionId}>
+                        <Fragment key={String(region.regionId)}>
                           <tr
                             className="border-b bg-slate-50/60 hover:bg-slate-100/60 cursor-pointer font-semibold"
                             style={{ borderColor: 'var(--border-table)' }}

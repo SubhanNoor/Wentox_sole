@@ -1,21 +1,21 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
-import { getEmployeeBalance } from '@/lib/payroll';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
+import * as api from '@/lib/api';
+import type { EmployeeRow, EmployeeType, StageRow, CityRow, WageRunRow, ExpenseRow } from '@/lib/api';
+import { getEmployeeBalance, type FlatSalaryItem } from '@/lib/payroll';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, Phone, MapPin, HardHat, BadgeDollarSign, X, Tag } from 'lucide-react';
-import { COST_FIELDS } from '@/types';
-import type { Employee, EmployeeType } from '@/types';
-import SearchableSelect from '@/components/SearchableSelect';
-
-const CHART_ID_BY_TYPE: Record<EmployeeType, string> = {
-  WORKER: '220001',   // WORKER WAGES
-  SALARIED: '220002', // SALARIES PAYABLE
-};
+import { Plus, Search, Settings, Save, Edit2, Trash2, Phone, MapPin, HardHat, BadgeDollarSign, X, RotateCcw } from 'lucide-react';
 
 type ListTab = 'workers' | 'salaried';
 
 export default function EmployeeSetupPage() {
-  const { state, dispatch } = useApp();
+  const [employeeList, setEmployeeList] = useState<EmployeeRow[]>([]);
+  const [stageList, setStageList] = useState<StageRow[]>([]);
+  const [cities, setCities] = useState<CityRow[]>([]);
+  const [wageRuns, setWageRuns] = useState<WageRunRow[]>([]);
+  const [salaryItems, setSalaryItems] = useState<FlatSalaryItem[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const [activeTab, setActiveTab] = useState<ListTab>('workers');
   const [isClosing, setIsClosing] = useState(false);
@@ -33,23 +33,61 @@ export default function EmployeeSetupPage() {
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   // Form state
   const [empType, setEmpType] = useState<EmployeeType>('WORKER');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [cityId, setCityId] = useState('');
-  const [stages, setStages] = useState<string[]>([]);
-  const [customTrade, setCustomTrade] = useState('');
+  const [selectedStages, setSelectedStages] = useState<string[]>([]);
   const [salary, setSalary] = useState('');
 
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [reactivatePrompt, setReactivatePrompt] = useState<{ employee_id: number; name: string; phone: string | null } | null>(null);
+  const [deletingEmployee, setDeletingEmployee] = useState<EmployeeRow | null>(null);
 
-  const cityName = (id?: string) => state.cities.find(c => c.id === id)?.name || '';
+  const cityName = (id?: number | null) => cities.find(c => c.city_id === id)?.name || '';
   const flash = (msg: string) => { setSuccessMsg(msg); setTimeout(() => setSuccessMsg(''), 3000); };
   const fail = (msg: string) => { setErrorMsg(msg); setTimeout(() => setErrorMsg(''), 5000); };
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    const [empRes, stageRes, cityRes, wrRes, srRes, exRes] = await Promise.all([
+      api.employees.list({ includeInactive: true }),
+      api.stages.list(),
+      api.listCities(),
+      api.wageRuns.list(),
+      api.salaryRuns.list({ status: 'CONFIRMED' }),
+      api.expenses.list({ status: 'CONFIRMED' }),
+    ]);
+    if (empRes.ok) setEmployeeList(empRes.data);
+    if (stageRes.ok) setStageList(stageRes.data);
+    if (cityRes.ok) setCities(cityRes.data);
+    if (wrRes.ok) setWageRuns(wrRes.data);
+    if (exRes.ok) setExpenses(exRes.data);
+
+    // salaryRuns:list() has no line items — flatten each CONFIRMED run's items via get()
+    // once here so getEmployeeBalance() can sum a salaried employee's accrual across runs.
+    if (srRes.ok) {
+      const details = await Promise.all(srRes.data.map(r => api.salaryRuns.get(r.salary_run_id)));
+      const flat: FlatSalaryItem[] = [];
+      details.forEach(d => {
+        if (!d.ok || !d.data.items) return;
+        d.data.items.forEach(it => flat.push({
+          employee_id: it.employee_id,
+          amount: it.amount,
+          run_date: d.data.run_date,
+          status: d.data.status,
+        }));
+      });
+      setSalaryItems(flat);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
 
   const handleOpenAddModal = (type: EmployeeType) => {
     setSelectedId(null);
@@ -57,24 +95,28 @@ export default function EmployeeSetupPage() {
     setName('');
     setPhone('');
     setCityId('');
-    setStages([]);
-    setCustomTrade('');
+    setSelectedStages([]);
     setSalary('');
     setErrorMsg('');
     setIsModalOpen(true);
   };
 
-  const handleOpenEditModal = (emp: Employee) => {
-    setSelectedId(emp.id);
-    setEmpType(emp.employeeType);
+  const handleOpenEditModal = async (emp: EmployeeRow) => {
+    setSelectedId(emp.employee_id);
+    setEmpType(emp.employee_type);
     setName(emp.name);
     setPhone(emp.phone || '');
-    setCityId(emp.cityId || '');
-    setStages(emp.stages ? [...emp.stages] : []);
-    setCustomTrade('');
-    setSalary(emp.monthlySalary ? String(emp.monthlySalary) : '');
+    setCityId(emp.city_id != null ? String(emp.city_id) : '');
+    setSalary(emp.monthly_salary != null ? String(emp.monthly_salary) : '');
     setErrorMsg('');
     setIsModalOpen(true);
+    if (emp.employee_type === 'WORKER') {
+      // list() only carries a comma stage_keys string — get() has the authoritative set.
+      const res = await api.employees.get(emp.employee_id);
+      setSelectedStages(res.ok && res.data.stages ? res.data.stages.map(s => s.stage_key) : []);
+    } else {
+      setSelectedStages([]);
+    }
   };
 
   const handleCloseModal = () => {
@@ -83,65 +125,20 @@ export default function EmployeeSetupPage() {
     setName('');
     setPhone('');
     setCityId('');
-    setStages([]);
-    setCustomTrade('');
+    setSelectedStages([]);
     setSalary('');
     setErrorMsg('');
   };
 
   const toggleStage = (key: string) => {
-    setStages(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+    setSelectedStages(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
   };
 
-  const handleAddCustomTrade = () => {
-    const trimmed = customTrade.trim();
-    if (!trimmed) return;
-    if (!stages.includes(trimmed)) {
-      setStages(prev => [...prev, trimmed]);
-    }
-    setCustomTrade('');
-  };
-
-  // Compile pre-existing trade options (standard COST_FIELDS + custom trades registered across workers)
-  const allTradeOptions = useMemo(() => {
-    const standard = COST_FIELDS.map(f => ({ key: f.key, label: f.workerLabel }));
-    const customKeys = new Set<string>();
-
-    state.employees.forEach(e => {
-      if (e.employeeType === 'WORKER' && e.stages) {
-        e.stages.forEach(st => {
-          if (!standard.some(s => s.key === st)) {
-            customKeys.add(st);
-          }
-        });
-      }
-    });
-
-    stages.forEach(st => {
-      if (!standard.some(s => s.key === st)) {
-        customKeys.add(st);
-      }
-    });
-
-    const customOptions = Array.from(customKeys).map(k => ({ key: k, label: k }));
-    return [...standard, ...customOptions];
-  }, [state.employees, stages]);
-
-  const getNextAccountCode = (type: EmployeeType) => {
-    const chartId = CHART_ID_BY_TYPE[type];
-    const existing = state.businessAccounts.filter(acc => acc.controlId === chartId);
-    const maxSerial = existing.reduce((max, acc) => {
-      const serial = parseInt(acc.id.substring(chartId.length), 10);
-      return isNaN(serial) ? max : Math.max(max, serial);
-    }, 0);
-    return `${chartId}${String(maxSerial + 1).padStart(4, '0')}`;
-  };
-
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return setErrorMsg('Employee name is required.');
 
-    if (empType === 'WORKER' && stages.length === 0) {
+    if (empType === 'WORKER' && selectedStages.length === 0) {
       return setErrorMsg('Pick at least one trade — a worker with no trades cannot be paid for any work.');
     }
     if (empType === 'SALARIED') {
@@ -151,71 +148,64 @@ export default function EmployeeSetupPage() {
       }
     }
 
-    const shared = {
+    const payload: api.EmployeeCreateInput = {
       name: name.trim(),
       phone: phone.trim() || undefined,
-      cityId: cityId || undefined,
-      employeeType: empType,
-      stages: empType === 'WORKER' ? stages : undefined,
-      monthlySalary: empType === 'SALARIED' ? Number(salary) : undefined,
+      city_id: cityId ? Number(cityId) : undefined,
+      employee_type: empType,
+      stages: empType === 'WORKER' ? selectedStages : undefined,
+      monthly_salary: empType === 'SALARIED' ? Number(salary) : undefined,
     };
 
     if (selectedId) {
-      const existing = state.employees.find(e => e.id === selectedId);
-      dispatch({
-        type: 'UPDATE_EMPLOYEE',
-        employee: { ...shared, id: selectedId, baId: existing?.baId || '' }
-      });
+      const res = await api.employees.update(selectedId, payload);
+      if (!res.ok) return setErrorMsg(res.error.message);
       flash('Employee details updated successfully.');
     } else {
-      const baId = getNextAccountCode(empType);
-
-      dispatch({
-        type: 'ADD_BUSINESS_ACCOUNT',
-        account: {
-          id: baId,
-          name: `${name.trim()} A/C`,
-          controlId: CHART_ID_BY_TYPE[empType],
-          linkCode: 'A',
-          region: 'LOCAL',
-          status: 'Active'
+      const res = await api.employees.create(payload);
+      if (!res.ok) {
+        if (res.error.code === 'INACTIVE_DUPLICATE' && res.error.details) {
+          setReactivatePrompt(res.error.details as { employee_id: number; name: string; phone: string | null });
+          return;
         }
-      });
-
-      dispatch({
-        type: 'ADD_EMPLOYEE',
-        employee: { ...shared, id: (empType === 'WORKER' ? 'w_' : 's_') + Date.now(), baId }
-      });
+        return setErrorMsg(res.error.message);
+      }
       flash(`${empType === 'WORKER' ? 'Worker' : 'Salaried employee'} added successfully.`);
     }
 
     handleCloseModal();
+    loadAll();
   };
 
-  const remove = (emp: Employee) => {
-    const isWorker = emp.employeeType === 'WORKER';
-    const used = isWorker
-      ? state.wageRuns.filter(r => r.employeeId === emp.id).length
-      : state.salaryRuns.some(r => r.items.some(it => it.employeeId === emp.id));
-    if (used) {
-      return fail(`Cannot delete ${emp.name}: payroll records exist for this employee.`);
-    }
-    if (window.confirm(`Delete ${emp.name}?`)) {
-      dispatch({ type: 'DELETE_EMPLOYEE', id: emp.id });
-      flash('Employee deleted.');
-      handleCloseModal();
-    }
+  const confirmReactivateFromPrompt = async () => {
+    if (!reactivatePrompt) return;
+    const res = await api.employees.reactivate(reactivatePrompt.employee_id);
+    setReactivatePrompt(null);
+    if (!res.ok) return fail('Failed to reactivate: ' + res.error.message);
+    flash('Existing employee reactivated.');
+    handleCloseModal();
+    loadAll();
+  };
+
+  const confirmDelete = async () => {
+    if (!deletingEmployee) return;
+    const res = await api.employees.remove(deletingEmployee.employee_id);
+    setDeletingEmployee(null);
+    if (!res.ok) return fail('Failed to delete: ' + res.error.message);
+    flash('Employee deleted.');
+    handleCloseModal();
+    loadAll();
   };
 
   const activeEmployees = useMemo(
-    () => state.employees.filter(e => e.employeeType === (activeTab === 'workers' ? 'WORKER' : 'SALARIED')),
-    [state.employees, activeTab]
+    () => employeeList.filter(e => e.is_active && e.employee_type === (activeTab === 'workers' ? 'WORKER' : 'SALARIED')),
+    [employeeList, activeTab]
   );
 
   const filtered = useMemo(() => {
     let list = activeEmployees;
     if (cityFilter !== 'all') {
-      list = list.filter(e => e.cityId === cityFilter);
+      list = list.filter(e => String(e.city_id ?? '') === cityFilter);
     }
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -228,15 +218,15 @@ export default function EmployeeSetupPage() {
   }, [activeEmployees, cityFilter, search]);
 
   const totalOutstanding = useMemo(
-    () => activeEmployees.reduce((s, e) => s + getEmployeeBalance(state, e.id), 0),
-    [state, activeEmployees]
+    () => activeEmployees.reduce((s, e) => s + getEmployeeBalance(e, wageRuns, salaryItems, expenses), 0),
+    [activeEmployees, wageRuns, salaryItems, expenses]
   );
 
-  const formatStageLabels = (keys?: string[]) => {
-    if (!keys || !keys.length) return '—';
-    return keys.map(k => {
-      const found = COST_FIELDS.find(f => f.key === k);
-      return found ? found.workerLabel : k;
+  const formatStageLabels = (stageKeys?: string | null) => {
+    if (!stageKeys) return '—';
+    return stageKeys.split(',').map(k => {
+      const found = stageList.find(s => s.stage_key === k);
+      return found ? found.worker_label : k;
     }).join(', ');
   };
 
@@ -254,13 +244,13 @@ export default function EmployeeSetupPage() {
               onClick={() => handleSwitchTab('workers')}
               className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${activeTab === 'workers' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
-              <HardHat size={15} /> Piece-Rate Workers ({state.employees.filter(e => e.employeeType === 'WORKER').length})
+              <HardHat size={15} /> Piece-Rate Workers ({employeeList.filter(e => e.is_active && e.employee_type === 'WORKER').length})
             </button>
             <button
               onClick={() => handleSwitchTab('salaried')}
               className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${activeTab === 'salaried' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
-              <BadgeDollarSign size={15} /> Salaried Staff ({state.employees.filter(e => e.employeeType === 'SALARIED').length})
+              <BadgeDollarSign size={15} /> Salaried Staff ({employeeList.filter(e => e.is_active && e.employee_type === 'SALARIED').length})
             </button>
           </div>
 
@@ -293,17 +283,14 @@ export default function EmployeeSetupPage() {
 
               {/* Filters */}
               <div className="flex flex-wrap items-center gap-3">
-                <div className="w-48">
-                  <SearchableSelect
-                    options={[
-                      { value: 'all', label: 'All Cities' },
-                      ...state.cities.map(c => ({ value: c.id, label: c.name }))
-                    ]}
-                    value={cityFilter}
-                    onChange={setCityFilter}
-                    placeholder="All Cities"
-                  />
-                </div>
+                <select
+                  value={cityFilter}
+                  onChange={e => setCityFilter(e.target.value)}
+                  className="soleria-input w-48 py-1.5 text-xs font-semibold"
+                >
+                  <option value="all">All Cities</option>
+                  {cities.map(c => <option key={c.city_id} value={String(c.city_id)}>{c.name}</option>)}
+                </select>
 
                 <div className="relative min-w-[200px]">
                   <input
@@ -337,7 +324,9 @@ export default function EmployeeSetupPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.length === 0 ? (
+                  {loading ? (
+                    <tr><td colSpan={7} className="text-center p-8 text-slate-400">Loading…</td></tr>
+                  ) : filtered.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="text-center p-8 text-slate-400">
                         {activeEmployees.length === 0
@@ -346,22 +335,22 @@ export default function EmployeeSetupPage() {
                       </td>
                     </tr>
                   ) : filtered.map(emp => {
-                    const bal = getEmployeeBalance(state, emp.id);
+                    const bal = getEmployeeBalance(emp, wageRuns, salaryItems, expenses);
                     return (
-                      <tr key={emp.id} className="border-b hover:bg-slate-50/50 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-3 pl-4 font-mono font-semibold text-slate-500">{emp.baId}</td>
+                      <tr key={emp.employee_id} className="border-b hover:bg-slate-50/50 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                        <td className="p-3 pl-4 font-mono font-semibold text-slate-500">{emp.ba_id}</td>
                         <td className="p-3 font-semibold text-slate-900">{emp.name}</td>
                         <td className="p-3 text-slate-600">
                           {emp.phone ? <span className="flex items-center gap-1"><Phone size={12} className="text-slate-400" /> {emp.phone}</span> : <span className="text-slate-300">—</span>}
                         </td>
                         <td className="p-3 text-slate-600">
-                          {emp.cityId ? <span className="flex items-center gap-1"><MapPin size={12} className="text-slate-400" /> {cityName(emp.cityId)}</span> : <span className="text-slate-300">—</span>}
+                          {emp.city_id ? <span className="flex items-center gap-1"><MapPin size={12} className="text-slate-400" /> {cityName(emp.city_id)}</span> : <span className="text-slate-300">—</span>}
                         </td>
                         {activeTab === 'workers' ? (
-                          <td className="p-3 text-slate-700 font-medium">{formatStageLabels(emp.stages)}</td>
+                          <td className="p-3 text-slate-700 font-medium">{formatStageLabels(emp.stage_keys)}</td>
                         ) : (
                           <td className="p-3 text-right font-semibold text-slate-900">
-                            {emp.monthlySalary != null ? formatCurrency(emp.monthlySalary) : '—'}
+                            {emp.monthly_salary != null ? formatCurrency(emp.monthly_salary) : '—'}
                           </td>
                         )}
                         <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(bal)}</td>
@@ -375,7 +364,7 @@ export default function EmployeeSetupPage() {
                               <Edit2 size={15} />
                             </button>
                             <button
-                              onClick={() => remove(emp)}
+                              onClick={() => setDeletingEmployee(emp)}
                               title="Delete Employee"
                               className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
                             >
@@ -485,15 +474,14 @@ export default function EmployeeSetupPage() {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">City Location</label>
-                    <SearchableSelect
-                      options={[
-                        { value: '', label: 'Select city...' },
-                        ...state.cities.map(c => ({ value: c.id, label: c.name }))
-                      ]}
+                    <select
                       value={cityId}
-                      onChange={setCityId}
-                      placeholder="Select city..."
-                    />
+                      onChange={e => setCityId(e.target.value)}
+                      className="soleria-input w-full font-semibold"
+                    >
+                      <option value="">Select city...</option>
+                      {cities.map(c => <option key={c.city_id} value={String(c.city_id)}>{c.name}</option>)}
+                    </select>
                   </div>
                 </div>
 
@@ -505,22 +493,21 @@ export default function EmployeeSetupPage() {
                         <HardHat size={14} className="text-[#B08D57]" /> Registered Trades <span className="text-rose-500 font-bold">*</span>
                       </span>
                       <span className="text-[10px] font-semibold text-slate-500 bg-slate-200/60 px-2 py-0.5 rounded-full">
-                        {stages.length} selected
+                        {selectedStages.length} selected
                       </span>
                     </div>
 
-                    {/* Pre-existing and custom trade buttons grid */}
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-44 overflow-y-auto p-1">
-                      {allTradeOptions.map(f => {
-                        const on = stages.includes(f.key);
+                      {stageList.map(f => {
+                        const on = selectedStages.includes(f.stage_key);
                         return (
                           <button
                             type="button"
-                            key={f.key}
-                            onClick={() => toggleStage(f.key)}
+                            key={f.stage_key}
+                            onClick={() => toggleStage(f.stage_key)}
                             className={`text-left px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer flex items-center justify-between gap-1 ${on ? 'border-[#B08D57] bg-[#B08D57]/15 text-slate-900 font-bold shadow-2xs' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'}`}
                           >
-                            <span className="truncate">{f.label}</span>
+                            <span className="truncate">{f.worker_label}</span>
                             {on && <span className="text-[10px] text-[var(--brand-gold)] font-bold">✓</span>}
                           </button>
                         );
@@ -529,40 +516,10 @@ export default function EmployeeSetupPage() {
 
                     <div className="flex items-center justify-between text-[11px] font-semibold pt-1 border-t border-slate-200/60">
                       <div className="flex gap-3">
-                        <button type="button" onClick={() => setStages(allTradeOptions.map(f => f.key))} className="text-slate-600 hover:text-slate-900 underline cursor-pointer">Select all</button>
-                        <button type="button" onClick={() => setStages([])} className="text-slate-600 hover:text-slate-900 underline cursor-pointer">Clear</button>
+                        <button type="button" onClick={() => setSelectedStages(stageList.map(f => f.stage_key))} className="text-slate-600 hover:text-slate-900 underline cursor-pointer">Select all</button>
+                        <button type="button" onClick={() => setSelectedStages([])} className="text-slate-600 hover:text-slate-900 underline cursor-pointer">Clear</button>
                       </div>
                     </div>
-
-                    {/* Add Custom Registered Trade input section */}
-                    <div className="pt-2 border-t border-slate-200/60">
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1 flex items-center gap-1">
-                        <Tag size={12} className="text-[#B08D57]" /> Register Custom Trade
-                      </label>
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={customTrade}
-                          onChange={e => setCustomTrade(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              handleAddCustomTrade();
-                            }
-                          }}
-                          placeholder="e.g. Embroiderer, Sole Buffer..."
-                          className="soleria-input flex-1 text-xs py-1.5 px-2.5 font-semibold bg-white"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleAddCustomTrade}
-                          className="btn-outline px-3 py-1.5 text-xs font-semibold cursor-pointer flex items-center gap-1"
-                        >
-                          <Plus size={13} /> Add Trade
-                        </button>
-                      </div>
-                    </div>
-
                   </div>
                 ) : (
                   <div>
@@ -596,6 +553,43 @@ export default function EmployeeSetupPage() {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* Reactivate-inactive-duplicate prompt */}
+        {reactivatePrompt && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setReactivatePrompt(null)}>
+            <div className="bg-white rounded-2xl border-2 border-amber-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+              <h3 className="font-lora font-bold text-base text-slate-900 mb-2 flex items-center gap-2">
+                <RotateCcw size={18} className="text-amber-500" /> Inactive Employee Found
+              </h3>
+              <p className="text-xs text-slate-600 mb-4">
+                An inactive employee named <strong>{reactivatePrompt.name}</strong>
+                {reactivatePrompt.phone ? <> (phone {reactivatePrompt.phone})</> : null} already
+                exists. Reactivate it instead of creating a new record?
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={() => setReactivatePrompt(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
+                <button onClick={confirmReactivateFromPrompt} className="btn-gold px-4 py-2 text-xs font-semibold cursor-pointer">Reactivate</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Delete confirmation */}
+        {deletingEmployee && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setDeletingEmployee(null)}>
+            <div className="bg-white rounded-2xl border-2 border-rose-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+              <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Delete Employee</h3>
+              <p className="text-xs text-slate-600 mb-4">
+                Delete <strong>{deletingEmployee.name}</strong>? This deactivates the record —
+                past wage/salary run history is kept intact.
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={() => setDeletingEmployee(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
+                <button onClick={confirmDelete} className="px-4 py-2 text-xs font-semibold cursor-pointer rounded-lg bg-rose-600 text-white hover:bg-rose-700">Delete</button>
+              </div>
             </div>
           </div>
         )}

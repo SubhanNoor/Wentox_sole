@@ -1,60 +1,18 @@
-import { Fragment, useState, useMemo } from 'react';
-import { useApp } from '@/context/AppContext';
+import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Search, Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet, LayoutList, X } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import * as api from '@/lib/api';
+import type { StockRow, VendorStockRow, ProductLedgerResult, StockMovementRow, StockMovementType, CategoryRow, VendorRow } from '@/lib/api';
 
-interface ProductLedgerEntry {
-  date: string;
-  type: 'Production' | 'Sale' | 'Sale Return';
-  ref: string;
-  debit: number;  // IN
-  credit: number; // OUT
-}
-
-const getColorFromName = (name: string): string => {
-  const words = name.trim().split(/\s+/);
-  const lastWord = words[words.length - 1];
-  const colors = ['black', 'white', 'brown', 'tan', 'blue', 'red', 'green', 'yellow', 'grey', 'gray', 'pink', 'orange', 'navy', 'gold', 'silver', 'maroon'];
-  if (colors.includes(lastWord.toLowerCase())) {
-    return lastWord.charAt(0).toUpperCase() + lastWord.slice(1).toLowerCase();
-  }
-  for (const c of colors) {
-    if (name.toLowerCase().includes(' ' + c) || name.toLowerCase().endsWith(c)) {
-      return c.charAt(0).toUpperCase() + c.slice(1).toLowerCase();
-    }
-  }
-  return 'N/A';
-};
-
-const getCleanedArticleName = (name: string, color: string): string => {
-  if (color !== 'N/A') {
-    const idx = name.toLowerCase().lastIndexOf(color.toLowerCase());
-    if (idx !== -1) {
-      return name.substring(0, idx).trim();
-    }
-  }
-  return name;
-};
-
-// Articles are grouped by their leading style code (e.g. "P-101" in
-// "P-101 Jogger Sole Black") — different colors of the same article share
-// this code and must appear together as one row with an expandable panel,
-// not as separate rows.
-const getArticleCode = (name: string): string => {
-  const match = name.trim().match(/^([A-Za-z]+-\d+)/);
-  return match ? match[1] : name.trim().split(/\s+/)[0];
-};
-
-const getCommonName = (name: string, code: string, color: string): string => {
-  let rest = name.startsWith(code) ? name.slice(code.length).trim() : name;
-  if (color !== 'N/A') {
-    const idx = rest.toLowerCase().lastIndexOf(color.toLowerCase());
-    if (idx !== -1) rest = rest.substring(0, idx).trim();
-  }
-  return rest;
+const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
+  PRODUCTION: 'Production',
+  SALE: 'Sale',
+  SALE_RETURN: 'Sale Return',
+  OPENING: 'Opening',
+  ADJUSTMENT: 'Adjustment',
 };
 
 // Date range calculation helpers
@@ -71,17 +29,6 @@ const getWeekRange = (dateStr: string) => {
   return { start: monday, end: sunday };
 };
 
-const isDateInWeekOf = (targetDateStr: string, baseDateStr: string) => {
-  const target = new Date(targetDateStr);
-  const { start, end } = getWeekRange(baseDateStr);
-  return target >= start && target <= end;
-};
-
-const isDateInMonthYear = (targetDateStr: string, month: number, year: number) => {
-  const target = new Date(targetDateStr);
-  return target.getMonth() === month && target.getFullYear() === year;
-};
-
 const getMonthName = (m: number): string => {
   const names = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -90,9 +37,9 @@ const getMonthName = (m: number): string => {
   return names[m];
 };
 
-export default function ReportStockPage() {
-  const { state, dispatch } = useApp();
+const iso = (d: Date) => d.toISOString().split('T')[0];
 
+export default function ReportStockPage() {
   type StockTab = 'current' | 'material' | 'ledger' | 'daily' | 'weekly' | 'monthly' | 'overall';
   const [activeStockTab, setActiveStockTab] = useState<StockTab>('current');
   const [tabAnimating, setTabAnimating] = useState(false);
@@ -110,84 +57,86 @@ export default function ReportStockPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
 
+  // Real lookups
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
+  const [vendors, setVendors] = useState<VendorRow[]>([]);
+
+  // Real report data, fetched per-tab
+  const [stockRows, setStockRows] = useState<StockRow[]>([]);
+  const [vendorStockRows, setVendorStockRows] = useState<VendorStockRow[]>([]);
+  const [ledgerResult, setLedgerResult] = useState<ProductLedgerResult>({ rows: [], total_in: 0, total_out: 0, net: 0 });
+  const [productionRows, setProductionRows] = useState<StockMovementRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
+
+  const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
+  const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
+
+  useEffect(() => {
+    api.listCategories().then(r => { if (r.ok) setCategories(r.data); });
+    api.listVendors().then(r => { if (r.ok) setVendors(r.data); });
+  }, []);
+
   // Add stock state variables
-  const [selectedGroup, setSelectedGroup] = useState<{ code: string; commonName: string; categoryId: string; vendorId: string; packing: number; products: any[] } | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<{ articleId: number; code: string; commonName: string; categoryName: string; packing: number; rows: StockRow[] } | null>(null);
   const [addQuantity, setAddQuantity] = useState<number>(0);
   const [qtyType, setQtyType] = useState<'cartons' | 'pairs'>('cartons');
   const [productionDate, setProductionDate] = useState(new Date().toISOString().split('T')[0]);
   const [addColor, setAddColor] = useState('');
   const [isNewColor, setIsNewColor] = useState(false);
 
-  // Expandable row state (TASK-03) — keyed by article group code, not product id,
-  // since all color variants of an article now live under one row.
-  const [expandedArticleCode, setExpandedArticleCode] = useState<string | null>(null);
+  // Expandable row state — keyed by article_id, since all color variants of an article live
+  // under one row.
+  const [expandedArticleId, setExpandedArticleId] = useState<number | null>(null);
 
   // Full Report modal — one row per article, every color's cartons/pairs inline on the same
   // line (no click-to-expand), ending with a combined Total Pairs across all colors.
   const [showColorReport, setShowColorReport] = useState(false);
 
-  // Material stock adjustment modal state (+ and -)
+  // Material stock adjustment modal state — DEDUCT only (stock:reduce-vendor-stock is the only
+  // real backend operation; the demo's ADD direction had no backend equivalent and was dropped).
   const [materialAdjModal, setMaterialAdjModal] = useState<{
-    isOpen: boolean;
-    type: 'ADD' | 'DEDUCT';
-    vendorId: string;
+    vendorId: number;
     vendorName: string;
+    materialId: number;
     materialName: string;
     unit: string;
     currentQty: number;
   } | null>(null);
   const [materialAdjQty, setMaterialAdjQty] = useState('');
-  const [materialAdjRemarks, setMaterialAdjRemarks] = useState('');
   const [materialAdjError, setMaterialAdjError] = useState('');
 
-  function handleSaveMaterialAdjustment() {
+  async function handleSaveMaterialAdjustment() {
     if (!materialAdjModal) return;
     const qty = Number(materialAdjQty);
     if (isNaN(qty) || qty <= 0) {
       setMaterialAdjError('Quantity must be greater than 0.');
       return;
     }
-    if (materialAdjModal.type === 'DEDUCT' && materialAdjModal.currentQty - qty < 0) {
+    if (materialAdjModal.currentQty - qty < 0) {
       setMaterialAdjError(`Total stock after reduction cannot be less than 0. Maximum allowed reduction is ${materialAdjModal.currentQty.toLocaleString()} ${materialAdjModal.unit}.`);
       return;
     }
 
-    dispatch({
-      type: 'ADD_MATERIAL_ADJUSTMENT',
-      adjustment: {
-        id: 'madj_' + Date.now(),
-        date: getTodayDate(),
-        vendorId: materialAdjModal.vendorId,
-        materialName: materialAdjModal.materialName,
-        unit: materialAdjModal.unit,
-        type: materialAdjModal.type,
-        quantity: qty,
-        remarks: materialAdjRemarks
-      }
+    const res = await api.stock.reduceVendorStock({
+      vendor_id: materialAdjModal.vendorId,
+      material_id: materialAdjModal.materialId,
+      unit: materialAdjModal.unit,
+      qty,
+      movement_date: getTodayDate(),
     });
+    if (!res.ok) {
+      setMaterialAdjError(res.error.message);
+      return;
+    }
 
     setMaterialAdjModal(null);
     setMaterialAdjQty('');
-    setMaterialAdjRemarks('');
     setMaterialAdjError('');
+    flash('Material stock reduced.');
+    loadVendorStock();
   }
-
-  const getProductLedgerEntries = (productIds: string[]): ProductLedgerEntry[] => {
-    const idSet = new Set(productIds);
-    const entries: ProductLedgerEntry[] = [];
-    state.productionLogs
-      .filter(l => idSet.has(l.productId))
-      .forEach(l => entries.push({ date: l.date, type: 'Production', ref: l.id.replace('pl_', ''), debit: l.quantity, credit: 0 }));
-    state.saleBills
-      .filter(b => b.status === 'Posted')
-      .forEach(b => b.items.filter(it => idSet.has(it.productId))
-        .forEach(it => entries.push({ date: b.date, type: 'Sale', ref: b.billNo, debit: 0, credit: it.pairs })));
-    state.saleReturns
-      .filter(r => r.status === 'Posted')
-      .forEach(r => r.items.filter(it => idSet.has(it.productId))
-        .forEach(it => entries.push({ date: r.date, type: 'Sale Return', ref: r.billNo, debit: it.pairs, credit: 0 })));
-    return entries.sort((a, b) => a.date.localeCompare(b.date));
-  };
 
   // Production log filtering states
   const [dailyDate, setDailyDate] = useState(new Date().toISOString().split('T')[0]);
@@ -197,239 +146,141 @@ export default function ReportStockPage() {
   const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(getTodayDate());
 
-  // Product Ledger tab filtering state (TASK-02 / TASK-02 UPDATE)
+  // Product Ledger tab filtering state
   const [ledgerFromDate, setLedgerFromDate] = useState(getThreeMonthsAgoDate());
   const [ledgerToDate, setLedgerToDate] = useState(getTodayDate());
   const [ledgerVendorFilter, setLedgerVendorFilter] = useState('all');
 
-  // 1. Current stock filter memo
-  const filteredProducts = useMemo(() => {
-    let result = [...state.products];
+  const categoryIdParam = selectedCategory !== 'all' ? Number(selectedCategory) : undefined;
 
-    if (selectedCategory !== 'all') {
-      result = result.filter(p => p.categoryId === selectedCategory);
-    }
+  // ── Current Stock ──
+  const loadStock = useCallback(async () => {
+    setLoading(true);
+    const res = await api.reports.stock({ category_id: categoryIdParam });
+    if (res.ok) setStockRows(res.data); else fail(res.error.message);
+    setLoading(false);
+  }, [categoryIdParam]);
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter(p => p.name.toLowerCase().includes(q) || p.id.includes(q));
-    }
+  useEffect(() => { if (activeStockTab === 'current') loadStock(); }, [activeStockTab, loadStock]);
 
-    return result;
-  }, [state.products, selectedCategory, searchQuery]);
+  // reports:stock has no free-text search — filtered client-side against the fetched rows.
+  const filteredStockRows = useMemo(() => {
+    if (!searchQuery.trim()) return stockRows;
+    const q = searchQuery.toLowerCase();
+    return stockRows.filter(r => r.article_name.toLowerCase().includes(q) || r.article_code.toLowerCase().includes(q));
+  }, [stockRows, searchQuery]);
 
-  // Group products into articles: different colors of the same style code
-  // (e.g. "P-101") are variants under one row, not separate rows.
+  // Group color variants of the same article under one row.
   const groupedArticles = useMemo(() => {
-    const groups: Record<string, { code: string; commonName: string; categoryId: string; vendorId: string; packing: number; products: typeof filteredProducts }> = {};
-    filteredProducts.forEach(p => {
-      const code = getArticleCode(p.name);
-      const color = p.color || getColorFromName(p.name);
-      const commonName = getCommonName(p.name, code, color);
-      if (!groups[code]) {
-        groups[code] = { code, commonName, categoryId: p.categoryId, vendorId: p.vendorId, packing: p.packing, products: [] };
+    const groups: Record<number, { articleId: number; code: string; commonName: string; categoryName: string; packing: number; rows: StockRow[] }> = {};
+    filteredStockRows.forEach(r => {
+      if (!groups[r.article_id]) {
+        groups[r.article_id] = { articleId: r.article_id, code: r.article_code, commonName: r.article_name, categoryName: r.category_name, packing: r.effective_packing, rows: [] };
       }
-      groups[code].products.push(p);
+      groups[r.article_id].rows.push(r);
     });
     return Object.values(groups).sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
-  }, [filteredProducts]);
+  }, [filteredStockRows]);
 
-// Full Report: a pivot table — one column per distinct color found across ALL filtered
+  // Full Report: a pivot table — one column per distinct color found across ALL filtered
   // articles (one-hot style), each cell showing that article's cartons/extra-pairs in that
   // color, or 0/0 if the article has no stock in it.
   const allColorsAcrossArticles = useMemo(() => {
-    const colors = new Set<string>();
-    groupedArticles.forEach(group => {
-      group.products.forEach(p => colors.add(p.color || getColorFromName(p.name)));
-    });
-    return Array.from(colors).sort((a, b) => a.localeCompare(b));
-  }, [groupedArticles]);
+    return Array.from(new Set(filteredStockRows.map(r => r.color))).sort((a, b) => a.localeCompare(b));
+  }, [filteredStockRows]);
 
   const colorReportRows = useMemo(() => {
     return groupedArticles.map(group => {
-      const catName = state.categories.find(c => c.id === group.categoryId)?.name || 'General';
       const byColor: Record<string, { cartons: number; extraPairs: number }> = {};
-      group.products.forEach(p => {
-        const pairs = p.stock || 0;
-        const packing = p.packing || 12;
-        const color = p.color || getColorFromName(p.name);
-        byColor[color] = { cartons: Math.floor(pairs / packing), extraPairs: pairs % packing };
-      });
-      const totalPairs = group.products.reduce((sum, p) => sum + (p.stock || 0), 0);
-      return { code: group.code, commonName: group.commonName, categoryName: catName, byColor, totalPairs };
+      group.rows.forEach(r => { byColor[r.color] = { cartons: r.cartons, extraPairs: r.extra_pairs }; });
+      const totalPairs = group.rows.reduce((sum, r) => sum + r.total_pairs, 0);
+      return { code: group.code, commonName: group.commonName, categoryName: group.categoryName, byColor, totalPairs };
     });
-  }, [groupedArticles, state.categories]);
+  }, [groupedArticles]);
 
-  const colorReportTotalPairs = useMemo(() => {
-    return colorReportRows.reduce((sum, r) => sum + r.totalPairs, 0);
-  }, [colorReportRows]);
+  const colorReportTotalPairs = useMemo(() => colorReportRows.reduce((sum, r) => sum + r.totalPairs, 0), [colorReportRows]);
+  const totalPairs = useMemo(() => filteredStockRows.reduce((sum, r) => sum + r.total_pairs, 0), [filteredStockRows]);
+  const totalCartons = useMemo(() => filteredStockRows.reduce((sum, r) => sum + r.cartons, 0), [filteredStockRows]);
+  const totalExtraPairs = useMemo(() => filteredStockRows.reduce((sum, r) => sum + r.extra_pairs, 0), [filteredStockRows]);
 
-  const totalPairs = useMemo(() => {
-    return filteredProducts.reduce((sum, p) => sum + (p.stock || 0), 0);
-  }, [filteredProducts]);
+  // ── Material Stock ──
+  const loadVendorStock = useCallback(async () => {
+    setLoading(true);
+    const res = await api.reports.vendorStock();
+    if (res.ok) setVendorStockRows(res.data); else fail(res.error.message);
+    setLoading(false);
+  }, []);
 
-  const totalCartons = useMemo(() => {
-    return filteredProducts.reduce((sum, p) => sum + Math.floor((p.stock || 0) / (p.packing || 12)), 0);
-  }, [filteredProducts]);
+  useEffect(() => { if (activeStockTab === 'material') loadVendorStock(); }, [activeStockTab, loadVendorStock]);
 
-  const totalExtraPairs = useMemo(() => {
-    return filteredProducts.reduce((sum, p) => sum + ((p.stock || 0) % (p.packing || 12)), 0);
-  }, [filteredProducts]);
-
-  // Material Stock: raw materials purchased from vendors, grouped by
-  // vendor + material name + unit, running qty = Purchase + Added - Purchase Return - Deducted.
   const materialStockRows = useMemo(() => {
-    const groups: Record<string, {
-      vendorId: string;
-      vendorName: string;
-      materialName: string;
-      unit: string;
-      purchasedQty: number;
-      returnedQty: number;
-      addedQty: number;
-      deductedQty: number;
-    }> = {};
-
-    state.purchases.forEach(p => {
-      const vendorName = state.vendors.find(v => v.id === p.vendorId)?.name || 'Unknown Vendor';
-      p.items.forEach(it => {
-        const key = `${p.vendorId}::${it.materialName.trim().toLowerCase()}::${it.unit.trim().toLowerCase()}`;
-        if (!groups[key]) {
-          groups[key] = { vendorId: p.vendorId, vendorName, materialName: it.materialName, unit: it.unit, purchasedQty: 0, returnedQty: 0, addedQty: 0, deductedQty: 0 };
-        }
-        groups[key].purchasedQty += it.quantity;
-      });
-    });
-
-    state.purchaseReturns.forEach(r => {
-      const vendorName = state.vendors.find(v => v.id === r.vendorId)?.name || 'Unknown Vendor';
-      r.items.forEach(it => {
-        const key = `${r.vendorId}::${it.materialName.trim().toLowerCase()}::${it.unit.trim().toLowerCase()}`;
-        if (!groups[key]) {
-          groups[key] = { vendorId: r.vendorId, vendorName, materialName: it.materialName, unit: it.unit, purchasedQty: 0, returnedQty: 0, addedQty: 0, deductedQty: 0 };
-        }
-        groups[key].returnedQty += it.quantity;
-      });
-    });
-
-    (state.materialAdjustments || []).forEach(adj => {
-      const vendorName = state.vendors.find(v => v.id === adj.vendorId)?.name || 'Unknown Vendor';
-      const key = `${adj.vendorId}::${adj.materialName.trim().toLowerCase()}::${adj.unit.trim().toLowerCase()}`;
-      if (!groups[key]) {
-        groups[key] = { vendorId: adj.vendorId, vendorName, materialName: adj.materialName, unit: adj.unit, purchasedQty: 0, returnedQty: 0, addedQty: 0, deductedQty: 0 };
-      }
-      if (adj.type === 'ADD') {
-        groups[key].addedQty += adj.quantity;
-      } else {
-        groups[key].deductedQty += adj.quantity;
-      }
-    });
-
-    let rows = Object.values(groups).map(g => ({
-      ...g,
-      currentQty: g.purchasedQty + g.addedQty - g.returnedQty - g.deductedQty
-    }));
-
+    let rows = vendorStockRows;
     if (materialVendorFilter !== 'all') {
-      rows = rows.filter(r => r.vendorId === materialVendorFilter);
+      rows = rows.filter(r => String(r.vendor_id) === materialVendorFilter);
     }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      rows = rows.filter(r => r.materialName.toLowerCase().includes(q));
+      rows = rows.filter(r => r.material_name.toLowerCase().includes(q));
     }
+    return rows;
+  }, [vendorStockRows, materialVendorFilter, searchQuery]);
 
-    return rows.sort((a, b) => a.vendorName.localeCompare(b.vendorName) || a.materialName.localeCompare(b.materialName));
-  }, [state.purchases, state.purchaseReturns, state.materialAdjustments, state.vendors, materialVendorFilter, searchQuery]);
+  // ── Product Ledger ──
+  const loadLedger = useCallback(async () => {
+    setLoading(true);
+    const res = await api.reports.productLedger({
+      category_id: categoryIdParam,
+      vendor_id: ledgerVendorFilter !== 'all' ? Number(ledgerVendorFilter) : undefined,
+      search: searchQuery.trim() || undefined,
+      date_from: ledgerFromDate || undefined,
+      date_to: ledgerToDate || undefined,
+    });
+    if (res.ok) setLedgerResult(res.data); else fail(res.error.message);
+    setLoading(false);
+  }, [categoryIdParam, ledgerVendorFilter, searchQuery, ledgerFromDate, ledgerToDate]);
 
-  // 2. Production logs filter memo
-  const filteredLogs = useMemo(() => {
-    let logs = [...state.productionLogs];
+  useEffect(() => { if (activeStockTab === 'ledger') loadLedger(); }, [activeStockTab, loadLedger]);
 
-    // Filter by tab timeframe
-    if (activeStockTab === 'daily') {
-      logs = logs.filter(log => log.date === dailyDate);
-    } else if (activeStockTab === 'weekly') {
-      logs = logs.filter(log => isDateInWeekOf(log.date, weeklyDate));
-    } else if (activeStockTab === 'monthly') {
-      logs = logs.filter(log => isDateInMonthYear(log.date, monthlyMonth, monthlyYear));
-    } else if (activeStockTab === 'overall') {
-      if (fromDate) {
-        logs = logs.filter(log => log.date >= fromDate);
-      }
-      if (toDate) {
-        logs = logs.filter(log => log.date <= toDate);
-      }
+  // ── Production (daily/weekly/monthly/overall) ──
+  // The page's own week/month picker computes an explicit date_from/date_to — backend's `range`
+  // param only covers "from today"/"from the 1st", not an arbitrary picked period.
+  const productionDateRange = useMemo((): { date_from?: string; date_to?: string } => {
+    if (activeStockTab === 'daily') return { date_from: dailyDate, date_to: dailyDate };
+    if (activeStockTab === 'weekly') {
+      const { start, end } = getWeekRange(weeklyDate);
+      return { date_from: iso(start), date_to: iso(end) };
     }
+    if (activeStockTab === 'monthly') {
+      const from = new Date(monthlyYear, monthlyMonth, 1);
+      const to = new Date(monthlyYear, monthlyMonth + 1, 0);
+      return { date_from: iso(from), date_to: iso(to) };
+    }
+    if (activeStockTab === 'overall') return { date_from: fromDate || undefined, date_to: toDate || undefined };
+    return {};
+  }, [activeStockTab, dailyDate, weeklyDate, monthlyMonth, monthlyYear, fromDate, toDate]);
 
-    // Filter by product query or category
-    return logs.filter(log => {
-      const prod = state.products.find(p => p.id === log.productId);
-      if (!prod) return false;
-      
-      const matchesCategory = selectedCategory === 'all' || prod.categoryId === selectedCategory;
-      const matchesQuery = !searchQuery.trim() || 
-        prod.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-        prod.id.toLowerCase().includes(searchQuery.toLowerCase());
-
-      return matchesCategory && matchesQuery;
+  const loadProduction = useCallback(async () => {
+    setLoading(true);
+    const res = await api.reports.production({
+      category_id: categoryIdParam,
+      search: searchQuery.trim() || undefined,
+      ...productionDateRange,
     });
-  }, [
-    state.productionLogs, 
-    activeStockTab, 
-    dailyDate, 
-    weeklyDate, 
-    monthlyMonth, 
-    monthlyYear, 
-    fromDate, 
-    toDate, 
-    selectedCategory, 
-    searchQuery,
-    state.products
-  ]);
+    if (res.ok) setProductionRows(res.data); else fail(res.error.message);
+    setLoading(false);
+  }, [categoryIdParam, searchQuery, productionDateRange]);
 
-  const totalProductionCartons = useMemo(() => {
-    return filteredLogs.reduce((sum, log) => {
-      return sum + (log.unitType === 'cartons' ? log.qtyValue : 0);
-    }, 0);
-  }, [filteredLogs]);
+  useEffect(() => {
+    if (activeStockTab === 'daily' || activeStockTab === 'weekly' || activeStockTab === 'monthly' || activeStockTab === 'overall') {
+      loadProduction();
+    }
+  }, [activeStockTab, loadProduction]);
 
-  const totalProductionPairsDirect = useMemo(() => {
-    return filteredLogs.reduce((sum, log) => {
-      return sum + (log.unitType === 'pairs' ? log.qtyValue : 0);
-    }, 0);
-  }, [filteredLogs]);
+  const filteredLogs = productionRows;
 
-  const totalProductionPairs = useMemo(() => {
-    return filteredLogs.reduce((sum, log) => sum + log.quantity, 0);
-  }, [filteredLogs]);
-
-  // 3. Product Ledger tab: full Debit(IN)/Credit(OUT) list across all articles,
-  // filtered by date range, vendor, and article/category (TASK-02 / TASK-02 UPDATE)
-  const ledgerTableEntries = useMemo(() => {
-    const rows: (ProductLedgerEntry & { productId: string; productCode: string; articleName: string; color: string; vendorName: string })[] = [];
-
-    filteredProducts.forEach(p => {
-      if (ledgerVendorFilter !== 'all' && p.vendorId !== ledgerVendorFilter) return;
-      const color = p.color || getColorFromName(p.name);
-      const articleName = getCleanedArticleName(p.name, color);
-      const vendorName = state.vendors.find(v => v.id === p.vendorId)?.name || 'General';
-
-      getProductLedgerEntries([p.id]).forEach(entry => {
-        if (ledgerFromDate && entry.date < ledgerFromDate) return;
-        if (ledgerToDate && entry.date > ledgerToDate) return;
-        rows.push({ ...entry, productId: p.id, productCode: p.id, articleName, color, vendorName });
-      });
-    });
-
-    return rows.sort((a, b) => a.date.localeCompare(b.date));
-  }, [filteredProducts, ledgerVendorFilter, ledgerFromDate, ledgerToDate, state.vendors, state.productionLogs, state.saleBills, state.saleReturns]);
-
-  const ledgerTotals = useMemo(() => {
-    return ledgerTableEntries.reduce((acc, e) => ({
-      debit: acc.debit + e.debit,
-      credit: acc.credit + e.credit
-    }), { debit: 0, credit: 0 });
-  }, [ledgerTableEntries]);
+  const totalProductionCartons = useMemo(() => filteredLogs.reduce((sum, log) => sum + (log.input_unit === 'CARTONS' ? (log.input_qty || 0) : 0), 0), [filteredLogs]);
+  const totalProductionPairsDirect = useMemo(() => filteredLogs.reduce((sum, log) => sum + (log.input_unit === 'PAIRS' ? (log.input_qty || 0) : 0), 0), [filteredLogs]);
+  const totalProductionPairs = useMemo(() => filteredLogs.reduce((sum, log) => sum + log.qty_pairs, 0), [filteredLogs]);
 
   const handleExportColorReportExcel = () => {
     const headers = ['Product Code', 'Article', 'Category', ...allColorsAcrossArticles.map(c => `${c} (Ctn/Prs)`), 'Total Pairs'];
@@ -444,23 +295,19 @@ export default function ReportStockPage() {
   const handleExportExcel = () => {
     if (activeStockTab === 'current') {
       const headers = ['Product Code', 'Category', 'Total Pairs'];
-      const rows = groupedArticles.map(g => [g.code, state.categories.find(c => c.id === g.categoryId)?.name || 'General', g.products.reduce((s, p) => s + (p.stock || 0), 0)]);
+      const rows = groupedArticles.map(g => [g.code, g.categoryName, g.rows.reduce((s, r) => s + r.total_pairs, 0)]);
       exportRowsToExcel('current-stock', headers, rows);
     } else if (activeStockTab === 'material') {
       const headers = ['Vendor', 'Material', 'Unit', 'Purchased', 'Returned', 'Current Stock'];
-      const rows = materialStockRows.map(r => [r.vendorName, r.materialName, r.unit, r.purchasedQty, r.returnedQty, r.currentQty]);
+      const rows = materialStockRows.map(r => [r.vendor_name, r.material_name, r.unit, r.purchased_qty, r.returned_qty, r.on_hand]);
       exportRowsToExcel('material-stock', headers, rows);
     } else if (activeStockTab === 'ledger') {
       const headers = ['Date', 'Product Code', 'Article', 'Color', 'Vendor', 'Type', 'Ref', 'Debit (IN)', 'Credit (OUT)'];
-      const rows = ledgerTableEntries.map(e => [e.date, e.productCode, e.articleName, e.color, e.vendorName, e.type, e.ref, e.debit, e.credit]);
+      const rows = ledgerResult.rows.map(e => [e.movement_date, e.article_code, e.article_name, e.color, e.vendor_name || '', MOVEMENT_TYPE_LABEL[e.movement_type], e.movement_id, e.debit, e.credit]);
       exportRowsToExcel('product-ledger', headers, rows);
     } else {
       const headers = ['Date', 'Product Code', 'Article Name', 'Color', 'Category', 'Packing', 'Qty Added', 'Unit', 'Total Pairs'];
-      const rows = filteredLogs.map(log => {
-        const prod = state.products.find(p => p.id === log.productId);
-        const color = prod?.color || getColorFromName(prod?.name || '');
-        return [log.date, log.productId, prod ? getCleanedArticleName(prod.name, color) : '', color, prod ? (state.categories.find(c => c.id === prod.categoryId)?.name || 'General') : '', log.packing, log.qtyValue, log.unitType, log.quantity];
-      });
+      const rows = filteredLogs.map(log => [log.movement_date, log.article_code, log.article_name, log.color, log.category_name, log.packing ?? '', log.input_qty ?? '', log.input_unit ?? '', log.qty_pairs]);
       exportRowsToExcel(`production-${activeStockTab}`, headers, rows);
     }
   };
@@ -468,7 +315,10 @@ export default function ReportStockPage() {
   return (
     <AppLayout pageTitle="Stock & Production Center">
       <div className="mx-auto" style={{ maxWidth: 1000 }}>
-        
+
+        {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>}
+        {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>}
+
         {/* Top Tab Navigation - hidden on print */}
         <div className="flex flex-wrap gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           <button
@@ -558,12 +408,12 @@ export default function ReportStockPage() {
                   className="soleria-input pl-9 py-1.5 w-full text-xs font-semibold"
                 />
               </div>
-              
+
               <div className="w-44 shrink-0">
                 <SearchableSelect
                   options={[
                     { value: 'all', label: 'All Categories' },
-                    ...state.categories.map(cat => ({ value: cat.id, label: cat.name }))
+                    ...categories.map(cat => ({ value: String(cat.category_id), label: cat.name }))
                   ]}
                   value={selectedCategory}
                   onChange={setSelectedCategory}
@@ -602,7 +452,7 @@ export default function ReportStockPage() {
                       <SearchableSelect
                         options={[
                           { value: 'all', label: 'All Vendors' },
-                          ...state.vendors.map(v => ({ value: v.id, label: v.name }))
+                          ...vendors.map(v => ({ value: String(v.vendor_id), label: v.name }))
                         ]}
                         value={materialVendorFilter}
                         onChange={setMaterialVendorFilter}
@@ -638,7 +488,7 @@ export default function ReportStockPage() {
                         <SearchableSelect
                           options={[
                             { value: 'all', label: 'All Vendors' },
-                            ...state.vendors.map(v => ({ value: v.id, label: v.name }))
+                            ...vendors.map(v => ({ value: String(v.vendor_id), label: v.name }))
                           ]}
                           value={ledgerVendorFilter}
                           onChange={setLedgerVendorFilter}
@@ -739,7 +589,9 @@ export default function ReportStockPage() {
 
           {/* On-screen Layout Table */}
           <div className="card-white p-6 md:p-8 bg-white border">
-            {activeStockTab === 'current' ? (
+            {loading ? (
+              <div className="text-center p-8 text-slate-400">Loading…</div>
+            ) : activeStockTab === 'current' ? (
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-sm">
                   <thead>
@@ -760,17 +612,15 @@ export default function ReportStockPage() {
                       </tr>
                     ) : (
                       groupedArticles.map(group => {
-                        const catName = state.categories.find(c => c.id === group.categoryId)?.name || 'General';
-                        const vendName = state.vendors.find(v => v.id === group.vendorId)?.name || 'General';
-                        const groupTotalPairs = group.products.reduce((sum, p) => sum + (p.stock || 0), 0);
-                        const isExpanded = expandedArticleCode === group.code;
+                        const groupTotalPairs = group.rows.reduce((sum, r) => sum + r.total_pairs, 0);
+                        const isExpanded = expandedArticleId === group.articleId;
 
                         return (
-                          <Fragment key={group.code}>
+                          <Fragment key={group.articleId}>
                             <tr
                               className="border-b hover:bg-slate-50/50 cursor-pointer"
                               style={{ borderColor: 'var(--border-table)' }}
-                              onClick={() => setExpandedArticleCode(isExpanded ? null : group.code)}
+                              onClick={() => setExpandedArticleId(isExpanded ? null : group.articleId)}
                             >
                               <td className="p-3 pl-4 text-slate-400">
                                 {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
@@ -778,10 +628,10 @@ export default function ReportStockPage() {
                               <td className="p-3 font-semibold text-slate-700">
                                 {group.code}
                                 <span className="block text-xs font-normal text-slate-500">
-                                  {group.commonName} <span className="text-slate-400">({group.products.length} color{group.products.length !== 1 ? 's' : ''})</span>
+                                  {group.commonName} <span className="text-slate-400">({group.rows.length} color{group.rows.length !== 1 ? 's' : ''})</span>
                                 </span>
                               </td>
-                              <td className="p-3 text-slate-500">{catName}</td>
+                              <td className="p-3 text-slate-500">{group.categoryName}</td>
                               <td className={`p-3 text-right font-bold ${groupTotalPairs <= 0 ? 'text-red-600' : 'text-slate-900'}`}>
                                 {groupTotalPairs.toLocaleString()}
                               </td>
@@ -795,7 +645,7 @@ export default function ReportStockPage() {
                                     setQtyType('cartons');
                                     setProductionDate(new Date().toISOString().split('T')[0]);
                                     setAddColor('');
-                                    setIsNewColor(group.products.length === 0);
+                                    setIsNewColor(group.rows.length === 0);
                                   }}
                                   className="border border-black rounded bg-transparent text-black hover:bg-slate-50 transition-colors flex items-center justify-center mx-auto font-black text-xs"
                                   style={{ width: '22px', height: '22px' }}
@@ -809,8 +659,6 @@ export default function ReportStockPage() {
                               <tr className="bg-slate-50/70 border-b" style={{ borderColor: 'var(--border-table)' }}>
                                 <td></td>
                                 <td colSpan={4} className="p-4">
-                                  <div className="text-[11px] text-slate-400 mb-2">Vendor: {vendName}</div>
-
                                   {/* Color variant sub-rows */}
                                   <div className="bg-white border rounded-lg overflow-hidden mb-4" style={{ borderColor: 'var(--border-color)' }}>
                                     <table className="w-full text-left border-collapse text-xs">
@@ -824,33 +672,25 @@ export default function ReportStockPage() {
                                         </tr>
                                       </thead>
                                       <tbody>
-                                        {group.products.map(p => {
-                                          const pPairs = p.stock || 0;
-                                          const pPacking = p.packing || 12;
-                                          const pCartons = Math.floor(pPairs / pPacking);
-                                          const pRemPairs = pPairs % pPacking;
-                                          const pColor = p.color || getColorFromName(p.name);
-                                          return (
-                                            <tr key={p.id} className="border-t" style={{ borderColor: 'var(--border-table)' }}>
-                                              <td className="p-2 pl-3">
-                                                <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${
-                                                  pColor.toLowerCase() === 'black' ? 'bg-slate-900 text-white' :
-                                                  pColor.toLowerCase() === 'white' ? 'bg-slate-100 text-slate-800 border border-slate-200' :
-                                                  pColor.toLowerCase() === 'brown' ? 'bg-amber-900 text-amber-50' :
-                                                  pColor.toLowerCase() === 'tan' ? 'bg-orange-100 text-orange-800' :
-                                                  'bg-slate-100 text-slate-600'
-                                                }`}>
-                                                  {pColor}
-                                                </span>
-                                                <span className="ml-2 text-slate-400 font-mono">{p.id}</span>
-                                              </td>
-                                              <td className="p-2 text-center font-medium text-slate-700">{pPacking}</td>
-                                              <td className="p-2 text-right font-bold text-slate-800">{pCartons}</td>
-                                              <td className="p-2 text-right text-slate-700">{pRemPairs || '-'}</td>
-                                              <td className="p-2 text-right pr-3 font-bold" style={{ color: 'var(--brand-gold)' }}>{pPairs.toLocaleString()}</td>
-                                            </tr>
-                                          );
-                                        })}
+                                        {group.rows.map(r => (
+                                          <tr key={r.variant_id} className="border-t" style={{ borderColor: 'var(--border-table)' }}>
+                                            <td className="p-2 pl-3">
+                                              <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${
+                                                r.color.toLowerCase() === 'black' ? 'bg-slate-900 text-white' :
+                                                r.color.toLowerCase() === 'white' ? 'bg-slate-100 text-slate-800 border border-slate-200' :
+                                                r.color.toLowerCase() === 'brown' ? 'bg-amber-900 text-amber-50' :
+                                                r.color.toLowerCase() === 'tan' ? 'bg-orange-100 text-orange-800' :
+                                                'bg-slate-100 text-slate-600'
+                                              }`}>
+                                                {r.color}
+                                              </span>
+                                            </td>
+                                            <td className="p-2 text-center font-medium text-slate-700">{r.effective_packing}</td>
+                                            <td className="p-2 text-right font-bold text-slate-800">{r.cartons}</td>
+                                            <td className="p-2 text-right text-slate-700">{r.extra_pairs || '-'}</td>
+                                            <td className="p-2 text-right pr-3 font-bold" style={{ color: 'var(--brand-gold)' }}>{r.total_pairs.toLocaleString()}</td>
+                                          </tr>
+                                        ))}
                                       </tbody>
                                     </table>
                                   </div>
@@ -886,7 +726,6 @@ export default function ReportStockPage() {
                       <th className="p-3">Unit</th>
                       <th className="p-3 text-right">Purchased</th>
                       <th className="p-3 text-right">Returned</th>
-                      <th className="p-3 text-right">Manual Adj</th>
                       <th className="p-3 text-right">Current Stock</th>
                       <th className="p-3 text-right pr-4">Actions</th>
                     </tr>
@@ -894,79 +733,50 @@ export default function ReportStockPage() {
                   <tbody>
                     {materialStockRows.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="text-center p-8 text-slate-400">
+                        <td colSpan={7} className="text-center p-8 text-slate-400">
                           No raw material purchases recorded yet.
                         </td>
                       </tr>
                     ) : (
-                      materialStockRows.map((r, idx) => {
-                        const netAdj = r.addedQty - r.deductedQty;
-                        return (
-                          <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                            <td className="p-3 pl-4 font-semibold text-slate-700">{r.vendorName}</td>
-                            <td className="p-3 text-slate-800">{r.materialName}</td>
-                            <td className="p-3 text-slate-500">{r.unit}</td>
-                            <td className="p-3 text-right font-semibold text-emerald-700">{r.purchasedQty.toLocaleString()}</td>
-                            <td className="p-3 text-right font-semibold text-rose-700">{r.returnedQty > 0 ? r.returnedQty.toLocaleString() : '-'}</td>
-                            <td className="p-3 text-right text-xs font-semibold text-slate-600">
-                              {netAdj > 0 ? `+${netAdj.toLocaleString()}` : netAdj < 0 ? `${netAdj.toLocaleString()}` : '-'}
-                            </td>
-                            <td className={`p-3 text-right font-bold ${r.currentQty <= 0 ? 'text-red-600' : 'text-slate-900'}`}>{r.currentQty.toLocaleString()}</td>
-                            <td className="p-3 text-right pr-4">
-                              <div className="flex items-center justify-end gap-1.5">
-                                <button
-                                  onClick={() => {
-                                    setMaterialAdjModal({
-                                      isOpen: true,
-                                      type: 'DEDUCT',
-                                      vendorId: r.vendorId,
-                                      vendorName: r.vendorName,
-                                      materialName: r.materialName,
-                                      unit: r.unit,
-                                      currentQty: r.currentQty
-                                    });
-                                    setMaterialAdjQty('');
-                                    setMaterialAdjRemarks('');
-                                    setMaterialAdjError('');
-                                  }}
-                                  title="Deduct / Reduce Material Stock"
-                                  className="border border-slate-900 rounded bg-transparent text-slate-900 hover:bg-slate-100 transition-colors flex items-center justify-center font-bold text-xs cursor-pointer"
-                                  style={{ width: '24px', height: '24px' }}
-                                >
-                                  -
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    setMaterialAdjModal({
-                                      isOpen: true,
-                                      type: 'ADD',
-                                      vendorId: r.vendorId,
-                                      vendorName: r.vendorName,
-                                      materialName: r.materialName,
-                                      unit: r.unit,
-                                      currentQty: r.currentQty
-                                    });
-                                    setMaterialAdjQty('');
-                                    setMaterialAdjRemarks('');
-                                    setMaterialAdjError('');
-                                  }}
-                                  title="Add Material Stock"
-                                  className="border border-slate-900 rounded bg-transparent text-slate-900 hover:bg-slate-100 transition-colors flex items-center justify-center font-bold text-xs cursor-pointer"
-                                  style={{ width: '24px', height: '24px' }}
-                                >
-                                  +
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })
+                      materialStockRows.map((r, idx) => (
+                        <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                          <td className="p-3 pl-4 font-semibold text-slate-700">{r.vendor_name}</td>
+                          <td className="p-3 text-slate-800">{r.material_name}</td>
+                          <td className="p-3 text-slate-500">{r.unit}</td>
+                          <td className="p-3 text-right font-semibold text-emerald-700">{r.purchased_qty.toLocaleString()}</td>
+                          <td className="p-3 text-right font-semibold text-rose-700">{r.returned_qty > 0 ? r.returned_qty.toLocaleString() : '-'}</td>
+                          <td className={`p-3 text-right font-bold ${r.on_hand <= 0 ? 'text-red-600' : 'text-slate-900'}`}>{r.on_hand.toLocaleString()}</td>
+                          <td className="p-3 text-right pr-4">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => {
+                                  setMaterialAdjModal({
+                                    vendorId: r.vendor_id,
+                                    vendorName: r.vendor_name,
+                                    materialId: r.material_id,
+                                    materialName: r.material_name,
+                                    unit: r.unit,
+                                    currentQty: r.on_hand,
+                                  });
+                                  setMaterialAdjQty('');
+                                  setMaterialAdjError('');
+                                }}
+                                title="Deduct / Reduce Material Stock"
+                                className="border border-slate-900 rounded bg-transparent text-slate-900 hover:bg-slate-100 transition-colors flex items-center justify-center font-bold text-xs cursor-pointer"
+                                style={{ width: '24px', height: '24px' }}
+                              >
+                                -
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
                     )}
                   </tbody>
                 </table>
               </div>
             ) : activeStockTab === 'ledger' ? (
-              // Product Ledger View (TASK-02 / TASK-02 UPDATE)
+              // Product Ledger View
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-sm">
                   <thead>
@@ -983,30 +793,31 @@ export default function ReportStockPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {ledgerTableEntries.length === 0 ? (
+                    {ledgerResult.rows.length === 0 ? (
                       <tr>
                         <td colSpan={9} className="text-center p-8 text-slate-400">
                           No product ledger movements found matching your filters.
                         </td>
                       </tr>
                     ) : (
-                      ledgerTableEntries.map((entry, idx) => (
-                        <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                          <td className="p-3 pl-4 font-mono text-slate-600">{entry.date}</td>
-                          <td className="p-3 font-semibold text-slate-700">{entry.productCode}</td>
-                          <td className="p-3 text-slate-700">{entry.articleName}</td>
+                      ledgerResult.rows.map((entry) => (
+                        <tr key={entry.movement_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                          <td className="p-3 pl-4 font-mono text-slate-600">{entry.movement_date}</td>
+                          <td className="p-3 font-semibold text-slate-700">{entry.article_code}</td>
+                          <td className="p-3 text-slate-700">{entry.article_name}</td>
                           <td className="p-3 text-slate-500">{entry.color}</td>
-                          <td className="p-3 text-slate-500">{entry.vendorName}</td>
+                          <td className="p-3 text-slate-500">{entry.vendor_name || '—'}</td>
                           <td className="p-3">
                             <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                              entry.type === 'Production' ? 'bg-emerald-50 text-emerald-700' :
-                              entry.type === 'Sale' ? 'bg-rose-50 text-rose-700' :
-                              'bg-blue-50 text-blue-700'
+                              entry.movement_type === 'PRODUCTION' ? 'bg-emerald-50 text-emerald-700' :
+                              entry.movement_type === 'SALE' ? 'bg-rose-50 text-rose-700' :
+                              entry.movement_type === 'SALE_RETURN' ? 'bg-blue-50 text-blue-700' :
+                              'bg-slate-100 text-slate-600'
                             }`}>
-                              {entry.type}
+                              {MOVEMENT_TYPE_LABEL[entry.movement_type]}
                             </span>
                           </td>
-                          <td className="p-3 text-slate-500">{entry.ref}</td>
+                          <td className="p-3 text-slate-500">#{entry.movement_id}</td>
                           <td className="p-3 text-right font-semibold text-emerald-700">{entry.debit > 0 ? entry.debit : '-'}</td>
                           <td className="p-3 text-right font-semibold text-rose-700">{entry.credit > 0 ? entry.credit : '-'}</td>
                         </tr>
@@ -1016,8 +827,8 @@ export default function ReportStockPage() {
                   <tfoot>
                     <tr className="bg-slate-50 font-bold border-t-2 border-b text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
                       <td colSpan={7} className="p-4 text-left font-lora">REPORT TOTAL</td>
-                      <td className="p-4 text-right text-emerald-800">{ledgerTotals.debit.toLocaleString()}</td>
-                      <td className="p-4 text-right text-rose-800">{ledgerTotals.credit.toLocaleString()}</td>
+                      <td className="p-4 text-right text-emerald-800">{ledgerResult.total_in.toLocaleString()}</td>
+                      <td className="p-4 text-right text-rose-800">{ledgerResult.total_out.toLocaleString()}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -1048,38 +859,30 @@ export default function ReportStockPage() {
                         </td>
                       </tr>
                     ) : (
-                      filteredLogs.map((log, idx) => {
-                        const prod = state.products.find(p => p.id === log.productId);
-                        if (!prod) return null;
-                        const catName = state.categories.find(c => c.id === prod.categoryId)?.name || 'General';
-                        const color = prod.color || getColorFromName(prod.name);
-                        const cleanedName = getCleanedArticleName(prod.name, color);
-
-                        return (
-                          <tr key={log.id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                            <td className="p-3 pl-4 font-mono text-slate-500">{idx + 1}</td>
-                            <td className="p-3 text-slate-600 font-semibold">{log.date}</td>
-                            <td className="p-3 font-semibold text-slate-700">{log.productId}</td>
-                            <td className="p-3 font-semibold text-slate-800">{cleanedName}</td>
-                            <td className="p-3">
-                              <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                                color.toLowerCase() === 'black' ? 'bg-slate-900 text-white' :
-                                color.toLowerCase() === 'white' ? 'bg-slate-100 text-slate-800 border border-slate-200' :
-                                color.toLowerCase() === 'brown' ? 'bg-amber-900 text-amber-50' :
-                                color.toLowerCase() === 'tan' ? 'bg-orange-100 text-orange-800' :
-                                'bg-slate-100 text-slate-600'
-                              }`}>
-                                {color}
-                              </span>
-                            </td>
-                            <td className="p-3 text-slate-500">{catName}</td>
-                            <td className="p-3 text-center text-slate-600 font-medium">{log.packing}</td>
-                            <td className="p-3 text-right text-slate-700 font-bold">{log.qtyValue}</td>
-                            <td className="p-3 text-right text-slate-500 capitalize">{log.unitType}</td>
-                            <td className="p-3 text-right text-slate-900 font-bold">{log.quantity.toLocaleString()}</td>
-                          </tr>
-                        );
-                      })
+                      filteredLogs.map((log, idx) => (
+                        <tr key={log.movement_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                          <td className="p-3 pl-4 font-mono text-slate-500">{idx + 1}</td>
+                          <td className="p-3 text-slate-600 font-semibold">{log.movement_date}</td>
+                          <td className="p-3 font-semibold text-slate-700">{log.article_code}</td>
+                          <td className="p-3 font-semibold text-slate-800">{log.article_name}</td>
+                          <td className="p-3">
+                            <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                              log.color.toLowerCase() === 'black' ? 'bg-slate-900 text-white' :
+                              log.color.toLowerCase() === 'white' ? 'bg-slate-100 text-slate-800 border border-slate-200' :
+                              log.color.toLowerCase() === 'brown' ? 'bg-amber-900 text-amber-50' :
+                              log.color.toLowerCase() === 'tan' ? 'bg-orange-100 text-orange-800' :
+                              'bg-slate-100 text-slate-600'
+                            }`}>
+                              {log.color}
+                            </span>
+                          </td>
+                          <td className="p-3 text-slate-500">{log.category_name}</td>
+                          <td className="p-3 text-center text-slate-600 font-medium">{log.packing}</td>
+                          <td className="p-3 text-right text-slate-700 font-bold">{log.input_qty}</td>
+                          <td className="p-3 text-right text-slate-500 capitalize">{log.input_unit?.toLowerCase()}</td>
+                          <td className="p-3 text-right text-slate-900 font-bold">{log.qty_pairs.toLocaleString()}</td>
+                        </tr>
+                      ))
                     )}
                   </tbody>
                   <tfoot>
@@ -1139,7 +942,7 @@ export default function ReportStockPage() {
           <div className="excel-grid-info" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', border: '1px solid #000000', marginBottom: '15px' }}>
             <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
               <span style={{ fontWeight: 'bold', textTransform: 'uppercase', fontSize: '9px', color: '#333333', display: 'block', marginBottom: '2px' }}>Category Filter</span>
-              <span>{selectedCategory === 'all' ? 'ALL CATEGORIES' : (state.categories.find(c => c.id === selectedCategory)?.name || 'General')}</span>
+              <span>{selectedCategory === 'all' ? 'ALL CATEGORIES' : (categories.find(c => String(c.category_id) === selectedCategory)?.name || 'General')}</span>
             </div>
             <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
               <span style={{ fontWeight: 'bold', textTransform: 'uppercase', fontSize: '9px', color: '#333333', display: 'block', marginBottom: '2px' }}>Search Filter</span>
@@ -1163,29 +966,19 @@ export default function ReportStockPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredProducts.map((prod, idx) => {
-                  const catName = state.categories.find(c => c.id === prod.categoryId)?.name || 'General';
-                  const pairs = prod.stock || 0;
-                  const packing = prod.packing || 12;
-                  const cartons = Math.floor(pairs / packing);
-                  const remPairs = pairs % packing;
-                  const color = prod.color || getColorFromName(prod.name);
-                  const cleanedName = getCleanedArticleName(prod.name, color);
-
-                  return (
-                    <tr key={prod.id}>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{prod.id}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{cleanedName}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{color}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{catName}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{packing}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{cartons}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{remPairs > 0 ? remPairs : '-'}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold' }}>{pairs.toLocaleString()}</td>
-                    </tr>
-                  );
-                })}
+                {filteredStockRows.map((r, idx) => (
+                  <tr key={r.variant_id}>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{r.article_code}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.article_name}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.color}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.category_name}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{r.effective_packing}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{r.cartons}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{r.extra_pairs > 0 ? r.extra_pairs : '-'}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold' }}>{r.total_pairs.toLocaleString()}</td>
+                  </tr>
+                ))}
                 <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2', fontSize: '12px' }}>
                   <td colSpan={6} style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', textTransform: 'uppercase' }}>Report Total:</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right' }}>{totalCartons}</td>
@@ -1211,12 +1004,12 @@ export default function ReportStockPage() {
                 {materialStockRows.map((r, idx) => (
                   <tr key={idx}>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{r.vendorName}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.materialName}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{r.vendor_name}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.material_name}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.unit}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{r.purchasedQty.toLocaleString()}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{r.returnedQty > 0 ? r.returnedQty.toLocaleString() : '-'}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold' }}>{r.currentQty.toLocaleString()}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{r.purchased_qty.toLocaleString()}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{r.returned_qty > 0 ? r.returned_qty.toLocaleString() : '-'}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold' }}>{r.on_hand.toLocaleString()}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1238,16 +1031,16 @@ export default function ReportStockPage() {
                 </tr>
               </thead>
               <tbody>
-                {ledgerTableEntries.map((e, idx) => (
-                  <tr key={idx}>
+                {ledgerResult.rows.map((e, idx) => (
+                  <tr key={e.movement_id}>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.date}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{e.productCode}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.articleName}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.movement_date}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{e.article_code}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.article_name}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.color}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.vendorName}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.type}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.ref}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.vendor_name || ''}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{MOVEMENT_TYPE_LABEL[e.movement_type]}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>#{e.movement_id}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{e.debit > 0 ? e.debit : '-'}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{e.credit > 0 ? e.credit : '-'}</td>
                   </tr>
@@ -1271,28 +1064,20 @@ export default function ReportStockPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredLogs.map((log, idx) => {
-                  const prod = state.products.find(p => p.id === log.productId);
-                  if (!prod) return null;
-                  const catName = state.categories.find(c => c.id === prod.categoryId)?.name || 'General';
-                  const color = prod.color || getColorFromName(prod.name);
-                  const cleanedName = getCleanedArticleName(prod.name, color);
-
-                  return (
-                    <tr key={log.id}>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{log.date}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{log.productId}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{cleanedName}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{color}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{catName}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{log.packing}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{log.qtyValue}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textTransform: 'capitalize' }}>{log.unitType}</td>
-                      <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold' }}>{log.quantity.toLocaleString()}</td>
-                    </tr>
-                  );
-                })}
+                {filteredLogs.map((log, idx) => (
+                  <tr key={log.movement_id}>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{log.movement_date}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{log.article_code}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{log.article_name}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{log.color}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{log.category_name}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{log.packing}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{log.input_qty}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textTransform: 'capitalize' }}>{log.input_unit?.toLowerCase()}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold' }}>{log.qty_pairs.toLocaleString()}</td>
+                  </tr>
+                ))}
                 <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2', fontSize: '12px' }}>
                   <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', textTransform: 'uppercase' }}>Report Total:</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right' }}>
@@ -1483,12 +1268,12 @@ export default function ReportStockPage() {
 
       {/* Add Stock Modal */}
       {selectedGroup && (() => {
-        const matchedProduct = addColor.trim()
-          ? selectedGroup.products.find(p => (p.color || getColorFromName(p.name)).toLowerCase() === addColor.trim().toLowerCase())
+        const matchedRow = addColor.trim()
+          ? selectedGroup.rows.find(r => r.color.toLowerCase() === addColor.trim().toLowerCase())
           : undefined;
-        const basePacking = matchedProduct?.packing || selectedGroup.packing || 12;
-        const baseStock = matchedProduct?.stock || 0;
-        const existingColors = selectedGroup.products.map(p => p.color || getColorFromName(p.name));
+        const basePacking = matchedRow?.effective_packing || selectedGroup.packing || 12;
+        const baseStock = matchedRow?.total_pairs || 0;
+        const existingColors = selectedGroup.rows.map(r => r.color);
 
         return (
           <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
@@ -1500,10 +1285,10 @@ export default function ReportStockPage() {
                 {selectedGroup.code} — {selectedGroup.commonName}
               </p>
 
-              {matchedProduct && (
+              {matchedRow && (
                 <div className="bg-slate-50 p-3 rounded-lg border mb-4 text-xs font-semibold text-slate-600 flex justify-between">
                   <div>
-                    <span className="block text-[10px] uppercase text-slate-400">Current Stock ({matchedProduct.color || getColorFromName(matchedProduct.name)})</span>
+                    <span className="block text-[10px] uppercase text-slate-400">Current Stock ({matchedRow.color})</span>
                     <span className="text-slate-800 font-bold">
                       {Math.floor(baseStock / basePacking)} ctn
                       { baseStock % basePacking > 0 && ` & ${baseStock % basePacking} prs` }
@@ -1554,9 +1339,9 @@ export default function ReportStockPage() {
                     <option value="__new__">+ Add New Color (type manually)...</option>
                   </select>
                 )}
-                {!matchedProduct && addColor.trim() && (
+                {!matchedRow && addColor.trim() && (
                   <p className="text-[10px] text-amber-600 mt-1">
-                    "{addColor.trim()}" is a new color — a new article record will be created for it.
+                    "{addColor.trim()}" is a new color — a new article color record will be created for it.
                   </p>
                 )}
               </div>
@@ -1631,54 +1416,24 @@ export default function ReportStockPage() {
                 <button
                   type="button"
                   disabled={!addColor.trim()}
-                  onClick={() => {
-                    const increment = qtyType === 'cartons' ? addQuantity * basePacking : addQuantity;
-
-                    if (matchedProduct) {
-                      // Existing color variant — increment its stock
-                      dispatch({
-                        type: 'UPDATE_PRODUCT',
-                        product: { ...matchedProduct, stock: (matchedProduct.stock || 0) + increment }
-                      });
-                      dispatch({
-                        type: 'ADD_PRODUCTION_LOG',
-                        log: {
-                          id: 'pl_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
-                          date: productionDate,
-                          productId: matchedProduct.id,
-                          quantity: increment,
-                          qtyValue: addQuantity,
-                          unitType: qtyType,
-                          packing: matchedProduct.packing || 12
-                        }
-                      });
-                    } else {
-                      // New color variant — create a new product record under this article
-                      const sibling = selectedGroup.products[0];
-                      const nextId = String(Math.max(0, ...state.products.map(p => parseInt(p.id, 10) || 0)) + 1);
-                      const newProduct = sibling
-                        ? { ...sibling, id: nextId, name: `${selectedGroup.code} ${selectedGroup.commonName} ${addColor.trim()}`.trim(), color: addColor.trim(), stock: increment }
-                        : { id: nextId, name: `${selectedGroup.code} ${selectedGroup.commonName} ${addColor.trim()}`.trim(), categoryId: selectedGroup.categoryId, vendorId: selectedGroup.vendorId, batchNo: 0, packing: selectedGroup.packing || 12, salePrice: 0, cutting: 0, edging: 0, upStitch: 0, bending: 0, stubbleDori: 0, shapeForm: 0, chipkai: 0, bottom: 0, machine: 0, trimming: 0, sockStitch: 0, finish: 0, color: addColor.trim(), stock: increment };
-
-                      dispatch({ type: 'ADD_PRODUCT', product: newProduct });
-                      dispatch({
-                        type: 'ADD_PRODUCTION_LOG',
-                        log: {
-                          id: 'pl_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
-                          date: productionDate,
-                          productId: nextId,
-                          quantity: increment,
-                          qtyValue: addQuantity,
-                          unitType: qtyType,
-                          packing: selectedGroup.packing || 12
-                        }
-                      });
+                  onClick={async () => {
+                    const res = await api.stock.logProduction({
+                      movement_date: productionDate,
+                      input_qty: addQuantity,
+                      input_unit: qtyType === 'cartons' ? 'CARTONS' : 'PAIRS',
+                      article_id: selectedGroup.articleId,
+                      color: addColor.trim(),
+                    });
+                    if (!res.ok) {
+                      fail(res.error.message);
+                      return;
                     }
-
                     setSelectedGroup(null);
                     setAddQuantity(0);
                     setAddColor('');
                     setIsNewColor(false);
+                    flash('Stock added and production logged.');
+                    loadStock();
                   }}
                   className="px-4 py-2 bg-[#111c2a] text-[#B08D57] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
                 >
@@ -1690,14 +1445,13 @@ export default function ReportStockPage() {
         );
       })()}
 
-      {/* Material Stock Adjustment Modal Dialog (+ and -) */}
+      {/* Material Stock Adjustment Modal (deduct/reduce only — stock:reduce-vendor-stock is the
+          only real backend operation, the demo's Add direction had no backend equivalent). */}
       {materialAdjModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 border border-slate-200" style={{ borderColor: 'var(--border-color)' }}>
             <div className="flex items-center justify-between pb-4 border-b">
-              <h3 className="text-lg font-bold text-slate-800 font-lora">
-                {materialAdjModal.type === 'DEDUCT' ? 'Deduct Material Stock' : 'Add Material Stock'}
-              </h3>
+              <h3 className="text-lg font-bold text-slate-800 font-lora">Deduct Material Stock</h3>
               <button
                 onClick={() => setMaterialAdjModal(null)}
                 className="text-slate-400 hover:text-slate-600 p-1 rounded"
@@ -1716,7 +1470,7 @@ export default function ReportStockPage() {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {materialAdjModal.type === 'DEDUCT' ? 'Quantity to Deduct / Reduce *' : 'Quantity to Add *'}
+                  Quantity to Deduct / Reduce *
                 </label>
                 <input
                   type="number"
@@ -1750,13 +1504,9 @@ export default function ReportStockPage() {
               <button
                 type="button"
                 onClick={handleSaveMaterialAdjustment}
-                className={`px-4 py-2 text-sm font-semibold text-white rounded-lg transition-colors ${
-                  materialAdjModal.type === 'DEDUCT'
-                    ? 'bg-rose-600 hover:bg-rose-700'
-                    : 'bg-emerald-600 hover:bg-emerald-700'
-                }`}
+                className="px-4 py-2 text-sm font-semibold text-white rounded-lg transition-colors bg-rose-600 hover:bg-rose-700"
               >
-                {materialAdjModal.type === 'DEDUCT' ? 'Confirm Reduction' : 'Confirm Addition'}
+                Confirm Reduction
               </button>
             </div>
           </div>

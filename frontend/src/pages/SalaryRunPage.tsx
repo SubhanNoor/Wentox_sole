@@ -1,15 +1,20 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
+import * as api from '@/lib/api';
+import type { EmployeeRow, SalaryRunRow } from '@/lib/api';
 import AppLayout from '@/components/AppLayout';
-import type { SalaryRun, SalaryRunItem } from '@/types';
 import { Save, BadgeDollarSign, History, Edit2, Undo2, Trash2, AlertTriangle, RotateCcw } from 'lucide-react';
+
+interface FormLine {
+  employee_id: number;
+  employee_name: string;
+  salary_amount: number;
+  amount: number;
+  remarks?: string;
+}
 
 const thisMonth = () => new Date().toISOString().slice(0, 7);   // 'YYYY-MM'
 const today = () => new Date().toISOString().split('T')[0];
-
-// Module scope on purpose: an id generator is impure, and calling Date.now()
-// inside the component body is what react-hooks/purity (rightly) objects to.
-const newRunId = () => 'sr_' + Date.now();
 
 const monthLabel = (ym: string) => {
   const [y, m] = ym.split('-').map(Number);
@@ -17,7 +22,9 @@ const monthLabel = (ym: string) => {
 };
 
 export default function SalaryRunPage() {
-  const { state, dispatch } = useApp();
+  const [salariedEmployees, setSalariedEmployees] = useState<EmployeeRow[]>([]);
+  const [runs, setRuns] = useState<SalaryRunRow[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const [tab, setTab] = useState<'entry' | 'history'>('entry');
   const [tabAnimating, setTabAnimating] = useState(false);
@@ -30,17 +37,18 @@ export default function SalaryRunPage() {
       setTabAnimating(false);
     }, 180);
   };
-  const [editingRunId, setEditingRunId] = useState<string | null>(null);
+  const [editingRunId, setEditingRunId] = useState<number | null>(null);
+  const [editingRunDate, setEditingRunDate] = useState<string | null>(null);
   const [periodMonth, setPeriodMonth] = useState(thisMonth());
 
   // A new run's lines are DERIVED from the current roster, never stored — so
   // adding a salaried employee shows up immediately without an effect syncing
   // state to state. Only what the operator actually typed over is held here.
-  const [overrides, setOverrides] = useState<Record<string, { amount?: number; remarks?: string }>>({});
+  const [overrides, setOverrides] = useState<Record<number, { amount?: number; remarks?: string }>>({});
 
   // An existing run carries its own snapshots, including for people whose
   // salary has since changed, so editing works from the stored items instead.
-  const [editingItems, setEditingItems] = useState<SalaryRunItem[] | null>(null);
+  const [editingItems, setEditingItems] = useState<FormLine[] | null>(null);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -48,53 +56,63 @@ export default function SalaryRunPage() {
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
 
-  const salaried = useMemo(
-    () => state.employees.filter(e => e.employeeType === 'SALARIED'),
-    [state.employees]
-  );
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    const [empRes, runRes] = await Promise.all([
+      api.employees.list({ employee_type: 'SALARIED' }),
+      api.salaryRuns.list(),
+    ]);
+    if (empRes.ok) setSalariedEmployees(empRes.data);
+    if (runRes.ok) setRuns(runRes.data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
 
   // A month is unambiguous, so a second POSTED run for it is always a mistake —
   // unlike a wage run, where the settlement period is fuzzy and a second run in
-  // a day can be legitimate. Hence a real block here and none there.
+  // a day can be legitimate. Hence a real block here and none there. This is a
+  // client-side preview only — the backend re-checks MONTH_ALREADY_CONFIRMED on
+  // create()/post() regardless, so a race is still caught server-side.
   const existingPosted = useMemo(
-    () => state.salaryRuns.find(r => r.periodMonth === periodMonth && r.status === 'Posted' && r.id !== editingRunId),
-    [state.salaryRuns, periodMonth, editingRunId]
+    () => runs.find(r => r.period_month === periodMonth && r.status === 'CONFIRMED' && r.salary_run_id !== editingRunId),
+    [runs, periodMonth, editingRunId]
   );
 
   // The month's lines: every active salaried employee, pre-filled with their
   // salary, with anything typed over layered on top.
-  const lines: SalaryRunItem[] = useMemo(() => {
+  const lines: FormLine[] = useMemo(() => {
     if (editingItems) return editingItems;
-    return salaried.map(e => {
-      const o = overrides[e.id] || {};
-      const salaryAmount = e.monthlySalary || 0;
+    return salariedEmployees.map(e => {
+      const o = overrides[e.employee_id] || {};
+      const salaryAmount = e.monthly_salary || 0;
       return {
-        id: 'sri_' + e.id,
-        employeeId: e.id,
-        salaryAmount,
+        employee_id: e.employee_id,
+        employee_name: e.name,
+        salary_amount: salaryAmount,
         amount: o.amount ?? salaryAmount,
         remarks: o.remarks
       };
     });
-  }, [editingItems, salaried, overrides]);
+  }, [editingItems, salariedEmployees, overrides]);
 
-  const patch = (employeeId: string, change: { amount?: number; remarks?: string }) => {
+  const patch = (employeeId: number, change: { amount?: number; remarks?: string }) => {
     if (editingItems) {
-      setEditingItems(prev => (prev || []).map(l => l.employeeId === employeeId ? { ...l, ...change } : l));
+      setEditingItems(prev => (prev || []).map(l => l.employee_id === employeeId ? { ...l, ...change } : l));
     } else {
       setOverrides(prev => ({ ...prev, [employeeId]: { ...prev[employeeId], ...change } }));
     }
   };
 
-  const setAmount = (employeeId: string, amount: number) => patch(employeeId, { amount });
-  const setRemarks = (employeeId: string, remarks: string) => patch(employeeId, { remarks: remarks || undefined });
+  const setAmount = (employeeId: number, amount: number) => patch(employeeId, { amount });
+  const setRemarks = (employeeId: number, remarks: string) => patch(employeeId, { remarks: remarks || undefined });
 
-  const resetLine = (employeeId: string) => {
-    const line = lines.find(l => l.employeeId === employeeId);
+  const resetLine = (employeeId: number) => {
+    const line = lines.find(l => l.employee_id === employeeId);
     if (!line) return;
     if (editingItems) {
       setEditingItems(prev => (prev || []).map(l =>
-        l.employeeId === employeeId ? { ...l, amount: l.salaryAmount, remarks: undefined } : l));
+        l.employee_id === employeeId ? { ...l, amount: l.salary_amount, remarks: undefined } : l));
     } else {
       setOverrides(prev => {
         const next = { ...prev };
@@ -105,78 +123,94 @@ export default function SalaryRunPage() {
   };
 
   const total = lines.reduce((s, l) => s + Number(l.amount || 0), 0);
-  const deductions = lines.filter(l => Number(l.amount) !== Number(l.salaryAmount));
-
-  const nameOf = (id: string) => state.employees.find(e => e.id === id)?.name || '—';
+  const deductions = lines.filter(l => Number(l.amount) !== Number(l.salary_amount));
 
   const resetForm = () => {
     setEditingRunId(null);
+    setEditingRunDate(null);
     setEditingItems(null);
     setOverrides({});
     setPeriodMonth(thisMonth());
   };
 
-  const save = (status: 'Posted' | 'Unposted') => {
+  const save = async (shouldPost: boolean) => {
     if (lines.length === 0) return fail('There are no salaried employees to pay.');
-    if (status === 'Posted' && existingPosted) {
+    if (shouldPost && existingPosted) {
       return fail(`${monthLabel(periodMonth)} already has a posted salary run. Unpost it first, or open it from History.`);
     }
     const bad = lines.find(l => isNaN(Number(l.amount)) || Number(l.amount) < 0);
-    if (bad) return fail(`${nameOf(bad.employeeId)} has an invalid amount.`);
+    if (bad) return fail(`${bad.employee_name} has an invalid amount.`);
 
-    const existing = editingRunId ? state.salaryRuns.find(r => r.id === editingRunId) : undefined;
-    const run: SalaryRun = {
-      id: editingRunId || newRunId(),
-      periodMonth,
-      date: existing?.date || today(),
-      totalAmount: total,
-      status,
-      unpostedAt: existing?.unpostedAt,
-      amountBefore: existing?.amountBefore,
-      items: lines.map(l => ({ ...l, amount: Number(l.amount) }))
+    const overridesPayload = lines
+      .filter(l => Number(l.amount) !== Number(l.salary_amount) || l.remarks)
+      .map(l => ({ employee_id: l.employee_id, amount: Number(l.amount), remarks: l.remarks || undefined }));
+
+    const payload: api.SalaryRunCreateInput = {
+      period_month: periodMonth,
+      run_date: editingRunDate || today(),
+      overrides: overridesPayload,
     };
 
-    if (editingRunId) {
-      dispatch({ type: 'UPDATE_SALARY_RUN', runId: editingRunId, run });
-      flash(status === 'Posted' ? 'Salary run updated and posted.' : 'Salary run saved as unposted.');
+    const res = editingRunId
+      ? await api.salaryRuns.update(editingRunId, payload)
+      : await api.salaryRuns.create(payload);
+    if (!res.ok) return fail(res.error.message);
+
+    if (shouldPost) {
+      const postRes = await api.salaryRuns.post(res.data.salary_run_id);
+      if (!postRes.ok) return fail(postRes.error.message);
+      flash(`${monthLabel(periodMonth)} salaries posted — ${formatCurrency(total)} across ${lines.length} employee(s).`);
     } else {
-      dispatch({ type: 'ADD_SALARY_RUN', run });
-      flash(status === 'Posted'
-        ? `${monthLabel(periodMonth)} salaries posted — ${formatCurrency(total)} across ${lines.length} employee(s).`
-        : 'Salary run saved as unposted. It counts toward nothing until posted.');
+      flash('Salary run saved as unposted. It counts toward nothing until posted.');
     }
     resetForm();
+    loadAll();
   };
 
-  const editRun = (run: SalaryRun) => {
-    if (run.status === 'Posted') {
+  const editRun = async (run: SalaryRunRow) => {
+    if (run.status === 'CONFIRMED') {
       return fail('Unpost this run before editing it — a posted run is counted in every balance it touches.');
     }
-    setEditingRunId(run.id);
-    setPeriodMonth(run.periodMonth);
-    setEditingItems(run.items.map(i => ({ ...i })));
+    // list() rows have no items — fetch the full row before opening the form.
+    const res = await api.salaryRuns.get(run.salary_run_id);
+    if (!res.ok) return fail(res.error.message);
+    const full = res.data;
+    setEditingRunId(full.salary_run_id);
+    setEditingRunDate(full.run_date);
+    setPeriodMonth(full.period_month);
+    setEditingItems((full.items || []).map(i => ({
+      employee_id: i.employee_id,
+      employee_name: i.employee_name || '—',
+      salary_amount: i.salary_amount,
+      amount: i.amount,
+      remarks: i.remarks || undefined,
+    })));
     setOverrides({});
     switchTab('entry');
   };
 
-  const unpost = (run: SalaryRun) => {
-    if (!window.confirm(`Unpost ${monthLabel(run.periodMonth)}? ${formatCurrency(run.totalAmount)} will stop counting toward every salaried employee's balance until it is posted again.`)) return;
-    dispatch({ type: 'UNPOST_SALARY_RUN', runId: run.id, unpostedAt: new Date().toISOString() });
+  const unpost = async (run: SalaryRunRow) => {
+    if (!window.confirm(`Unpost ${monthLabel(run.period_month)}? ${formatCurrency(run.total_amount)} will stop counting toward every salaried employee's balance until it is posted again.`)) return;
+    const res = await api.salaryRuns.unpost(run.salary_run_id);
+    if (!res.ok) return fail(res.error.message);
     flash('Run unposted. The month is free to be posted again.');
+    loadAll();
   };
 
-  const removeRun = (run: SalaryRun) => {
-    if (run.status === 'Posted') {
+  const removeRun = async (run: SalaryRunRow) => {
+    if (run.status === 'CONFIRMED') {
       return fail('A posted run cannot be deleted — unpost it first, so the change to the balances is deliberate.');
     }
     if (!window.confirm('Delete this unposted run? It counts toward nothing, so nothing will move.')) return;
-    dispatch({ type: 'DELETE_SALARY_RUN', runId: run.id });
+    const res = await api.salaryRuns.remove(run.salary_run_id);
+    if (!res.ok) return fail(res.error.message);
     flash('Unposted run deleted.');
+    loadAll();
   };
 
   const sortedRuns = useMemo(
-    () => [...state.salaryRuns].sort((a, b) => b.periodMonth.localeCompare(a.periodMonth)),
-    [state.salaryRuns]
+    () => [...runs].sort((a, b) => b.period_month.localeCompare(a.period_month)),
+    [runs]
   );
 
   return (
@@ -198,7 +232,7 @@ export default function SalaryRunPage() {
               onClick={() => switchTab('history')}
               className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'history' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
-              <History size={15} /> History ({state.salaryRuns.length})
+              <History size={15} /> History ({runs.length})
             </button>
           </div>
           {editingRunId && (
@@ -237,7 +271,7 @@ export default function SalaryRunPage() {
                 <AlertTriangle size={16} className="mt-0.5 shrink-0" />
                 <div>
                   <strong>{monthLabel(periodMonth)} has already been posted</strong> —{' '}
-                  {formatCurrency(existingPosted.totalAmount)} across {existingPosted.items.length} employee(s).
+                  {formatCurrency(existingPosted.total_amount)} across {existingPosted.item_count ?? '—'} employee(s).
                   <button
                     onClick={() => { switchTab('history'); }}
                     className="ml-2 underline font-semibold hover:text-amber-900"
@@ -249,7 +283,9 @@ export default function SalaryRunPage() {
               </div>
             )}
 
-            {lines.length === 0 ? (
+            {loading ? (
+              <div className="text-center p-10 text-slate-400 text-sm">Loading…</div>
+            ) : lines.length === 0 ? (
               <div className="text-center p-10 text-slate-400 text-sm">
                 No salaried employees registered yet. Add one under Employees → Salaried Employees.
               </div>
@@ -268,16 +304,16 @@ export default function SalaryRunPage() {
                     </thead>
                     <tbody>
                       {lines.map(l => {
-                        const changed = Number(l.amount) !== Number(l.salaryAmount);
+                        const changed = Number(l.amount) !== Number(l.salary_amount);
                         return (
-                          <tr key={l.id} className={`border-b ${changed ? 'bg-amber-50/50' : ''}`} style={{ borderColor: 'var(--border-table)' }}>
-                            <td className="p-3 pl-4 font-semibold text-slate-900">{nameOf(l.employeeId)}</td>
-                            <td className="p-3 text-right text-slate-500 font-mono">{formatCurrency(l.salaryAmount)}</td>
+                          <tr key={l.employee_id} className={`border-b ${changed ? 'bg-amber-50/50' : ''}`} style={{ borderColor: 'var(--border-table)' }}>
+                            <td className="p-3 pl-4 font-semibold text-slate-900">{l.employee_name}</td>
+                            <td className="p-3 text-right text-slate-500 font-mono">{formatCurrency(l.salary_amount)}</td>
                             <td className="p-2">
                               <input
                                 type="number" min={0}
                                 value={l.amount}
-                                onChange={e => setAmount(l.employeeId, Number(e.target.value))}
+                                onChange={e => setAmount(l.employee_id, Number(e.target.value))}
                                 className={`soleria-input py-1.5 text-right text-sm font-semibold ${changed ? 'border-amber-400 bg-amber-50' : ''}`}
                               />
                             </td>
@@ -285,7 +321,7 @@ export default function SalaryRunPage() {
                               <input
                                 type="text"
                                 value={l.remarks || ''}
-                                onChange={e => setRemarks(l.employeeId, e.target.value)}
+                                onChange={e => setRemarks(l.employee_id, e.target.value)}
                                 placeholder={changed ? 'Why is this different?' : ''}
                                 className={`soleria-input py-1.5 text-sm ${changed && !l.remarks ? 'border-amber-400' : ''}`}
                               />
@@ -293,7 +329,7 @@ export default function SalaryRunPage() {
                             <td className="p-2 text-center">
                               {changed && (
                                 <button
-                                  onClick={() => resetLine(l.employeeId)}
+                                  onClick={() => resetLine(l.employee_id)}
                                   title="Reset to full salary"
                                   className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700"
                                 >
@@ -309,7 +345,7 @@ export default function SalaryRunPage() {
                       <tr className="bg-slate-50 font-bold">
                         <td className="p-3 pl-4 text-slate-700">Total</td>
                         <td className="p-3 text-right text-slate-400 font-mono">
-                          {formatCurrency(lines.reduce((s, l) => s + l.salaryAmount, 0))}
+                          {formatCurrency(lines.reduce((s, l) => s + l.salary_amount, 0))}
                         </td>
                         <td className="p-3 text-right text-lg text-slate-900">{formatCurrency(total)}</td>
                         <td colSpan={2} />
@@ -329,11 +365,11 @@ export default function SalaryRunPage() {
                 )}
 
                 <div className="flex gap-3 justify-end border-t pt-4 mt-6">
-                  <button onClick={() => save('Unposted')} className="px-5 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
+                  <button onClick={() => save(false)} className="px-5 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
                     Save as Unposted
                   </button>
                   <button
-                    onClick={() => save('Posted')}
+                    onClick={() => save(true)}
                     disabled={!!existingPosted}
                     className="btn-gold flex items-center gap-1.5 px-5 py-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
                   >
@@ -363,29 +399,31 @@ export default function SalaryRunPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedRuns.length === 0 ? (
+                  {loading ? (
+                    <tr><td colSpan={6} className="text-center p-8 text-slate-400">Loading…</td></tr>
+                  ) : sortedRuns.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="text-center p-8 text-slate-400">
                         No salary runs yet. Post one to start accruing what staff are owed.
                       </td>
                     </tr>
                   ) : sortedRuns.map(r => (
-                    <tr key={r.id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                      <td className="p-3 pl-4 font-semibold text-slate-900">{monthLabel(r.periodMonth)}</td>
-                      <td className="p-3 font-mono text-slate-600">{r.date}</td>
-                      <td className="p-3 text-center text-slate-600">{r.items.length}</td>
-                      <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.totalAmount)}</td>
+                    <tr key={r.salary_run_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                      <td className="p-3 pl-4 font-semibold text-slate-900">{monthLabel(r.period_month)}</td>
+                      <td className="p-3 font-mono text-slate-600">{r.run_date}</td>
+                      <td className="p-3 text-center text-slate-600">{r.item_count ?? '—'}</td>
+                      <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.total_amount)}</td>
                       <td className="p-3 text-center">
-                        <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${r.status === 'Posted' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
-                          {r.status}
+                        <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${r.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
+                          {r.status === 'CONFIRMED' ? 'Posted' : 'Unposted'}
                         </span>
-                        {r.unpostedAt && (
-                          <div className="text-[10px] text-slate-400 mt-1">was {formatCurrency(r.amountBefore || 0)}</div>
+                        {r.unposted_at && (
+                          <div className="text-[10px] text-slate-400 mt-1">was {formatCurrency(r.amount_before || 0)}</div>
                         )}
                       </td>
                       <td className="p-3">
                         <div className="flex items-center justify-center gap-1.5">
-                          {r.status === 'Posted' ? (
+                          {r.status === 'CONFIRMED' ? (
                             <button onClick={() => unpost(r)} title="Unpost" className="p-1.5 rounded hover:bg-amber-50 text-slate-500 hover:text-amber-700">
                               <Undo2 size={15} />
                             </button>

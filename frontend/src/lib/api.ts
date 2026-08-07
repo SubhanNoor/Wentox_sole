@@ -57,6 +57,10 @@ export interface SaleBillRow {
   due_date: string | null;
   is_posted: boolean;
   items: SaleBillItemRow[];
+  // Only populated by biltySearch() (its own join) — never by list()/get().
+  customer_name?: string;
+  sub_customer_name?: string;
+  adda_name?: string;
 }
 
 export interface SaleBillCreateInput {
@@ -180,6 +184,20 @@ export interface ProductRow {
   packing: number;
   sale_price: number;
   is_active: boolean;
+  // The 12 manufacturing-stage cost columns (Wage Run's rate snapshot source) — `a.*` in
+  // products.repository.js already returns these, just not previously typed here.
+  cutting: number;
+  edging: number;
+  up_stitch: number;
+  bending: number;
+  stubble_dori: number;
+  shape_form: number;
+  chipkai: number;
+  bottom: number;
+  machine: number;
+  trimming: number;
+  sock_stitch: number;
+  finish: number;
 }
 
 export interface ProductVariantRow {
@@ -206,6 +224,12 @@ export interface AddaRow {
 
 export interface RegionRow {
   region_id: number;
+  name: string;
+  is_active: boolean;
+}
+
+export interface CategoryRow {
+  category_id: number;
   name: string;
   is_active: boolean;
 }
@@ -610,6 +634,395 @@ export interface DraftExpenseRow {
   bank_name?: string;
 }
 
+// ── Module 4e: Payroll (Employees & Stages, Wage Run, Salary Run) ──
+
+export interface StageRow {
+  stage_key: string;
+  form_label: string;
+  worker_label: string;
+  cost_column: string;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export type EmployeeType = 'WORKER' | 'SALARIED';
+
+export interface EmployeeRow {
+  employee_id: number;
+  name: string;
+  phone: string | null;
+  city_id: number | null;
+  employee_type: EmployeeType;
+  monthly_salary: number | null;
+  ba_id: number;
+  is_active: boolean;
+  city_name?: string;
+  // Comma-separated stage_keys, populated by list() only — full `stages` below only via get().
+  stage_keys?: string | null;
+  stages?: { stage_key: string; form_label: string; worker_label: string }[];
+}
+
+export interface EmployeeCreateInput {
+  name: string;
+  phone?: string;
+  city_id?: number;
+  employee_type: EmployeeType;
+  monthly_salary?: number;
+  stages?: string[];
+}
+
+export interface EmployeeListFilters {
+  includeInactive?: boolean;
+  employee_type?: EmployeeType;
+  search?: string;
+}
+
+export interface WageRunItemRow {
+  item_id: number;
+  article_id: number;
+  article_code?: string;
+  article_name?: string;
+  rate: number;
+  cartons: number;
+  packing: number;
+  amount: number;
+  line_no: number;
+}
+
+export interface WageRunRow {
+  wage_run_id: number;
+  employee_id: number;
+  employee_name?: string;
+  stage_key: string;
+  stage_label?: string;
+  run_date: string;
+  total_amount: number;
+  status: 'DRAFT' | 'CONFIRMED';
+  unposted_at?: string | null;
+  unposted_by?: number | null;
+  amount_before?: number | null;
+  // item_count populated by list() only — full `items` only via get().
+  item_count?: number;
+  items?: WageRunItemRow[];
+}
+
+export interface WageRunCreateInput {
+  employee_id: number;
+  stage_key: string;
+  run_date: string;
+  items: { article_id: number; cartons: number; rate?: number }[];
+}
+
+export interface WageRunListFilters {
+  employee_id?: number;
+  stage_key?: string;
+  status?: 'DRAFT' | 'CONFIRMED';
+  date_from?: string;
+  date_to?: string;
+}
+
+export interface SalaryRunItemRow {
+  item_id: number;
+  employee_id: number;
+  employee_name?: string;
+  employee_ba_id?: number;
+  salary_amount: number;
+  amount: number;
+  remarks: string | null;
+}
+
+export interface SalaryRunRow {
+  salary_run_id: number;
+  period_month: string;
+  run_date: string;
+  total_amount: number;
+  status: 'DRAFT' | 'CONFIRMED';
+  unposted_at?: string | null;
+  unposted_by?: number | null;
+  amount_before?: number | null;
+  // item_count populated by list() only — full `items` only via get().
+  item_count?: number;
+  items?: SalaryRunItemRow[];
+}
+
+export interface SalaryRunCreateInput {
+  period_month: string;
+  run_date: string;
+  overrides?: { employee_id: number; amount?: number; remarks?: string }[];
+}
+
+export interface SalaryRunListFilters {
+  status?: 'DRAFT' | 'CONFIRMED';
+  date_from?: string;
+  date_to?: string;
+}
+
+// ── Module 5: Reports & Stock ──
+
+export type DateRangeFilters = { date_from?: string; date_to?: string; range?: 'weekly' | 'monthly' | 'overall' };
+
+export interface StockRow {
+  variant_id: number;
+  color: string;
+  article_id: number;
+  article_code: string;
+  article_name: string;
+  category_name: string;
+  effective_packing: number;
+  total_pairs: number;
+  cartons: number;
+  extra_pairs: number;
+}
+
+export interface VendorStockRow {
+  vendor_id: number;
+  vendor_name: string;
+  material_id: number;
+  material_name: string;
+  unit: string;
+  purchased_qty: number;
+  returned_qty: number;
+  on_hand: number;
+}
+
+export type StockMovementType = 'PRODUCTION' | 'SALE' | 'SALE_RETURN' | 'OPENING' | 'ADJUSTMENT';
+
+export interface StockMovementRow {
+  movement_id: number;
+  variant_id: number;
+  movement_type: StockMovementType;
+  qty_pairs: number;
+  movement_date: string;
+  input_qty: number | null;
+  input_unit: 'CARTONS' | 'PAIRS' | null;
+  packing: number | null;
+  created_by: number | null;
+  color: string;
+  article_id?: number;
+  article_code: string;
+  article_name: string;
+  category_name: string;
+  vendor_name?: string;
+}
+
+export interface ProductLedgerRow extends StockMovementRow {
+  debit: number;
+  credit: number;
+}
+
+export interface ProductLedgerResult {
+  rows: ProductLedgerRow[];
+  total_in: number;
+  total_out: number;
+  net: number;
+}
+
+export interface StockFilters {
+  article_id?: number;
+  category_id?: number;
+}
+
+export interface ProductionFilters extends DateRangeFilters {
+  article_id?: number;
+  category_id?: number;
+  search?: string;
+}
+
+export interface ProductLedgerFilters extends DateRangeFilters {
+  article_id?: number;
+  category_id?: number;
+  vendor_id?: number;
+  search?: string;
+}
+
+export interface LogProductionInput {
+  movement_date: string;
+  input_qty: number;
+  input_unit: 'CARTONS' | 'PAIRS';
+  article_id?: number;
+  variant_id?: number;
+  color?: string;
+  packing?: number;
+}
+
+export interface StockAdjustInput {
+  movement_date: string;
+  movement_type: 'OPENING' | 'ADJUSTMENT';
+  qty_pairs: number;
+  article_id?: number;
+  variant_id?: number;
+  color?: string;
+  packing?: number;
+}
+
+export interface ReduceVendorStockInput {
+  vendor_id: number;
+  material_id: number;
+  unit: string;
+  qty: number;
+  movement_date: string;
+}
+
+// Shared "Khaata" row shape — backs account-ledger, business-ledger's detail view, cash-book, and
+// overall-search-ledger's drill-down, all via the same reports.service.js#formatLedgerRow().
+export interface LedgerRow {
+  entry_id: number;
+  date: string;
+  type: string;
+  inv_no: number | null;
+  bill_no: string | null;
+  narration: string | null;
+  cheque_no: string | null;
+  cheque_date: string | null;
+  cheque_received_date: string | null;
+  pairs: number | null;
+  debit: number;
+  credit: number;
+  is_payment_row: boolean;
+  balance: number;
+}
+
+export interface AccountLedgerResult {
+  opening_balance: number;
+  rows: LedgerRow[];
+  total_debit: number;
+  total_credit: number;
+  closing_balance: number;
+}
+
+export interface AccountLedgerFilters extends DateRangeFilters {
+  ba_id?: number;
+  ac_id?: number;
+}
+
+export interface SaleAnalysisRow {
+  customer_id: number;
+  customer_name: string;
+  region_id: number | null;
+  region_name: string | null;
+  total_sales: number;
+  total_returns: number;
+  total_payment: number;
+  total_commission: number;
+}
+
+export interface SaleAnalysisRegionGroup {
+  region_id: number | null;
+  region_name: string | null;
+  customers: SaleAnalysisRow[];
+}
+
+export interface SaleReportRow {
+  customer_id: number;
+  customer_name: string;
+  region_id: number | null;
+  region_name: string | null;
+  total_sales: number;
+  total_cartons: number;
+  commission: number;
+  sale_return: number;
+  net_sales: number;
+  payment: number;
+}
+
+export interface SaleReportRegionGroup {
+  region_id: number | null;
+  region_name: string | null;
+  customers: SaleReportRow[];
+}
+
+export interface SaleReportFilters extends DateRangeFilters {
+  group_by?: 'region';
+}
+
+export interface VendorReportRow {
+  vendor_id: number;
+  vendor_name: string;
+  total_purchase: number;
+  total_return: number;
+  net_purchase: number;
+  payment_paid: number;
+}
+
+export interface VendorReportFilters extends DateRangeFilters {
+  vendor_id?: number;
+}
+
+export interface PaymentTrailBucket {
+  key: string;
+  label: string;
+  total: number;
+}
+
+export interface PaymentTrailResult {
+  buckets: PaymentTrailBucket[];
+  grand_total: number;
+}
+
+export interface BusinessLedgerSummaryRow {
+  ba_id: number;
+  code: string;
+  name: string;
+  main_account: string;
+  city_name: string | null;
+  category: 'CUSTOMER' | 'VENDOR' | 'EMPLOYEE' | 'BANK' | 'BUSINESS_ACCOUNT';
+  closing_balance: number;
+}
+
+export interface BusinessLedgerFilters extends DateRangeFilters {
+  ba_id?: number;
+  view?: 'summary' | 'detail';
+}
+
+export type BusinessLedgerResult = BusinessLedgerSummaryRow[] | ({ account: BusinessLedgerSummaryRow } & AccountLedgerResult);
+
+export interface CashBookResult {
+  opening_cash: number;
+  cash_received: number;
+  total_cash: number;
+  cash_paid: number;
+  cash_in_hand: number;
+  rows: LedgerRow[];
+}
+
+export interface CashBookFilters {
+  date?: string;
+  month?: string;
+}
+
+export interface OverallTrailRow {
+  code: string;
+  description: string;
+  type: string;
+  type_label: string;
+  ba_id?: number;
+  ac_id?: number;
+  debit: number;
+  credit: number;
+  net_balance: number;
+}
+
+export interface OverallTrailResult {
+  as_of_date: string;
+  rows: OverallTrailRow[];
+  total_debit: number;
+  total_credit: number;
+}
+
+export type OverallEntityType = 'CUSTOMER' | 'VENDOR' | 'EMPLOYEE' | 'SUB_CUSTOMER' | 'BUSINESS_ACCOUNT' | 'BANK';
+
+export interface OverallDirectoryRow {
+  entity_type: OverallEntityType;
+  entity_id: number;
+  name: string;
+  ba_id: number | null;
+  city_name: string | null;
+  phone: string | null;
+  is_active: boolean;
+}
+
+export type OverallSearchLedgerResult = { has_account: false; message: string } | ({ has_account: true } & AccountLedgerResult);
+
 declare global {
   interface Window {
     api?: {
@@ -676,6 +1089,9 @@ declare global {
       };
       cities: {
         list: (payload?: { is_active?: boolean; region_id?: number }) => Promise<ApiResult<CityRow[]>>;
+      };
+      categories: {
+        list: (payload?: { is_active?: boolean }) => Promise<ApiResult<CategoryRow[]>>;
       };
       vendors: {
         list: (payload?: { includeInactive?: boolean; search?: string }) => Promise<ApiResult<VendorRow[]>>;
@@ -797,6 +1213,62 @@ declare global {
       updates: {
         check: () => Promise<ApiResult<{ updateAvailable: boolean; currentVersion?: string; latestVersion?: string; packaged?: boolean }>>;
         install: () => Promise<ApiResult<{ ok: true }>>;
+      };
+      stages: {
+        list: () => Promise<ApiResult<StageRow[]>>;
+      };
+      employees: {
+        list: (payload?: EmployeeListFilters) => Promise<ApiResult<EmployeeRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<EmployeeRow>>;
+        create: (payload: EmployeeCreateInput) => Promise<ApiResult<EmployeeRow>>;
+        update: (payload: { id: number } & EmployeeCreateInput) => Promise<ApiResult<EmployeeRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        reactivate: (payload: { id: number }) => Promise<ApiResult<EmployeeRow>>;
+      };
+      wageRuns: {
+        list: (payload?: WageRunListFilters) => Promise<ApiResult<WageRunRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<WageRunRow>>;
+        create: (payload: WageRunCreateInput) => Promise<ApiResult<WageRunRow>>;
+        update: (payload: { id: number } & WageRunCreateInput) => Promise<ApiResult<WageRunRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        post: (payload: { id: number }) => Promise<ApiResult<WageRunRow>>;
+        unpost: (payload: { id: number }) => Promise<ApiResult<WageRunRow>>;
+        recent: (payload: { employee_id: number; stage_key: string }) => Promise<ApiResult<{ wage_run_id: number; run_date: string; total_amount: number; status: 'DRAFT' | 'CONFIRMED' }[]>>;
+      };
+      salaryRuns: {
+        list: (payload?: SalaryRunListFilters) => Promise<ApiResult<SalaryRunRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<SalaryRunRow>>;
+        create: (payload: SalaryRunCreateInput) => Promise<ApiResult<SalaryRunRow>>;
+        update: (payload: { id: number } & SalaryRunCreateInput) => Promise<ApiResult<SalaryRunRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        post: (payload: { id: number }) => Promise<ApiResult<SalaryRunRow>>;
+        unpost: (payload: { id: number }) => Promise<ApiResult<SalaryRunRow>>;
+      };
+      // Sub-actions with hyphens in their name bypass camelToKebab() in ipcBridge.ts's Proxy — the
+      // property key is used verbatim as the channel suffix, so these must be accessed via bracket
+      // notation with the literal hyphenated string, not dot notation (same as cheques above).
+      stock: {
+        'log-production': (payload: LogProductionInput) => Promise<ApiResult<{ movement_id: number; variant_id: number; qty_pairs: number }>>;
+        adjust: (payload: StockAdjustInput) => Promise<ApiResult<{ movement_id: number; variant_id: number; qty_pairs: number }>>;
+        movements: (payload: { article_id?: number; variant_id?: number }) => Promise<ApiResult<StockMovementRow[]>>;
+        'reduce-vendor-stock': (payload: ReduceVendorStockInput) => Promise<ApiResult<{ movement_id: number }>>;
+      };
+      reports: {
+        stock: (payload?: StockFilters) => Promise<ApiResult<StockRow[]>>;
+        production: (payload?: ProductionFilters) => Promise<ApiResult<StockMovementRow[]>>;
+        'product-ledger': (payload?: ProductLedgerFilters) => Promise<ApiResult<ProductLedgerResult>>;
+        'vendor-stock': () => Promise<ApiResult<VendorStockRow[]>>;
+        'sale-analysis': (payload?: SaleReportFilters) => Promise<ApiResult<SaleAnalysisRow[] | SaleAnalysisRegionGroup[]>>;
+        'sale-report': (payload?: SaleReportFilters) => Promise<ApiResult<SaleReportRow[] | SaleReportRegionGroup[]>>;
+        'vendor-report': (payload?: VendorReportFilters) => Promise<ApiResult<VendorReportRow[]>>;
+        'vendor-ledger': (payload: { vendor_id: number } & DateRangeFilters) => Promise<ApiResult<AccountLedgerResult>>;
+        'payment-trail': (payload?: DateRangeFilters) => Promise<ApiResult<PaymentTrailResult>>;
+        'account-ledger': (payload: AccountLedgerFilters) => Promise<ApiResult<AccountLedgerResult>>;
+        'business-ledger': (payload?: BusinessLedgerFilters) => Promise<ApiResult<BusinessLedgerResult>>;
+        'cash-book': (payload?: CashBookFilters) => Promise<ApiResult<CashBookResult>>;
+        'overall-trail': (payload?: { as_of_date?: string }) => Promise<ApiResult<OverallTrailResult>>;
+        'overall-search': (payload?: { search?: string; entity_type?: OverallEntityType }) => Promise<ApiResult<OverallDirectoryRow[]>>;
+        'overall-search-ledger': (payload: { entity_type: OverallEntityType; ba_id: number | null } & DateRangeFilters) => Promise<ApiResult<OverallSearchLedgerResult>>;
       };
     };
   }
@@ -956,6 +1428,11 @@ export async function listStores(): Promise<ApiResult<StoreRow[]>> {
 export async function listAddas(): Promise<ApiResult<AddaRow[]>> {
   if (!window.api) return NO_BRIDGE;
   return window.api.addas.list({ is_active: true });
+}
+
+export async function listCategories(): Promise<ApiResult<CategoryRow[]>> {
+  if (!window.api) return NO_BRIDGE;
+  return window.api.categories.list({ is_active: true });
 }
 
 export async function listRegions(): Promise<ApiResult<RegionRow[]>> {
@@ -1246,4 +1723,151 @@ export const draftExpenses = {
   remove: (id: number) => window.api ? window.api.draftExpenses.remove({ id }) : Promise.resolve(NO_BRIDGE),
   confirm: (id: number) =>
     window.api ? window.api.draftExpenses.confirm({ id }).then(r => mapResult(r, normalizeExpenseRow)) : Promise.resolve(NO_BRIDGE)
+};
+
+// ── Module 4e: Payroll (Employees & Stages, Wage Run, Salary Run) ──
+
+export const stages = {
+  list: () => window.api ? window.api.stages.list() : Promise.resolve(NO_BRIDGE)
+};
+
+export const employees = {
+  list: (payload?: EmployeeListFilters) =>
+    window.api ? window.api.employees.list(payload) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.employees.get({ id }) : Promise.resolve(NO_BRIDGE),
+  create: (payload: EmployeeCreateInput) =>
+    window.api ? window.api.employees.create(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: EmployeeCreateInput) =>
+    window.api ? window.api.employees.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.employees.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) =>
+    window.api ? window.api.employees.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+};
+
+function normalizeWageRunRow(row: WageRunRow): WageRunRow {
+  return { ...row, run_date: normalizeDate(row.run_date) };
+}
+
+export const wageRuns = {
+  list: (payload?: WageRunListFilters) =>
+    window.api ? window.api.wageRuns.list(payload).then(r => mapResult(r, rows => rows.map(normalizeWageRunRow))) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.wageRuns.get({ id }).then(r => mapResult(r, normalizeWageRunRow)) : Promise.resolve(NO_BRIDGE),
+  create: (payload: WageRunCreateInput) =>
+    window.api ? window.api.wageRuns.create(payload).then(r => mapResult(r, normalizeWageRunRow)) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: WageRunCreateInput) =>
+    window.api ? window.api.wageRuns.update({ id, ...payload }).then(r => mapResult(r, normalizeWageRunRow)) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.wageRuns.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  post: (id: number) =>
+    window.api ? window.api.wageRuns.post({ id }).then(r => mapResult(r, normalizeWageRunRow)) : Promise.resolve(NO_BRIDGE),
+  unpost: (id: number) =>
+    window.api ? window.api.wageRuns.unpost({ id }).then(r => mapResult(r, normalizeWageRunRow)) : Promise.resolve(NO_BRIDGE),
+  recent: (employee_id: number, stage_key: string) =>
+    window.api ? window.api.wageRuns.recent({ employee_id, stage_key }) : Promise.resolve(NO_BRIDGE)
+};
+
+function normalizeSalaryRunRow(row: SalaryRunRow): SalaryRunRow {
+  return { ...row, period_month: normalizeDate(row.period_month).slice(0, 7), run_date: normalizeDate(row.run_date) };
+}
+
+export const salaryRuns = {
+  list: (payload?: SalaryRunListFilters) =>
+    window.api ? window.api.salaryRuns.list(payload).then(r => mapResult(r, rows => rows.map(normalizeSalaryRunRow))) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.salaryRuns.get({ id }).then(r => mapResult(r, normalizeSalaryRunRow)) : Promise.resolve(NO_BRIDGE),
+  create: (payload: SalaryRunCreateInput) =>
+    window.api ? window.api.salaryRuns.create(payload).then(r => mapResult(r, normalizeSalaryRunRow)) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: SalaryRunCreateInput) =>
+    window.api ? window.api.salaryRuns.update({ id, ...payload }).then(r => mapResult(r, normalizeSalaryRunRow)) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.salaryRuns.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  post: (id: number) =>
+    window.api ? window.api.salaryRuns.post({ id }).then(r => mapResult(r, normalizeSalaryRunRow)) : Promise.resolve(NO_BRIDGE),
+  unpost: (id: number) =>
+    window.api ? window.api.salaryRuns.unpost({ id }).then(r => mapResult(r, normalizeSalaryRunRow)) : Promise.resolve(NO_BRIDGE)
+};
+
+// ── Module 5: Reports & Stock ──
+
+export const stock = {
+  logProduction: (payload: LogProductionInput) =>
+    window.api ? window.api.stock['log-production'](payload) : Promise.resolve(NO_BRIDGE),
+  adjust: (payload: StockAdjustInput) =>
+    window.api ? window.api.stock.adjust(payload) : Promise.resolve(NO_BRIDGE),
+  movements: (payload: { article_id?: number; variant_id?: number }) =>
+    window.api ? window.api.stock.movements(payload).then(r => mapResult(r, rows => rows.map(normalizeStockMovementRow))) : Promise.resolve(NO_BRIDGE),
+  reduceVendorStock: (payload: ReduceVendorStockInput) =>
+    window.api ? window.api.stock['reduce-vendor-stock'](payload) : Promise.resolve(NO_BRIDGE)
+};
+
+function normalizeStockMovementRow(row: StockMovementRow): StockMovementRow {
+  return { ...row, movement_date: normalizeDate(row.movement_date) };
+}
+
+function normalizeProductLedgerResult(result: ProductLedgerResult): ProductLedgerResult {
+  return { ...result, rows: result.rows.map(r => ({ ...r, movement_date: normalizeDate(r.movement_date) })) };
+}
+
+function normalizeLedgerRow(row: LedgerRow): LedgerRow {
+  return {
+    ...row,
+    date: normalizeDate(row.date),
+    cheque_date: row.cheque_date != null ? normalizeDate(row.cheque_date) : row.cheque_date,
+    cheque_received_date: row.cheque_received_date != null ? normalizeDate(row.cheque_received_date) : row.cheque_received_date,
+  };
+}
+
+function normalizeAccountLedgerResult(result: AccountLedgerResult): AccountLedgerResult {
+  return { ...result, rows: result.rows.map(normalizeLedgerRow) };
+}
+
+function normalizeBusinessLedgerResult(result: BusinessLedgerResult): BusinessLedgerResult {
+  if (Array.isArray(result)) return result;
+  return { ...result, rows: result.rows.map(normalizeLedgerRow) };
+}
+
+function normalizeCashBookResult(result: CashBookResult): CashBookResult {
+  return { ...result, rows: result.rows.map(normalizeLedgerRow) };
+}
+
+function normalizeOverallTrailResult(result: OverallTrailResult): OverallTrailResult {
+  return { ...result, as_of_date: normalizeDate(result.as_of_date) };
+}
+
+function normalizeOverallSearchLedgerResult(result: OverallSearchLedgerResult): OverallSearchLedgerResult {
+  if (!result.has_account) return result;
+  return { ...result, rows: result.rows.map(normalizeLedgerRow) };
+}
+
+export const reports = {
+  stock: (payload?: StockFilters) =>
+    window.api ? window.api.reports.stock(payload) : Promise.resolve(NO_BRIDGE),
+  production: (payload?: ProductionFilters) =>
+    window.api ? window.api.reports.production(payload).then(r => mapResult(r, rows => rows.map(normalizeStockMovementRow))) : Promise.resolve(NO_BRIDGE),
+  productLedger: (payload?: ProductLedgerFilters) =>
+    window.api ? window.api.reports['product-ledger'](payload).then(r => mapResult(r, normalizeProductLedgerResult)) : Promise.resolve(NO_BRIDGE),
+  vendorStock: () =>
+    window.api ? window.api.reports['vendor-stock']() : Promise.resolve(NO_BRIDGE),
+  saleAnalysis: (payload?: SaleReportFilters) =>
+    window.api ? window.api.reports['sale-analysis'](payload) : Promise.resolve(NO_BRIDGE),
+  saleReport: (payload?: SaleReportFilters) =>
+    window.api ? window.api.reports['sale-report'](payload) : Promise.resolve(NO_BRIDGE),
+  vendorReport: (payload?: VendorReportFilters) =>
+    window.api ? window.api.reports['vendor-report'](payload) : Promise.resolve(NO_BRIDGE),
+  vendorLedger: (payload: { vendor_id: number } & DateRangeFilters) =>
+    window.api ? window.api.reports['vendor-ledger'](payload).then(r => mapResult(r, normalizeAccountLedgerResult)) : Promise.resolve(NO_BRIDGE),
+  paymentTrail: (payload?: DateRangeFilters) =>
+    window.api ? window.api.reports['payment-trail'](payload) : Promise.resolve(NO_BRIDGE),
+  accountLedger: (payload: AccountLedgerFilters) =>
+    window.api ? window.api.reports['account-ledger'](payload).then(r => mapResult(r, normalizeAccountLedgerResult)) : Promise.resolve(NO_BRIDGE),
+  businessLedger: (payload?: BusinessLedgerFilters) =>
+    window.api ? window.api.reports['business-ledger'](payload).then(r => mapResult(r, normalizeBusinessLedgerResult)) : Promise.resolve(NO_BRIDGE),
+  cashBook: (payload?: CashBookFilters) =>
+    window.api ? window.api.reports['cash-book'](payload).then(r => mapResult(r, normalizeCashBookResult)) : Promise.resolve(NO_BRIDGE),
+  overallTrail: (payload?: { as_of_date?: string }) =>
+    window.api ? window.api.reports['overall-trail'](payload).then(r => mapResult(r, normalizeOverallTrailResult)) : Promise.resolve(NO_BRIDGE),
+  overallSearch: (payload?: { search?: string; entity_type?: OverallEntityType }) =>
+    window.api ? window.api.reports['overall-search'](payload) : Promise.resolve(NO_BRIDGE),
+  overallSearchLedger: (payload: { entity_type: OverallEntityType; ba_id: number | null } & DateRangeFilters) =>
+    window.api ? window.api.reports['overall-search-ledger'](payload).then(r => mapResult(r, normalizeOverallSearchLedgerResult)) : Promise.resolve(NO_BRIDGE)
 };

@@ -1,71 +1,30 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Printer, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
-import { getBankBusinessAccounts, getAccountBalance } from '@/lib/cashbank';
-import { isChartAccountRestrictedForRole } from '@/lib/access';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
-
-// Maps each Payment Trail category to the Chart of Account it's sourced from.
-// "Cash at Banks" is a running balance (holdings), not a spend total — see below.
-const CATEGORY_CHART_MAP: { label: string; chartId: string }[] = [
-  { label: 'Business Running Expenses', chartId: '420001' },
-  { label: 'Directors Expenses - Drawings', chartId: '440001' },
-  { label: 'Employees', chartId: '220001' },
-  { label: 'Vendors - Suppliers', chartId: '210001' }
-];
-const BANK_ACCOUNTS_CHART_ID = '120002';
+import * as api from '@/lib/api';
+import type { PaymentTrailResult } from '@/lib/api';
 
 export function PaymentTrailContent() {
-  const { state } = useApp();
-
   const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(getTodayDate());
+  const [result, setResult] = useState<PaymentTrailResult>({ buckets: [], grand_total: 0 });
+  const [loading, setLoading] = useState(false);
 
-  const inRange = (date: string) => (!fromDate || date >= fromDate) && (!toDate || date <= toDate);
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res = await api.reports.paymentTrail({ date_from: fromDate || undefined, date_to: toDate || undefined });
+    if (res.ok) setResult(res.data);
+    setLoading(false);
+  }, [fromDate, toDate]);
 
-  // "Total amount spent" categories — sum of Expenses against business accounts
-  // under that chart account, within the selected date range.
-  // UC-03: hide any category whose chart account is flagged isRestricted for this role.
-  const visibleCategories = useMemo(() => {
-    return CATEGORY_CHART_MAP.filter(({ chartId }) => {
-      const chartAccount = state.chartAccounts.find(c => c.id === chartId);
-      return !chartAccount || !isChartAccountRestrictedForRole(chartAccount, state.currentUserRole);
-    });
-  }, [state.chartAccounts, state.currentUserRole]);
-
-  const spendRows = useMemo(() => {
-    return visibleCategories.map(({ label, chartId }) => {
-      const bizIds = new Set(state.businessAccounts.filter(b => b.controlId === chartId).map(b => b.id));
-      const amount = state.expenses
-        .filter(e => bizIds.has(e.businessAccountId) && inRange(e.date))
-        .reduce((sum, e) => sum + e.amount, 0);
-      return { label, amount };
-    });
-  }, [visibleCategories, state.businessAccounts, state.expenses, fromDate, toDate]);
-
-  // "Cash at Banks" — sum of every bank account's real ledger balance
-  // (opening balance + receipts + deposits + transfers + cheque deposits -
-  // expenses), as at the end of the period. Uses the same `getAccountBalance`
-  // helper as the Bank Accounts page and Cash Book, so all three agree.
-  const cashAtBanks = useMemo(() => {
-    const asOf = toDate || undefined;
-    return getBankBusinessAccounts(state)
-      .reduce((sum, b) => sum + getAccountBalance(state, b.id, asOf), 0);
-  }, [state, toDate]);
-
-  const grandTotal = useMemo(() => spendRows.reduce((s, r) => s + r.amount, 0), [spendRows]);
-
-  const showCashAtBanks = useMemo(() => {
-    const bankChartAccount = state.chartAccounts.find(c => c.id === BANK_ACCOUNTS_CHART_ID);
-    return !bankChartAccount || !isChartAccountRestrictedForRole(bankChartAccount, state.currentUserRole);
-  }, [state.chartAccounts, state.currentUserRole]);
+  useEffect(() => { load(); }, [load]);
 
   const handleExportExcel = () => {
     const headers = ['Account Title', 'Amount'];
-    const rows: (string | number)[][] = spendRows.map(r => [r.label, r.amount]);
-    if (showCashAtBanks) rows.push(['Cash at Banks', cashAtBanks]);
+    const rows: (string | number)[][] = result.buckets.map(b => [b.label, b.total]);
     exportRowsToExcel('payment-trail', headers, rows);
   };
 
@@ -121,26 +80,19 @@ export function PaymentTrailContent() {
                 </tr>
               </thead>
               <tbody>
-                {spendRows.map(row => (
-                  <tr key={row.label} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 pl-4 font-semibold text-slate-800">{row.label}</td>
-                    <td className="p-3 text-right font-bold text-rose-700">{row.amount > 0 ? formatCurrency(row.amount) : '-'}</td>
+                {loading ? (
+                  <tr><td colSpan={2} className="text-center p-8 text-slate-400">Loading…</td></tr>
+                ) : result.buckets.map(bucket => (
+                  <tr key={bucket.key} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                    <td className="p-3 pl-4 font-semibold text-slate-800">{bucket.label}</td>
+                    <td className="p-3 text-right font-bold text-rose-700">{bucket.total > 0 ? formatCurrency(bucket.total) : '-'}</td>
                   </tr>
                 ))}
-                {showCashAtBanks && (
-                  <tr className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 pl-4 font-semibold text-slate-800">
-                      Cash at Banks
-                      <span className="block text-[10px] font-normal text-slate-400">Balance held, not a payment — excluded from Grand Total</span>
-                    </td>
-                    <td className="p-3 text-right font-bold text-emerald-700">{formatCurrency(cashAtBanks)}</td>
-                  </tr>
-                )}
               </tbody>
               <tfoot>
                 <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
                   <td className="p-4 pl-4 text-left font-lora">GRAND TOTAL (Amounts Paid)</td>
-                  <td className="p-4 text-right text-lg" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(grandTotal)}</td>
+                  <td className="p-4 text-right text-lg" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(result.grand_total)}</td>
                 </tr>
               </tfoot>
             </table>

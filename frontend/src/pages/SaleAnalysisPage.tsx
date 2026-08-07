@@ -1,20 +1,12 @@
-import { Fragment, useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
-import { isReceiptLive } from '@/lib/cheques';
+import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
-
-interface CustomerAnalysisRow {
-  customerId: string;
-  customerName: string;
-  totalSales: number;   // Debit
-  saleReturns: number;  // Credit
-  paymentReceived: number; // Credit
-  balance: number;
-}
+import * as api from '@/lib/api';
+import type { SaleAnalysisRow } from '@/lib/api';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -22,15 +14,16 @@ const MONTHS = [
 ];
 
 export function SaleAnalysisContent() {
-  const { state } = useApp();
-
   const [groupMode, setGroupMode] = useState<'customer' | 'region'>('customer');
   const [viewMode, setViewMode] = useState<'overall' | 'month' | 'range'>('overall');
   const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
   const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(getTodayDate());
-  const [expandedRegionId, setExpandedRegionId] = useState<string | null>(null);
+  const [expandedRegionId, setExpandedRegionId] = useState<number | null>(null);
+
+  const [rows, setRows] = useState<SaleAnalysisRow[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const { periodStart, periodEnd, periodLabel } = useMemo(() => {
     if (viewMode === 'month') {
@@ -41,54 +34,47 @@ export function SaleAnalysisContent() {
     }
     if (viewMode === 'range') {
       return {
-        periodStart: fromDate || '0000-01-01',
-        periodEnd: toDate || '9999-12-31',
+        periodStart: fromDate || undefined,
+        periodEnd: toDate || undefined,
         periodLabel: `${fromDate || 'Start'} to ${toDate || 'End'}`
       };
     }
-    return { periodStart: '0000-01-01', periodEnd: '9999-12-31', periodLabel: 'Overall (All Time)' };
+    return { periodStart: undefined, periodEnd: undefined, periodLabel: 'Overall (All Time)' };
   }, [viewMode, filterMonth, filterYear, fromDate, toDate]);
 
-  const customerRows = useMemo((): CustomerAnalysisRow[] => {
-    return state.customers.map(c => {
-      const totalSales = state.saleBills
-        .filter(b => b.customerId === c.id && b.status === 'Posted' && b.date >= periodStart && b.date <= periodEnd)
-        .reduce((sum, b) => sum + b.totalValue, 0);
+  const loadRows = useCallback(async () => {
+    setLoading(true);
+    const res = await api.reports.saleAnalysis({ date_from: periodStart, date_to: periodEnd });
+    if (res.ok) setRows(res.data as SaleAnalysisRow[]);
+    setLoading(false);
+  }, [periodStart, periodEnd]);
 
-      const saleReturns = state.saleReturns
-        .filter(r => r.customerId === c.id && r.status === 'Posted' && r.date >= periodStart && r.date <= periodEnd)
-        .reduce((sum, r) => sum + r.items.reduce((s, it) => s + it.value, 0), 0);
+  useEffect(() => { loadRows(); }, [loadRows]);
 
-      // A bounced cheque was never really received, so it must not show as
-      // payment here (§13) — same rule the Account Ledger and Receipts use.
-      const paymentReceived = state.receipts
-        .filter(rec => rec.customerId === c.id && rec.date >= periodStart && rec.date <= periodEnd)
-        .filter(isReceiptLive)
-        .reduce((sum, rec) => sum + rec.amount + (rec.commission || 0), 0);
-
-      return {
-        customerId: c.id,
-        customerName: c.name,
-        totalSales,
-        saleReturns,
-        paymentReceived,
-        balance: totalSales - saleReturns - paymentReceived
-      };
-    }).filter(row => row.totalSales > 0 || row.saleReturns > 0 || row.paymentReceived > 0);
-  }, [state.customers, state.saleBills, state.saleReturns, state.receipts, periodStart, periodEnd]);
+  // "Payment Received" combines the receipt amount and commission, same as the receipt-level
+  // Dr customer BA / Cr COMMISSION_ALLOWED pair both reduce what the customer owes.
+  const customerRows = useMemo(() => {
+    return rows
+      .map(r => ({
+        customerId: r.customer_id,
+        customerName: r.customer_name,
+        regionId: r.region_id,
+        regionName: r.region_name,
+        totalSales: r.total_sales,
+        saleReturns: r.total_returns,
+        paymentReceived: r.total_payment + r.total_commission,
+        balance: r.total_sales - r.total_returns - (r.total_payment + r.total_commission),
+      }))
+      .filter(row => row.totalSales > 0 || row.saleReturns > 0 || row.paymentReceived > 0);
+  }, [rows]);
 
   const regionGroups = useMemo(() => {
-    const groups: Record<string, { regionId: string; regionName: string; customers: CustomerAnalysisRow[] }> = {};
-
-    state.customers.forEach(c => {
-      const row = customerRows.find(r => r.customerId === c.id);
-      if (!row) return;
-      const regionName = state.regions.find(r => r.id === c.regionId)?.name || 'No Region';
-      const key = c.regionId || 'none';
-      if (!groups[key]) groups[key] = { regionId: key, regionName, customers: [] };
+    const groups: Record<string, { regionId: number | null; regionName: string; customers: typeof customerRows }> = {};
+    customerRows.forEach(row => {
+      const key = String(row.regionId ?? 'none');
+      if (!groups[key]) groups[key] = { regionId: row.regionId, regionName: row.regionName || 'No Region', customers: [] };
       groups[key].customers.push(row);
     });
-
     return Object.values(groups)
       .map(g => ({
         ...g,
@@ -98,7 +84,7 @@ export function SaleAnalysisContent() {
         balance: g.customers.reduce((s, c) => s + c.balance, 0)
       }))
       .sort((a, b) => a.regionName.localeCompare(b.regionName));
-  }, [state.customers, state.regions, customerRows]);
+  }, [customerRows]);
 
   const grandTotals = useMemo(() => {
     return customerRows.reduce((acc, r) => ({
@@ -239,7 +225,9 @@ export function SaleAnalysisContent() {
                 </tr>
               </thead>
               <tbody>
-                {groupMode === 'customer' ? (
+                {loading ? (
+                  <tr><td colSpan={5} className="text-center p-8 text-slate-400">Loading…</td></tr>
+                ) : groupMode === 'customer' ? (
                   customerRows.length === 0 ? (
                     <tr><td colSpan={5} className="text-center p-8 text-slate-400">No sales activity found for this period.</td></tr>
                   ) : (
@@ -260,7 +248,7 @@ export function SaleAnalysisContent() {
                     regionGroups.map(region => {
                       const isExpanded = expandedRegionId === region.regionId;
                       return (
-                        <Fragment key={region.regionId}>
+                        <Fragment key={String(region.regionId)}>
                           <tr
                             className="border-b bg-slate-50/60 hover:bg-slate-100/60 cursor-pointer font-semibold"
                             style={{ borderColor: 'var(--border-table)' }}

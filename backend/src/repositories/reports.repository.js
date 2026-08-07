@@ -94,17 +94,21 @@ async function productLedger(filters = {}) {
 }
 
 // UC-30 Vendor Stock — on-hand raw material per vendor+material+unit, purchases in minus returns/
-// consumption out. Matches the exact query schema.sql's own "USED BY" comment on
-// vendor_stock_movements specifies.
+// consumption out, plus the purchased/returned breakdown the frontend's Material Stock tab shows
+// (movement_type is a real CHECK-constrained discriminator on this table, sign-constrained per
+// type — PURCHASE_RETURN rows are negative, flipped here for a positive "returned" figure). No
+// HAVING filter: a material that was purchased and fully consumed (on_hand = 0) still has real
+// purchased/returned history the breakdown view needs to show.
 async function vendorStock() {
   const result = await query(
-    `SELECT v.vendor_id, v.name AS vendor_name, m.material_id, m.name AS material_name,
-            vsm.unit, SUM(vsm.qty) AS on_hand
+    `SELECT v.vendor_id, v.name AS vendor_name, m.material_id, m.name AS material_name, vsm.unit,
+            SUM(CASE WHEN vsm.movement_type = 'PURCHASE' THEN vsm.qty ELSE 0 END) AS purchased_qty,
+            SUM(CASE WHEN vsm.movement_type = 'PURCHASE_RETURN' THEN -vsm.qty ELSE 0 END) AS returned_qty,
+            SUM(vsm.qty) AS on_hand
      FROM dbo.vendor_stock_movements AS vsm
      JOIN dbo.vendors   AS v ON v.vendor_id   = vsm.vendor_id
      JOIN dbo.materials AS m ON m.material_id = vsm.material_id
      GROUP BY v.vendor_id, v.name, m.material_id, m.name, vsm.unit
-     HAVING SUM(vsm.qty) <> 0
      ORDER BY v.name, m.name`,
   );
   return result.recordset;

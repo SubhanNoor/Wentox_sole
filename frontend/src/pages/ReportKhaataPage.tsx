@@ -1,237 +1,74 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Printer, Search, FileDown, FileSpreadsheet } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
-
-interface KhaataRow {
-  date: string;
-  type: 'Opening Balance' | 'Sale Bill' | 'Sale Return' | 'Receipt (Jamma)' | 'Commission' | 'Cheque Bounced' | 'Cheque Returned';
-  invNo: string;    // system-generated id
-  billNo: string;   // manual bill number, '-' for non-bill rows
-  narration: string; // free text (blank for cheque rows, which use the 3 sub-columns instead)
-  chequeNo?: string;
-  chequeDate?: string;
-  chequeReceivedDate?: string;
-  pairs: number;    // only filled for sale/return rows
-  debit: number;  // increases customer receivable
-  credit: number; // decreases customer receivable
-}
+import * as api from '@/lib/api';
+import type { BusinessLedgerSummaryRow, LedgerRow } from '@/lib/api';
 
 export function ReportKhaataContent() {
-  const { state } = useApp();
-
-  const [customerId, setCustomerId] = useState('');
+  const [customerBaId, setCustomerBaId] = useState<number | null>(null);
   const [isClosing, setIsClosing] = useState(false);
   const [accountSearch, setAccountSearch] = useState('');
 
   const handleCloseDetail = () => {
     setIsClosing(true);
     setTimeout(() => {
-      setCustomerId('');
+      setCustomerBaId(null);
       setIsClosing(false);
     }, 200);
   };
   const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(getTodayDate());
 
-  // Find selected customer info
-  const selectedCustomer = useMemo(() => {
-    return state.customers.find(c => c.id === customerId);
-  }, [customerId, state.customers]);
+  const [directory, setDirectory] = useState<BusinessLedgerSummaryRow[]>([]);
+  const [ledger, setLedger] = useState<{ opening_balance: number; rows: LedgerRow[]; total_debit: number; total_credit: number; closing_balance: number } | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  // Helper to format/generate account code
-  const getAccountCode = (cust: any) => {
-    if (!cust) return '';
-    const ba = state.businessAccounts.find(b => b.name === cust.name);
-    if (ba) return ba.id;
-    // Fallback: use acId + padded customer index
-    const idx = state.customers.findIndex(c => c.id === cust.id);
-    const suffix = (idx !== -1 ? idx + 1 : 1).toString().padStart(2, '0');
-    return `${cust.acId}${suffix}`;
-  };
+  useEffect(() => {
+    api.reports.businessLedger({ view: 'summary' }).then(res => {
+      if (res.ok && Array.isArray(res.data)) {
+        setDirectory(res.data.filter(a => a.category === 'CUSTOMER'));
+      }
+    });
+  }, []);
+
+  const selectedCustomer = useMemo(() => directory.find(c => c.ba_id === customerBaId), [customerBaId, directory]);
+
+  const loadLedger = useCallback(async () => {
+    if (!customerBaId) return;
+    setLoading(true);
+    const res = await api.reports.accountLedger({ ba_id: customerBaId, date_from: fromDate || undefined, date_to: toDate || undefined });
+    if (res.ok) setLedger(res.data); else setLedger(null);
+    setLoading(false);
+  }, [customerBaId, fromDate, toDate]);
+
+  useEffect(() => { if (customerBaId) loadLedger(); }, [customerBaId, loadLedger]);
 
   const filteredCustomers = useMemo(() => {
-    if (!accountSearch.trim()) return state.customers;
+    if (!accountSearch.trim()) return directory;
     const q = accountSearch.toLowerCase();
-    return state.customers.filter(c => {
-      const code = getAccountCode(c);
-      const name = c.name.toLowerCase();
-      const mainAc = (state.chartAccounts.find(coa => coa.id === c.acId)?.name || 'CUSTOMERS ACCOUNTS').toLowerCase();
-      const city = (state.cities.find(ct => ct.id === c.cityId)?.name || 'General').toLowerCase();
-      
-      return (
-        code.includes(q) ||
-        name.includes(q) ||
-        mainAc.includes(q) ||
-        city.includes(q)
-      );
-    });
-  }, [state.customers, accountSearch, state.chartAccounts, state.cities, state.businessAccounts]);
+    return directory.filter(c =>
+      c.code.toLowerCase().includes(q) ||
+      c.name.toLowerCase().includes(q) ||
+      c.main_account.toLowerCase().includes(q) ||
+      (c.city_name || '').toLowerCase().includes(q)
+    );
+  }, [directory, accountSearch]);
 
-  const khaataEntries = useMemo(() => {
-    if (!customerId) return [];
-    const entries: KhaataRow[] = [];
-
-    const deliveryNarration = (subCustomerId: string | null) => {
-      if (!subCustomerId) return 'SAME';
-      return state.subCustomers.find(sc => sc.id === subCustomerId)?.name || 'SAME';
-    };
-
-    // 1. Sale Bills (Debit the Customer)
-    state.saleBills.forEach(bill => {
-      if (bill.customerId !== customerId || bill.status !== 'Posted') return;
-      entries.push({
-        date: bill.date,
-        type: 'Sale Bill',
-        invNo: bill.id,
-        billNo: bill.billNo,
-        narration: deliveryNarration(bill.subCustomerId),
-        pairs: bill.items.reduce((s, it) => s + it.pairs, 0),
-        debit: bill.totalValue,
-        credit: 0
-      });
-    });
-
-    // 2. Sale Returns (Credit the Customer)
-    state.saleReturns.forEach(ret => {
-      if (ret.customerId !== customerId || ret.status !== 'Posted') return;
-      const totalCreditVal = ret.items.reduce((s, it) => s + it.value, 0);
-      entries.push({
-        date: ret.date,
-        type: 'Sale Return',
-        invNo: ret.id,
-        billNo: ret.billNo,
-        narration: deliveryNarration(ret.subCustomerId),
-        pairs: ret.items.reduce((s, it) => s + it.pairs, 0),
-        debit: 0,
-        credit: totalCreditVal
-      });
-    });
-
-    // 3. Receipts / Payments Jamma (Credit the Customer)
-    state.receipts.forEach(rec => {
-      if (rec.customerId !== customerId) return;
-      const isCheque = rec.paymentMode === 'Cheque';
-      entries.push({
-        date: rec.date,
-        type: 'Receipt (Jamma)',
-        invNo: rec.id,
-        billNo: '-',
-        narration: isCheque ? '' : (rec.remarks || rec.details || rec.paymentMode.toUpperCase()),
-        chequeNo: isCheque ? rec.chequeNo : undefined,
-        chequeDate: isCheque ? rec.chequeDate : undefined,
-        chequeReceivedDate: isCheque ? rec.chequeReceivedDate : undefined,
-        pairs: 0,
-        debit: 0,
-        credit: rec.amount
-      });
-
-      // 4. Commission — payment-time only, credit side, same as the payment
-      if (rec.commission && rec.commission > 0) {
-        entries.push({
-          date: rec.date,
-          type: 'Commission',
-          invNo: rec.id,
-          billNo: '-',
-          narration: 'Commission',
-          pairs: 0,
-          debit: 0,
-          credit: rec.commission
-        });
-      }
-
-      // 5. Bounce (§13) — the credit above stands on its original date; the
-      //    cancellation is a debit dated the bounce, so the customer's due goes
-      //    back up without rewriting a statement that was already printed.
-      if (rec.chequeStatus === 'BOUNCED' && rec.bouncedDate) {
-        entries.push({
-          date: rec.bouncedDate,
-          type: 'Cheque Bounced',
-          invNo: rec.id,
-          billNo: '-',
-          narration: `Cheque ${rec.chequeNo || ''} bounced — reverses receipt of ${rec.date}`,
-          pairs: 0,
-          debit: rec.amount + (rec.commission || 0),
-          credit: 0
-        });
-      }
-
-      // 6. Return to sender — same reversal shape as a bounce, distinct wording (we handed the
-      //    overdue cheque back voluntarily, not a bank rejection).
-      if (rec.chequeStatus === 'RETURNED' && rec.returnedDate) {
-        entries.push({
-          date: rec.returnedDate,
-          type: 'Cheque Returned',
-          invNo: rec.id,
-          billNo: '-',
-          narration: `Cheque ${rec.chequeNo || ''} returned to sender — reverses receipt of ${rec.date}`,
-          pairs: 0,
-          debit: rec.amount + (rec.commission || 0),
-          credit: 0
-        });
-      }
-    });
-
-    // Sort by Date
-    entries.sort((a, b) => a.date.localeCompare(b.date));
-
-    return entries;
-  }, [customerId, state.saleBills, state.saleReturns, state.receipts, state.subCustomers, state.chequeAllocations]);
-
-  // Compute running balance with date filtering
+  // Opening Balance synthetic row + running balance — the backend already computes both.
   const runningKhaata = useMemo(() => {
-    let openingBalance = 0;
-
-    // Filter by date
-    let beforeEntries = khaataEntries;
-    let filtered = khaataEntries;
-
-    if (fromDate) {
-      beforeEntries = khaataEntries.filter(e => e.date < fromDate);
-      filtered = khaataEntries.filter(e => e.date >= fromDate);
-    }
-    if (toDate) {
-      filtered = filtered.filter(e => e.date <= toDate);
-    }
-
-    // Calculate opening balance from entries before fromDate
-    openingBalance = beforeEntries.reduce((sum, e) => sum + e.debit - e.credit, 0);
-
-    let balance = openingBalance;
-
-    const finalRows = [
-      {
-        date: fromDate ? `Before ${fromDate}` : '---',
-        type: 'Opening Balance' as const,
-        invNo: '-',
-        billNo: '-',
-        narration: fromDate ? `Opening balance before ${fromDate}` : 'Opening Balance brought forward',
-        pairs: 0,
-        debit: 0,
-        credit: 0,
-        balance: openingBalance
-      },
-      ...filtered.map(e => {
-        balance = balance + e.debit - e.credit;
-        return {
-          ...e,
-          balance
-        };
-      })
+    if (!ledger) return [];
+    return [
+      { date: fromDate ? `Before ${fromDate}` : '---', type: 'Opening Balance', invNo: '-', billNo: '-', narration: fromDate ? `Opening balance before ${fromDate}` : 'Opening Balance brought forward', chequeNo: undefined as string | null | undefined, chequeDate: undefined as string | null | undefined, chequeReceivedDate: undefined as string | null | undefined, pairs: 0, debit: 0, credit: 0, balance: ledger.opening_balance },
+      ...ledger.rows.map(r => ({
+        date: r.date, type: r.type, invNo: r.inv_no != null ? String(r.inv_no) : String(r.entry_id), billNo: r.bill_no || '-', narration: r.narration || '',
+        chequeNo: r.cheque_no, chequeDate: r.cheque_date, chequeReceivedDate: r.cheque_received_date,
+        pairs: r.pairs || 0, debit: r.debit, credit: r.credit, balance: r.balance,
+      })),
     ];
-
-    return finalRows;
-  }, [khaataEntries, fromDate, toDate]);
-
-  const khaataTotals = useMemo(() => {
-    return khaataEntries.reduce((acc, e) => {
-      const inRange = (!fromDate || e.date >= fromDate) && (!toDate || e.date <= toDate);
-      if (!inRange) return acc;
-      return { debit: acc.debit + e.debit, credit: acc.credit + e.credit };
-    }, { debit: 0, credit: 0 });
-  }, [khaataEntries, fromDate, toDate]);
+  }, [ledger, fromDate]);
 
   const handleExportExcel = () => {
     const headers = ['Date', 'Type', 'Inv #', 'Bill #', 'Narration', 'Pairs', 'Debit', 'Credit', 'Balance'];
@@ -245,9 +82,9 @@ export function ReportKhaataContent() {
 
   return (
       <div className="mx-auto" style={{ maxWidth: 1000 }}>
-        
+
         {/* 1. Accounts Directory View (When no customer is selected) */}
-        {!customerId ? (
+        {!customerBaId ? (
           <>
             {/* Selection Bar / Search & Date filters - data-no-print */}
             <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
@@ -307,25 +144,22 @@ export function ReportKhaataContent() {
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {filteredCustomers.map(c => {
-                    const code = getAccountCode(c);
-                    const mainAc = state.chartAccounts.find(coa => coa.id === c.acId)?.name || 'CUSTOMERS ACCOUNTS';
-                    const city = state.cities.find(ct => ct.id === c.cityId)?.name || 'General';
                     const initialLetter = c.name.charAt(0).toUpperCase();
 
                     return (
                       <div
-                        key={c.id}
-                        onClick={() => setCustomerId(c.id)}
+                        key={c.ba_id}
+                        onClick={() => setCustomerBaId(c.ba_id)}
                         className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
                       >
                         <div>
                           {/* Card Top: Code & City badge */}
                           <div className="flex items-center justify-between mb-3.5">
                             <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
-                              Code: {code}
+                              Code: {c.code}
                             </span>
                             <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200/50 uppercase tracking-wider">
-                              {city}
+                              {c.city_name || 'General'}
                             </span>
                           </div>
 
@@ -339,7 +173,7 @@ export function ReportKhaataContent() {
                                 {c.name}
                               </h4>
                               <p className="text-[11px] text-slate-400 font-medium mt-0.5 uppercase tracking-wider truncate">
-                                {mainAc}
+                                {c.main_account}
                               </p>
                             </div>
                           </div>
@@ -432,7 +266,7 @@ export function ReportKhaataContent() {
 
             {/* Printable Statement Sheet */}
             <div className="card-white p-6 md:p-8 bg-white border">
-              
+
               {/* Header details */}
               <div className="flex items-center justify-between border-b pb-4 mb-6">
                 <div>
@@ -443,7 +277,7 @@ export function ReportKhaataContent() {
                   <h2 className="font-lora font-semibold text-lg uppercase">Account Statement (Khaata)</h2>
                   <div className="text-sm font-semibold text-slate-700 mt-1">{selectedCustomer?.name}</div>
                   <div className="text-xs text-slate-500 font-medium">
-                    Account ID: {getAccountCode(selectedCustomer)} | City: {state.cities.find(ct => ct.id === selectedCustomer?.cityId)?.name || 'General'}
+                    Account ID: {selectedCustomer?.code} | City: {selectedCustomer?.city_name || 'General'}
                   </div>
                   {(fromDate || toDate) && (
                     <div className="text-xs text-amber-700 font-semibold mt-0.5">
@@ -470,7 +304,9 @@ export function ReportKhaataContent() {
                     </tr>
                   </thead>
                   <tbody>
-                    {runningKhaata.length === 1 && runningKhaata[0].balance === 0 && runningKhaata[0].debit === 0 && runningKhaata[0].credit === 0 ? (
+                    {loading ? (
+                      <tr><td colSpan={9} className="text-center p-8 text-slate-400">Loading…</td></tr>
+                    ) : runningKhaata.length === 1 && runningKhaata[0].balance === 0 && runningKhaata[0].debit === 0 && runningKhaata[0].credit === 0 ? (
                       <tr>
                         <td colSpan={9} className="text-center p-8 text-slate-400">
                           No ledger entries found matching selection or date range.
@@ -489,7 +325,7 @@ export function ReportKhaataContent() {
                           >
                             <td className="p-3 pl-4 font-semibold">{row.date}</td>
                             <td className="p-3">
-                              <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${row.type === 'Sale Bill' ? 'bg-rose-50 text-rose-700' : row.type === 'Receipt (Jamma)' ? 'bg-emerald-50 text-emerald-700' : row.type === 'Sale Return' ? 'bg-blue-50 text-blue-700' : row.type === 'Commission' ? 'bg-amber-50 text-amber-700' : row.type === 'Cheque Bounced' ? 'bg-rose-100 text-rose-800' : 'bg-slate-100 text-slate-700'}`}>
+                              <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${row.type === 'Sale Bill' ? 'bg-rose-50 text-rose-700' : row.type === 'Receipt (Jamma)' ? 'bg-emerald-50 text-emerald-700' : row.type === 'Sale Return' ? 'bg-blue-50 text-blue-700' : row.type === 'Commission' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-700'}`}>
                                 {row.type}
                               </span>
                             </td>
@@ -524,8 +360,8 @@ export function ReportKhaataContent() {
                   <tfoot>
                     <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
                       <td colSpan={6} className="p-4 text-left font-lora">TOTAL</td>
-                      <td className="p-4 text-right text-rose-800">{formatCurrency(khaataTotals.debit)}</td>
-                      <td className="p-4 text-right text-emerald-800">{formatCurrency(khaataTotals.credit)}</td>
+                      <td className="p-4 text-right text-rose-800">{formatCurrency(ledger?.total_debit || 0)}</td>
+                      <td className="p-4 text-right text-emerald-800">{formatCurrency(ledger?.total_credit || 0)}</td>
                       <td className="p-4 text-right" style={{ color: 'var(--brand-gold)' }}>
                         {formatCurrency(Math.abs(runningKhaata[runningKhaata.length - 1]?.balance || 0))}
                       </td>
