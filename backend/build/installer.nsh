@@ -10,6 +10,11 @@
 !include "nsDialogs.nsh"
 !include "LogicLib.nsh"
 !include "WordFunc.nsh"
+; MUI_HEADER_TEXT is a MUI2 macro — electron-builder's base template includes MUI2.nsh itself, but
+; this file gets !include-d before that happens, so the macro isn't defined yet when NSIS compiles
+; this script (a build-time, not runtime, ordering problem). MUI2.nsh has its own include guard,
+; so including it again here is safe.
+!include "MUI2.nsh"
 
 Var DbServerText
 Var DbPortText
