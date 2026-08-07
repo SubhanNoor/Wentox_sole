@@ -62,4 +62,27 @@ async function verifyPassword(userId, password) {
   return { ok: true };
 }
 
-module.exports = { login, updateCredentials, verifyPassword };
+// Admin-only (enforced by the ipc layer via requireRole('ADMIN')) — creates a new login. `role` is
+// never taken from the caller: this only ever creates limited-access USER accounts.
+async function createUser(payload) {
+  const { username, password, fullName } = payload;
+  if (!username || !username.trim()) throw ApiError.badRequest('Username is required');
+  if (!password) throw ApiError.badRequest('Password is required');
+
+  const existing = await repository.findByUsername(username.trim());
+  if (existing) throw ApiError.conflict('Username already taken', 'USERNAME_TAKEN');
+
+  const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+  return repository.insertUser({
+    username: username.trim(),
+    passwordHash,
+    fullName: fullName || null,
+    role: 'USER',
+  });
+}
+
+async function listUsers() {
+  return repository.listUsers();
+}
+
+module.exports = { login, updateCredentials, verifyPassword, createUser, listUsers };

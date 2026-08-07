@@ -1,27 +1,32 @@
-import { useState, useMemo } from 'react';
-import { useApp } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, Trash2, X, Globe, ArrowRight } from 'lucide-react';
-import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
-import type { Region } from '@/types';
+import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
+import { regions as regionsApi, type RegionRow } from '@/lib/api';
 
 export default function RegionSetupPage() {
-  const { state, dispatch } = useApp();
-
+  const [regions, setRegions] = useState<RegionRow[]>([]);
   const [regionSearch, setRegionSearch] = useState('');
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
+  const [selectedRegionId, setSelectedRegionId] = useState<number | null>(null);
 
   // Duplicate Check Modal state
-  const [dupMatch, setDupMatch] = useState<Region | null>(null);
+  const [dupMatch, setDupMatch] = useState<DuplicateNameMatch | null>(null);
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
   // Form State
   const [regionName, setRegionName] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  const loadData = useCallback(async () => {
+    const res = await regionsApi.list({ includeInactive: true });
+    if (res.ok) setRegions(res.data);
+  }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
 
   const handleOpenAddModal = () => {
     setSelectedRegionId(null);
@@ -30,8 +35,8 @@ export default function RegionSetupPage() {
     setIsModalOpen(true);
   };
 
-  const handleOpenEditModal = (region: { id: string; name: string }) => {
-    setSelectedRegionId(region.id);
+  const handleOpenEditModal = (region: RegionRow) => {
+    setSelectedRegionId(region.region_id);
     setRegionName(region.name);
     setErrorMsg('');
     setIsModalOpen(true);
@@ -44,7 +49,7 @@ export default function RegionSetupPage() {
     setErrorMsg('');
   };
 
-  const handleSaveRegion = (e: React.FormEvent) => {
+  const handleSaveRegion = async (e: React.FormEvent) => {
     e.preventDefault();
     const typed = regionName.trim();
     if (!typed) {
@@ -52,74 +57,65 @@ export default function RegionSetupPage() {
     }
 
     if (selectedRegionId) {
-      dispatch({
-        type: 'UPDATE_REGION',
-        region: { id: selectedRegionId, name: typed }
-      });
+      const res = await regionsApi.update(selectedRegionId, { name: typed });
+      if (!res.ok) {
+        return setErrorMsg(res.error.message);
+      }
       setSuccessMsg('Region details updated successfully.');
+      await loadData();
     } else {
-      const match = state.regions.find(r => r.name.toLowerCase() === typed.toLowerCase());
-      if (match) {
-        if (match.isActive !== false) {
-          return setErrorMsg('A region with this name already exists.');
-        } else {
-          setDupMatch(match);
+      const res = await regionsApi.create({ name: typed });
+      if (!res.ok) {
+        if (res.error.code === 'INACTIVE_DUPLICATE') {
+          const details = res.error.details as { region_id: number; name: string } | undefined;
+          setDupMatch(details ? { id: String(details.region_id), name: details.name } : null);
           setIsDupModalOpen(true);
           return;
         }
+        return setErrorMsg(res.error.message);
       }
-
-      const newId = 'rg_' + Date.now();
-      dispatch({
-        type: 'ADD_REGION',
-        region: { id: newId, name: typed }
-      });
       setSuccessMsg('New region registered successfully.');
+      await loadData();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
     handleCloseModal();
   };
 
-  const handleActivateDuplicate = (id: string) => {
-    const match = state.regions.find(r => r.id === id);
-    if (match) {
-      dispatch({
-        type: 'UPDATE_REGION',
-        region: { ...match, isActive: true }
-      });
+  const handleActivateDuplicate = async (id: string) => {
+    const res = await regionsApi.reactivate(Number(id));
+    if (res.ok) {
       setSuccessMsg('Region reactivated successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
+      await loadData();
     }
     setIsDupModalOpen(false);
     setDupMatch(null);
     handleCloseModal();
   };
 
-  const handleDeleteRegion = (id: string) => {
-    const customerCount = state.customers.filter(c => c.regionId === id && c.isActive !== false).length;
-    if (customerCount > 0) {
-      alert(`Cannot delete this region. It is currently assigned to ${customerCount} registered customers.`);
+  const handleDeleteRegion = async (id: number) => {
+    if (!window.confirm('Are you sure you want to delete this region?')) return;
+    const res = await regionsApi.remove(id);
+    if (!res.ok) {
+      alert(res.error.message);
       return;
     }
-
-    if (window.confirm('Are you sure you want to delete this region?')) {
-      dispatch({ type: 'DELETE_REGION', id });
-      setSuccessMsg('Region deleted successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-      handleCloseModal();
-    }
+    setSuccessMsg('Region deleted successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    handleCloseModal();
+    await loadData();
   };
 
   const filteredRegions = useMemo(() => {
-    const activeRegions = state.regions.filter(r => r.isActive !== false);
+    const activeRegions = regions.filter(r => r.is_active);
     if (!regionSearch.trim()) return activeRegions;
     const q = regionSearch.toLowerCase();
     return activeRegions.filter(r =>
       r.name.toLowerCase().includes(q) ||
-      r.id.toLowerCase().includes(q)
+      String(r.region_id).includes(q)
     );
-  }, [state.regions, regionSearch]);
+  }, [regions, regionSearch]);
 
   return (
     <AppLayout pageTitle="Region Setup">
@@ -128,7 +124,7 @@ export default function RegionSetupPage() {
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
         )}
-        {errorMsg && (
+        {errorMsg && !isModalOpen && (
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
         )}
 
@@ -141,7 +137,7 @@ export default function RegionSetupPage() {
               </h3>
               <p className="text-xs text-slate-500 font-medium">Search and manage regions used for primary customer identification.</p>
             </div>
-            
+
             <button
               onClick={handleOpenAddModal}
               className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
@@ -176,12 +172,9 @@ export default function RegionSetupPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredRegions.map(region => {
-              const customerCount = state.customers.filter(c => c.regionId === region.id && c.isActive !== false).length;
-
-              return (
+            {filteredRegions.map(region => (
                 <div
-                  key={region.id}
+                  key={region.region_id}
                   onClick={() => handleOpenEditModal(region)}
                   className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
                 >
@@ -198,11 +191,7 @@ export default function RegionSetupPage() {
 
                     {/* Subtitle: Code in mono */}
                     <div className="font-mono text-xs text-slate-400 mb-3">
-                      Region Code: <span className="font-semibold text-slate-600">#{region.id}</span>
-                    </div>
-
-                    <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5">
-                      Customers Assigned: <span className="font-semibold text-slate-700">{customerCount}</span>
+                      Region Code: <span className="font-semibold text-slate-600">#{region.region_id}</span>
                     </div>
                   </div>
 
@@ -217,7 +206,7 @@ export default function RegionSetupPage() {
                         <Edit2 size={15} />
                       </button>
                       <button
-                        onClick={() => handleDeleteRegion(region.id)}
+                        onClick={() => handleDeleteRegion(region.region_id)}
                         className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
                         title="Delete Region"
                       >
@@ -230,8 +219,7 @@ export default function RegionSetupPage() {
                     </span>
                   </div>
                 </div>
-              );
-            })}
+            ))}
           </div>
         )}
 
@@ -295,7 +283,7 @@ export default function RegionSetupPage() {
           isOpen={isDupModalOpen}
           entityLabel="region"
           status="inactive"
-          matches={dupMatch ? [{ id: dupMatch.id, name: dupMatch.name }] : []}
+          matches={dupMatch ? [dupMatch] : []}
           allowCreateOnActive={false}
           onActivate={handleActivateDuplicate}
           onCreateNew={() => {}}

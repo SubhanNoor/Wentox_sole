@@ -12,7 +12,7 @@
  */
 
 const FEATURES = [
-  'auth', 'addas', 'bankAccounts', 'businessAccounts', 'categories', 'chartAccounts', 'cheques',
+  'auth', 'accountClasses', 'addas', 'bankAccounts', 'businessAccounts', 'categories', 'chartAccounts', 'cheques',
   'cities', 'customers', 'draftExpenses', 'draftPurchases', 'draftPurchaseReturns', 'draftReceipts',
   'draftSaleBills', 'draftSaleReturns', 'employees', 'expenses',
   'groupAccounts', 'products', 'productColors', 'purchases', 'purchaseReturns', 'receipts',

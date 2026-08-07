@@ -247,6 +247,10 @@ export interface StoreRow {
   is_active: boolean;
 }
 
+export interface StoreCreateInput {
+  name: string;
+}
+
 export interface AddaRow {
   adda_id: number;
   name: string;
@@ -254,12 +258,25 @@ export interface AddaRow {
   city_id: number | null;
   details: string | null;
   is_active: boolean;
+  region_name?: string;
+  city_name?: string;
+}
+
+export interface AddaCreateInput {
+  name: string;
+  region_id: number;
+  city_id?: number;
+  details?: string;
 }
 
 export interface RegionRow {
   region_id: number;
   name: string;
   is_active: boolean;
+}
+
+export interface RegionCreateInput {
+  name: string;
 }
 
 export interface CategoryRow {
@@ -278,6 +295,11 @@ export interface CityRow {
   region_id: number | null;
   region_name?: string;
   is_active: boolean;
+}
+
+export interface CityCreateInput {
+  name: string;
+  region_id?: number;
 }
 
 export interface CustomerCreateInput {
@@ -627,6 +649,100 @@ export interface BusinessAccountRow {
   region_name?: string;
   city_name?: string;
 }
+
+export interface BusinessAccountCreateInput {
+  name: string;
+  ac_id: number;
+  region_id?: number;
+  city_id?: number;
+  opening_balance?: number;
+  opening_date?: string;
+}
+
+export interface BusinessAccountUpdateInput {
+  name: string;
+  region_id?: number;
+  city_id?: number;
+}
+
+// ── Milestone 8.2/8.3: Account Classes, Group Accounts, Chart of Accounts ──
+
+export interface AccountClassRow {
+  class_id: number;
+  code: string;
+  name: string;
+  is_active: boolean;
+}
+
+export interface GroupAccountRow {
+  group_id: number;
+  code: string;
+  name: string;
+  class_id: number;
+  sorting: number | null;
+  is_active: boolean;
+  class_code?: string;
+  class_name?: string;
+}
+
+export interface GroupAccountCreateInput {
+  name: string;
+  class_id: number;
+  sorting?: number;
+}
+
+export interface GroupAccountUpdateInput {
+  name: string;
+  sorting?: number;
+}
+
+export interface ChartOfAccountRow {
+  ac_id: number;
+  code: string;
+  name: string;
+  group_id: number;
+  link_code: string | null;
+  status: 'ACTIVE' | 'CLOSED';
+  is_restricted: boolean;
+  group_code?: string;
+  group_name?: string;
+  class_id?: number;
+  class_code?: string;
+  class_name?: string;
+}
+
+export interface ChartAccountCreateInput {
+  name: string;
+  group_id: number;
+  link_code?: string;
+}
+
+export interface ChartAccountUpdateInput {
+  name: string;
+  link_code?: string;
+}
+
+// Mirrors backend/src/constants/reservedAccounts.js — single source of truth is the backend file;
+// this list must be kept in sync manually since the Electron renderer can't require() it directly.
+export const RESERVED_ACCOUNT_CODES: readonly string[] = [
+  '100001', // CUSTOMERS_ACCOUNTS
+  '200001', // VENDORS_ACCOUNTS
+  '100002', // CASH_IN_HAND
+  '100003', // BANK_ACCOUNTS
+  '300001', // SALES
+  '400001', // PURCHASES
+  '400002', // COMMISSION_ALLOWED
+  '100004', // CHEQUES_IN_HAND
+  '400003', // BUSINESS_RUNNING_EXPENSES
+  '400004', // DIRECTORS_DRAWINGS
+  '400005', // EMPLOYEES
+  '200002', // VENDORS_SUPPLIERS
+  '220001', // WORKER_WAGES
+  '220002', // SALARIES_PAYABLE
+  '410001', // WAGES_EXPENSE
+  '410002', // SALARIES_EXPENSE
+  '400006', // MISC_ADJUSTMENTS
+];
 
 export type ExpensePaymentMode = 'CASH' | 'ONLINE' | 'CHEQUE_ENDORSED' | 'CHEQUE_ISSUED';
 
@@ -1088,6 +1204,8 @@ declare global {
         logout: () => Promise<ApiResult<{ ok: true }>>;
         updateCredentials: (payload: { currentPassword: string; username?: string; newPassword?: string }) => Promise<ApiResult<{ username: string }>>;
         verifyPassword: (payload: { password: string }) => Promise<ApiResult<{ ok: true }>>;
+        createUser: (payload: { username: string; password: string; fullName?: string }) => Promise<ApiResult<UserAccountRowFromApi>>;
+        listUsers: () => Promise<ApiResult<UserAccountRowFromApi[]>>;
       };
       saleBills: {
         create: (payload: SaleBillCreateInput) => Promise<ApiResult<SaleBillRow>>;
@@ -1155,16 +1273,36 @@ declare global {
         remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
       };
       stores: {
-        list: (payload?: { is_active?: boolean }) => Promise<ApiResult<StoreRow[]>>;
+        list: (payload?: { includeInactive?: boolean; is_active?: boolean }) => Promise<ApiResult<StoreRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<StoreRow>>;
+        create: (payload: StoreCreateInput) => Promise<ApiResult<StoreRow>>;
+        update: (payload: { id: number } & StoreCreateInput) => Promise<ApiResult<StoreRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        reactivate: (payload: { id: number }) => Promise<ApiResult<StoreRow>>;
       };
       addas: {
-        list: (payload?: { is_active?: boolean }) => Promise<ApiResult<AddaRow[]>>;
+        list: (payload?: { includeInactive?: boolean; is_active?: boolean; region_id?: number }) => Promise<ApiResult<AddaRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<AddaRow>>;
+        create: (payload: AddaCreateInput) => Promise<ApiResult<AddaRow>>;
+        update: (payload: { id: number } & AddaCreateInput) => Promise<ApiResult<AddaRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        reactivate: (payload: { id: number }) => Promise<ApiResult<AddaRow>>;
       };
       regions: {
-        list: (payload?: { is_active?: boolean }) => Promise<ApiResult<RegionRow[]>>;
+        list: (payload?: { includeInactive?: boolean; is_active?: boolean }) => Promise<ApiResult<RegionRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<RegionRow>>;
+        create: (payload: RegionCreateInput) => Promise<ApiResult<RegionRow>>;
+        update: (payload: { id: number } & RegionCreateInput) => Promise<ApiResult<RegionRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        reactivate: (payload: { id: number }) => Promise<ApiResult<RegionRow>>;
       };
       cities: {
-        list: (payload?: { is_active?: boolean; region_id?: number }) => Promise<ApiResult<CityRow[]>>;
+        list: (payload?: { includeInactive?: boolean; is_active?: boolean; region_id?: number }) => Promise<ApiResult<CityRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<CityRow>>;
+        create: (payload: CityCreateInput) => Promise<ApiResult<CityRow>>;
+        update: (payload: { id: number } & CityCreateInput) => Promise<ApiResult<CityRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        reactivate: (payload: { id: number }) => Promise<ApiResult<CityRow>>;
       };
       categories: {
         list: (payload?: { includeInactive?: boolean }) => Promise<ApiResult<CategoryRow[]>>;
@@ -1271,13 +1409,33 @@ declare global {
         'allocations-for-receipt': (payload: { receipt_id: number }) => Promise<ApiResult<ChequeAllocationRow[]>>;
       };
       businessAccounts: {
-        list: (payload?: { ac_id?: number; excludeRestrictedParent?: boolean; excludeClosed?: boolean }) => Promise<ApiResult<BusinessAccountRow[]>>;
+        list: (payload?: { ac_id?: number; excludeRestrictedParent?: boolean; excludeClosed?: boolean; includeInactive?: boolean }) => Promise<ApiResult<BusinessAccountRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<BusinessAccountRow>>;
-        create: (payload: { name: string; ac_id: number; region_id?: number; city_id?: number; opening_balance?: number; opening_date?: string }) => Promise<ApiResult<BusinessAccountRow>>;
-        update: (payload: { id: number; name: string; region_id?: number; city_id?: number }) => Promise<ApiResult<BusinessAccountRow>>;
+        create: (payload: BusinessAccountCreateInput) => Promise<ApiResult<BusinessAccountRow>>;
+        update: (payload: { id: number } & BusinessAccountUpdateInput) => Promise<ApiResult<BusinessAccountRow>>;
         remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
         reactivate: (payload: { id: number }) => Promise<ApiResult<BusinessAccountRow>>;
         getCashAccount: () => Promise<ApiResult<BusinessAccountRow>>;
+      };
+      accountClasses: {
+        list: () => Promise<ApiResult<AccountClassRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<AccountClassRow>>;
+      };
+      groupAccounts: {
+        list: (payload?: { includeInactive?: boolean }) => Promise<ApiResult<GroupAccountRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<GroupAccountRow>>;
+        create: (payload: GroupAccountCreateInput) => Promise<ApiResult<GroupAccountRow>>;
+        update: (payload: { id: number } & GroupAccountUpdateInput) => Promise<ApiResult<GroupAccountRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        reactivate: (payload: { id: number }) => Promise<ApiResult<GroupAccountRow>>;
+      };
+      chartAccounts: {
+        list: (payload?: { includeInactive?: boolean; group_id?: number }) => Promise<ApiResult<ChartOfAccountRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<ChartOfAccountRow>>;
+        create: (payload: ChartAccountCreateInput) => Promise<ApiResult<ChartOfAccountRow>>;
+        update: (payload: { id: number } & ChartAccountUpdateInput) => Promise<ApiResult<ChartOfAccountRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        reactivate: (payload: { id: number }) => Promise<ApiResult<ChartOfAccountRow>>;
       };
       expenses: {
         list: (payload?: ExpenseListFilters) => Promise<ApiResult<ExpenseRow[]>>;
@@ -1369,6 +1527,38 @@ const NO_BRIDGE: ApiFail = {
 // here at the one real boundary, so nothing else in the app needs to know the wire format.
 function mapRole(role: 'ADMIN' | 'USER'): UserRole {
   return role === 'ADMIN' ? 'Admin' : 'User';
+}
+
+export interface UserAccountRowFromApi {
+  user_id: number;
+  username: string;
+  full_name: string | null;
+  role: 'ADMIN' | 'USER';
+  is_active: boolean;
+}
+
+export interface UserAccountRow {
+  user_id: number;
+  username: string;
+  full_name: string | null;
+  role: UserRole;
+  is_active: boolean;
+}
+
+function mapUserAccountRow(row: UserAccountRowFromApi): UserAccountRow {
+  return { ...row, role: mapRole(row.role) };
+}
+
+export async function createUser(payload: { username: string; password: string; fullName?: string }): Promise<ApiResult<UserAccountRow>> {
+  if (!window.api) return NO_BRIDGE;
+  const result = await window.api.auth.createUser(payload);
+  return mapResult(result, mapUserAccountRow);
+}
+
+export async function listUsers(): Promise<ApiResult<UserAccountRow[]>> {
+  if (!window.api) return NO_BRIDGE;
+  const result = await window.api.auth.listUsers();
+  return mapResult(result, rows => rows.map(mapUserAccountRow));
 }
 
 export async function login(username: string, password: string): Promise<ApiResult<{ username: string; role: UserRole }>> {
@@ -1529,6 +1719,64 @@ export async function listCities(): Promise<ApiResult<CityRow[]>> {
   if (!window.api) return NO_BRIDGE;
   return window.api.cities.list({ is_active: true });
 }
+
+// ── Module 8.1: Cities, Regions, Stores, Transport Addas (full CRUD) ──
+
+export const cities = {
+  list: (payload?: { includeInactive?: boolean; region_id?: number }) =>
+    window.api ? window.api.cities.list(payload) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.cities.get({ id }) : Promise.resolve(NO_BRIDGE),
+  create: (payload: CityCreateInput) =>
+    window.api ? window.api.cities.create(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: CityCreateInput) =>
+    window.api ? window.api.cities.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.cities.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) =>
+    window.api ? window.api.cities.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+};
+
+export const regions = {
+  list: (payload?: { includeInactive?: boolean }) =>
+    window.api ? window.api.regions.list(payload) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.regions.get({ id }) : Promise.resolve(NO_BRIDGE),
+  create: (payload: RegionCreateInput) =>
+    window.api ? window.api.regions.create(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: RegionCreateInput) =>
+    window.api ? window.api.regions.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.regions.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) =>
+    window.api ? window.api.regions.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+};
+
+export const stores = {
+  list: (payload?: { includeInactive?: boolean }) =>
+    window.api ? window.api.stores.list(payload) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.stores.get({ id }) : Promise.resolve(NO_BRIDGE),
+  create: (payload: StoreCreateInput) =>
+    window.api ? window.api.stores.create(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: StoreCreateInput) =>
+    window.api ? window.api.stores.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.stores.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) =>
+    window.api ? window.api.stores.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+};
+
+export const addas = {
+  list: (payload?: { includeInactive?: boolean; region_id?: number }) =>
+    window.api ? window.api.addas.list(payload) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.addas.get({ id }) : Promise.resolve(NO_BRIDGE),
+  create: (payload: AddaCreateInput) =>
+    window.api ? window.api.addas.create(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: AddaCreateInput) =>
+    window.api ? window.api.addas.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.addas.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) =>
+    window.api ? window.api.addas.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+};
 
 export async function createCustomer(payload: CustomerCreateInput): Promise<ApiResult<CustomerRow>> {
   if (!window.api) return NO_BRIDGE;
@@ -1858,6 +2106,56 @@ export async function getCashBusinessAccount(): Promise<ApiResult<BusinessAccoun
   if (!window.api) return NO_BRIDGE;
   return window.api.businessAccounts.getCashAccount();
 }
+
+export const businessAccounts = {
+  list: (payload?: { ac_id?: number; excludeClosed?: boolean; includeInactive?: boolean }) =>
+    window.api ? window.api.businessAccounts.list(payload) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.businessAccounts.get({ id }) : Promise.resolve(NO_BRIDGE),
+  create: (payload: BusinessAccountCreateInput) =>
+    window.api ? window.api.businessAccounts.create(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: BusinessAccountUpdateInput) =>
+    window.api ? window.api.businessAccounts.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.businessAccounts.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) =>
+    window.api ? window.api.businessAccounts.reactivate({ id }) : Promise.resolve(NO_BRIDGE),
+  getCashAccount: () => window.api ? window.api.businessAccounts.getCashAccount() : Promise.resolve(NO_BRIDGE)
+};
+
+// ── Milestone 8.2/8.3: Account Classes, Group Accounts, Chart of Accounts ──
+
+export async function listAccountClasses(): Promise<ApiResult<AccountClassRow[]>> {
+  if (!window.api) return NO_BRIDGE;
+  return window.api.accountClasses.list();
+}
+
+export const groupAccounts = {
+  list: (payload?: { includeInactive?: boolean }) =>
+    window.api ? window.api.groupAccounts.list(payload) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.groupAccounts.get({ id }) : Promise.resolve(NO_BRIDGE),
+  create: (payload: GroupAccountCreateInput) =>
+    window.api ? window.api.groupAccounts.create(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: GroupAccountUpdateInput) =>
+    window.api ? window.api.groupAccounts.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.groupAccounts.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) =>
+    window.api ? window.api.groupAccounts.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+};
+
+export const chartAccounts = {
+  list: (payload?: { includeInactive?: boolean; group_id?: number }) =>
+    window.api ? window.api.chartAccounts.list(payload) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.chartAccounts.get({ id }) : Promise.resolve(NO_BRIDGE),
+  create: (payload: ChartAccountCreateInput) =>
+    window.api ? window.api.chartAccounts.create(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: ChartAccountUpdateInput) =>
+    window.api ? window.api.chartAccounts.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.chartAccounts.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) =>
+    window.api ? window.api.chartAccounts.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+};
 
 function normalizeExpenseRow(row: ExpenseRow): ExpenseRow {
   return {

@@ -9,8 +9,9 @@ type UpdateStatus = 'idle' | 'checking' | 'no-internet' | 'error' | 'up-to-date'
 
 export default function SettingsPage() {
   const { state, dispatch } = useApp();
+  const isAdmin = state.currentUserRole === 'Admin';
 
-  const [activeTab, setActiveTab] = useState<SettingsTab>('credentials');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(isAdmin ? 'credentials' : 'updates');
 
   // Credentials State
   const [currentPassword, setCurrentPassword] = useState('');
@@ -119,26 +120,28 @@ export default function SettingsPage() {
     <AppLayout pageTitle="Settings">
       <div className="mx-auto" style={{ maxWidth: 900 }}>
 
-        {/* Subpage Pill-Tabs */}
-        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 gap-1 mb-6 self-start max-w-md">
-          <button
-            type="button"
-            onClick={() => setActiveTab('credentials')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${activeTab === 'credentials' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-          >
-            <Lock size={14} /> Profile & Credentials
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('updates')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${activeTab === 'updates' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-          >
-            <RefreshCw size={14} /> Check for Updates
-          </button>
-        </div>
+        {/* Subpage Pill-Tabs — non-admins only ever get Check for Updates, no credentials tab at all */}
+        {isAdmin && (
+          <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 gap-1 mb-6 self-start max-w-md">
+            <button
+              type="button"
+              onClick={() => setActiveTab('credentials')}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${activeTab === 'credentials' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <Lock size={14} /> Profile & Credentials
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('updates')}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${activeTab === 'updates' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <RefreshCw size={14} /> Check for Updates
+            </button>
+          </div>
+        )}
 
-        {/* SUBPAGE 1: Profile & Credentials */}
-        {activeTab === 'credentials' && (
+        {/* SUBPAGE 1: Profile & Credentials — admin-only */}
+        {isAdmin && activeTab === 'credentials' && (
           <div className="animate-in fade-in duration-200">
             <div className="card-white p-6 md:p-8 bg-white border max-w-xl mx-auto">
               <div className="border-b pb-4 mb-6">

@@ -40,4 +40,20 @@ module.exports = function register() {
       return service.verifyPassword(current.userId, payload.password);
     }),
   );
+
+  ipcMain.handle(
+    'auth:createUser',
+    wrap(async (payload) => {
+      session.requireRole('ADMIN');
+      return service.createUser(payload);
+    }),
+  );
+
+  ipcMain.handle(
+    'auth:listUsers',
+    wrap(async () => {
+      session.requireRole('ADMIN');
+      return service.listUsers();
+    }),
+  );
 };

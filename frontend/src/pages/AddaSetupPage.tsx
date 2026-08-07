@@ -1,22 +1,22 @@
-import { useState, useMemo } from 'react';
-import { useApp } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, Trash2, X, Truck, MapPin } from 'lucide-react';
-import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
+import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import SearchableSelect from '@/components/SearchableSelect';
-import type { Adda } from '@/types';
+import { addas as addasApi, listRegions, listCities, type AddaRow, type RegionRow, type CityRow } from '@/lib/api';
 
 export default function AddaSetupPage() {
-  const { state, dispatch } = useApp();
-
+  const [addas, setAddas] = useState<AddaRow[]>([]);
+  const [regions, setRegions] = useState<RegionRow[]>([]);
+  const [cities, setCities] = useState<CityRow[]>([]);
   const [addaSearch, setAddaSearch] = useState('');
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedAddaId, setSelectedAddaId] = useState<string | null>(null);
+  const [selectedAddaId, setSelectedAddaId] = useState<number | null>(null);
 
   // Duplicate Check Modal state
-  const [dupMatch, setDupMatch] = useState<Adda | null>(null);
+  const [dupMatch, setDupMatch] = useState<DuplicateNameMatch | null>(null);
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
   // Form State
@@ -26,20 +26,33 @@ export default function AddaSetupPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  const loadData = useCallback(async () => {
+    const [aRes, rRes, cRes] = await Promise.all([
+      addasApi.list({ includeInactive: true }),
+      listRegions(),
+      listCities(),
+    ]);
+    if (aRes.ok) setAddas(aRes.data);
+    if (rRes.ok) setRegions(rRes.data);
+    if (cRes.ok) setCities(cRes.data);
+  }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
   const handleOpenAddModal = () => {
     setSelectedAddaId(null);
     setAddaName('');
-    setRegionId(state.regions[0]?.id || '');
+    setRegionId('');
     setCityId('');
     setErrorMsg('');
     setIsModalOpen(true);
   };
 
-  const handleOpenEditModal = (adda: { id: string; name: string; regionId?: string; cityId: string }) => {
-    setSelectedAddaId(adda.id);
+  const handleOpenEditModal = (adda: AddaRow) => {
+    setSelectedAddaId(adda.adda_id);
     setAddaName(adda.name);
-    setRegionId(adda.regionId || '');
-    setCityId(adda.cityId || '');
+    setRegionId(String(adda.region_id));
+    setCityId(adda.city_id ? String(adda.city_id) : '');
     setErrorMsg('');
     setIsModalOpen(true);
   };
@@ -53,108 +66,85 @@ export default function AddaSetupPage() {
     setErrorMsg('');
   };
 
-  const handleSaveAdda = (e: React.FormEvent) => {
+  const handleSaveAdda = async (e: React.FormEvent) => {
     e.preventDefault();
     const typed = addaName.trim();
     if (!typed) {
       return setErrorMsg('Adda name is required.');
     }
-    if (!cityId) {
-      return setErrorMsg('City selection is required.');
+    if (!regionId) {
+      return setErrorMsg('Region selection is required.');
     }
 
+    const payload = {
+      name: typed,
+      region_id: Number(regionId),
+      city_id: cityId ? Number(cityId) : undefined,
+    };
+
     if (selectedAddaId) {
-      dispatch({
-        type: 'UPDATE_ADDA',
-        adda: {
-          id: selectedAddaId,
-          name: typed,
-          regionId: regionId || undefined,
-          cityId: cityId
-        }
-      });
+      const res = await addasApi.update(selectedAddaId, payload);
+      if (!res.ok) {
+        return setErrorMsg(res.error.message);
+      }
       setSuccessMsg('Adda details updated successfully.');
+      await loadData();
     } else {
-      const match = state.addas.find(a => a.name.toLowerCase() === typed.toLowerCase());
-      if (match) {
-        if (match.isActive !== false) {
-          return setErrorMsg('An adda with this name already exists.');
-        } else {
-          setDupMatch(match);
+      const res = await addasApi.create(payload);
+      if (!res.ok) {
+        if (res.error.code === 'INACTIVE_DUPLICATE') {
+          const details = res.error.details as { adda_id: number; name: string } | undefined;
+          setDupMatch(details ? { id: String(details.adda_id), name: details.name } : null);
           setIsDupModalOpen(true);
           return;
         }
+        return setErrorMsg(res.error.message);
       }
-
-      const newId = 'ad_' + Date.now();
-      dispatch({
-        type: 'ADD_ADDA',
-        adda: {
-          id: newId,
-          name: typed,
-          regionId: regionId || undefined,
-          cityId: cityId
-        }
-      });
       setSuccessMsg('New Transport Adda registered successfully.');
+      await loadData();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
     handleCloseModal();
   };
 
-  const handleActivateDuplicate = (id: string) => {
-    const match = state.addas.find(a => a.id === id);
-    if (match) {
-      dispatch({
-        type: 'UPDATE_ADDA',
-        adda: {
-          ...match,
-          isActive: true,
-          regionId: regionId || match.regionId,
-          cityId: cityId || match.cityId
-        }
-      });
+  const handleActivateDuplicate = async (id: string) => {
+    const res = await addasApi.reactivate(Number(id));
+    if (res.ok) {
       setSuccessMsg('Transport Adda reactivated successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
+      await loadData();
     }
     setIsDupModalOpen(false);
     setDupMatch(null);
     handleCloseModal();
   };
 
-  const handleDeleteAdda = (id: string) => {
-    const billCount = state.saleBills.filter(b => b.addaId === id).length;
-    if (billCount > 0) {
-      alert(`Cannot delete this Adda. It is currently assigned to ${billCount} registered sale bills.`);
+  const handleDeleteAdda = async (id: number) => {
+    if (!window.confirm('Are you sure you want to delete this Transport Adda?')) return;
+    const res = await addasApi.remove(id);
+    if (!res.ok) {
+      alert(res.error.message);
       return;
     }
-
-    if (window.confirm('Are you sure you want to delete this Transport Adda?')) {
-      dispatch({ type: 'DELETE_ADDA', id });
-      setSuccessMsg('Transport Adda deleted successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-      handleCloseModal();
-    }
+    setSuccessMsg('Transport Adda deleted successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    handleCloseModal();
+    await loadData();
   };
 
   const filteredAddas = useMemo(() => {
-    const activeAddas = state.addas.filter(a => a.isActive !== false);
+    const activeAddas = addas.filter(a => a.is_active);
     if (!addaSearch.trim()) return activeAddas;
     const q = addaSearch.toLowerCase();
     return activeAddas.filter(a =>
       a.name.toLowerCase().includes(q) ||
-      a.id.toLowerCase().includes(q)
+      String(a.adda_id).includes(q)
     );
-  }, [state.addas, addaSearch]);
+  }, [addas, addaSearch]);
 
-  const activeRegions = useMemo(() => {
-    return state.regions.filter(r => r.isActive !== false);
-  }, [state.regions]);
-
-  const activeCities = useMemo(() => {
-    return state.cities.filter(c => c.isActive !== false);
-  }, [state.cities]);
+  const activeRegions = useMemo(() => regions.filter(r => r.is_active), [regions]);
+  const activeCities = useMemo(() => cities.filter(c => c.is_active), [cities]);
 
   return (
     <AppLayout pageTitle="Transport Adda Setup">
@@ -163,7 +153,7 @@ export default function AddaSetupPage() {
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
         )}
-        {errorMsg && (
+        {errorMsg && !isModalOpen && (
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
         )}
 
@@ -176,7 +166,7 @@ export default function AddaSetupPage() {
               </h3>
               <p className="text-xs text-slate-500 font-medium">Search and manage delivery points / adda services for wholesale shipment routing.</p>
             </div>
-            
+
             <button
               onClick={handleOpenAddModal}
               className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
@@ -212,12 +202,12 @@ export default function AddaSetupPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredAddas.map(adda => {
-              const cityName = activeCities.find(c => c.id === adda.cityId)?.name || 'N/A';
-              const regionName = activeRegions.find(r => r.id === adda.regionId)?.name || 'N/A';
+              const cityName = adda.city_name || 'N/A';
+              const regionName = adda.region_name || 'N/A';
 
               return (
                 <div
-                  key={adda.id}
+                  key={adda.adda_id}
                   onClick={() => handleOpenEditModal(adda)}
                   className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
                 >
@@ -235,7 +225,7 @@ export default function AddaSetupPage() {
 
                     {/* Subtitle: Code in mono */}
                     <div className="font-mono text-xs text-slate-400 mb-3">
-                      Adda Code: <span className="font-semibold text-slate-600">#{adda.id}</span>
+                      Adda Code: <span className="font-semibold text-slate-600">#{adda.adda_id}</span>
                     </div>
 
                     <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5">
@@ -254,7 +244,7 @@ export default function AddaSetupPage() {
                         <Edit2 size={15} />
                       </button>
                       <button
-                        onClick={() => handleDeleteAdda(adda.id)}
+                        onClick={() => handleDeleteAdda(adda.adda_id)}
                         className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
                         title="Delete Adda"
                       >
@@ -311,13 +301,10 @@ export default function AddaSetupPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Region
+                      Region <span className="text-rose-500">*</span>
                     </label>
                     <SearchableSelect
-                      options={[
-                        { value: '', label: 'Select Region (Optional)' },
-                        ...activeRegions.map(r => ({ value: r.id, label: r.name }))
-                      ]}
+                      options={activeRegions.map(r => ({ value: String(r.region_id), label: r.name }))}
                       value={regionId}
                       onChange={setRegionId}
                       placeholder="Select Region..."
@@ -326,10 +313,13 @@ export default function AddaSetupPage() {
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      City Location <span className="text-rose-500">*</span>
+                      City Location
                     </label>
                     <SearchableSelect
-                      options={activeCities.map(c => ({ value: c.id, label: c.name }))}
+                      options={[
+                        { value: '', label: 'Select City (Optional)' },
+                        ...activeCities.map(c => ({ value: String(c.city_id), label: c.name }))
+                      ]}
                       value={cityId}
                       onChange={setCityId}
                       placeholder="Select City..."
@@ -361,7 +351,7 @@ export default function AddaSetupPage() {
           isOpen={isDupModalOpen}
           entityLabel="transport adda"
           status="inactive"
-          matches={dupMatch ? [{ id: dupMatch.id, name: dupMatch.name }] : []}
+          matches={dupMatch ? [dupMatch] : []}
           allowCreateOnActive={false}
           onActivate={handleActivateDuplicate}
           onCreateNew={() => {}}

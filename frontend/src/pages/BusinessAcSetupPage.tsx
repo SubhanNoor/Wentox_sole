@@ -1,24 +1,35 @@
-import { useState, useMemo } from 'react';
-import { useApp } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, X, Landmark, ArrowRight } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Trash2, RotateCcw, X, Landmark, ArrowRight } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
-import { filterChartAccountsForRole, filterBusinessAccountsForRole } from '@/lib/access';
+import {
+  businessAccounts as businessAccountsApi,
+  chartAccounts as chartAccountsApi,
+  listRegions,
+  listCities,
+  type BusinessAccountRow,
+  type ChartOfAccountRow,
+  type RegionRow,
+  type CityRow,
+} from '@/lib/api';
 
 export default function BusinessAcSetupPage() {
-  const { state, dispatch } = useApp();
+  const [accounts, setAccounts] = useState<BusinessAccountRow[]>([]);
+  const [charts, setCharts] = useState<ChartOfAccountRow[]>([]);
+  const [regions, setRegions] = useState<RegionRow[]>([]);
+  const [cities, setCities] = useState<CityRow[]>([]);
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   // Form State
-  const [id, setId] = useState('');
   const [name, setName] = useState('');
-  const [controlId, setControlId] = useState(''); // parent chart account ID
-  const [linkCode, setLinkCode] = useState('A');
-  const [region, setRegion] = useState('LOCAL');
-  const [status, setStatus] = useState<'Active' | 'Closed'>('Active');
+  const [controlId, setControlId] = useState(''); // parent chart account id
+  const [regionId, setRegionId] = useState('');
+  const [cityId, setCityId] = useState('');
+  const [openingBalance, setOpeningBalance] = useState('');
+  const [openingDate, setOpeningDate] = useState('');
 
   // Search and Sort State
   const [searchQuery, setSearchQuery] = useState('');
@@ -29,26 +40,41 @@ export default function BusinessAcSetupPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  const loadData = useCallback(async () => {
+    const [bRes, cRes, rRes, ciRes] = await Promise.all([
+      businessAccountsApi.list({ includeInactive: true }),
+      chartAccountsApi.list({ includeInactive: true }),
+      listRegions(),
+      listCities(),
+    ]);
+    if (bRes.ok) setAccounts(bRes.data);
+    if (cRes.ok) setCharts(cRes.data);
+    if (rRes.ok) setRegions(rRes.data);
+    if (ciRes.ok) setCities(ciRes.data);
+  }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
   const handleOpenAddModal = () => {
     setSelectedId(null);
-    setId('');
     setName('');
     setControlId('');
-    setLinkCode('A');
-    setRegion('LOCAL');
-    setStatus('Active');
+    setRegionId('');
+    setCityId('');
+    setOpeningBalance('');
+    setOpeningDate('');
     setErrorMsg('');
     setIsModalOpen(true);
   };
 
-  const handleOpenEditModal = (biz: any) => {
-    setSelectedId(biz.id);
-    setId(biz.id);
+  const handleOpenEditModal = (biz: BusinessAccountRow) => {
+    setSelectedId(biz.ba_id);
     setName(biz.name);
-    setControlId(biz.controlId);
-    setLinkCode(biz.linkCode || 'A');
-    setRegion(biz.region || 'LOCAL');
-    setStatus(biz.status || 'Active');
+    setControlId(String(biz.ac_id));
+    setRegionId(biz.region_id ? String(biz.region_id) : '');
+    setCityId(biz.city_id ? String(biz.city_id) : '');
+    setOpeningBalance('');
+    setOpeningDate('');
     setErrorMsg('');
     setIsModalOpen(true);
   };
@@ -56,157 +82,133 @@ export default function BusinessAcSetupPage() {
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setSelectedId(null);
-    setId('');
     setName('');
     setControlId('');
-    setLinkCode('A');
-    setRegion('LOCAL');
-    setStatus('Active');
+    setRegionId('');
+    setCityId('');
+    setOpeningBalance('');
+    setOpeningDate('');
     setErrorMsg('');
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!id.trim()) return setErrorMsg('Business Account code is required.');
-    if (!name.trim()) return setErrorMsg('Business Account title / name is required.');
-    if (!controlId) return setErrorMsg('Please select a parent Chart A/C.');
-
-    if (!selectedId && state.businessAccounts.some(b => b.id.toLowerCase() === id.trim().toLowerCase())) {
-      return setErrorMsg('A Business Account with this code already exists.');
+    const typed = name.trim();
+    if (!typed) return setErrorMsg('Business Account title / name is required.');
+    if (!selectedId && !controlId) return setErrorMsg('Please select a parent Chart A/C.');
+    if ((openingBalance.trim() !== '') !== (openingDate.trim() !== '')) {
+      return setErrorMsg('Opening balance and opening date must be provided together.');
     }
 
-    const accountData = {
-      id: id.trim(),
-      name: name.trim(),
-      controlId,
-      linkCode: linkCode.trim(),
-      region: region.trim(),
-      status
-    };
-
     if (selectedId) {
-      dispatch({ type: 'UPDATE_BUSINESS_ACCOUNT', account: accountData });
+      const res = await businessAccountsApi.update(selectedId, {
+        name: typed,
+        region_id: regionId ? Number(regionId) : undefined,
+        city_id: cityId ? Number(cityId) : undefined,
+      });
+      if (!res.ok) {
+        return setErrorMsg(res.error.message);
+      }
       setSuccessMsg('Business Account updated successfully.');
+      await loadData();
     } else {
-      dispatch({ type: 'ADD_BUSINESS_ACCOUNT', account: accountData });
-
-      if (controlId === '110001') {
-        const cityId = state.cities[0]?.id || 'ct1';
-        const regionId = state.regions.find(r => r.name.toLowerCase() === region.trim().toLowerCase())?.id
-          || state.regions[0]?.id || '';
-        dispatch({
-          type: 'ADD_CUSTOMER',
-          customer: {
-            id: id.trim(),
-            name: name.trim(),
-            acId: controlId,
-            regionId,
-            cityId
-          }
-        });
+      const res = await businessAccountsApi.create({
+        name: typed,
+        ac_id: Number(controlId),
+        region_id: regionId ? Number(regionId) : undefined,
+        city_id: cityId ? Number(cityId) : undefined,
+        opening_balance: openingBalance.trim() ? Number(openingBalance) : undefined,
+        opening_date: openingDate.trim() || undefined,
+      });
+      if (!res.ok) {
+        return setErrorMsg(res.error.message);
       }
       setSuccessMsg('Business Account registered successfully.');
+      await loadData();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
     handleCloseModal();
   };
 
-  const handleDeleteBusinessAc = (bizId: string) => {
-    const hasBills = state.saleBills.some(bill => bill.customerId === bizId);
-    if (hasBills) {
-      setErrorMsg('Cannot delete: This business account is linked to active sale bills.');
+  const handleDeleteBusinessAc = async (biz: BusinessAccountRow) => {
+    if (!window.confirm('Are you sure you want to delete this Business Account?')) return;
+    const res = await businessAccountsApi.remove(biz.ba_id);
+    if (!res.ok) {
+      setErrorMsg(res.error.message);
       setTimeout(() => setErrorMsg(''), 4000);
       return;
     }
-
-    const linkedVendor = state.vendors.find(v => v.baId === bizId);
-    if (linkedVendor) {
-      setErrorMsg(`Cannot delete: This is the ledger account for vendor "${linkedVendor.name}". Delete the vendor instead.`);
-      setTimeout(() => setErrorMsg(''), 4000);
-      return;
-    }
-
-    const linkedBank = state.bankAccounts.find(b => b.baId === bizId);
-    if (linkedBank) {
-      setErrorMsg(`Cannot delete: This is the ledger account for bank "${linkedBank.name}". Delete it from Bank Accounts instead.`);
-      setTimeout(() => setErrorMsg(''), 4000);
-      return;
-    }
-
-    const used =
-      state.expenses.filter(e => e.businessAccountId === bizId).length +
-      state.transfers.filter(t => t.fromBaId === bizId || t.toBaId === bizId).length +
-      state.deposits.filter(d => d.toBaId === bizId).length;
-    if (used > 0) {
-      setErrorMsg(`Cannot delete: ${used} transaction(s) are recorded against this account.`);
-      setTimeout(() => setErrorMsg(''), 4000);
-      return;
-    }
-
-    if (window.confirm('Are you sure you want to delete this Business Account?')) {
-      dispatch({ type: 'DELETE_BUSINESS_ACCOUNT', id: bizId });
-      setSuccessMsg('Business Account deleted successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-      handleCloseModal();
-    }
+    setSuccessMsg('Business Account deleted successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    handleCloseModal();
+    await loadData();
   };
 
-  const visibleChartAccounts = useMemo(() => {
-    return filterChartAccountsForRole(state.chartAccounts, state.currentUserRole);
-  }, [state.chartAccounts, state.currentUserRole]);
+  const handleReactivateBusinessAc = async (biz: BusinessAccountRow) => {
+    const res = await businessAccountsApi.reactivate(biz.ba_id);
+    if (!res.ok) {
+      setErrorMsg(res.error.message);
+      setTimeout(() => setErrorMsg(''), 4000);
+      return;
+    }
+    setSuccessMsg('Business Account reactivated successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    await loadData();
+  };
+
+  const openChartAccounts = useMemo(() => charts.filter(c => c.status === 'ACTIVE'), [charts]);
 
   const chartOptions = useMemo(() => {
-    return visibleChartAccounts.map(c => ({
-      value: c.id,
-      label: `${c.name} (${c.id})`
+    return openChartAccounts.map(c => ({
+      value: String(c.ac_id),
+      label: `${c.name} (${c.code})`
     }));
-  }, [visibleChartAccounts]);
+  }, [openChartAccounts]);
 
   const chartFilterOptions = useMemo(() => {
     return [
       { value: '', label: 'All Accounts' },
-      ...visibleChartAccounts.map(c => ({
-        value: c.id,
-        label: `${c.name} (${c.id})`
+      ...charts.map(c => ({
+        value: String(c.ac_id),
+        label: `${c.name} (${c.code})`
       }))
     ];
-  }, [visibleChartAccounts]);
+  }, [charts]);
 
-  const visibleAccounts = useMemo(() => {
-    return filterBusinessAccountsForRole(state.businessAccounts, state.chartAccounts, state.currentUserRole);
-  }, [state.businessAccounts, state.chartAccounts, state.currentUserRole]);
+  const regionOptions = useMemo(() => regions.filter(r => r.is_active).map(r => ({ value: String(r.region_id), label: r.name })), [regions]);
+  const cityOptions = useMemo(() => cities.filter(c => c.is_active).map(c => ({ value: String(c.city_id), label: c.name })), [cities]);
 
   const filteredAndSortedAccounts = useMemo(() => {
-    let list = visibleAccounts;
+    let list = accounts;
     if (selectedChartFilter) {
-      list = list.filter(b => b.controlId === selectedChartFilter);
+      list = list.filter(b => String(b.ac_id) === selectedChartFilter);
     }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      list = list.filter(b => 
-        b.name.toLowerCase().includes(q) || 
-        b.id.toLowerCase().includes(q) ||
-        (b.region && b.region.toLowerCase().includes(q))
+      list = list.filter(b =>
+        b.name.toLowerCase().includes(q) ||
+        b.code.toLowerCase().includes(q) ||
+        (b.region_name && b.region_name.toLowerCase().includes(q))
       );
     }
     return [...list].sort((a, b) => {
       if (sortBy === 'code') {
-        return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
+        return a.code.localeCompare(b.code, undefined, { numeric: true, sensitivity: 'base' });
       } else {
         return a.name.localeCompare(b.name);
       }
     });
-  }, [visibleAccounts, searchQuery, sortBy, selectedChartFilter]);
+  }, [accounts, searchQuery, sortBy, selectedChartFilter]);
 
   return (
     <AppLayout pageTitle="Business Accounts Setup">
       <div className="mx-auto" style={{ maxWidth: 1400 }}>
-        
+
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
         )}
-        {errorMsg && (
+        {errorMsg && !isModalOpen && (
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
         )}
 
@@ -219,7 +221,7 @@ export default function BusinessAcSetupPage() {
               </h3>
               <p className="text-xs text-slate-500 font-medium">Search and manage custom business ledgers, customer accounts, and expense files.</p>
             </div>
-            
+
             <button
               onClick={handleOpenAddModal}
               className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
@@ -281,11 +283,11 @@ export default function BusinessAcSetupPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredAndSortedAccounts.map(biz => {
-              const chartName = state.chartAccounts.find(c => c.id === biz.controlId)?.name || 'UNKNOWN A/C';
+              const chartName = biz.ac_name || 'UNKNOWN A/C';
 
               return (
                 <div
-                  key={biz.id}
+                  key={biz.ba_id}
                   onClick={() => handleOpenEditModal(biz)}
                   className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
                 >
@@ -296,17 +298,17 @@ export default function BusinessAcSetupPage() {
                         {biz.name}
                       </h4>
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border flex-shrink-0 ${
-                        biz.status === 'Active' 
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                        biz.status === 'ACTIVE'
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                           : 'bg-rose-50 text-rose-700 border-rose-200'
                       }`}>
-                        {biz.status === 'Active' ? 'Active' : 'Closed'}
+                        {biz.status === 'ACTIVE' ? 'Active' : 'Closed'}
                       </span>
                     </div>
 
                     {/* Subtitle: Code in mono */}
                     <div className="font-mono text-xs text-slate-400 mb-3">
-                      A/C Code: <span className="font-semibold text-slate-600">#{biz.id}</span>
+                      A/C Code: <span className="font-semibold text-slate-600">#{biz.code}</span>
                     </div>
 
                     <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5 flex flex-col gap-1">
@@ -314,7 +316,7 @@ export default function BusinessAcSetupPage() {
                         Control A/C: {chartName}
                       </div>
                       <div className="text-[11px] text-slate-400">
-                        Region: <span className="font-semibold text-slate-600">{biz.region || 'LOCAL'}</span>
+                        Region: <span className="font-semibold text-slate-600">{biz.region_name || 'N/A'}</span>
                       </div>
                     </div>
                   </div>
@@ -329,13 +331,23 @@ export default function BusinessAcSetupPage() {
                       >
                         <Edit2 size={15} />
                       </button>
-                      <button
-                        onClick={() => handleDeleteBusinessAc(biz.id)}
-                        className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                        title="Delete Business Account"
-                      >
-                        <Trash2 size={15} />
-                      </button>
+                      {biz.status === 'CLOSED' ? (
+                        <button
+                          onClick={() => handleReactivateBusinessAc(biz)}
+                          className="p-1.5 rounded-lg hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer"
+                          title="Reactivate Business Account"
+                        >
+                          <RotateCcw size={15} />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleDeleteBusinessAc(biz)}
+                          className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                          title="Delete Business Account"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
                     </div>
 
                     <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
@@ -370,35 +382,32 @@ export default function BusinessAcSetupPage() {
                   <div className="banner-error rounded-lg px-3 py-2 text-xs">{errorMsg}</div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {selectedId && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Business Account Code <span className="text-rose-500">*</span>
+                      Business Account Code
                     </label>
                     <input
                       type="text"
-                      value={id}
-                      onChange={e => setId(e.target.value)}
-                      placeholder="e.g. 11000105"
-                      disabled={!!selectedId}
+                      value={accounts.find(b => b.ba_id === selectedId)?.code || ''}
+                      disabled
                       className="soleria-input w-full font-mono font-semibold disabled:bg-slate-100 disabled:text-slate-500"
-                      autoFocus={!selectedId}
                     />
                   </div>
+                )}
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Account Title / Name <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={name}
-                      onChange={e => setName(e.target.value)}
-                      placeholder="e.g. Shalimar Footwear Agency"
-                      className="soleria-input w-full font-semibold"
-                      autoFocus={!!selectedId}
-                    />
-                  </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                    Account Title / Name <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    placeholder="e.g. Shalimar Footwear Agency"
+                    className="soleria-input w-full font-semibold"
+                    autoFocus
+                  />
                 </div>
 
                 <div>
@@ -411,49 +420,65 @@ export default function BusinessAcSetupPage() {
                     onChange={setControlId}
                     placeholder="Select Chart A/C..."
                     searchPlaceholder="Search chart accounts..."
+                    disabled={!!selectedId}
                   />
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Region / Location
+                      Region
                     </label>
-                    <input
-                      type="text"
-                      value={region}
-                      onChange={e => setRegion(e.target.value)}
-                      placeholder="e.g. LOCAL"
-                      className="soleria-input w-full font-medium"
+                    <SearchableSelect
+                      options={[{ value: '', label: 'Select Region (Optional)' }, ...regionOptions]}
+                      value={regionId}
+                      onChange={setRegionId}
+                      placeholder="Select Region..."
                     />
                   </div>
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Link Code
+                      City
                     </label>
-                    <input
-                      type="text"
-                      value={linkCode}
-                      onChange={e => setLinkCode(e.target.value)}
-                      className="soleria-input w-full font-mono font-medium"
+                    <SearchableSelect
+                      options={[{ value: '', label: 'Select City (Optional)' }, ...cityOptions]}
+                      value={cityId}
+                      onChange={setCityId}
+                      placeholder="Select City..."
                     />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Status
-                    </label>
-                    <select
-                      value={status}
-                      onChange={e => setStatus(e.target.value as any)}
-                      className="soleria-input w-full cursor-pointer font-medium"
-                    >
-                      <option value="Active">Active</option>
-                      <option value="Closed">Closed</option>
-                    </select>
                   </div>
                 </div>
+
+                {!selectedId && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                        Opening Balance
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={openingBalance}
+                        onChange={e => setOpeningBalance(e.target.value)}
+                        placeholder="0.00"
+                        className="soleria-input w-full font-medium"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                        Opening Date
+                      </label>
+                      <input
+                        type="date"
+                        value={openingDate}
+                        onChange={e => setOpeningDate(e.target.value)}
+                        className="soleria-input w-full font-medium"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                   <button

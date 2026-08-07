@@ -1,12 +1,22 @@
-import { useState, useMemo } from 'react';
-import { useApp } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, X, BookOpen, ArrowRight } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Trash2, RotateCcw, X, BookOpen, ArrowRight } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
-import { filterChartAccountsForRole } from '@/lib/access';
+import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
+import {
+  chartAccounts as chartAccountsApi,
+  groupAccounts as groupAccountsApi,
+  businessAccounts as businessAccountsApi,
+  RESERVED_ACCOUNT_CODES,
+  type ChartOfAccountRow,
+  type GroupAccountRow,
+  type BusinessAccountRow,
+} from '@/lib/api';
 
 export default function ChartAcSetupPage() {
-  const { state, dispatch } = useApp();
+  const [charts, setCharts] = useState<ChartOfAccountRow[]>([]);
+  const [groups, setGroups] = useState<GroupAccountRow[]>([]);
+  const [viewingChildBizAccounts, setViewingChildBizAccounts] = useState<BusinessAccountRow[]>([]);
 
   // Search and Sort State
   const [searchQuery, setSearchQuery] = useState('');
@@ -15,40 +25,49 @@ export default function ChartAcSetupPage() {
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  // Duplicate Check Modal state
+  const [dupMatch, setDupMatch] = useState<DuplicateNameMatch | null>(null);
+  const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
   // Form State
-  const [id, setId] = useState('');
   const [name, setName] = useState('');
   const [groupId, setGroupId] = useState('');
-  const [linkCode, setLinkCode] = useState('A');
-  const [status, setStatus] = useState<'Active' | 'Closed'>('Active');
+  const [linkCode, setLinkCode] = useState('');
 
   // Drill-down Modal State
-  const [viewingChartId, setViewingChartId] = useState<string | null>(null);
+  const [viewingChartId, setViewingChartId] = useState<number | null>(null);
 
   // Messages
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  const loadData = useCallback(async () => {
+    const [cRes, gRes] = await Promise.all([
+      chartAccountsApi.list({ includeInactive: true }),
+      groupAccountsApi.list({ includeInactive: true }),
+    ]);
+    if (cRes.ok) setCharts(cRes.data);
+    if (gRes.ok) setGroups(gRes.data);
+  }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
   const handleOpenAddModal = () => {
     setSelectedId(null);
-    setId('');
     setName('');
     setGroupId('');
-    setLinkCode('A');
-    setStatus('Active');
+    setLinkCode('');
     setErrorMsg('');
     setIsModalOpen(true);
   };
 
-  const handleOpenEditModal = (c: any) => {
-    setSelectedId(c.id);
-    setId(c.id);
+  const handleOpenEditModal = (c: ChartOfAccountRow) => {
+    setSelectedId(c.ac_id);
     setName(c.name);
-    setGroupId(c.groupId);
-    setLinkCode(c.linkCode || 'A');
-    setStatus(c.status || 'Active');
+    setGroupId(String(c.group_id));
+    setLinkCode(c.link_code || '');
     setErrorMsg('');
     setIsModalOpen(true);
   };
@@ -56,106 +75,132 @@ export default function ChartAcSetupPage() {
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setSelectedId(null);
-    setId('');
     setName('');
     setGroupId('');
-    setLinkCode('A');
-    setStatus('Active');
+    setLinkCode('');
     setErrorMsg('');
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!id.trim()) return setErrorMsg('Account code is required.');
-    if (!name.trim()) return setErrorMsg('Account name is required.');
-    if (!groupId) return setErrorMsg('Please select a parent Group A/C.');
-
-    if (!selectedId && state.chartAccounts.some(c => c.id.toLowerCase() === id.trim().toLowerCase())) {
-      return setErrorMsg('An Account with this code already exists.');
-    }
-
-    const chartData = {
-      id: id.trim(),
-      name: name.trim(),
-      groupId,
-      linkCode: linkCode.trim(),
-      status
-    };
+    const typed = name.trim();
+    if (!typed) return setErrorMsg('Account name is required.');
+    if (!selectedId && !groupId) return setErrorMsg('Please select a parent Group A/C.');
 
     if (selectedId) {
-      dispatch({ type: 'UPDATE_CHART_ACCOUNT', account: chartData });
+      const res = await chartAccountsApi.update(selectedId, { name: typed, link_code: linkCode.trim() || undefined });
+      if (!res.ok) {
+        return setErrorMsg(res.error.message);
+      }
       setSuccessMsg('Account updated successfully.');
+      await loadData();
     } else {
-      dispatch({ type: 'ADD_CHART_ACCOUNT', account: chartData });
+      const res = await chartAccountsApi.create({ name: typed, group_id: Number(groupId), link_code: linkCode.trim() || undefined });
+      if (!res.ok) {
+        if (res.error.code === 'INACTIVE_DUPLICATE') {
+          const details = res.error.details as { ac_id: number; name: string } | undefined;
+          setDupMatch(details ? { id: String(details.ac_id), name: details.name } : null);
+          setIsDupModalOpen(true);
+          return;
+        }
+        return setErrorMsg(res.error.message);
+      }
       setSuccessMsg('Account registered successfully.');
+      await loadData();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
     handleCloseModal();
   };
 
-  const handleDeleteChart = (chartId: string) => {
-    const inUse = state.businessAccounts.some(b => b.controlId === chartId);
-    if (inUse) {
-      setErrorMsg('Cannot delete: This account is linked to active business accounts.');
+  const handleActivateDuplicate = async (id: string) => {
+    const res = await chartAccountsApi.reactivate(Number(id));
+    if (res.ok) {
+      setSuccessMsg('Account reactivated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+      await loadData();
+    }
+    setIsDupModalOpen(false);
+    setDupMatch(null);
+    handleCloseModal();
+  };
+
+  const handleDeleteChart = async (chart: ChartOfAccountRow) => {
+    if (RESERVED_ACCOUNT_CODES.includes(chart.code)) return;
+    if (!window.confirm('Are you sure you want to close this Account?')) return;
+    const res = await chartAccountsApi.remove(chart.ac_id);
+    if (!res.ok) {
+      setErrorMsg(res.error.message);
       setTimeout(() => setErrorMsg(''), 4000);
       return;
     }
+    setSuccessMsg('Account closed successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    handleCloseModal();
+    await loadData();
+  };
 
-    if (window.confirm('Are you sure you want to delete this Account?')) {
-      dispatch({ type: 'DELETE_CHART_ACCOUNT', id: chartId });
-      setSuccessMsg('Account deleted successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-      handleCloseModal();
+  const handleReactivateChart = async (chart: ChartOfAccountRow) => {
+    const res = await chartAccountsApi.reactivate(chart.ac_id);
+    if (!res.ok) {
+      setErrorMsg(res.error.message);
+      setTimeout(() => setErrorMsg(''), 4000);
+      return;
     }
+    setSuccessMsg('Account reactivated successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    await loadData();
   };
 
   const groupFilterOptions = useMemo(() => {
     return [
       { value: '', label: 'All Group Accounts' },
-      ...state.groupAccounts.map(g => ({
-        value: g.id,
-        label: `${g.name} (${g.id})`
+      ...groups.map(g => ({
+        value: String(g.group_id),
+        label: `${g.name} (${g.code})`
       }))
     ];
-  }, [state.groupAccounts]);
+  }, [groups]);
 
   const groupSelectOptions = useMemo(() => {
-    return state.groupAccounts.map(g => ({
-      value: g.id,
-      label: `${g.name} (${g.id})`
+    return groups.filter(g => g.is_active).map(g => ({
+      value: String(g.group_id),
+      label: `${g.name} (${g.code})`
     }));
-  }, [state.groupAccounts]);
+  }, [groups]);
 
   const filteredAndSortedCharts = useMemo(() => {
-    let list = filterChartAccountsForRole(state.chartAccounts, state.currentUserRole);
+    let list = charts;
     if (selectedGroupFilter) {
-      list = list.filter(c => c.groupId === selectedGroupFilter);
+      list = list.filter(c => String(c.group_id) === selectedGroupFilter);
     }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      list = list.filter(c => 
-        c.name.toLowerCase().includes(q) || 
-        c.id.toLowerCase().includes(q)
+      list = list.filter(c =>
+        c.name.toLowerCase().includes(q) ||
+        c.code.toLowerCase().includes(q)
       );
     }
     return [...list].sort((a, b) => {
       if (sortBy === 'code') {
-        return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
+        return a.code.localeCompare(b.code, undefined, { numeric: true, sensitivity: 'base' });
       } else {
         return a.name.localeCompare(b.name);
       }
     });
-  }, [state.chartAccounts, state.currentUserRole, searchQuery, sortBy, selectedGroupFilter]);
+  }, [charts, searchQuery, sortBy, selectedGroupFilter]);
 
-  const viewingChart = useMemo(() => {
-    return state.chartAccounts.find(c => c.id === viewingChartId);
-  }, [viewingChartId, state.chartAccounts]);
+  const viewingChart = useMemo(() => charts.find(c => c.ac_id === viewingChartId), [viewingChartId, charts]);
 
-  const viewingChildBizAccounts = useMemo(() => {
-    if (!viewingChartId) return [];
-    return state.businessAccounts.filter(b => b.controlId === viewingChartId);
-  }, [viewingChartId, state.businessAccounts]);
+  useEffect(() => {
+    if (viewingChartId == null) {
+      setViewingChildBizAccounts([]);
+      return;
+    }
+    businessAccountsApi.list({ ac_id: viewingChartId, includeInactive: true }).then(res => {
+      if (res.ok) setViewingChildBizAccounts(res.data);
+    });
+  }, [viewingChartId]);
 
   return (
     <AppLayout pageTitle="Chart of Accounts Setup">
@@ -164,7 +209,7 @@ export default function ChartAcSetupPage() {
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
         )}
-        {errorMsg && (
+        {errorMsg && !isModalOpen && (
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
         )}
 
@@ -177,7 +222,7 @@ export default function ChartAcSetupPage() {
               </h3>
               <p className="text-xs text-slate-500 font-medium">Search and manage accounts defining reporting codes and sub-ledgers.</p>
             </div>
-            
+
             <button
               onClick={handleOpenAddModal}
               className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
@@ -239,13 +284,13 @@ export default function ChartAcSetupPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredAndSortedCharts.map(c => {
-              const groupName = state.groupAccounts.find(g => g.id === c.groupId)?.name || 'UNKNOWN GROUP';
-              const childAccounts = state.businessAccounts.filter(b => b.controlId === c.id);
+              const groupName = c.group_name || 'UNKNOWN GROUP';
+              const isReserved = RESERVED_ACCOUNT_CODES.includes(c.code);
 
               return (
                 <div
-                  key={c.id}
-                  onClick={() => setViewingChartId(c.id)}
+                  key={c.ac_id}
+                  onClick={() => setViewingChartId(c.ac_id)}
                   className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
                 >
                   <div>
@@ -255,25 +300,23 @@ export default function ChartAcSetupPage() {
                         {c.name}
                       </h4>
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border flex-shrink-0 ${
-                        c.status === 'Active' 
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                        c.status === 'ACTIVE'
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                           : 'bg-rose-50 text-rose-700 border-rose-200'
                       }`}>
-                        {c.status === 'Active' ? 'Active' : 'Closed'}
+                        {c.status === 'ACTIVE' ? 'Active' : 'Closed'}
                       </span>
                     </div>
 
                     {/* Subtitle: Code in mono */}
                     <div className="font-mono text-xs text-slate-400 mb-3">
-                      Chart Code: <span className="font-semibold text-slate-600">#{c.id}</span>
+                      Chart Code: <span className="font-semibold text-slate-600">#{c.code}</span>
+                      {isReserved && <span className="ml-1.5 text-[10px] text-[#B08D57] font-semibold uppercase">Reserved</span>}
                     </div>
 
                     <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5 flex flex-col gap-1">
                       <div className="font-semibold text-[#B08D57] truncate" title={groupName}>
                         Group: {groupName}
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        Sub-Ledgers Linked: <span className="font-semibold text-slate-700">{childAccounts.length}</span>
                       </div>
                     </div>
                   </div>
@@ -288,13 +331,24 @@ export default function ChartAcSetupPage() {
                       >
                         <Edit2 size={15} />
                       </button>
-                      <button
-                        onClick={() => handleDeleteChart(c.id)}
-                        className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                        title="Delete Chart Account"
-                      >
-                        <Trash2 size={15} />
-                      </button>
+                      {c.status === 'CLOSED' ? (
+                        <button
+                          onClick={() => handleReactivateChart(c)}
+                          className="p-1.5 rounded-lg hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer"
+                          title="Reactivate Account"
+                        >
+                          <RotateCcw size={15} />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleDeleteChart(c)}
+                          disabled={isReserved}
+                          className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                          title={isReserved ? 'Reserved account — cannot be closed' : 'Close Account'}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
                     </div>
 
                     <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
@@ -316,7 +370,7 @@ export default function ChartAcSetupPage() {
                   <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
                     <BookOpen size={18} className="text-[#B08D57]" /> {viewingChart.name}
                   </h3>
-                  <p className="text-xs text-slate-500">Chart Code #{viewingChart.id}</p>
+                  <p className="text-xs text-slate-500">Chart Code #{viewingChart.code}</p>
                 </div>
                 <button
                   onClick={() => setViewingChartId(null)}
@@ -338,12 +392,12 @@ export default function ChartAcSetupPage() {
                 ) : (
                   <div className="flex flex-col gap-2">
                     {viewingChildBizAccounts.map(b => (
-                      <div key={b.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
+                      <div key={b.ba_id} className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
                         <div>
                           <div className="font-semibold text-xs text-slate-900">{b.name}</div>
-                          <div className="font-mono text-[11px] text-slate-400">Code: #{b.id}</div>
+                          <div className="font-mono text-[11px] text-slate-400">Code: #{b.code}</div>
                         </div>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase border ${b.status === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase border ${b.status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
                           {b.status}
                         </span>
                       </div>
@@ -383,35 +437,32 @@ export default function ChartAcSetupPage() {
                   <div className="banner-error rounded-lg px-3 py-2 text-xs">{errorMsg}</div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {selectedId && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Chart Account Code <span className="text-rose-500">*</span>
+                      Chart Account Code
                     </label>
                     <input
                       type="text"
-                      value={id}
-                      onChange={e => setId(e.target.value)}
-                      placeholder="e.g. 110001"
-                      disabled={!!selectedId}
+                      value={charts.find(c => c.ac_id === selectedId)?.code || ''}
+                      disabled
                       className="soleria-input w-full font-mono font-semibold disabled:bg-slate-100 disabled:text-slate-500"
-                      autoFocus={!selectedId}
                     />
                   </div>
+                )}
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Account Name <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={name}
-                      onChange={e => setName(e.target.value)}
-                      placeholder="e.g. CUSTOMERS ACCOUNTS"
-                      className="soleria-input w-full font-semibold"
-                      autoFocus={!!selectedId}
-                    />
-                  </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                    Account Name <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    placeholder="e.g. CUSTOMERS ACCOUNTS"
+                    className="soleria-input w-full font-semibold"
+                    autoFocus
+                  />
                 </div>
 
                 <div>
@@ -424,35 +475,20 @@ export default function ChartAcSetupPage() {
                     onChange={setGroupId}
                     placeholder="Select Group Account..."
                     searchPlaceholder="Search group accounts..."
+                    disabled={!!selectedId}
                   />
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Link Code
-                    </label>
-                    <input
-                      type="text"
-                      value={linkCode}
-                      onChange={e => setLinkCode(e.target.value)}
-                      className="soleria-input w-full font-mono font-medium"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Status
-                    </label>
-                    <select
-                      value={status}
-                      onChange={e => setStatus(e.target.value as any)}
-                      className="soleria-input w-full cursor-pointer font-medium"
-                    >
-                      <option value="Active">Active</option>
-                      <option value="Closed">Closed</option>
-                    </select>
-                  </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                    Link Code
+                  </label>
+                  <input
+                    type="text"
+                    value={linkCode}
+                    onChange={e => setLinkCode(e.target.value)}
+                    className="soleria-input w-full font-mono font-medium"
+                  />
                 </div>
 
                 <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
@@ -474,6 +510,20 @@ export default function ChartAcSetupPage() {
             </div>
           </div>
         )}
+
+        <DuplicateNamePromptModal
+          isOpen={isDupModalOpen}
+          entityLabel="chart account"
+          status="inactive"
+          matches={dupMatch ? [dupMatch] : []}
+          allowCreateOnActive={false}
+          onActivate={handleActivateDuplicate}
+          onCreateNew={() => {}}
+          onCancel={() => {
+            setIsDupModalOpen(false);
+            setDupMatch(null);
+          }}
+        />
 
       </div>
     </AppLayout>

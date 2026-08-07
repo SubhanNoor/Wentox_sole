@@ -566,6 +566,7 @@ export type NavPage =
   | 'setup-region'
   | 'setup-adda'
   | 'setup-store'
+  | 'setup-users'
   | 'report-stock'
   | 'reports'
   | 'bilty-update'

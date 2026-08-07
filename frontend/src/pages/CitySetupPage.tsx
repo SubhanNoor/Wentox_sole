@@ -1,22 +1,21 @@
-import { useState, useMemo } from 'react';
-import { useApp } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, Trash2, X, Building2, MapPin } from 'lucide-react';
-import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
+import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import SearchableSelect from '@/components/SearchableSelect';
-import type { City } from '@/types';
+import { cities as citiesApi, listRegions, type CityRow, type RegionRow } from '@/lib/api';
 
 export default function CitySetupPage() {
-  const { state, dispatch } = useApp();
-
+  const [cities, setCities] = useState<CityRow[]>([]);
+  const [regions, setRegions] = useState<RegionRow[]>([]);
   const [citySearch, setCitySearch] = useState('');
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedCityId, setSelectedCityId] = useState<string | null>(null);
+  const [selectedCityId, setSelectedCityId] = useState<number | null>(null);
 
   // Duplicate Check Modal state
-  const [dupMatch, setDupMatch] = useState<City | null>(null);
+  const [dupMatch, setDupMatch] = useState<DuplicateNameMatch | null>(null);
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
   // Form State
@@ -25,18 +24,29 @@ export default function CitySetupPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  const loadData = useCallback(async () => {
+    const [cRes, rRes] = await Promise.all([
+      citiesApi.list({ includeInactive: true }),
+      listRegions(),
+    ]);
+    if (cRes.ok) setCities(cRes.data);
+    if (rRes.ok) setRegions(rRes.data);
+  }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
   const handleOpenAddModal = () => {
     setSelectedCityId(null);
     setCityName('');
-    setRegionId(state.regions[0]?.id || '');
+    setRegionId('');
     setErrorMsg('');
     setIsModalOpen(true);
   };
 
-  const handleOpenEditModal = (city: { id: string; name: string; regionId?: string }) => {
-    setSelectedCityId(city.id);
+  const handleOpenEditModal = (city: CityRow) => {
+    setSelectedCityId(city.city_id);
     setCityName(city.name);
-    setRegionId(city.regionId || '');
+    setRegionId(city.region_id ? String(city.region_id) : '');
     setErrorMsg('');
     setIsModalOpen(true);
   };
@@ -49,95 +59,86 @@ export default function CitySetupPage() {
     setErrorMsg('');
   };
 
-  const handleSaveCity = (e: React.FormEvent) => {
+  const handleSaveCity = async (e: React.FormEvent) => {
     e.preventDefault();
     const typed = cityName.trim();
     if (!typed) {
       return setErrorMsg('City name is required.');
     }
 
+    const payload = { name: typed, region_id: regionId ? Number(regionId) : undefined };
+
     if (selectedCityId) {
-      dispatch({
-        type: 'UPDATE_CITY',
-        city: { id: selectedCityId, name: typed, regionId: regionId || undefined }
-      });
+      const res = await citiesApi.update(selectedCityId, payload);
+      if (!res.ok) {
+        return setErrorMsg(res.error.message);
+      }
       setSuccessMsg('City details updated successfully.');
+      await loadData();
     } else {
-      const match = state.cities.find(c => c.name.toLowerCase() === typed.toLowerCase());
-      if (match) {
-        if (match.isActive !== false) {
-          return setErrorMsg('A city with this name already exists.');
-        } else {
-          setDupMatch(match);
+      const res = await citiesApi.create(payload);
+      if (!res.ok) {
+        if (res.error.code === 'INACTIVE_DUPLICATE') {
+          const details = res.error.details as { city_id: number; name: string } | undefined;
+          setDupMatch(details ? { id: String(details.city_id), name: details.name } : null);
           setIsDupModalOpen(true);
           return;
         }
+        return setErrorMsg(res.error.message);
       }
-
-      const newId = 'ct_' + Date.now();
-      dispatch({
-        type: 'ADD_CITY',
-        city: { id: newId, name: typed, regionId: regionId || undefined }
-      });
       setSuccessMsg('New city registered successfully.');
+      await loadData();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
     handleCloseModal();
   };
 
-  const handleActivateDuplicate = (id: string) => {
-    const match = state.cities.find(c => c.id === id);
-    if (match) {
-      dispatch({
-        type: 'UPDATE_CITY',
-        city: { ...match, isActive: true, regionId: regionId || match.regionId }
-      });
+  const handleActivateDuplicate = async (id: string) => {
+    const res = await citiesApi.reactivate(Number(id));
+    if (res.ok) {
       setSuccessMsg('City reactivated successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
+      await loadData();
     }
     setIsDupModalOpen(false);
     setDupMatch(null);
     handleCloseModal();
   };
 
-  const handleDeleteCity = (id: string) => {
-    const customerCount = state.customers.filter(c => c.cityId === id && c.isActive !== false).length;
-    if (customerCount > 0) {
-      alert(`Cannot delete this city. It is currently assigned to ${customerCount} registered customers.`);
+  const handleDeleteCity = async (id: number) => {
+    if (!window.confirm('Are you sure you want to delete this city?')) return;
+    const res = await citiesApi.remove(id);
+    if (!res.ok) {
+      alert(res.error.message);
       return;
     }
-
-    if (window.confirm('Are you sure you want to delete this city?')) {
-      dispatch({ type: 'DELETE_CITY', id });
-      setSuccessMsg('City deleted successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-      handleCloseModal();
-    }
+    setSuccessMsg('City deleted successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    handleCloseModal();
+    await loadData();
   };
 
   const filteredCities = useMemo(() => {
-    const activeCities = state.cities.filter(c => c.isActive !== false);
+    const activeCities = cities.filter(c => c.is_active);
     if (!citySearch.trim()) return activeCities;
     const q = citySearch.toLowerCase();
-    return activeCities.filter(c => 
-      c.name.toLowerCase().includes(q) || 
-      c.id.toLowerCase().includes(q)
+    return activeCities.filter(c =>
+      c.name.toLowerCase().includes(q) ||
+      String(c.city_id).includes(q)
     );
-  }, [state.cities, citySearch]);
+  }, [cities, citySearch]);
 
-  const activeRegions = useMemo(() => {
-    return state.regions.filter(r => r.isActive !== false);
-  }, [state.regions]);
+  const activeRegions = useMemo(() => regions.filter(r => r.is_active), [regions]);
 
   return (
     <AppLayout pageTitle="City Setup">
       <div className="mx-auto" style={{ maxWidth: 1400 }}>
-        
+
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
         )}
-        {errorMsg && (
+        {errorMsg && !isModalOpen && (
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
         )}
 
@@ -150,7 +151,7 @@ export default function CitySetupPage() {
               </h3>
               <p className="text-xs text-slate-500 font-medium">Search and manage cities for customer regions and logistics assignments.</p>
             </div>
-            
+
             <button
               onClick={handleOpenAddModal}
               className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
@@ -186,12 +187,11 @@ export default function CitySetupPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredCities.map(city => {
-              const customerCount = state.customers.filter(c => c.cityId === city.id && c.isActive !== false).length;
-              const regionName = state.regions.find(r => r.id === city.regionId)?.name || 'No Region';
+              const regionName = city.region_name || 'No Region';
 
               return (
                 <div
-                  key={city.id}
+                  key={city.city_id}
                   onClick={() => handleOpenEditModal(city)}
                   className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
                 >
@@ -209,11 +209,7 @@ export default function CitySetupPage() {
 
                     {/* Subtitle: Code in mono */}
                     <div className="font-mono text-xs text-slate-400 mb-3">
-                      City Code: <span className="font-semibold text-slate-600">#{city.id}</span>
-                    </div>
-
-                    <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5">
-                      Customers Linked: <span className="font-semibold text-slate-700">{customerCount}</span>
+                      City Code: <span className="font-semibold text-slate-600">#{city.city_id}</span>
                     </div>
                   </div>
 
@@ -228,7 +224,7 @@ export default function CitySetupPage() {
                         <Edit2 size={15} />
                       </button>
                       <button
-                        onClick={() => handleDeleteCity(city.id)}
+                        onClick={() => handleDeleteCity(city.city_id)}
                         className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
                         title="Delete City"
                       >
@@ -289,7 +285,7 @@ export default function CitySetupPage() {
                   <SearchableSelect
                     options={[
                       { value: '', label: 'Select Region (Optional)' },
-                      ...activeRegions.map(r => ({ value: r.id, label: r.name }))
+                      ...activeRegions.map(r => ({ value: String(r.region_id), label: r.name }))
                     ]}
                     value={regionId}
                     onChange={setRegionId}
@@ -321,7 +317,7 @@ export default function CitySetupPage() {
           isOpen={isDupModalOpen}
           entityLabel="city"
           status="inactive"
-          matches={dupMatch ? [{ id: dupMatch.id, name: dupMatch.name }] : []}
+          matches={dupMatch ? [dupMatch] : []}
           allowCreateOnActive={false}
           onActivate={handleActivateDuplicate}
           onCreateNew={() => {}}

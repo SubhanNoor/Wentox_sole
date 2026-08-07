@@ -4,7 +4,8 @@ import {
   ShoppingCart, Receipt, Package, FileText, Layers,
   Settings, LogOut, Menu, X, ChevronDown, MapPin, Home,
   Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search, HardHat,
-  BadgeDollarSign, ArrowLeftRight, Landmark, Pin, BookmarkPlus, Trash2, GripHorizontal, ArrowDownToLine, Warehouse, RotateCcw
+  BadgeDollarSign, ArrowLeftRight, Landmark, Pin, BookmarkPlus, Trash2, GripHorizontal, ArrowDownToLine, Warehouse, RotateCcw,
+  UserCog
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
@@ -69,6 +70,7 @@ const navSections: NavSection[] = [
       { page: 'setup-region', label: 'Regions', icon: MapPin },
       { page: 'setup-adda', label: 'Transport Addas', icon: Milestone },
       { page: 'setup-store', label: 'Store Setup', icon: Warehouse },
+      { page: 'setup-users', label: 'Manage Users', icon: UserCog, adminOnly: true },
     ]
   },
   {
@@ -335,16 +337,14 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
                 boxShadow: '0 14px 34px rgba(0,0,0,0.35)',
               }}
             >
-              {state.currentUserRole === 'Admin' && (
-                <button
-                  onClick={() => navigate('settings')}
-                  className="flex items-center gap-2 w-full px-3.5 py-3 text-sm transition-colors hover:bg-white/5 cursor-pointer"
-                  style={{ color: 'rgba(250,248,243,0.85)' }}
-                >
-                  <Settings size={14} />
-                  <span>Settings & Updates</span>
-                </button>
-              )}
+              <button
+                onClick={() => navigate('settings')}
+                className="flex items-center gap-2 w-full px-3.5 py-3 text-sm transition-colors hover:bg-white/5 cursor-pointer"
+                style={{ color: 'rgba(250,248,243,0.85)' }}
+              >
+                <Settings size={14} />
+                <span>{state.currentUserRole === 'Admin' ? 'Settings & Updates' : 'Check for Updates'}</span>
+              </button>
               <div style={{ borderTop: '1px solid var(--sidebar-sep)' }} />
               <button
                 onClick={() => { void api.logout(); dispatch({ type: 'LOGOUT' }); }}

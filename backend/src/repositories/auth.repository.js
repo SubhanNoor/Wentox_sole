@@ -34,6 +34,31 @@ async function usernameTaken(username, excludingUserId) {
   return result.recordset.length > 0;
 }
 
+async function insertUser({ username, passwordHash, fullName, role }) {
+  const result = await query(
+    `INSERT INTO dbo.users (username, password_hash, full_name, role)
+     OUTPUT INSERTED.user_id, INSERTED.username, INSERTED.full_name, INSERTED.role, INSERTED.is_active
+     VALUES (@username, @passwordHash, @fullName, @role)`,
+    {
+      username: { type: sql.VarChar, value: username },
+      passwordHash: { type: sql.VarChar, value: passwordHash },
+      fullName: { type: sql.NVarChar, value: fullName },
+      role: { type: sql.VarChar, value: role },
+    },
+  );
+  return result.recordset[0];
+}
+
+async function listUsers() {
+  const result = await query(
+    `SELECT user_id, username, full_name, role, is_active, created_at
+     FROM dbo.users
+     ORDER BY user_id`,
+    {},
+  );
+  return result.recordset;
+}
+
 // `updates` may contain `username` and/or `passwordHash` — only the provided fields are written.
 async function updateCredentials(userId, updates) {
   const sets = [];
@@ -52,4 +77,4 @@ async function updateCredentials(userId, updates) {
   await query(`UPDATE dbo.users SET ${sets.join(', ')} WHERE user_id = @userId`, params);
 }
 
-module.exports = { findByUsername, findById, usernameTaken, updateCredentials };
+module.exports = { findByUsername, findById, usernameTaken, updateCredentials, insertUser, listUsers };

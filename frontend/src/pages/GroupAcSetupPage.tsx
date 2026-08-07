@@ -1,11 +1,20 @@
-import { useState, useMemo } from 'react';
-import { useApp } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, Trash2, X, ListCollapse, ArrowRight } from 'lucide-react';
-import { filterChartAccountsForRole } from '@/lib/access';
+import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
+import {
+  groupAccounts as groupAccountsApi,
+  chartAccounts as chartAccountsApi,
+  listAccountClasses,
+  type GroupAccountRow,
+  type AccountClassRow,
+  type ChartOfAccountRow,
+} from '@/lib/api';
 
 export default function GroupAcSetupPage() {
-  const { state, dispatch } = useApp();
+  const [groups, setGroups] = useState<GroupAccountRow[]>([]);
+  const [classes, setClasses] = useState<AccountClassRow[]>([]);
+  const [viewingChildCharts, setViewingChildCharts] = useState<ChartOfAccountRow[]>([]);
 
   // Search & Sort State
   const [searchQuery, setSearchQuery] = useState('');
@@ -13,34 +22,49 @@ export default function GroupAcSetupPage() {
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  // Duplicate Check Modal state
+  const [dupMatch, setDupMatch] = useState<DuplicateNameMatch | null>(null);
+  const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
   // Form State
-  const [id, setId] = useState('');
   const [name, setName] = useState('');
-  const [acClass, setAcClass] = useState<'ASSETS' | 'LIABILITY' | 'INCOME' | 'EXPENSES'>('ASSETS');
+  const [classId, setClassId] = useState<number | null>(null);
 
   // Drill-down Modal State
-  const [viewingGroupId, setViewingGroupId] = useState<string | null>(null);
+  const [viewingGroupId, setViewingGroupId] = useState<number | null>(null);
 
   // Messages
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  const loadData = useCallback(async () => {
+    const [gRes, cRes] = await Promise.all([
+      groupAccountsApi.list({ includeInactive: true }),
+      listAccountClasses(),
+    ]);
+    if (gRes.ok) setGroups(gRes.data);
+    if (cRes.ok) {
+      setClasses(cRes.data);
+      setClassId(prev => prev ?? cRes.data[0]?.class_id ?? null);
+    }
+  }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
   const handleOpenAddModal = () => {
     setSelectedId(null);
-    setId('');
     setName('');
-    setAcClass('ASSETS');
+    setClassId(classes[0]?.class_id ?? null);
     setErrorMsg('');
     setIsModalOpen(true);
   };
 
-  const handleOpenEditModal = (grp: any) => {
-    setSelectedId(grp.id);
-    setId(grp.id);
+  const handleOpenEditModal = (grp: GroupAccountRow) => {
+    setSelectedId(grp.group_id);
     setName(grp.name);
-    setAcClass(grp.class);
+    setClassId(grp.class_id);
     setErrorMsg('');
     setIsModalOpen(true);
   };
@@ -48,94 +72,107 @@ export default function GroupAcSetupPage() {
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setSelectedId(null);
-    setId('');
     setName('');
-    setAcClass('ASSETS');
     setErrorMsg('');
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!id.trim()) return setErrorMsg('Group Account code is required.');
-    if (!name.trim()) return setErrorMsg('Group Account name is required.');
-
-    if (!selectedId && state.groupAccounts.some(g => g.id.toLowerCase() === id.trim().toLowerCase())) {
-      return setErrorMsg('A Group Account with this code already exists.');
-    }
-
-    const groupData = {
-      id: id.trim(),
-      name: name.trim(),
-      class: acClass
-    };
+    const typed = name.trim();
+    if (!typed) return setErrorMsg('Group Account name is required.');
+    if (!classId) return setErrorMsg('Account class is required.');
 
     if (selectedId) {
-      dispatch({ type: 'UPDATE_GROUP_ACCOUNT', account: groupData });
+      const res = await groupAccountsApi.update(selectedId, { name: typed });
+      if (!res.ok) {
+        return setErrorMsg(res.error.message);
+      }
       setSuccessMsg('Group Account updated successfully.');
+      await loadData();
     } else {
-      dispatch({ type: 'ADD_GROUP_ACCOUNT', account: groupData });
+      const res = await groupAccountsApi.create({ name: typed, class_id: classId });
+      if (!res.ok) {
+        if (res.error.code === 'INACTIVE_DUPLICATE') {
+          const details = res.error.details as { group_id: number; name: string } | undefined;
+          setDupMatch(details ? { id: String(details.group_id), name: details.name } : null);
+          setIsDupModalOpen(true);
+          return;
+        }
+        return setErrorMsg(res.error.message);
+      }
       setSuccessMsg('Group Account registered successfully.');
+      await loadData();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
     handleCloseModal();
   };
 
-  const handleDeleteGroup = (grpId: string) => {
-    const inUse = state.chartAccounts.some(c => c.groupId === grpId);
-    if (inUse) {
-      setErrorMsg('Cannot delete: This group account is linked to active chart accounts.');
+  const handleActivateDuplicate = async (id: string) => {
+    const res = await groupAccountsApi.reactivate(Number(id));
+    if (res.ok) {
+      setSuccessMsg('Group Account reactivated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+      await loadData();
+    }
+    setIsDupModalOpen(false);
+    setDupMatch(null);
+    handleCloseModal();
+  };
+
+  const handleDeleteGroup = async (grpId: number) => {
+    if (!window.confirm('Are you sure you want to delete this Group Account?')) return;
+    const res = await groupAccountsApi.remove(grpId);
+    if (!res.ok) {
+      setErrorMsg(res.error.message);
       setTimeout(() => setErrorMsg(''), 4000);
       return;
     }
-
-    if (window.confirm('Are you sure you want to delete this Group Account?')) {
-      dispatch({ type: 'DELETE_GROUP_ACCOUNT', id: grpId });
-      setSuccessMsg('Group Account deleted successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-      handleCloseModal();
-    }
+    setSuccessMsg('Group Account deleted successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    handleCloseModal();
+    await loadData();
   };
 
   const filteredAndSortedGroups = useMemo(() => {
-    let list = state.groupAccounts;
+    let list = groups.filter(g => g.is_active);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      list = list.filter(g => 
-        g.name.toLowerCase().includes(q) || 
-        g.id.toLowerCase().includes(q) ||
-        g.class.toLowerCase().includes(q)
+      list = list.filter(g =>
+        g.name.toLowerCase().includes(q) ||
+        g.code.toLowerCase().includes(q) ||
+        (g.class_name || '').toLowerCase().includes(q)
       );
     }
     return [...list].sort((a, b) => {
       if (sortBy === 'code') {
-        return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
+        return a.code.localeCompare(b.code, undefined, { numeric: true, sensitivity: 'base' });
       } else {
         return a.name.localeCompare(b.name);
       }
     });
-  }, [state.groupAccounts, searchQuery, sortBy]);
+  }, [groups, searchQuery, sortBy]);
 
-  const viewingGroup = useMemo(() => {
-    return state.groupAccounts.find(g => g.id === viewingGroupId);
-  }, [viewingGroupId, state.groupAccounts]);
+  const viewingGroup = useMemo(() => groups.find(g => g.group_id === viewingGroupId), [viewingGroupId, groups]);
 
-  const viewingChildCharts = useMemo(() => {
-    if (!viewingGroupId) return [];
-    return filterChartAccountsForRole(
-      state.chartAccounts.filter(c => c.groupId === viewingGroupId),
-      state.currentUserRole
-    );
-  }, [viewingGroupId, state.chartAccounts, state.currentUserRole]);
+  useEffect(() => {
+    if (viewingGroupId == null) {
+      setViewingChildCharts([]);
+      return;
+    }
+    chartAccountsApi.list({ group_id: viewingGroupId, includeInactive: true }).then(res => {
+      if (res.ok) setViewingChildCharts(res.data);
+    });
+  }, [viewingGroupId]);
 
   return (
     <AppLayout pageTitle="Group Accounts Setup">
       <div className="mx-auto" style={{ maxWidth: 1400 }}>
-        
+
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
         )}
-        {errorMsg && (
+        {errorMsg && !isModalOpen && (
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
         )}
 
@@ -148,7 +185,7 @@ export default function GroupAcSetupPage() {
               </h3>
               <p className="text-xs text-slate-500 font-medium">Manage high-level Group accounts specifying financial classification category rules.</p>
             </div>
-            
+
             <button
               onClick={handleOpenAddModal}
               className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
@@ -196,16 +233,10 @@ export default function GroupAcSetupPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredAndSortedGroups.map(grp => {
-              const childCharts = filterChartAccountsForRole(
-                state.chartAccounts.filter(c => c.groupId === grp.id),
-                state.currentUserRole
-              );
-
-              return (
+            {filteredAndSortedGroups.map(grp => (
                 <div
-                  key={grp.id}
-                  onClick={() => setViewingGroupId(grp.id)}
+                  key={grp.group_id}
+                  onClick={() => setViewingGroupId(grp.group_id)}
                   className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
                 >
                   <div>
@@ -215,17 +246,13 @@ export default function GroupAcSetupPage() {
                         {grp.name}
                       </h4>
                       <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider flex-shrink-0">
-                        {grp.class}
+                        {grp.class_name || ''}
                       </span>
                     </div>
 
                     {/* Subtitle: Code in mono */}
                     <div className="font-mono text-xs text-slate-400 mb-3">
-                      Group Code: <span className="font-semibold text-slate-600">#{grp.id}</span>
-                    </div>
-
-                    <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5">
-                      Child Accounts: <span className="font-semibold text-slate-700">{childCharts.length}</span>
+                      Group Code: <span className="font-semibold text-slate-600">#{grp.code}</span>
                     </div>
                   </div>
 
@@ -240,7 +267,7 @@ export default function GroupAcSetupPage() {
                         <Edit2 size={15} />
                       </button>
                       <button
-                        onClick={() => handleDeleteGroup(grp.id)}
+                        onClick={() => handleDeleteGroup(grp.group_id)}
                         className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
                         title="Delete Group Account"
                       >
@@ -253,8 +280,7 @@ export default function GroupAcSetupPage() {
                     </span>
                   </div>
                 </div>
-              );
-            })}
+            ))}
           </div>
         )}
 
@@ -267,7 +293,7 @@ export default function GroupAcSetupPage() {
                   <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
                     <ListCollapse size={18} className="text-[#B08D57]" /> {viewingGroup.name}
                   </h3>
-                  <p className="text-xs text-slate-500">Group Code #{viewingGroup.id} · {viewingGroup.class} Category</p>
+                  <p className="text-xs text-slate-500">Group Code #{viewingGroup.code} · {viewingGroup.class_name} Category</p>
                 </div>
                 <button
                   onClick={() => setViewingGroupId(null)}
@@ -289,12 +315,12 @@ export default function GroupAcSetupPage() {
                 ) : (
                   <div className="flex flex-col gap-2">
                     {viewingChildCharts.map(c => (
-                      <div key={c.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
+                      <div key={c.ac_id} className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
                         <div>
                           <div className="font-semibold text-xs text-slate-900">{c.name}</div>
-                          <div className="font-mono text-[11px] text-slate-400">Code: #{c.id}</div>
+                          <div className="font-mono text-[11px] text-slate-400">Code: #{c.code}</div>
                         </div>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase border ${c.status === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase border ${c.status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
                           {c.status}
                         </span>
                       </div>
@@ -334,35 +360,32 @@ export default function GroupAcSetupPage() {
                   <div className="banner-error rounded-lg px-3 py-2 text-xs">{errorMsg}</div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {selectedId && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Group Code <span className="text-rose-500">*</span>
+                      Group Code
                     </label>
                     <input
                       type="text"
-                      value={id}
-                      onChange={e => setId(e.target.value)}
-                      placeholder="e.g. 1100"
-                      disabled={!!selectedId}
+                      value={groups.find(g => g.group_id === selectedId)?.code || ''}
+                      disabled
                       className="soleria-input w-full font-mono font-semibold disabled:bg-slate-100 disabled:text-slate-500"
-                      autoFocus={!selectedId}
                     />
                   </div>
+                )}
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Account Title <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={name}
-                      onChange={e => setName(e.target.value)}
-                      placeholder="e.g. Current Assets"
-                      className="soleria-input w-full font-semibold"
-                      autoFocus={!!selectedId}
-                    />
-                  </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                    Account Title <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={e => setName(e.target.value)}
+                    placeholder="e.g. Current Assets"
+                    className="soleria-input w-full font-semibold"
+                    autoFocus
+                  />
                 </div>
 
                 <div>
@@ -370,14 +393,14 @@ export default function GroupAcSetupPage() {
                     Account Class Category <span className="text-rose-500">*</span>
                   </label>
                   <select
-                    value={acClass}
-                    onChange={e => setAcClass(e.target.value as any)}
-                    className="soleria-input w-full cursor-pointer font-semibold"
+                    value={classId ?? ''}
+                    onChange={e => setClassId(Number(e.target.value))}
+                    disabled={!!selectedId}
+                    className="soleria-input w-full cursor-pointer font-semibold disabled:bg-slate-100 disabled:text-slate-500"
                   >
-                    <option value="ASSETS">ASSETS</option>
-                    <option value="LIABILITY">LIABILITY</option>
-                    <option value="INCOME">INCOME</option>
-                    <option value="EXPENSES">EXPENSES</option>
+                    {classes.map(c => (
+                      <option key={c.class_id} value={c.class_id}>{c.name}</option>
+                    ))}
                   </select>
                 </div>
 
@@ -400,6 +423,20 @@ export default function GroupAcSetupPage() {
             </div>
           </div>
         )}
+
+        <DuplicateNamePromptModal
+          isOpen={isDupModalOpen}
+          entityLabel="group account"
+          status="inactive"
+          matches={dupMatch ? [dupMatch] : []}
+          allowCreateOnActive={false}
+          onActivate={handleActivateDuplicate}
+          onCreateNew={() => {}}
+          onCancel={() => {
+            setIsDupModalOpen(false);
+            setDupMatch(null);
+          }}
+        />
 
       </div>
     </AppLayout>
