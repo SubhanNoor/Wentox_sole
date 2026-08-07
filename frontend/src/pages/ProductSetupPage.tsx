@@ -1,23 +1,43 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import type { Product, ProductCosts, CostFieldKey } from '@/types';
+import type { ProductCosts, CostFieldKey } from '@/types';
 import { COST_FIELDS } from '@/types';
-import { Plus, Trash2, Edit2, Hammer, Settings, Search, ArrowLeft } from 'lucide-react';
-import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
+import { Plus, Trash2, Edit2, Hammer, Settings, Search, ArrowLeft, RotateCcw } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
+import * as api from '@/lib/api';
+import type { ProductRow, CategoryRow, VendorRow } from '@/lib/api';
 
 /** All twelve stage costs at zero — used to reset the form and to read a product in. */
 const emptyCosts = (): ProductCosts =>
   Object.fromEntries(COST_FIELDS.map(f => [f.key, 0])) as ProductCosts;
 
-const costsFromProduct = (prod: Product): ProductCosts =>
-  Object.fromEntries(COST_FIELDS.map(f => [f.key, prod[f.key] || 0])) as ProductCosts;
+// The 12 manufacturing-stage cost columns share the same keys on both sides, just cased
+// differently — frontend's CostFieldKey is camelCase, the backend's ProductRow/CreateInput is
+// snake_case (matches database/schema.sql exactly).
+const COST_FIELD_TO_API: Record<CostFieldKey, keyof ProductRow> = {
+  cutting: 'cutting', edging: 'edging', upStitch: 'up_stitch', bending: 'bending',
+  stubbleDori: 'stubble_dori', shapeForm: 'shape_form', chipkai: 'chipkai', bottom: 'bottom',
+  machine: 'machine', trimming: 'trimming', sockStitch: 'sock_stitch', finish: 'finish',
+};
+
+function costsFromRow(row: ProductRow): ProductCosts {
+  return Object.fromEntries(
+    COST_FIELDS.map(f => [f.key, Number(row[COST_FIELD_TO_API[f.key]]) || 0])
+  ) as ProductCosts;
+}
+
+function costsToApiPayload(costs: ProductCosts) {
+  const out: Record<string, number> = {};
+  for (const f of COST_FIELDS) out[COST_FIELD_TO_API[f.key]] = costs[f.key];
+  return out as {
+    cutting: number; edging: number; up_stitch: number; bending: number; stubble_dori: number;
+    shape_form: number; chipkai: number; bottom: number; machine: number; trimming: number;
+    sock_stitch: number; finish: number;
+  };
+}
 
 export default function ProductSetupPage() {
-  const { state, dispatch } = useApp();
-
-  // Active Tab state: 'list' or 'form'
   const [activeTab, setActiveTab] = useState<'list' | 'form'>('list');
   const [isClosing, setIsClosing] = useState(false);
   const [productSearch, setProductSearch] = useState('');
@@ -30,26 +50,39 @@ export default function ProductSetupPage() {
     }, 200);
   };
 
-  // Selected product for edit
-  const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [productList, setProductList] = useState<ProductRow[]>([]);
+  const [categoryList, setCategoryList] = useState<CategoryRow[]>([]);
+  const [vendorList, setVendorList] = useState<VendorRow[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  // Duplicate Check Modal state
-  const [dupMatch, setDupMatch] = useState<Product | null>(null);
-  const [isDupModalOpen, setIsDupModalOpen] = useState(false);
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    const [prodRes, catRes, venRes] = await Promise.all([
+      api.products.list(),
+      api.listCategories(),
+      api.listVendors(),
+    ]);
+    if (prodRes.ok) setProductList(prodRes.data);
+    if (catRes.ok) setCategoryList(catRes.data);
+    if (venRes.ok) setVendorList(venRes.data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  // Selected product for edit — null means "adding new"
+  const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
+  const [selectedProductCode, setSelectedProductCode] = useState('');
+
+  const [reactivatePrompt, setReactivatePrompt] = useState<{ article_id: number; name: string } | null>(null);
 
   // Form State
-  const [id, setId] = useState('');
   const [name, setName] = useState('');
   const [color, setColor] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [vendorId, setVendorId] = useState('');
-  const [batchNo, setBatchNo] = useState(0);
-  const [packing, setPacking] = useState(12); // default 12 pairs per carton
+  const [packing, setPacking] = useState(0);
   const [salePrice, setSalePrice] = useState(0);
-
-  // The twelve stage costs, held as one object rather than twelve useStates so
-  // the field list lives only in COST_FIELDS. They are recorded per stage and
-  // deliberately never summed — each is consumed on its own elsewhere.
   const [costs, setCosts] = useState<ProductCosts>(emptyCosts);
 
   const setCost = (key: CostFieldKey, value: number) =>
@@ -57,29 +90,16 @@ export default function ProductSetupPage() {
 
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3000); };
+  const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 4000); };
 
-  // Start adding a new product
   const handleAddNew = () => {
-    setSelectedProductId('');
-    // Auto-generate next product code from database (max existing product ID + 1)
-    const maxId = state.products.reduce((max, p) => {
-      const num = parseInt(p.id, 10);
-      return isNaN(num) ? max : Math.max(max, num);
-    }, 1000);
-    const nextCode = (maxId + 1).toString();
-
-    // Auto-generate next batch number from database (max existing batchNo + 1)
-    const maxBatch = state.products.reduce((max, p) => {
-      return Math.max(max, p.batchNo || 0);
-    }, 100);
-    const nextBatchNo = maxBatch > 0 ? maxBatch + 1 : 101;
-
-    setId(nextCode);
+    setSelectedProductId(null);
+    setSelectedProductCode('');
     setName('');
     setColor('');
-    setCategoryId(state.categories.find(c => c.isActive !== false)?.id || '');
-    setVendorId(state.vendors.find(v => v.isActive !== false)?.id || '');
-    setBatchNo(nextBatchNo);
+    setCategoryId('');
+    setVendorId('');
     setPacking(0);
     setSalePrice(0);
     setCosts(emptyCosts());
@@ -87,156 +107,106 @@ export default function ProductSetupPage() {
     handleSwitchTab('form');
   };
 
-  // Select product for editing
-  const handleSelectProduct = (prod: Product) => {
-    setSelectedProductId(prod.id);
-    setId(prod.id);
+  const handleSelectProduct = (prod: ProductRow) => {
+    setSelectedProductId(prod.article_id);
+    setSelectedProductCode(prod.code);
     setName(prod.name);
-    setColor(prod.color || '');
-    setCategoryId(prod.categoryId);
-    setVendorId(prod.vendorId);
-    setBatchNo(prod.batchNo || 0);
+    setColor('');
+    setCategoryId(String(prod.category_id));
+    setVendorId(String(prod.vendor_id));
     setPacking(prod.packing || 0);
-    setSalePrice(prod.salePrice || 0);
-    setCosts(costsFromProduct(prod));
+    setSalePrice(prod.sale_price || 0);
+    setCosts(costsFromRow(prod));
     setErrorMsg('');
     handleSwitchTab('form');
+    // Prefill the color field from the article's own existing variant, if any — reflects today's
+    // one-color-per-product UX without needing a full colors list UI.
+    api.productColors.listByArticle(prod.article_id).then(r => {
+      if (r.ok && r.data.length > 0) setColor(r.data[0].color);
+    });
   };
 
-  const handleSaveProduct = (e: React.FormEvent) => {
+  const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     const typedName = name.trim();
-    if (!id.trim()) return setErrorMsg('Product / Article Code is required.');
-    if (!typedName) return setErrorMsg('Product Article Name is required.');
-    if (!categoryId) return setErrorMsg('Category is required. Please select a category.');
-    if (!vendorId) return setErrorMsg('Vendor Partner is required. Please select a vendor partner.');
+    if (!typedName) return fail('Product Article Name is required.');
+    if (!categoryId) return fail('Category is required. Please select a category.');
+    if (!vendorId) return fail('Vendor Partner is required. Please select a vendor partner.');
+    if (!packing || packing <= 0) return fail('Packing (pairs/carton) must be greater than 0.');
 
-    const savedProduct: Product = {
-      id: id.trim(),
-      name: typedName,
-      color: color.trim() || undefined,
-      categoryId,
-      vendorId,
-      batchNo: isNaN(batchNo) ? 0 : batchNo,
-      packing: isNaN(packing) ? 0 : packing,
-      salePrice: isNaN(salePrice) ? 0 : salePrice,
-      ...costs,
-      stock: selectedProductId ? state.products.find(p => p.id === id)?.stock || 0 : 0
-    };
+    const costFields = costsToApiPayload(costs);
 
+    let articleId: number;
     if (selectedProductId) {
-      if (id.trim() !== selectedProductId && state.products.some(p => p.id === id.trim())) {
-        return setErrorMsg('A product with this code already exists.');
-      }
-      dispatch({ type: 'UPDATE_PRODUCT', product: savedProduct });
-      setSuccessMsg('Product details updated successfully.');
+      const res = await api.products.update(selectedProductId, {
+        name: typedName, category_id: Number(categoryId), packing, sale_price: salePrice, ...costFields,
+      });
+      if (!res.ok) return fail(res.error.message);
+      articleId = res.data.article_id;
+      flash('Product details updated successfully.');
     } else {
-      // Check duplicate code
-      if (state.products.some(p => p.id === id.trim())) {
-        return setErrorMsg('A product with this code already exists.');
-      }
-
-      // Flow A duplicate check (name + vendorId)
-      const match = state.products.find(p =>
-        p.name.toLowerCase() === typedName.toLowerCase() &&
-        p.vendorId === vendorId
-      );
-
-      if (match) {
-        if (match.isActive !== false) {
-          return setErrorMsg('A product with this name already exists.');
-        } else {
-          setDupMatch(match);
-          setIsDupModalOpen(true);
+      const res = await api.products.create({
+        name: typedName, category_id: Number(categoryId), vendor_id: Number(vendorId), packing, sale_price: salePrice, ...costFields,
+      });
+      if (!res.ok) {
+        if (res.error.code === 'INACTIVE_DUPLICATE' && res.error.details) {
+          setReactivatePrompt(res.error.details as { article_id: number; name: string });
           return;
         }
+        return fail(res.error.message);
       }
-
-      dispatch({ type: 'ADD_PRODUCT', product: savedProduct });
-      setSuccessMsg('New product article registered successfully.');
+      articleId = res.data.article_id;
+      flash('New product article registered successfully.');
     }
 
-    setTimeout(() => setSuccessMsg(''), 3000);
+    if (color.trim()) {
+      await api.productColors.resolveOrCreate({ article_id: articleId, color: color.trim(), packing });
+    }
+
     setSelectedProductId(null);
     setErrorMsg('');
     handleSwitchTab('list');
+    loadAll();
   };
 
-  const handleActivateDuplicate = (pId: string) => {
-    const match = state.products.find(p => p.id === pId);
-    if (match) {
-      dispatch({
-        type: 'UPDATE_PRODUCT',
-        product: {
-          ...match,
-          name: name.trim() || match.name,
-          color: color.trim() || match.color,
-          categoryId: categoryId || match.categoryId,
-          vendorId: vendorId || match.vendorId,
-          packing: packing || match.packing,
-          salePrice: salePrice || match.salePrice,
-          ...costs,
-          isActive: true
-        }
-      });
-      setSuccessMsg('Product reactivated successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-    }
-    setIsDupModalOpen(false);
-    setDupMatch(null);
+  const confirmReactivateFromPrompt = async () => {
+    if (!reactivatePrompt) return;
+    const res = await api.products.reactivate(reactivatePrompt.article_id);
+    setReactivatePrompt(null);
+    if (!res.ok) return fail('Failed to reactivate: ' + res.error.message);
+    flash('Existing product reactivated.');
     setSelectedProductId(null);
-    setErrorMsg('');
     handleSwitchTab('list');
+    loadAll();
   };
 
-  const handleDeleteProduct = (pId: string) => {
-    // Safety check: is it referenced in any historical transactions?
-    const inSaleBills = state.saleBills.some(b => b.items.some(it => it.productId === pId));
-    const inSaleReturns = state.saleReturns.some(r => r.items.some(it => it.productId === pId));
-    const inProductionLogs = state.productionLogs.some(l => l.productId === pId);
-    if (inSaleBills || inSaleReturns || inProductionLogs) {
-      setErrorMsg('Cannot delete: this article has sale bill, sale return, or production history linked to it.');
-      setTimeout(() => setErrorMsg(''), 4000);
-      return;
-    }
-
-    if (window.confirm('Are you sure you want to delete this product?')) {
-      dispatch({ type: 'DELETE_PRODUCT', id: pId });
-      setSuccessMsg('Product deleted successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-      setSelectedProductId(null);
-      handleSwitchTab('list');
-    }
+  const [deletingProduct, setDeletingProduct] = useState<ProductRow | null>(null);
+  const confirmDelete = async () => {
+    if (!deletingProduct) return;
+    const res = await api.products.remove(deletingProduct.article_id);
+    setDeletingProduct(null);
+    if (!res.ok) return fail('Failed to delete: ' + res.error.message);
+    flash('Product deleted successfully.');
+    setSelectedProductId(null);
+    handleSwitchTab('list');
+    loadAll();
   };
 
   const filteredProducts = useMemo(() => {
-    const activeProducts = state.products.filter(prod => prod.isActive !== false);
-    if (!productSearch.trim()) return activeProducts;
+    if (!productSearch.trim()) return productList;
     const q = productSearch.toLowerCase();
-    return activeProducts.filter(prod => {
-      const cat = state.categories.find(c => c.id === prod.categoryId)?.name || '';
-      const vend = state.vendors.find(v => v.id === prod.vendorId)?.name || '';
-      return (
-        prod.name.toLowerCase().includes(q) ||
-        prod.id.toLowerCase().includes(q) ||
-        cat.toLowerCase().includes(q) ||
-        vend.toLowerCase().includes(q)
-      );
-    });
-  }, [state.products, productSearch, state.categories, state.vendors]);
-
-  const activeCategories = useMemo(() => {
-    return state.categories.filter(c => c.isActive !== false);
-  }, [state.categories]);
-
-  const activeVendors = useMemo(() => {
-    return state.vendors.filter(v => v.isActive !== false);
-  }, [state.vendors]);
+    return productList.filter(prod =>
+      prod.name.toLowerCase().includes(q) ||
+      prod.code.toLowerCase().includes(q) ||
+      (prod.category_name || '').toLowerCase().includes(q) ||
+      (prod.vendor_name || '').toLowerCase().includes(q)
+    );
+  }, [productList, productSearch]);
 
   return (
     <AppLayout pageTitle="Product Detail Info Setup">
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
-        
+
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
         )}
@@ -258,7 +228,7 @@ export default function ProductSetupPage() {
             </button>
             <button
               onClick={handleAddNew}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 cursor-pointer ${activeTab === 'form' && !selectedProductId ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200 cursor-pointer ${activeTab === 'form' && selectedProductId === null ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               Add New Product
             </button>
@@ -283,7 +253,7 @@ export default function ProductSetupPage() {
                   <h3 className="font-lora font-semibold text-lg text-slate-800">Articles Directory</h3>
                   <p className="text-xs text-slate-500 font-medium">Search and manage your business registered products and shoe sole articles.</p>
                 </div>
-                
+
                 <div className="relative min-w-[280px]">
                   <input
                     type="text"
@@ -302,7 +272,6 @@ export default function ProductSetupPage() {
                     <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                       <th className="p-3 pl-4">Code</th>
                       <th className="p-3">Article Name</th>
-                      <th className="p-3">Color</th>
                       <th className="p-3">Category</th>
                       <th className="p-3">Vendor</th>
                       <th className="p-3 text-center">Packing (Pairs)</th>
@@ -311,58 +280,47 @@ export default function ProductSetupPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredProducts.length === 0 ? (
+                    {loading ? (
+                      <tr><td colSpan={7} className="text-center p-8 text-slate-400">Loading…</td></tr>
+                    ) : filteredProducts.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="text-center p-8 text-slate-400">
+                        <td colSpan={7} className="text-center p-8 text-slate-400">
                           No registered products found.
                         </td>
                       </tr>
                     ) : (
-                      filteredProducts.map(prod => {
-                        const catName = state.categories.find(c => c.id === prod.categoryId)?.name || 'General';
-                        const vendorName = state.vendors.find(v => v.id === prod.vendorId)?.name || 'N/A';
-                        return (
-                          <tr
-                            key={prod.id}
-                            className="border-b hover:bg-slate-50/50 transition-colors"
-                            style={{ borderColor: 'var(--border-table)' }}
-                          >
-                            <td className="p-3 pl-4 font-semibold text-slate-700">{prod.id}</td>
-                            <td className="p-3 font-semibold text-slate-900">{prod.name}</td>
-                            <td className="p-3">
-                              {prod.color ? (
-                                <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200 font-mono">
-                                  {prod.color}
-                                </span>
-                              ) : (
-                                <span className="text-slate-400 text-xs italic">N/A</span>
-                              )}
-                            </td>
-                            <td className="p-3 text-slate-500 font-medium">{catName}</td>
-                            <td className="p-3 text-slate-600 font-semibold">{vendorName}</td>
-                            <td className="p-3 text-center font-semibold text-slate-700">{prod.packing}</td>
-                            <td className="p-3 text-right font-bold text-amber-800">{formatCurrency(prod.salePrice)}</td>
-                            <td className="p-3 text-center">
-                              <div className="flex items-center justify-center gap-1.5">
-                                <button
-                                  onClick={() => handleSelectProduct(prod)}
-                                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                                  title="Edit Product"
-                                >
-                                  <Edit2 size={15} />
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteProduct(prod.id)}
-                                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                                  title="Delete Product"
-                                >
-                                  <Trash2 size={15} />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })
+                      filteredProducts.map(prod => (
+                        <tr
+                          key={prod.article_id}
+                          className="border-b hover:bg-slate-50/50 transition-colors"
+                          style={{ borderColor: 'var(--border-table)' }}
+                        >
+                          <td className="p-3 pl-4 font-semibold text-slate-700">{prod.code}</td>
+                          <td className="p-3 font-semibold text-slate-900">{prod.name}</td>
+                          <td className="p-3 text-slate-500 font-medium">{prod.category_name || 'General'}</td>
+                          <td className="p-3 text-slate-600 font-semibold">{prod.vendor_name || 'N/A'}</td>
+                          <td className="p-3 text-center font-semibold text-slate-700">{prod.packing}</td>
+                          <td className="p-3 text-right font-bold text-amber-800">{formatCurrency(prod.sale_price)}</td>
+                          <td className="p-3 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                onClick={() => handleSelectProduct(prod)}
+                                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                                title="Edit Product"
+                              >
+                                <Edit2 size={15} />
+                              </button>
+                              <button
+                                onClick={() => setDeletingProduct(prod)}
+                                className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                                title="Delete Product"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
                     )}
                   </tbody>
                 </table>
@@ -390,7 +348,7 @@ export default function ProductSetupPage() {
               </div>
 
               <form onSubmit={handleSaveProduct} className="flex flex-col gap-6">
-                
+
                 {/* Basic Details */}
                 <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-4" style={{ borderColor: 'var(--border-color)' }}>
                   <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
@@ -401,9 +359,8 @@ export default function ProductSetupPage() {
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Product / Article Code</label>
                       <input
                         type="text"
-                        value={id}
+                        value={selectedProductCode || '(auto-generated on save)'}
                         disabled
-                        placeholder="e.g. 1005"
                         className="soleria-input font-semibold bg-slate-100 text-slate-500 cursor-not-allowed"
                       />
                     </div>
@@ -432,7 +389,7 @@ export default function ProductSetupPage() {
                       <SearchableSelect
                         options={[
                           { value: '', label: 'Select Category...' },
-                          ...activeCategories.map(c => ({ value: c.id, label: c.name }))
+                          ...categoryList.map(c => ({ value: String(c.category_id), label: c.name }))
                         ]}
                         value={categoryId}
                         onChange={setCategoryId}
@@ -441,25 +398,22 @@ export default function ProductSetupPage() {
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Vendor Partner</label>
-                      <SearchableSelect
-                        options={[
-                          { value: '', label: 'Select Vendor...' },
-                          ...activeVendors.map(v => ({ value: v.id, label: v.name }))
-                        ]}
-                        value={vendorId}
-                        onChange={setVendorId}
-                        placeholder="Select Vendor..."
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Batch Number</label>
-                      <input
-                        type="number"
-                        value={batchNo}
-                        disabled
-                        placeholder="0"
-                        className="soleria-input font-semibold bg-slate-100 text-slate-500 cursor-not-allowed"
-                      />
+                      {selectedProductId ? (
+                        <div className="soleria-input bg-slate-100 text-slate-500 font-semibold flex items-center">
+                          {vendorList.find(v => String(v.vendor_id) === vendorId)?.name || '—'}
+                          <span className="ml-2 text-[10px] text-slate-400 normal-case font-normal">(fixed after creation)</span>
+                        </div>
+                      ) : (
+                        <SearchableSelect
+                          options={[
+                            { value: '', label: 'Select Vendor...' },
+                            ...vendorList.map(v => ({ value: String(v.vendor_id), label: v.name }))
+                          ]}
+                          value={vendorId}
+                          onChange={setVendorId}
+                          placeholder="Select Vendor..."
+                        />
+                      )}
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Packing (Pairs/Carton)</label>
@@ -490,7 +444,7 @@ export default function ProductSetupPage() {
                   <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
                     <Hammer size={15} className="text-[#B08D57]" /> Production / Manufacturing Cost Breakdown (PKR)
                   </div>
-                  
+
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     {COST_FIELDS.map(field => (
                       <div key={field.key}>
@@ -531,23 +485,41 @@ export default function ProductSetupPage() {
           )}
         </div>
 
-        <DuplicateNamePromptModal
-          isOpen={isDupModalOpen}
-          entityLabel="product"
-          status="inactive"
-          matches={dupMatch ? [{
-            id: dupMatch.id,
-            name: dupMatch.name,
-            phone: state.vendors.find(v => v.id === dupMatch.vendorId)?.name
-          }] : []}
-          allowCreateOnActive={false}
-          onActivate={handleActivateDuplicate}
-          onCreateNew={() => {}}
-          onCancel={() => {
-            setIsDupModalOpen(false);
-            setDupMatch(null);
-          }}
-        />
+        {/* Reactivate-inactive-duplicate prompt */}
+        {reactivatePrompt && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setReactivatePrompt(null)}>
+            <div className="bg-white rounded-2xl border-2 border-amber-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+              <h3 className="font-lora font-bold text-base text-slate-900 mb-2 flex items-center gap-2">
+                <RotateCcw size={18} className="text-amber-500" /> Inactive Product Found
+              </h3>
+              <p className="text-xs text-slate-600 mb-4">
+                An inactive product named <strong>{reactivatePrompt.name}</strong> for this vendor
+                already exists. Reactivate it instead of creating a new record?
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={() => setReactivatePrompt(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
+                <button onClick={confirmReactivateFromPrompt} className="btn-gold px-4 py-2 text-xs font-semibold cursor-pointer">Reactivate</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Delete confirmation */}
+        {deletingProduct && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setDeletingProduct(null)}>
+            <div className="bg-white rounded-2xl border-2 border-rose-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+              <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Delete Product</h3>
+              <p className="text-xs text-slate-600 mb-4">
+                Delete <strong>{deletingProduct.name}</strong>? This deactivates the record — past
+                sale/purchase/production history is kept intact.
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={() => setDeletingProduct(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
+                <button onClick={confirmDelete} className="px-4 py-2 text-xs font-semibold cursor-pointer rounded-lg bg-rose-600 text-white hover:bg-rose-700">Delete</button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </AppLayout>

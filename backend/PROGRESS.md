@@ -14,6 +14,46 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Milestone 6 — System Setup frontend wiring (Products, Categories, Vendors)
+
+### 2026-08-07 — Connected Product/Category/Vendor Setup pages to real `window.api` — verified live
+- **What:** `ProductSetupPage.tsx`, `CategorySetupPage.tsx`, `VendorSetupPage.tsx` rewired off the
+  demo `AppContext` reducer onto real `products`/`productColors`/`categories`/`vendors` IPC calls —
+  full CRUD, not just the read-only `list()` lookups these three already had from earlier modules.
+  `lib/api.ts` gained `ProductCreateInput`/`ProductUpdateInput` (vendor_id immutable on update, per
+  the service), `productColors` wrapper, `CategoryCreateInput`, `VendorUpdateInput`, and full
+  `window.api` typings/wrapper objects for all four.
+- **How:**
+  - User-confirmed decision: Product colors stay a single field on the form (today's UX) — resolved/
+    created behind the scenes via `product-colors:resolveOrCreate` rather than building a
+    multi-variant list UI.
+  - Duplicate-name handling follows the same ad hoc reactivate-offer pattern as every other
+    connected module (`BankSetupPage.tsx`/`EmployeeSetupPage.tsx`), not the built-but-unwired
+    `DuplicateNamePromptModal.tsx` — that component expects a `checkName()` pre-check endpoint these
+    three modules don't have, and its "Create New Anyway" action has no real backend affordance for
+    an inactive match here (a retry just throws the same error again).
+  - Delete guards dropped the demo's hard "used in a sale bill/purchase" blocking checks — the real
+    `remove()` for all three is a plain soft delete with no such check — replaced with a plain
+    confirm dialog, same precedent as Employees.
+  - Vendor's manual `ADD_BUSINESS_ACCOUNT` dispatch + `getNextVendorAccountCode()` computation
+    dropped entirely — `vendors:create` already creates and links the account server-side.
+    Vendor's free-text city field replaced with real `region_id`/`city_id` dropdowns.
+  - Category's "Associated Products" count/drill-down and Vendor's purchase-history drill-down both
+    now read off the real `products`/`purchases` lists (`purchases:list()` is header-only — no
+    `items` — so the drill-down shows date/bill_no/remarks/status/total_value, not a materials
+    breakdown; matches the same list-lacks-detail gotcha every prior module has hit).
+  - Live-verified via Electron + CDP: created a category, a vendor (with real region/city), and a
+    product under them (server-generated `code`/`batch_no` confirmed: `P-104`, `batch_no=4`); the
+    vendor's linked business account landed under the real `VENDORS_ACCOUNTS` reserved chart code
+    (`200001`, not `210001` as originally assumed in planning — corrected against the actual
+    `reservedAccounts.js` constant); the product's color field correctly created a real
+    `article_colors` row via `resolveOrCreate`; duplicate-name (active) blocked with the right
+    message for all three; soft-delete → re-create → `INACTIVE_DUPLICATE` reactivate offer worked
+    for all three; editing a product's sale price persisted while its `vendor_id` stayed immutable
+    (edit form shows it read-only, "(fixed after creation)"). No console errors across the full run.
+- **Files:** `frontend/src/lib/api.ts`, `frontend/src/pages/ProductSetupPage.tsx`,
+  `frontend/src/pages/CategorySetupPage.tsx`, `frontend/src/pages/VendorSetupPage.tsx`.
+
 ## Milestone 5 — Reports frontend wiring (Current Stock, Reports Hub's 9 sub-reports, Bilty/Adda Updation, Overall Searching)
 
 ### 2026-08-07 — Connected all of Milestone 5's frontend to real `window.api` — wire-only pass, not live-verified

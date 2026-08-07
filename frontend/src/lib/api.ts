@@ -198,13 +198,43 @@ export interface ProductRow {
   trimming: number;
   sock_stitch: number;
   finish: number;
+  // Only populated by list()/get()'s join — never sent on create/update.
+  category_name?: string;
+  vendor_name?: string;
+  // Only populated by get() (findById()'s extra query) — never by list().
+  colors?: ProductVariantRow[];
 }
+
+export interface ProductCreateInput {
+  name: string;
+  category_id: number;
+  vendor_id: number;
+  packing: number;
+  sale_price?: number;
+  cutting?: number;
+  edging?: number;
+  up_stitch?: number;
+  bending?: number;
+  stubble_dori?: number;
+  shape_form?: number;
+  chipkai?: number;
+  bottom?: number;
+  machine?: number;
+  trimming?: number;
+  sock_stitch?: number;
+  finish?: number;
+}
+
+// vendor_id is immutable after creation (products.service.js#update() excludes it from the SET
+// clause) — code/batch_no are always system-generated, never client-supplied on create or update.
+export type ProductUpdateInput = Omit<ProductCreateInput, 'vendor_id'>;
 
 export interface ProductVariantRow {
   variant_id: number;
   article_id: number;
   color: string;
-  packing: number;
+  packing: number | null;
+  is_active: boolean;
 }
 
 export interface StoreRow {
@@ -232,6 +262,10 @@ export interface CategoryRow {
   category_id: number;
   name: string;
   is_active: boolean;
+}
+
+export interface CategoryCreateInput {
+  name: string;
 }
 
 export interface CityRow {
@@ -266,6 +300,8 @@ export interface VendorRow {
   city_id: number | null;
   ba_id: number | null;
   is_active: boolean;
+  region_name?: string;
+  city_name?: string;
 }
 
 export interface VendorCreateInput {
@@ -274,6 +310,8 @@ export interface VendorCreateInput {
   region_id?: number;
   city_id?: number;
 }
+
+export type VendorUpdateInput = VendorCreateInput;
 
 export interface PurchaseItemRow {
   item_id: number;
@@ -1073,10 +1111,19 @@ declare global {
         create: (payload: SubCustomerCreateInput) => Promise<ApiResult<SubCustomerRow>>;
       };
       products: {
-        list: (payload?: { is_active?: boolean }) => Promise<ApiResult<ProductRow[]>>;
+        list: (payload?: { includeInactive?: boolean; category_id?: number; vendor_id?: number; search?: string }) => Promise<ApiResult<ProductRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<ProductRow>>;
+        create: (payload: ProductCreateInput) => Promise<ApiResult<ProductRow>>;
+        update: (payload: { id: number } & ProductUpdateInput) => Promise<ApiResult<ProductRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        reactivate: (payload: { id: number }) => Promise<ApiResult<ProductRow>>;
       };
       productColors: {
-        listByArticle: (payload: { article_id: number }) => Promise<ApiResult<ProductVariantRow[]>>;
+        listByArticle: (payload: { article_id: number; includeInactive?: boolean }) => Promise<ApiResult<ProductVariantRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<ProductVariantRow>>;
+        resolveOrCreate: (payload: { article_id: number; color: string; packing?: number }) => Promise<ApiResult<ProductVariantRow>>;
+        update: (payload: { id: number; color: string; packing?: number }) => Promise<ApiResult<ProductVariantRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
       };
       stores: {
         list: (payload?: { is_active?: boolean }) => Promise<ApiResult<StoreRow[]>>;
@@ -1091,11 +1138,20 @@ declare global {
         list: (payload?: { is_active?: boolean; region_id?: number }) => Promise<ApiResult<CityRow[]>>;
       };
       categories: {
-        list: (payload?: { is_active?: boolean }) => Promise<ApiResult<CategoryRow[]>>;
+        list: (payload?: { includeInactive?: boolean }) => Promise<ApiResult<CategoryRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<CategoryRow>>;
+        create: (payload: CategoryCreateInput) => Promise<ApiResult<CategoryRow>>;
+        update: (payload: { id: number } & CategoryCreateInput) => Promise<ApiResult<CategoryRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        reactivate: (payload: { id: number }) => Promise<ApiResult<CategoryRow>>;
       };
       vendors: {
         list: (payload?: { includeInactive?: boolean; search?: string }) => Promise<ApiResult<VendorRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<VendorRow>>;
         create: (payload: VendorCreateInput) => Promise<ApiResult<VendorRow>>;
+        update: (payload: { id: number } & VendorUpdateInput) => Promise<ApiResult<VendorRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        reactivate: (payload: { id: number }) => Promise<ApiResult<VendorRow>>;
       };
       purchases: {
         create: (payload: PurchaseCreateInput) => Promise<ApiResult<PurchaseRow>>;
@@ -1412,7 +1468,7 @@ export async function listSubCustomers(): Promise<ApiResult<SubCustomerRow[]>> {
 
 export async function listProducts(): Promise<ApiResult<ProductRow[]>> {
   if (!window.api) return NO_BRIDGE;
-  return window.api.products.list({ is_active: true });
+  return window.api.products.list();
 }
 
 export async function listProductVariants(articleId: number): Promise<ApiResult<ProductVariantRow[]>> {
@@ -1432,7 +1488,7 @@ export async function listAddas(): Promise<ApiResult<AddaRow[]>> {
 
 export async function listCategories(): Promise<ApiResult<CategoryRow[]>> {
   if (!window.api) return NO_BRIDGE;
-  return window.api.categories.list({ is_active: true });
+  return window.api.categories.list();
 }
 
 export async function listRegions(): Promise<ApiResult<RegionRow[]>> {
@@ -1530,6 +1586,62 @@ export async function createVendor(payload: VendorCreateInput): Promise<ApiResul
   if (!window.api) return NO_BRIDGE;
   return window.api.vendors.create(payload);
 }
+
+// ── Module 6: Products, Categories, Vendors (full CRUD) ──
+
+export const products = {
+  list: (payload?: { includeInactive?: boolean; category_id?: number; vendor_id?: number; search?: string }) =>
+    window.api ? window.api.products.list(payload) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.products.get({ id }) : Promise.resolve(NO_BRIDGE),
+  create: (payload: ProductCreateInput) =>
+    window.api ? window.api.products.create(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: ProductUpdateInput) =>
+    window.api ? window.api.products.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.products.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) =>
+    window.api ? window.api.products.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+};
+
+export const productColors = {
+  listByArticle: (articleId: number, includeInactive?: boolean) =>
+    window.api ? window.api.productColors.listByArticle({ article_id: articleId, includeInactive }) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.productColors.get({ id }) : Promise.resolve(NO_BRIDGE),
+  resolveOrCreate: (payload: { article_id: number; color: string; packing?: number }) =>
+    window.api ? window.api.productColors.resolveOrCreate(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: { color: string; packing?: number }) =>
+    window.api ? window.api.productColors.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.productColors.remove({ id }) : Promise.resolve(NO_BRIDGE)
+};
+
+export const categories = {
+  list: (payload?: { includeInactive?: boolean }) =>
+    window.api ? window.api.categories.list(payload) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.categories.get({ id }) : Promise.resolve(NO_BRIDGE),
+  create: (payload: CategoryCreateInput) =>
+    window.api ? window.api.categories.create(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: CategoryCreateInput) =>
+    window.api ? window.api.categories.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.categories.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) =>
+    window.api ? window.api.categories.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+};
+
+export const vendors = {
+  list: (payload?: { includeInactive?: boolean; search?: string }) =>
+    window.api ? window.api.vendors.list(payload) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.vendors.get({ id }) : Promise.resolve(NO_BRIDGE),
+  create: (payload: VendorCreateInput) =>
+    window.api ? window.api.vendors.create(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: VendorUpdateInput) =>
+    window.api ? window.api.vendors.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.vendors.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) =>
+    window.api ? window.api.vendors.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+};
 
 // ── Module 4a: Bank Accounts ──
 

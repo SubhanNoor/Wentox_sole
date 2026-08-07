@@ -1,30 +1,41 @@
-import { Fragment, useState, useMemo } from 'react';
-import { useApp } from '@/context/AppContext';
+import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Trash2, Edit2, Search, Settings, Save, ChevronDown, ChevronRight, X } from 'lucide-react';
-import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
-import type { ProductCategory } from '@/types';
+import { Plus, Trash2, Edit2, Search, Settings, Save, ChevronDown, ChevronRight, X, RotateCcw } from 'lucide-react';
+import * as api from '@/lib/api';
+import type { CategoryRow, ProductRow } from '@/lib/api';
 
 export default function CategorySetupPage() {
-  const { state, dispatch } = useApp();
-
   const [categorySearch, setCategorySearch] = useState('');
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedCatId, setSelectedCatId] = useState<string | null>(null);
+  const [selectedCatId, setSelectedCatId] = useState<number | null>(null);
 
-  // Duplicate Check Modal state
-  const [dupMatch, setDupMatch] = useState<ProductCategory | null>(null);
-  const [isDupModalOpen, setIsDupModalOpen] = useState(false);
+  const [reactivatePrompt, setReactivatePrompt] = useState<{ category_id: number; name: string } | null>(null);
+  const [deletingCategory, setDeletingCategory] = useState<CategoryRow | null>(null);
 
   // Drill-down: clicking a category row expands it to show every product registered under that category
-  const [expandedCatId, setExpandedCatId] = useState<string | null>(null);
+  const [expandedCatId, setExpandedCatId] = useState<number | null>(null);
+
+  const [categoryList, setCategoryList] = useState<CategoryRow[]>([]);
+  const [productList, setProductList] = useState<ProductRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    const [catRes, prodRes] = await Promise.all([api.categories.list(), api.products.list()]);
+    if (catRes.ok) setCategoryList(catRes.data);
+    if (prodRes.ok) setProductList(prodRes.data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
 
   // Form State
   const [catName, setCatName] = useState('');
   const [successCat, setSuccessCat] = useState('');
   const [errorCat, setErrorCat] = useState('');
+  const flash = (m: string) => { setSuccessCat(m); setTimeout(() => setSuccessCat(''), 3000); };
 
   const handleOpenAddModal = () => {
     setSelectedCatId(null);
@@ -33,8 +44,8 @@ export default function CategorySetupPage() {
     setIsModalOpen(true);
   };
 
-  const handleOpenEditModal = (cat: { id: string; name: string }) => {
-    setSelectedCatId(cat.id);
+  const handleOpenEditModal = (cat: CategoryRow) => {
+    setSelectedCatId(cat.category_id);
     setCatName(cat.name);
     setErrorCat('');
     setIsModalOpen(true);
@@ -47,90 +58,64 @@ export default function CategorySetupPage() {
     setErrorCat('');
   };
 
-  const handleSaveCategory = (e: React.FormEvent) => {
+  const handleSaveCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     const typed = catName.trim();
-    if (!typed) {
-      return setErrorCat('Category name is required.');
-    }
+    if (!typed) return setErrorCat('Category name is required.');
 
     if (selectedCatId) {
-      // Edit mode
-      dispatch({
-        type: 'UPDATE_CATEGORY',
-        category: { id: selectedCatId, name: typed }
-      });
-      setSuccessCat('Category details updated successfully.');
+      const res = await api.categories.update(selectedCatId, { name: typed });
+      if (!res.ok) return setErrorCat(res.error.message);
+      flash('Category details updated successfully.');
     } else {
-      // Add mode - Flow A duplicate check
-      const match = state.categories.find(c => c.name.toLowerCase() === typed.toLowerCase());
-      if (match) {
-        if (match.isActive !== false) {
-          return setErrorCat('A category with this name already exists.');
-        } else {
-          setDupMatch(match);
-          setIsDupModalOpen(true);
+      const res = await api.categories.create({ name: typed });
+      if (!res.ok) {
+        if (res.error.code === 'INACTIVE_DUPLICATE' && res.error.details) {
+          setReactivatePrompt(res.error.details as { category_id: number; name: string });
           return;
         }
+        return setErrorCat(res.error.message);
       }
-
-      const newId = 'cat_' + Date.now();
-      dispatch({
-        type: 'ADD_CATEGORY',
-        category: { id: newId, name: typed }
-      });
-      setSuccessCat('New product category registered successfully.');
+      flash('New product category registered successfully.');
     }
 
-    setTimeout(() => setSuccessCat(''), 3000);
     handleCloseModal();
+    loadAll();
   };
 
-  const handleActivateDuplicate = (id: string) => {
-    const match = state.categories.find(c => c.id === id);
-    if (match) {
-      dispatch({
-        type: 'UPDATE_CATEGORY',
-        category: { ...match, isActive: true }
-      });
-      setSuccessCat('Category reactivated successfully.');
-      setTimeout(() => setSuccessCat(''), 3000);
-    }
-    setIsDupModalOpen(false);
-    setDupMatch(null);
+  const confirmReactivateFromPrompt = async () => {
+    if (!reactivatePrompt) return;
+    const res = await api.categories.reactivate(reactivatePrompt.category_id);
+    setReactivatePrompt(null);
+    if (!res.ok) return setErrorCat('Failed to reactivate: ' + res.error.message);
+    flash('Existing category reactivated.');
     handleCloseModal();
+    loadAll();
   };
 
-  const handleDeleteCategory = (id: string) => {
-    // Check if category is used by any active products
-    const productCount = state.products.filter(p => p.categoryId === id && p.isActive !== false).length;
-    if (productCount > 0) {
-      alert(`Cannot delete this category. It is currently assigned to ${productCount} registered products.`);
-      return;
-    }
-
-    if (window.confirm('Are you sure you want to delete this category?')) {
-      dispatch({ type: 'DELETE_CATEGORY', id });
-      setSuccessCat('Category deleted successfully.');
-      setTimeout(() => setSuccessCat(''), 3000);
-      handleCloseModal();
-    }
+  const confirmDelete = async () => {
+    if (!deletingCategory) return;
+    const res = await api.categories.remove(deletingCategory.category_id);
+    setDeletingCategory(null);
+    if (!res.ok) return setErrorCat('Failed to delete: ' + res.error.message);
+    flash('Category deleted successfully.');
+    handleCloseModal();
+    loadAll();
   };
 
   const filteredCategories = useMemo(() => {
-    const activeCategories = state.categories.filter(c => c.isActive !== false);
-    if (!categorySearch.trim()) return activeCategories;
+    if (!categorySearch.trim()) return categoryList;
     const q = categorySearch.toLowerCase();
-    return activeCategories.filter(c => 
-      c.name.toLowerCase().includes(q) || 
-      c.id.toLowerCase().includes(q)
+    return categoryList.filter(c =>
+      c.name.toLowerCase().includes(q) ||
+      String(c.category_id).includes(q)
     );
-  }, [state.categories, categorySearch]);
+  }, [categoryList, categorySearch]);
 
   return (
     <AppLayout pageTitle="Product Category Setup">
       <div className="mx-auto" style={{ maxWidth: 880 }}>
-        
+
         {successCat && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successCat}</div>
         )}
@@ -145,7 +130,7 @@ export default function CategorySetupPage() {
               <h3 className="font-lora font-semibold text-lg text-slate-800">Categories Directory</h3>
               <p className="text-xs text-slate-500 font-medium">Search and manage product category groupings for report filtering and analysis.</p>
             </div>
-            
+
             <button
               onClick={handleOpenAddModal}
               className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
@@ -184,7 +169,9 @@ export default function CategorySetupPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredCategories.length === 0 ? (
+                {loading ? (
+                  <tr><td colSpan={5} className="text-center p-8 text-slate-400">Loading…</td></tr>
+                ) : filteredCategories.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="text-center p-8 text-slate-400">
                       No registered categories found.
@@ -192,20 +179,20 @@ export default function CategorySetupPage() {
                   </tr>
                 ) : (
                   filteredCategories.map(cat => {
-                    const associatedProducts = state.products.filter(p => p.categoryId === cat.id && p.isActive !== false);
-                    const isExpanded = expandedCatId === cat.id;
+                    const associatedProducts = productList.filter(p => p.category_id === cat.category_id);
+                    const isExpanded = expandedCatId === cat.category_id;
 
                     return (
-                      <Fragment key={cat.id}>
+                      <Fragment key={cat.category_id}>
                         <tr
                           className="border-b hover:bg-slate-50/50 transition-colors cursor-pointer"
                           style={{ borderColor: 'var(--border-table)' }}
-                          onClick={() => setExpandedCatId(isExpanded ? null : cat.id)}
+                          onClick={() => setExpandedCatId(isExpanded ? null : cat.category_id)}
                         >
                           <td className="p-3 pl-4 text-slate-400">
                             {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                           </td>
-                          <td className="p-3 font-semibold text-slate-500 font-mono text-xs">{cat.id}</td>
+                          <td className="p-3 font-semibold text-slate-500 font-mono text-xs">{cat.category_id}</td>
                           <td className="p-3 font-semibold text-slate-900">{cat.name}</td>
                           <td className="p-3 text-center font-bold text-slate-700">{associatedProducts.length}</td>
                           <td className="p-3 text-center">
@@ -218,7 +205,7 @@ export default function CategorySetupPage() {
                                 <Edit2 size={15} />
                               </button>
                               <button
-                                onClick={() => handleDeleteCategory(cat.id)}
+                                onClick={() => setDeletingCategory(cat)}
                                 className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
                                 title="Delete Category"
                               >
@@ -241,16 +228,14 @@ export default function CategorySetupPage() {
                                         <th className="p-2 pl-3">Code</th>
                                         <th className="p-2">Product Name</th>
                                         <th className="p-2">Vendor</th>
-                                        <th className="p-2 text-right pr-3">Current Stock</th>
                                       </tr>
                                     </thead>
                                     <tbody>
                                       {associatedProducts.map(p => (
-                                        <tr key={p.id} className="border-t" style={{ borderColor: 'var(--border-table)' }}>
-                                          <td className="p-2 pl-3 font-mono text-slate-600">{p.id}</td>
+                                        <tr key={p.article_id} className="border-t" style={{ borderColor: 'var(--border-table)' }}>
+                                          <td className="p-2 pl-3 font-mono text-slate-600">{p.code}</td>
                                           <td className="p-2 font-semibold text-slate-700">{p.name}</td>
-                                          <td className="p-2 text-slate-500">{state.vendors.find(v => v.id === p.vendorId)?.name || 'General'}</td>
-                                          <td className={`p-2 text-right pr-3 font-bold ${(p.stock || 0) <= 0 ? 'text-red-600' : 'text-slate-800'}`}>{(p.stock || 0).toLocaleString()}</td>
+                                          <td className="p-2 text-slate-500">{p.vendor_name || 'General'}</td>
                                         </tr>
                                       ))}
                                     </tbody>
@@ -325,19 +310,40 @@ export default function CategorySetupPage() {
           </div>
         )}
 
-        <DuplicateNamePromptModal
-          isOpen={isDupModalOpen}
-          entityLabel="product category"
-          status="inactive"
-          matches={dupMatch ? [{ id: dupMatch.id, name: dupMatch.name }] : []}
-          allowCreateOnActive={false}
-          onActivate={handleActivateDuplicate}
-          onCreateNew={() => {}}
-          onCancel={() => {
-            setIsDupModalOpen(false);
-            setDupMatch(null);
-          }}
-        />
+        {/* Reactivate-inactive-duplicate prompt */}
+        {reactivatePrompt && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setReactivatePrompt(null)}>
+            <div className="bg-white rounded-2xl border-2 border-amber-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+              <h3 className="font-lora font-bold text-base text-slate-900 mb-2 flex items-center gap-2">
+                <RotateCcw size={18} className="text-amber-500" /> Inactive Category Found
+              </h3>
+              <p className="text-xs text-slate-600 mb-4">
+                An inactive category named <strong>{reactivatePrompt.name}</strong> already exists.
+                Reactivate it instead of creating a new record?
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={() => setReactivatePrompt(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
+                <button onClick={confirmReactivateFromPrompt} className="btn-gold px-4 py-2 text-xs font-semibold cursor-pointer">Reactivate</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Delete confirmation */}
+        {deletingCategory && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setDeletingCategory(null)}>
+            <div className="bg-white rounded-2xl border-2 border-rose-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+              <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Delete Category</h3>
+              <p className="text-xs text-slate-600 mb-4">
+                Delete <strong>{deletingCategory.name}</strong>? This deactivates the record.
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={() => setDeletingCategory(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
+                <button onClick={confirmDelete} className="px-4 py-2 text-xs font-semibold cursor-pointer rounded-lg bg-rose-600 text-white hover:bg-rose-700">Delete</button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </AppLayout>
