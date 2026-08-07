@@ -8,6 +8,7 @@ import FindReturnTab from '@/components/FindReturnTab';
 import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
+import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import * as api from '@/lib/api';
 import type {
@@ -602,10 +603,11 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           paddingBottom: '10px'
         }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>WENTO ERP</h1>
-            <p style={{ margin: 0, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', color: '#555555' }}>
-              Footwear Wholesale Distribution
-            </p>
+            <img
+              src={wentoxLogo}
+              alt="Wentox Logo"
+              style={{ height: '180px', width: 'auto', objectFit: 'contain' }}
+            />
           </div>
           <div style={{ textAlign: 'right' }}>
             <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>SALE RETURN INVOICE</h2>

@@ -1,16 +1,37 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Printer, Search, FileDown, FileSpreadsheet } from 'lucide-react';
-import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { Printer, Search, FileSpreadsheet, Eye } from 'lucide-react';
+import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { BusinessLedgerSummaryRow, LedgerRow } from '@/lib/api';
+import { ReportContainer } from '@/components/reports/ReportContainer';
+import { ReportHeader } from '@/components/reports/ReportHeader';
+import { ReportTable, type ColumnDef } from '@/components/reports/ReportTable';
+import { ReportFooter } from '@/components/reports/ReportFooter';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+
+interface KhaataRow {
+  date: string;
+  type: string;
+  invNo: string;
+  billNo: string;
+  narration: string;
+  chequeNo?: string | null;
+  chequeDate?: string | null;
+  chequeReceivedDate?: string | null;
+  pairs: number;
+  debit: number;
+  credit: number;
+  balance: number;
+}
 
 export function ReportKhaataContent() {
   const [customerBaId, setCustomerBaId] = useState<number | null>(null);
   const [isClosing, setIsClosing] = useState(false);
   const [accountSearch, setAccountSearch] = useState('');
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const handleCloseDetail = () => {
     setIsClosing(true);
@@ -58,10 +79,10 @@ export function ReportKhaataContent() {
   }, [directory, accountSearch]);
 
   // Opening Balance synthetic row + running balance — the backend already computes both.
-  const runningKhaata = useMemo(() => {
+  const runningKhaata = useMemo<KhaataRow[]>(() => {
     if (!ledger) return [];
     return [
-      { date: fromDate ? `Before ${fromDate}` : '---', type: 'Opening Balance', invNo: '-', billNo: '-', narration: fromDate ? `Opening balance before ${fromDate}` : 'Opening Balance brought forward', chequeNo: undefined as string | null | undefined, chequeDate: undefined as string | null | undefined, chequeReceivedDate: undefined as string | null | undefined, pairs: 0, debit: 0, credit: 0, balance: ledger.opening_balance },
+      { date: fromDate ? `Before ${fromDate}` : '---', type: 'Opening Balance', invNo: '-', billNo: '-', narration: fromDate ? `Opening balance before ${fromDate}` : 'Opening Balance brought forward', chequeNo: undefined, chequeDate: undefined, chequeReceivedDate: undefined, pairs: 0, debit: 0, credit: 0, balance: ledger.opening_balance },
       ...ledger.rows.map(r => ({
         date: r.date, type: r.type, invNo: r.inv_no != null ? String(r.inv_no) : String(r.entry_id), billNo: r.bill_no || '-', narration: r.narration || '',
         chequeNo: r.cheque_no, chequeDate: r.cheque_date, chequeReceivedDate: r.cheque_received_date,
@@ -71,23 +92,78 @@ export function ReportKhaataContent() {
   }, [ledger, fromDate]);
 
   const handleExportExcel = () => {
-    const headers = ['Date', 'Type', 'Inv #', 'Bill #', 'Narration', 'Pairs', 'Debit', 'Credit', 'Balance'];
-    const rows = runningKhaata.map(row => [
-      row.date, row.type, row.invNo, row.billNo,
-      row.chequeNo ? `Cheque ${row.chequeNo} / ${row.chequeDate} / Recv ${row.chequeReceivedDate}` : row.narration,
-      row.pairs, row.debit, row.credit, row.balance
+    if (!selectedCustomer) return;
+    const headers = ['Date', 'Type', 'Inv #', 'Bill #', 'Narration', 'Pairs', 'Debit (Rs.)', 'Credit (Rs.)', 'Balance (Rs.)'];
+    const rows = runningKhaata.map(r => [
+      r.date, r.type, r.invNo, r.billNo, r.narration, r.pairs, r.debit, r.credit, r.balance
     ]);
-    exportRowsToExcel(`account-ledger-${selectedCustomer?.name || 'export'}`, headers, rows);
+    exportRowsToExcel(`khaata-ledger-${selectedCustomer.name}`, headers, rows);
   };
 
+  const columns: ColumnDef<KhaataRow>[] = [
+    { key: 'date', header: 'Date', width: '95px', accessor: r => <span className="font-mono">{r.date}</span> },
+    { key: 'type', header: 'Type', width: '110px', accessor: r => (
+      <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${r.type === 'Sale Bill' ? 'bg-rose-50 text-rose-700' : r.type === 'Receipt (Jamma)' ? 'bg-emerald-50 text-emerald-700' : r.type === 'Sale Return' ? 'bg-blue-50 text-blue-700' : r.type === 'Commission' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-700'}`}>
+        {r.type}
+      </span>
+    )},
+    { key: 'invNo', header: 'Inv #', align: 'center', width: '70px' },
+    { key: 'billNo', header: 'Bill #', align: 'center', width: '80px' },
+    { key: 'narration', header: 'Narration', accessor: r => r.chequeNo ? (
+      <div className="flex flex-col gap-0.5 text-[10.5px]">
+        <span><span className="text-slate-400">Cheque No:</span> {r.chequeNo}</span>
+        <span><span className="text-slate-400">Date on Cheque:</span> {r.chequeDate}</span>
+        <span><span className="text-slate-400">Received:</span> {r.chequeReceivedDate}</span>
+      </div>
+    ) : r.narration },
+    { key: 'pairs', header: 'Pairs', align: 'right', width: '65px', accessor: r => r.pairs > 0 ? r.pairs : '-' },
+    { key: 'debit', header: 'Debit (Rs.)', align: 'right', width: '105px', accessor: r => <span className="text-rose-700 font-bold">{r.debit > 0 ? formatCurrency(r.debit) : '-'}</span> },
+    { key: 'credit', header: 'Credit (Rs.)', align: 'right', width: '105px', accessor: r => <span className="text-emerald-700 font-bold">{r.credit > 0 ? formatCurrency(r.credit) : '-'}</span> },
+    { key: 'balance', header: 'Balance (Rs.)', align: 'right', width: '115px', accessor: r => <span className="font-bold text-slate-900">{formatCurrency(Math.abs(r.balance))}</span> },
+  ];
+
+  const renderPrintableReport = () => (
+    <ReportContainer orientation="portrait">
+      <ReportHeader
+        title="CUSTOMER KHAATA LEDGER STATEMENT"
+        subtitle={`Party Khaata Record: ${selectedCustomer?.name || 'All Customers'}`}
+        periodFrom={fromDate}
+        periodTo={toDate}
+        metadata={[
+          { label: 'Customer Name', value: selectedCustomer?.name || 'All' },
+          { label: 'Account Code', value: selectedCustomer?.code || '-' },
+          { label: 'City', value: selectedCustomer?.city_name || 'General' },
+          { label: 'Opening Balance', value: formatCurrency(Math.abs(runningKhaata[0]?.balance || 0)) },
+        ]}
+      />
+
+      <ReportTable
+        columns={columns}
+        data={runningKhaata}
+        rowKeyExtractor={(r, idx) => `${r.type}-${r.invNo}-${idx}`}
+        summaryRow={(
+          <tr className="bg-slate-100 font-bold border-t-2 border-slate-900 text-xs">
+            <td colSpan={6} className="py-2.5 px-3 text-left font-bold uppercase tracking-wider">TOTAL</td>
+            <td className="py-2.5 px-3 text-right text-rose-800">{formatCurrency(ledger?.total_debit || 0)}</td>
+            <td className="py-2.5 px-3 text-right text-emerald-800">{formatCurrency(ledger?.total_credit || 0)}</td>
+            <td className="py-2.5 px-3 text-right text-slate-950 underline">{formatCurrency(Math.abs(runningKhaata[runningKhaata.length - 1]?.balance || 0))}</td>
+          </tr>
+        )}
+      />
+
+      <ReportFooter printedBy="Admin Operator" notes="Computer generated customer statement." />
+    </ReportContainer>
+  );
+
   return (
+    <>
       <div className="mx-auto" style={{ maxWidth: 1000 }}>
 
         {/* 1. Accounts Directory View (When no customer is selected) */}
         {!customerBaId ? (
           <>
-            {/* Selection Bar / Search & Date filters - data-no-print */}
-            <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+            {/* Selection Bar / Search & Date filters */}
+            <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }}>
               <div className="relative flex-1 min-w-[280px]">
                 <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search Account:</span>
                 <div className="relative">
@@ -194,8 +270,8 @@ export function ReportKhaataContent() {
         ) : (
           /* 2. Specific Account Statement Ledger View */
           <div className={`transition-all duration-200 ${isClosing ? 'opacity-0 translate-y-2 scale-98' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
-            {/* Navigation & Action Card - data-no-print */}
-            <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-6 shadow-2xs" data-no-print>
+            {/* Navigation & Action Card */}
+            <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-6 shadow-2xs">
               {/* ROW 1: Back Button & Customer Name (Left), Opening Balance (Right) */}
               <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-3 mb-4">
                 <div className="flex flex-wrap items-center gap-3">
@@ -243,16 +319,16 @@ export function ReportKhaataContent() {
 
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => window.print()}
+                    onClick={() => setIsPreviewOpen(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+                  >
+                    <Eye size={15} /> Show Print Preview
+                  </button>
+                  <button
+                    onClick={() => setIsPreviewOpen(true)}
                     className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer"
                   >
                     <Printer size={14} /> Print Statement
-                  </button>
-                  <button
-                    onClick={exportToPDF}
-                    className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer"
-                  >
-                    <FileDown size={14} /> Export PDF
                   </button>
                   <button
                     onClick={handleExportExcel}
@@ -264,7 +340,7 @@ export function ReportKhaataContent() {
               </div>
             </div>
 
-            {/* Printable Statement Sheet */}
+            {/* On-screen Statement Sheet */}
             <div className="card-white p-6 md:p-8 bg-white border">
 
               {/* Header details */}
@@ -373,12 +449,24 @@ export function ReportKhaataContent() {
           </div>
         )}
       </div>
+
+      {/* Print Preview Modal — uses the real backend-computed ledger, not a client-side recompute */}
+      <ReportPrintPreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        title={`Customer Khaata Ledger - ${selectedCustomer?.name || ''}`}
+        orientation="portrait"
+        onExportExcel={handleExportExcel}
+      >
+        {renderPrintableReport()}
+      </ReportPrintPreviewModal>
+    </>
   );
 }
 
 export default function ReportKhaataPage() {
   return (
-    <AppLayout pageTitle="Accounts Ledger / Khaata">
+    <AppLayout pageTitle="Customer Khaata Ledger">
       <ReportKhaataContent />
     </AppLayout>
   );
