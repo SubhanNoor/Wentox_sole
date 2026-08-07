@@ -1,97 +1,100 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Printer, MapPin, Edit2, Trash2, FileDown, ArrowLeft, Settings, Save, X, ArrowRight, UserCheck, Download } from 'lucide-react';
 import { exportToPDF } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
-import type { Customer } from '@/types';
 import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
 import SearchableSelect from '@/components/SearchableSelect';
-
-interface ProductLedgerRow {
-  date: string;
-  refId: string;
-  article: string;
-  debit: number;       // sale value for that article
-  credit: number;       // sale return value for that article
-  returnQty: number;    // pairs returned for that article
-}
+import * as api from '@/lib/api';
+import type { CustomerRow, RegionRow, CityRow, AccountLedgerResult } from '@/lib/api';
 
 export default function CustomerSetupPage() {
-  const { state, dispatch } = useApp();
-
   // Directory view state
-  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+
+  const [customerList, setCustomerList] = useState<CustomerRow[]>([]);
+  const [regions, setRegions] = useState<RegionRow[]>([]);
+  const [cities, setCities] = useState<CityRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    const [custRes, rgRes, ctRes] = await Promise.all([
+      api.customers.list({ includeInactive: false }),
+      api.listRegions(),
+      api.listCities(),
+    ]);
+    if (custRes.ok) setCustomerList(custRes.data);
+    if (rgRes.ok) setRegions(rgRes.data);
+    if (ctRes.ok) setCities(ctRes.data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
 
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
+  const [editingCustomerId, setEditingCustomerId] = useState<number | null>(null);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerRegionId, setNewCustomerRegionId] = useState('');
   const [newCustomerCityId, setNewCustomerCityId] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3000); };
 
-  // Duplicate Check Modal state (Flow B)
-  const [dupMatches, setDupMatches] = useState<Customer[]>([]);
+  // Duplicate Check Modal state — non-blocking branch: checkName() is advisory before create()
+  const [dupMatches, setDupMatches] = useState<CustomerRow[]>([]);
   const [dupStatus, setDupStatus] = useState<'active' | 'inactive'>('active');
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
-  const [pendingCustomer, setPendingCustomer] = useState<{ name: string; regionId: string; cityId: string } | null>(null);
+  const [pendingCustomer, setPendingCustomer] = useState<{ name: string; region_id: number; city_id?: number } | null>(null);
+
+  const [deletingCustomer, setDeletingCustomer] = useState<CustomerRow | null>(null);
 
   // Ledger detail filters
   const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(getTodayDate());
-  const [articleFilter, setArticleFilter] = useState('');
+  const [ledger, setLedger] = useState<AccountLedgerResult | null>(null);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
 
   const selectedCustomer = useMemo(() => {
-    return state.customers.find(c => c.id === selectedCustomerId);
-  }, [selectedCustomerId, state.customers]);
+    return customerList.find(c => c.customer_id === selectedCustomerId);
+  }, [selectedCustomerId, customerList]);
 
-  const activeCustomers = useMemo(() => {
-    return state.customers.filter(c => c.isActive !== false);
-  }, [state.customers]);
+  const loadLedger = useCallback(async () => {
+    if (!selectedCustomer?.ba_id) { setLedger(null); return; }
+    setLedgerLoading(true);
+    const res = await api.reports.accountLedger({ ba_id: selectedCustomer.ba_id, date_from: fromDate || undefined, date_to: toDate || undefined });
+    if (res.ok) setLedger(res.data); else setLedger(null);
+    setLedgerLoading(false);
+  }, [selectedCustomer, fromDate, toDate]);
+
+  useEffect(() => { if (selectedCustomerId) loadLedger(); }, [selectedCustomerId, loadLedger]);
 
   const filteredCustomers = useMemo(() => {
-    if (!searchQuery.trim()) return activeCustomers;
+    if (!searchQuery.trim()) return customerList;
     const q = searchQuery.toLowerCase();
-    return activeCustomers.filter(c =>
+    return customerList.filter(c =>
       c.name.toLowerCase().includes(q) ||
-      c.id.toLowerCase().includes(q)
+      String(c.customer_id).includes(q)
     );
-  }, [activeCustomers, searchQuery]);
-
-  const activeRegions = useMemo(() => {
-    return state.regions.filter(r => r.isActive !== false);
-  }, [state.regions]);
-
-  const activeCities = useMemo(() => {
-    return state.cities.filter(c => c.isActive !== false);
-  }, [state.cities]);
-
-  const getNextCustomerCode = () => {
-    const customerAccounts = state.businessAccounts.filter(acc => acc.controlId === '110001');
-    const maxSuffix = customerAccounts.reduce((max, acc) => {
-      const num = parseInt(acc.id.substring(6), 10);
-      return isNaN(num) ? max : Math.max(max, num);
-    }, 0);
-    return `110001${String(maxSuffix + 1).padStart(4, '0')}`;
-  };
+  }, [customerList, searchQuery]);
 
   const handleOpenAdd = () => {
     setEditingCustomerId(null);
     setNewCustomerName('');
-    setNewCustomerRegionId(state.regions.find(r => r.isActive !== false)?.id || '');
+    setNewCustomerRegionId('');
     setNewCustomerCityId('');
     setErrorMsg('');
     setIsModalOpen(true);
   };
 
-  const handleOpenEdit = (c: Customer) => {
-    setEditingCustomerId(c.id);
+  const handleOpenEdit = (c: CustomerRow) => {
+    setEditingCustomerId(c.customer_id);
     setNewCustomerName(c.name);
-    setNewCustomerRegionId(c.regionId);
-    setNewCustomerCityId(c.cityId);
+    setNewCustomerRegionId(String(c.region_id));
+    setNewCustomerCityId(c.city_id ? String(c.city_id) : '');
     setErrorMsg('');
     setIsModalOpen(true);
   };
@@ -105,213 +108,89 @@ export default function CustomerSetupPage() {
     setErrorMsg('');
   };
 
-  const executeAddCustomer = (data: { name: string; regionId: string; cityId: string }) => {
-    const regionName = state.regions.find(r => r.id === data.regionId)?.name || 'LOCAL';
-    const newId = getNextCustomerCode();
-
-    dispatch({
-      type: 'ADD_BUSINESS_ACCOUNT',
-      account: {
-        id: newId,
-        name: data.name,
-        controlId: '110001',
-        linkCode: 'A',
-        region: regionName,
-        status: 'Active'
-      }
-    });
-
-    dispatch({
-      type: 'ADD_CUSTOMER',
-      customer: {
-        id: newId,
-        name: data.name,
-        acId: '110001',
-        regionId: data.regionId,
-        cityId: data.cityId
-      }
-    });
-
-    setSuccessMsg('New customer added successfully.');
-    setTimeout(() => setSuccessMsg(''), 3000);
+  const executeAddCustomer = async (data: { name: string; region_id: number; city_id?: number }) => {
+    const res = await api.customers.create(data);
+    if (!res.ok) return setErrorMsg(res.error.message);
+    flash('New customer added successfully.');
     handleCloseModal();
+    loadAll();
   };
 
-  const handleSaveCustomer = (e: React.FormEvent) => {
+  const handleSaveCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     const typed = newCustomerName.trim();
     if (!typed) return setErrorMsg('Customer name is required.');
     if (!newCustomerRegionId) return setErrorMsg('Region is required.');
-    if (!newCustomerCityId) return setErrorMsg('City is required.');
+
+    const payload = {
+      name: typed,
+      region_id: Number(newCustomerRegionId),
+      city_id: newCustomerCityId ? Number(newCustomerCityId) : undefined,
+    };
 
     if (editingCustomerId) {
-      dispatch({
-        type: 'UPDATE_CUSTOMER',
-        customer: {
-          id: editingCustomerId,
-          name: typed,
-          acId: '110001',
-          regionId: newCustomerRegionId,
-          cityId: newCustomerCityId
-        }
-      });
-      setSuccessMsg('Customer details updated successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
+      const res = await api.customers.update(editingCustomerId, payload);
+      if (!res.ok) return setErrorMsg(res.error.message);
+      flash('Customer details updated successfully.');
       handleCloseModal();
+      loadAll();
     } else {
-      const matches = state.customers.filter(c => c.name.toLowerCase() === typed.toLowerCase());
-      if (matches.length === 0) {
-        executeAddCustomer({ name: typed, regionId: newCustomerRegionId, cityId: newCustomerCityId });
+      const res = await api.customers.checkName(typed);
+      if (!res.ok) return setErrorMsg(res.error.message);
+      if (res.data.status === 'none') {
+        executeAddCustomer(payload);
       } else {
-        const hasInactive = matches.some(c => c.isActive === false);
-        const modalMatches = hasInactive ? matches.filter(c => c.isActive === false) : matches;
-        setDupMatches(modalMatches);
-        setDupStatus(hasInactive ? 'inactive' : 'active');
-        setPendingCustomer({ name: typed, regionId: newCustomerRegionId, cityId: newCustomerCityId });
+        setDupMatches(res.data.matches);
+        setDupStatus(res.data.status);
+        setPendingCustomer(payload);
         setIsDupModalOpen(true);
       }
     }
   };
 
-  const handleActivateDuplicate = (id: string) => {
-    const match = state.customers.find(c => c.id === id);
-    if (match) {
-      if (!state.businessAccounts.some(b => b.id === match.id)) {
-        const regionName = state.regions.find(r => r.id === match.regionId)?.name || 'LOCAL';
-        dispatch({
-          type: 'ADD_BUSINESS_ACCOUNT',
-          account: {
-            id: match.id,
-            name: match.name,
-            controlId: '110001',
-            linkCode: 'A',
-            region: regionName,
-            status: 'Active'
-          }
-        });
-      }
-      dispatch({
-        type: 'UPDATE_CUSTOMER',
-        customer: { ...match, isActive: true }
-      });
-      setSuccessMsg('Customer reactivated successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-    }
+  const handleActivateDuplicate = async (idStr: string) => {
+    const res = await api.customers.reactivate(Number(idStr));
     setIsDupModalOpen(false);
     setPendingCustomer(null);
+    if (!res.ok) return setErrorMsg('Failed to reactivate: ' + res.error.message);
+    flash('Customer reactivated successfully.');
     handleCloseModal();
+    loadAll();
   };
 
   const handleCreateNewAnyway = () => {
-    if (pendingCustomer) {
-      executeAddCustomer(pendingCustomer);
-    }
+    if (pendingCustomer) executeAddCustomer(pendingCustomer);
     setIsDupModalOpen(false);
     setPendingCustomer(null);
   };
 
-  const handleDeleteCustomer = (id: string) => {
-    const hasBills = state.saleBills.some(b => b.customerId === id);
-    const hasReturns = state.saleReturns.some(r => r.customerId === id);
-    const hasReceipts = state.receipts.some(rc => rc.customerId === id);
-
-    if (hasBills || hasReturns || hasReceipts) {
-      setErrorMsg('Cannot delete: Customer has active sale bills, returns, or receipts.');
-      setTimeout(() => setErrorMsg(''), 4000);
-      return;
-    }
-
-    if (window.confirm('Are you sure you want to delete this customer?')) {
-      dispatch({ type: 'DELETE_CUSTOMER', id });
-      setSuccessMsg('Customer deleted successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-      handleCloseModal();
-    }
+  const confirmDelete = async () => {
+    if (!deletingCustomer) return;
+    const res = await api.customers.remove(deletingCustomer.customer_id);
+    setDeletingCustomer(null);
+    if (!res.ok) return setErrorMsg('Failed to delete: ' + res.error.message);
+    flash('Customer deleted successfully.');
+    handleCloseModal();
+    loadAll();
   };
 
-  // Compile Product Ledger Rows
-  const customerProductLedgerRows = useMemo<ProductLedgerRow[]>(() => {
-    if (!selectedCustomer) return [];
-
-    const rows: ProductLedgerRow[] = [];
-    const custId = selectedCustomer.id;
-
-    state.saleBills.filter(b => b.customerId === custId).forEach(b => {
-      b.items.forEach(item => {
-        const prod = state.products.find(p => p.id === item.productId);
-        const articleName = prod?.name || item.productId;
-        rows.push({
-          date: b.date,
-          refId: b.billNo || b.id,
-          article: articleName,
-          debit: item.value,
-          credit: 0,
-          returnQty: 0
-        });
-      });
-    });
-
-    state.saleReturns.filter(r => r.customerId === custId).forEach(r => {
-      r.items.forEach(item => {
-        const prod = state.products.find(p => p.id === item.productId);
-        const articleName = prod?.name || item.productId;
-        const totalPairs = (item.cartons || 0) * (prod?.packing || 12) + (item.pairs || 0);
-        rows.push({
-          date: r.date,
-          refId: r.billNo || r.id,
-          article: articleName,
-          debit: 0,
-          credit: item.value,
-          returnQty: totalPairs
-        });
-      });
-    });
-
-    rows.sort((a, b) => a.date.localeCompare(b.date));
-    return rows;
-  }, [selectedCustomer, state]);
-
-  const filteredLedgerRows = useMemo(() => {
-    let list = customerProductLedgerRows;
-
-    if (fromDate) {
-      list = list.filter(r => r.date >= fromDate);
-    }
-    if (toDate) {
-      list = list.filter(r => r.date <= toDate);
-    }
-    if (articleFilter.trim()) {
-      const q = articleFilter.toLowerCase();
-      list = list.filter(r => r.article.toLowerCase().includes(q));
-    }
-
-    return list;
-  }, [customerProductLedgerRows, fromDate, toDate, articleFilter]);
-
-  const { totalDebit, totalCredit, totalReturnQty } = useMemo(() => {
-    let deb = 0;
-    let cred = 0;
-    let qty = 0;
-    filteredLedgerRows.forEach(r => {
-      deb += r.debit;
-      cred += r.credit;
-      qty += r.returnQty;
-    });
-    return { totalDebit: deb, totalCredit: cred, totalReturnQty: qty };
-  }, [filteredLedgerRows]);
+  const filteredLedgerRows = useMemo(() => ledger?.rows || [], [ledger]);
 
   const handleExportCSV = () => {
-    const header = ['Date', 'Ref No', 'Article', 'Debit', 'Credit', 'Sale Return (Pairs)'];
-    const lines = filteredLedgerRows.map(r => [r.date, r.refId, r.article, r.debit, r.credit, r.returnQty]);
+    const header = ['Date', 'Type', 'Ref No', 'Narration', 'Debit', 'Credit', 'Balance'];
+    const lines = filteredLedgerRows.map(r => [r.date, r.type, r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, r.narration || '', r.debit, r.credit, r.balance]);
     const csv = [header, ...lines].map(row => row.join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${selectedCustomer?.name || 'customer'}_product_ledger.csv`;
+    link.download = `${selectedCustomer?.name || 'customer'}_ledger.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
+
+  const cityName = (id: number | null) => cities.find(c => c.city_id === id)?.name || 'No City';
+  const regionName = (id: number) => regions.find(r => r.region_id === id)?.name || 'No Region';
 
   return (
     <AppLayout pageTitle="Customers Setup">
@@ -336,7 +215,7 @@ export default function CustomerSetupPage() {
                   </h3>
                   <p className="text-xs text-slate-500 font-medium">Browse registered customer accounts. Select a card to view its product ledger.</p>
                 </div>
-                
+
                 <button
                   onClick={handleOpenAdd}
                   className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer shadow-2xs hover:shadow-xs flex-shrink-0"
@@ -364,91 +243,88 @@ export default function CustomerSetupPage() {
               </div>
             </div>
 
-            {/* Customer Cards Grid (§1 Standard) */}
-            {filteredCustomers.length === 0 ? (
+            {/* Customer Cards Grid */}
+            {loading ? (
+              <div className="card-white p-12 text-center text-slate-400">Loading…</div>
+            ) : filteredCustomers.length === 0 ? (
               <div className="card-white p-12 text-center text-slate-400">
                 <UserCheck size={36} className="mx-auto mb-3 text-slate-300" />
                 <p className="font-semibold text-slate-600">No registered customers found matching your search.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredCustomers.map(c => {
-                  const regionName = state.regions.find(r => r.id === c.regionId)?.name || 'No Region';
-                  const cityName = state.cities.find(ct => ct.id === c.cityId)?.name || 'No City';
-
-                  return (
-                    <div
-                      key={c.id}
-                      onClick={() => setSelectedCustomerId(c.id)}
-                      className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
-                    >
-                      <div>
-                        {/* Header: Title + City Badge */}
-                        <div className="flex items-start justify-between gap-2 mb-1">
-                          <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
-                            {c.name}
-                          </h4>
-                          <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider flex-shrink-0 flex items-center gap-1">
-                            <MapPin size={10} className="text-slate-400" />
-                            {cityName}
-                          </span>
-                        </div>
-
-                        {/* Subtitle: Code in mono */}
-                        <div className="font-mono text-xs text-slate-400 mb-3">
-                          Customer ID: <span className="font-semibold text-slate-600">#{c.id}</span>
-                        </div>
-
-                        <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5">
-                          Region: <span className="font-semibold text-slate-700">{regionName}</span>
-                        </div>
-                      </div>
-
-                      {/* Footer Bar */}
-                      <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
-                        <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-                          <button
-                            onClick={() => handleOpenEdit(c)}
-                            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                            title="Edit Customer"
-                          >
-                            <Edit2 size={15} />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteCustomer(c.id)}
-                            className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                            title="Delete Customer"
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        </div>
-
-                        <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
-                          Product Ledger <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
+                {filteredCustomers.map(c => (
+                  <div
+                    key={c.customer_id}
+                    onClick={() => setSelectedCustomerId(c.customer_id)}
+                    className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
+                  >
+                    <div>
+                      {/* Header: Title + City Badge */}
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
+                          {c.name}
+                        </h4>
+                        <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider flex-shrink-0 flex items-center gap-1">
+                          <MapPin size={10} className="text-slate-400" />
+                          {c.city_name || cityName(c.city_id)}
                         </span>
                       </div>
+
+                      {/* Subtitle: Code in mono */}
+                      <div className="font-mono text-xs text-slate-400 mb-3">
+                        Customer ID: <span className="font-semibold text-slate-600">#{c.customer_id}</span>
+                      </div>
+
+                      <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5">
+                        Region: <span className="font-semibold text-slate-700">{c.region_name || regionName(c.region_id)}</span>
+                      </div>
                     </div>
-                  );
-                })}
+
+                    {/* Footer Bar */}
+                    <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
+                      <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                        <button
+                          onClick={() => handleOpenEdit(c)}
+                          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                          title="Edit Customer"
+                        >
+                          <Edit2 size={15} />
+                        </button>
+                        <button
+                          onClick={() => setDeletingCustomer(c)}
+                          className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                          title="Delete Customer"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+
+                      <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
+                        Product Ledger <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
+                      </span>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
         ) : (
-          /* Detailed Product Ledger View */
+          /* Detailed Ledger View */
           <div className="animate-in fade-in slide-in-from-bottom-3 duration-300">
             <div className="flex flex-wrap items-center justify-between gap-4 mb-6" data-no-print>
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => setSelectedCustomerId('')}
+                  onClick={() => setSelectedCustomerId(null)}
                   className="bg-amber-50/80 hover:bg-amber-100/90 text-amber-900 border border-amber-200/80 rounded-xl px-4 py-2 text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs hover:shadow-xs"
                 >
                   <ArrowLeft size={16} /> Back to Directory
                 </button>
                 <div>
                   <h2 className="font-lora font-bold text-xl text-slate-900">
-                    Product Ledger: {selectedCustomer?.name}
+                    Ledger: {selectedCustomer?.name}
                   </h2>
-                  <p className="text-xs text-slate-500 font-medium mt-0.5">Code: {selectedCustomer?.id}</p>
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">Code: {selectedCustomer?.customer_id}</p>
                 </div>
               </div>
 
@@ -465,7 +341,7 @@ export default function CustomerSetupPage() {
               </div>
             </div>
 
-            {/* Date & Article Filters */}
+            {/* Date Filters */}
             <div className="p-4 rounded-xl border mb-6 bg-white shadow-2xs flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }} data-no-print>
               <div className="flex flex-wrap items-center gap-4">
                 <div className="flex items-center gap-2">
@@ -486,16 +362,10 @@ export default function CustomerSetupPage() {
                     className="soleria-input py-1.5 px-2.5 text-xs font-semibold"
                   />
                 </div>
-                <div className="flex items-center gap-2 min-w-[200px]">
-                  <label className="text-xs font-semibold text-slate-500 uppercase">Article:</label>
-                  <input
-                    type="text"
-                    placeholder="Filter article..."
-                    value={articleFilter}
-                    onChange={e => setArticleFilter(e.target.value)}
-                    className="soleria-input py-1.5 px-2.5 text-xs font-semibold w-full"
-                  />
-                </div>
+              </div>
+              <div className="px-3.5 py-1.5 bg-slate-900 text-white rounded-lg flex items-center gap-2 text-xs font-semibold">
+                <span className="text-slate-400">Opening Balance:</span>
+                <span className="text-[#B08D57] font-bold">{formatCurrency(ledger?.opening_balance || 0)}</span>
               </div>
             </div>
 
@@ -506,39 +376,43 @@ export default function CustomerSetupPage() {
                   <thead>
                     <tr className="bg-slate-100 border-b text-slate-700 font-bold uppercase tracking-wider" style={{ borderColor: 'var(--border-color)' }}>
                       <th className="p-3">Date</th>
+                      <th className="p-3">Type</th>
                       <th className="p-3">Ref No</th>
-                      <th className="p-3">Article</th>
+                      <th className="p-3">Narration</th>
                       <th className="p-3 text-right">Debit (PKR)</th>
                       <th className="p-3 text-right">Credit (PKR)</th>
-                      <th className="p-3 text-right">Sale Return (Pairs)</th>
+                      <th className="p-3 text-right">Balance</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredLedgerRows.length === 0 ? (
+                    {ledgerLoading ? (
+                      <tr><td colSpan={7} className="text-center p-6 text-slate-400 italic">Loading…</td></tr>
+                    ) : filteredLedgerRows.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="text-center p-6 text-slate-400 italic">
-                          No product ledger transactions recorded for this customer in selected period.
+                        <td colSpan={7} className="text-center p-6 text-slate-400 italic">
+                          No ledger transactions recorded for this customer in the selected period.
                         </td>
                       </tr>
                     ) : (
-                      filteredLedgerRows.map((row, idx) => (
-                        <tr key={idx} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                      filteredLedgerRows.map((row) => (
+                        <tr key={row.entry_id} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
                           <td className="p-3 font-medium text-slate-600">{row.date}</td>
-                          <td className="p-3 text-slate-500 font-mono">{row.refId}</td>
-                          <td className="p-3 font-semibold text-slate-800">{row.article}</td>
+                          <td className="p-3 text-slate-700">{row.type}</td>
+                          <td className="p-3 text-slate-500 font-mono">{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
+                          <td className="p-3 text-slate-600">{row.narration || '-'}</td>
                           <td className="p-3 text-right font-semibold text-slate-900">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
                           <td className="p-3 text-right font-semibold text-slate-900">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
-                          <td className="p-3 text-right font-bold text-amber-800">{row.returnQty > 0 ? row.returnQty.toLocaleString() : '-'}</td>
+                          <td className="p-3 text-right font-bold text-amber-800">{formatCurrency(row.balance)}</td>
                         </tr>
                       ))
                     )}
                   </tbody>
                   <tfoot>
                     <tr className="bg-slate-900 text-white font-bold text-xs">
-                      <td colSpan={3} className="p-3 text-right uppercase tracking-wider text-[#B08D57]">Totals</td>
-                      <td className="p-3 text-right">{formatCurrency(totalDebit)}</td>
-                      <td className="p-3 text-right">{formatCurrency(totalCredit)}</td>
-                      <td className="p-3 text-right text-[#B08D57]">{totalReturnQty.toLocaleString()} Pairs</td>
+                      <td colSpan={4} className="p-3 text-right uppercase tracking-wider text-[#B08D57]">Totals</td>
+                      <td className="p-3 text-right">{formatCurrency(ledger?.total_debit || 0)}</td>
+                      <td className="p-3 text-right">{formatCurrency(ledger?.total_credit || 0)}</td>
+                      <td className="p-3 text-right text-[#B08D57]">{formatCurrency(ledger?.closing_balance || 0)}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -589,7 +463,7 @@ export default function CustomerSetupPage() {
                       Region Location <span className="text-rose-500">*</span>
                     </label>
                     <SearchableSelect
-                      options={activeRegions.map(r => ({ value: r.id, label: r.name }))}
+                      options={regions.map(r => ({ value: String(r.region_id), label: r.name }))}
                       value={newCustomerRegionId}
                       onChange={setNewCustomerRegionId}
                       placeholder="Select Region..."
@@ -598,10 +472,13 @@ export default function CustomerSetupPage() {
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      City Location <span className="text-rose-500">*</span>
+                      City Location
                     </label>
                     <SearchableSelect
-                      options={activeCities.map(c => ({ value: c.id, label: c.name }))}
+                      options={[
+                        { value: '', label: 'Select City...' },
+                        ...cities.map(c => ({ value: String(c.city_id), label: c.name }))
+                      ]}
                       value={newCustomerCityId}
                       onChange={setNewCustomerCityId}
                       placeholder="Select City..."
@@ -634,9 +511,9 @@ export default function CustomerSetupPage() {
           entityLabel="customer"
           status={dupStatus}
           matches={dupMatches.map(c => ({
-            id: c.id,
+            id: String(c.customer_id),
             name: c.name,
-            cityName: activeCities.find(ct => ct.id === c.cityId)?.name
+            cityName: c.city_name,
           }))}
           allowCreateOnActive={true}
           onActivate={handleActivateDuplicate}
@@ -646,6 +523,23 @@ export default function CustomerSetupPage() {
             setPendingCustomer(null);
           }}
         />
+
+        {/* Delete confirmation */}
+        {deletingCustomer && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setDeletingCustomer(null)}>
+            <div className="bg-white rounded-2xl border-2 border-rose-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+              <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Delete Customer</h3>
+              <p className="text-xs text-slate-600 mb-4">
+                Delete <strong>{deletingCustomer.name}</strong>? This deactivates the record — past
+                sale/receipt history is kept intact.
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={() => setDeletingCustomer(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
+                <button onClick={confirmDelete} className="px-4 py-2 text-xs font-semibold cursor-pointer rounded-lg bg-rose-600 text-white hover:bg-rose-700">Delete</button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </AppLayout>

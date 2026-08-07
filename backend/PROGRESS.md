@@ -14,6 +14,49 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Milestone 7 — System Setup frontend wiring (Customers, Sub-Customers)
+
+### 2026-08-07 — Connected Customer/Sub-Customer Setup pages to real `window.api` — verified live
+- **What:** `CustomerSetupPage.tsx`, `SubCustomerSetupPage.tsx` rewired off the demo `AppContext`
+  reducer onto real `customers`/`subCustomers` IPC calls — full CRUD including the real
+  `checkName()` pre-flight channel, which neither page had wired to anything before (both already
+  had `DuplicateNamePromptModal` built and rendered against demo data, just never touching the real
+  backend). `lib/api.ts` gained `CustomerUpdateInput`/`SubCustomerUpdateInput`,
+  `CustomerCheckNameResult`/`SubCustomerCheckNameResult`, and full `window.api` typings/wrapper
+  objects for both (previously only `list`/`create` were typed).
+- **How:**
+  - Confirmed from code (not assumed): customers/sub-customers are the **non-blocking duplicate
+    branch** — `create()` never checks for an active-name collision at all; the real flow is a
+    `checkName({name})` pre-flight call before `create()` (`'none'` → create directly; `'active'` →
+    advisory only, `DuplicateNamePromptModal`'s `allowCreateOnActive: true` fits exactly; `'inactive'`
+    → reactivate-or-create-new). Only `update()` blocks on an exact-name collision with a different
+    row (`DUPLICATE_NAME`). This is the opposite of every entity connected so far (vendors/
+    categories/products/employees/bank accounts all block on active match).
+  - Relaxed the frontend's `city_id`-required validation to match the backend (only `region_id` is
+    required, `city_id` is nullable) on both pages.
+  - Customer's delete guard (hard-blocked if referenced by demo sale bills/returns/receipts) dropped
+    in favor of a plain confirm dialog — real `remove()` is unconditional soft delete, same
+    precedent as every prior module.
+  - Customer's manual `ADD_BUSINESS_ACCOUNT` dispatch dropped — `customers:create` already creates
+    and links the account server-side in its own transaction.
+  - Customer's "Product Ledger" drill-down (previously hand-built per-article rows from demo sale
+    bills/returns) replaced with a direct reuse of `reports.accountLedger({ba_id})` — the exact same
+    channel/wrapper `ReportKhaataPage.tsx` (Module 5) already uses — no new backend work, and the
+    real result is richer (running balance, receipts/commission/bounce rows too, not just sale
+    bills/returns).
+  - Live-verified via Electron + CDP: created a customer with the **same name as an existing active
+    customer** and confirmed it was NOT blocked — the advisory modal appeared ("You can still create
+    a new one — this is just a heads-up"), "Create New Anyway" succeeded, and both rows coexist
+    active in `dbo.customers` with separate `ba_id`s under the real `CUSTOMERS_ACCOUNTS` chart code
+    (`100001`) — this is the key behavioral difference from every other connected module, confirmed
+    working correctly; renaming a customer to another customer's exact name via edit was correctly
+    blocked with `DUPLICATE_NAME`; soft-delete → re-create with the same name → `checkName` returned
+    `'inactive'` → reactivate offer worked, for both customers and sub-customers; the Product Ledger
+    drill-down rendered real Sale Bill/Receipt rows with correct running balance (28,200 → 13,200 →
+    7,200) for a seeded customer with real history. No console errors across the full run.
+- **Files:** `frontend/src/lib/api.ts`, `frontend/src/pages/CustomerSetupPage.tsx`,
+  `frontend/src/pages/SubCustomerSetupPage.tsx`.
+
 ## Milestone 6 — System Setup frontend wiring (Products, Categories, Vendors)
 
 ### 2026-08-07 — Connected Product/Category/Vendor Setup pages to real `window.api` — verified live

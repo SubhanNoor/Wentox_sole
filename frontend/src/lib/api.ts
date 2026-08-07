@@ -163,6 +163,8 @@ export interface CustomerRow {
   city_id: number | null;
   address: string | null;
   is_active: boolean;
+  region_name?: string;
+  city_name?: string;
 }
 
 export interface SubCustomerRow {
@@ -172,6 +174,8 @@ export interface SubCustomerRow {
   city_id: number | null;
   address: string | null;
   is_active: boolean;
+  region_name?: string;
+  city_name?: string;
 }
 
 export interface ProductRow {
@@ -288,6 +292,21 @@ export interface SubCustomerCreateInput {
   region_id: number;
   city_id?: number;
   address?: string;
+}
+
+export type CustomerUpdateInput = CustomerCreateInput;
+export type SubCustomerUpdateInput = SubCustomerCreateInput;
+
+// checkName()'s matches are full rows (findAllByName() joins the same way list() does), not a
+// slimmed-down shape.
+export interface CustomerCheckNameResult {
+  status: 'none' | 'active' | 'inactive';
+  matches: CustomerRow[];
+}
+
+export interface SubCustomerCheckNameResult {
+  status: 'none' | 'active' | 'inactive';
+  matches: SubCustomerRow[];
 }
 
 // ── Module 3 row/input shapes — field names match database/schema.sql exactly ──
@@ -1103,12 +1122,22 @@ declare global {
         confirm: (payload: { id: number }) => Promise<ApiResult<SaleReturnRow>>;
       };
       customers: {
-        list: (payload?: { is_active?: boolean }) => Promise<ApiResult<CustomerRow[]>>;
+        list: (payload?: { includeInactive?: boolean; region_id?: number; city_id?: number; search?: string }) => Promise<ApiResult<CustomerRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<CustomerRow>>;
         create: (payload: CustomerCreateInput) => Promise<ApiResult<CustomerRow>>;
+        update: (payload: { id: number } & CustomerUpdateInput) => Promise<ApiResult<CustomerRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        checkName: (payload: { name: string }) => Promise<ApiResult<CustomerCheckNameResult>>;
+        reactivate: (payload: { id: number }) => Promise<ApiResult<CustomerRow>>;
       };
       subCustomers: {
-        list: (payload?: { is_active?: boolean }) => Promise<ApiResult<SubCustomerRow[]>>;
+        list: (payload?: { includeInactive?: boolean; region_id?: number; city_id?: number; search?: string }) => Promise<ApiResult<SubCustomerRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<SubCustomerRow>>;
         create: (payload: SubCustomerCreateInput) => Promise<ApiResult<SubCustomerRow>>;
+        update: (payload: { id: number } & SubCustomerUpdateInput) => Promise<ApiResult<SubCustomerRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        checkName: (payload: { name: string }) => Promise<ApiResult<SubCustomerCheckNameResult>>;
+        reactivate: (payload: { id: number }) => Promise<ApiResult<SubCustomerRow>>;
       };
       products: {
         list: (payload?: { includeInactive?: boolean; category_id?: number; vendor_id?: number; search?: string }) => Promise<ApiResult<ProductRow[]>>;
@@ -1458,12 +1487,12 @@ export const draftSaleReturns = {
 
 export async function listCustomers(): Promise<ApiResult<CustomerRow[]>> {
   if (!window.api) return NO_BRIDGE;
-  return window.api.customers.list({ is_active: true });
+  return window.api.customers.list();
 }
 
 export async function listSubCustomers(): Promise<ApiResult<SubCustomerRow[]>> {
   if (!window.api) return NO_BRIDGE;
-  return window.api.subCustomers.list({ is_active: true });
+  return window.api.subCustomers.list();
 }
 
 export async function listProducts(): Promise<ApiResult<ProductRow[]>> {
@@ -1510,6 +1539,43 @@ export async function createSubCustomer(payload: SubCustomerCreateInput): Promis
   if (!window.api) return NO_BRIDGE;
   return window.api.subCustomers.create(payload);
 }
+
+// ── Module 7: Customers, Sub-Customers (full CRUD) ──
+// Both are on the non-blocking duplicate branch (real people can share a name) — checkName()
+// is a pre-flight advisory call before create(), never a block; only update() blocks on an
+// exact-name collision with a different row (DUPLICATE_NAME).
+
+export const customers = {
+  list: (payload?: { includeInactive?: boolean; region_id?: number; city_id?: number; search?: string }) =>
+    window.api ? window.api.customers.list(payload) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.customers.get({ id }) : Promise.resolve(NO_BRIDGE),
+  create: (payload: CustomerCreateInput) =>
+    window.api ? window.api.customers.create(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: CustomerUpdateInput) =>
+    window.api ? window.api.customers.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.customers.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  checkName: (name: string) =>
+    window.api ? window.api.customers.checkName({ name }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) =>
+    window.api ? window.api.customers.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+};
+
+export const subCustomers = {
+  list: (payload?: { includeInactive?: boolean; region_id?: number; city_id?: number; search?: string }) =>
+    window.api ? window.api.subCustomers.list(payload) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.subCustomers.get({ id }) : Promise.resolve(NO_BRIDGE),
+  create: (payload: SubCustomerCreateInput) =>
+    window.api ? window.api.subCustomers.create(payload) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: SubCustomerUpdateInput) =>
+    window.api ? window.api.subCustomers.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.subCustomers.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  checkName: (name: string) =>
+    window.api ? window.api.subCustomers.checkName({ name }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) =>
+    window.api ? window.api.subCustomers.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+};
 
 // ── Module 3: Purchase & Purchase Return ──
 // No password guard on this feature at all (update() hard-blocks once posted instead of a
