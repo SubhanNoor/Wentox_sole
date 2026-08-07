@@ -585,6 +585,21 @@
     width: 100% !important;
     border-collapse: collapse !important;
     margin-bottom: 15px !important;
+    page-break-inside: auto !important;
+    break-inside: auto !important;
+  }
+
+  .excel-print-table thead {
+    display: table-header-group !important;
+  }
+
+  .excel-print-table tfoot {
+    display: table-footer-group !important;
+  }
+
+  .excel-print-table tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
   
   .excel-print-table th, 
@@ -610,6 +625,16 @@
   
   .excel-print-double-bottom {
     border-bottom: 3px double #000000 !important;
+  }
+
+  .page-break-before {
+    page-break-before: always !important;
+    break-before: page !important;
+  }
+
+  .page-break-after {
+    page-break-after: always !important;
+    break-after: page !important;
   }
 
   .excel-grid-info {

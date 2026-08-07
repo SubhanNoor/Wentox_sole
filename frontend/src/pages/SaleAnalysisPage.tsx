@@ -2,11 +2,13 @@ import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
-import { Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet } from 'lucide-react';
-import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { ChevronDown, ChevronRight, Eye } from 'lucide-react';
+import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { SaleAnalysisRow } from '@/lib/api';
+import wentoxLogo from '@/assets/wentox_logo.png';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -95,6 +97,8 @@ export function SaleAnalysisContent() {
     }), { totalSales: 0, saleReturns: 0, paymentReceived: 0, balance: 0 });
   }, [customerRows]);
 
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
   const handleExportExcel = () => {
     const headers = [groupMode === 'customer' ? 'Customer' : 'Region', 'Total Sales', 'Sale Returns', 'Payment Received', 'Balance'];
     const rows = groupMode === 'customer'
@@ -104,6 +108,99 @@ export function SaleAnalysisContent() {
           ...g.customers.map(c => [`  ${c.customerName}`, c.totalSales, c.saleReturns, c.paymentReceived, c.balance])
         ]);
     exportRowsToExcel(`sale-analysis-${groupMode}`, headers, rows);
+  };
+
+  const renderPrintableDocument = () => {
+    return (
+      <div className="excel-print-container">
+        <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
+          <div>
+            <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '180px', width: 'auto', objectFit: 'contain' }} />
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>
+              SALE ANALYSIS REPORT — {groupMode === 'customer' ? 'CUSTOMER WISE' : 'REGION WISE'}
+            </h2>
+            <p style={{ margin: '6px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>
+              Period: {periodLabel}
+            </p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
+              Date of Print: {new Date().toLocaleDateString()}
+            </p>
+          </div>
+        </div>
+
+        <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+          <thead>
+            <tr>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>
+                {groupMode === 'customer' ? 'Customer' : 'Region'}
+              </th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Total Sales (Dr)</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Sale Returns (Cr)</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Payment Received</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Net Balance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groupMode === 'customer' ? (
+              customerRows.map(c => (
+                <tr key={c.customerId}>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{c.customerName}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.totalSales)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.saleReturns)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.paymentReceived)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(c.balance)}</td>
+                </tr>
+              ))
+            ) : (
+              regionGroups.map(g => (
+                <Fragment key={g.regionId}>
+                  <tr style={{ backgroundColor: '#f9f9f9', fontWeight: 'bold' }}>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{g.regionName}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(g.totalSales)}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(g.saleReturns)}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(g.paymentReceived)}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(g.balance)}</td>
+                  </tr>
+                  {g.customers.map(c => (
+                    <tr key={c.customerId}>
+                      <td style={{ border: '1px solid #000000', padding: '4px 6px 4px 20px', fontSize: '10.5px' }}>{c.customerName}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.totalSales)}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.saleReturns)}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.paymentReceived)}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.balance)}</td>
+                    </tr>
+                  ))}
+                </Fragment>
+              ))
+            )}
+            <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>GRAND TOTAL</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(grandTotals.totalSales)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(grandTotals.saleReturns)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(grandTotals.paymentReceived)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(grandTotals.balance)}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '40px', padding: '0 10px' }}>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -188,14 +285,11 @@ export function SaleAnalysisContent() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-              <Printer size={16} /> Print
-            </button>
-            <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-              <FileDown size={16} /> Export PDF
-            </button>
-            <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-              <FileSpreadsheet size={16} /> Export Excel
+            <button
+              onClick={() => setIsPreviewOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+            >
+              <Eye size={14} /> Show Print Preview
             </button>
           </div>
         </div>
@@ -292,7 +386,16 @@ export function SaleAnalysisContent() {
           </div>
         </div>
 
-      </div>
+      <ReportPrintPreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        title="Sale Analysis Report - Print Preview"
+        orientation="portrait"
+        onExportExcel={handleExportExcel}
+      >
+        {renderPrintableDocument()}
+      </ReportPrintPreviewModal>
+    </div>
   );
 }
 

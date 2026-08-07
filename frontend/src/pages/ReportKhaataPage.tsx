@@ -1,16 +1,13 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Printer, Search, FileSpreadsheet, Eye } from 'lucide-react';
+import { Search, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { BusinessLedgerSummaryRow, LedgerRow } from '@/lib/api';
-import { ReportContainer } from '@/components/reports/ReportContainer';
-import { ReportHeader } from '@/components/reports/ReportHeader';
-import { ReportTable, type ColumnDef } from '@/components/reports/ReportTable';
-import { ReportFooter } from '@/components/reports/ReportFooter';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import wentoxLogo from '@/assets/wentox_logo.png';
 
 interface KhaataRow {
   date: string;
@@ -100,59 +97,82 @@ export function ReportKhaataContent() {
     exportRowsToExcel(`khaata-ledger-${selectedCustomer.name}`, headers, rows);
   };
 
-  const columns: ColumnDef<KhaataRow>[] = [
-    { key: 'date', header: 'Date', width: '95px', accessor: r => <span className="font-mono">{r.date}</span> },
-    { key: 'type', header: 'Type', width: '110px', accessor: r => (
-      <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${r.type === 'Sale Bill' ? 'bg-rose-50 text-rose-700' : r.type === 'Receipt (Jamma)' ? 'bg-emerald-50 text-emerald-700' : r.type === 'Sale Return' ? 'bg-blue-50 text-blue-700' : r.type === 'Commission' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-700'}`}>
-        {r.type}
-      </span>
-    )},
-    { key: 'invNo', header: 'Inv #', align: 'center', width: '70px' },
-    { key: 'billNo', header: 'Bill #', align: 'center', width: '80px' },
-    { key: 'narration', header: 'Narration', accessor: r => r.chequeNo ? (
-      <div className="flex flex-col gap-0.5 text-[10.5px]">
-        <span><span className="text-slate-400">Cheque No:</span> {r.chequeNo}</span>
-        <span><span className="text-slate-400">Date on Cheque:</span> {r.chequeDate}</span>
-        <span><span className="text-slate-400">Received:</span> {r.chequeReceivedDate}</span>
-      </div>
-    ) : r.narration },
-    { key: 'pairs', header: 'Pairs', align: 'right', width: '65px', accessor: r => r.pairs > 0 ? r.pairs : '-' },
-    { key: 'debit', header: 'Debit (Rs.)', align: 'right', width: '105px', accessor: r => <span className="text-rose-700 font-bold">{r.debit > 0 ? formatCurrency(r.debit) : '-'}</span> },
-    { key: 'credit', header: 'Credit (Rs.)', align: 'right', width: '105px', accessor: r => <span className="text-emerald-700 font-bold">{r.credit > 0 ? formatCurrency(r.credit) : '-'}</span> },
-    { key: 'balance', header: 'Balance (Rs.)', align: 'right', width: '115px', accessor: r => <span className="font-bold text-slate-900">{formatCurrency(Math.abs(r.balance))}</span> },
-  ];
 
   const renderPrintableReport = () => (
-    <ReportContainer orientation="portrait">
-      <ReportHeader
-        title="CUSTOMER KHAATA LEDGER STATEMENT"
-        subtitle={`Party Khaata Record: ${selectedCustomer?.name || 'All Customers'}`}
-        periodFrom={fromDate}
-        periodTo={toDate}
-        metadata={[
-          { label: 'Customer Name', value: selectedCustomer?.name || 'All' },
-          { label: 'Account Code', value: selectedCustomer?.code || '-' },
-          { label: 'City', value: selectedCustomer?.city_name || 'General' },
-          { label: 'Opening Balance', value: formatCurrency(Math.abs(runningKhaata[0]?.balance || 0)) },
-        ]}
-      />
+    <div className="excel-print-container">
+      <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
+        <div>
+          <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '180px', width: 'auto', objectFit: 'contain' }} />
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>CUSTOMER KHAATA LEDGER STATEMENT</h2>
+          <p style={{ margin: '4px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>{selectedCustomer?.name || 'All Customers'}</p>
+          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Code: {selectedCustomer?.code} | City: {selectedCustomer?.city_name || 'General'}</p>
+          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Period: {fromDate || 'Start'} to {toDate || 'End'}</p>
+          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Date of Print: {new Date().toLocaleDateString()}</p>
+        </div>
+      </div>
 
-      <ReportTable
-        columns={columns}
-        data={runningKhaata}
-        rowKeyExtractor={(r, idx) => `${r.type}-${r.invNo}-${idx}`}
-        summaryRow={(
-          <tr className="bg-slate-100 font-bold border-t-2 border-slate-900 text-xs">
-            <td colSpan={6} className="py-2.5 px-3 text-left font-bold uppercase tracking-wider">TOTAL</td>
-            <td className="py-2.5 px-3 text-right text-rose-800">{formatCurrency(ledger?.total_debit || 0)}</td>
-            <td className="py-2.5 px-3 text-right text-emerald-800">{formatCurrency(ledger?.total_credit || 0)}</td>
-            <td className="py-2.5 px-3 text-right text-slate-950 underline">{formatCurrency(Math.abs(runningKhaata[runningKhaata.length - 1]?.balance || 0))}</td>
+      <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+        <thead>
+          <tr>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Date</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Type</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Inv #</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Bill #</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Narration</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Pairs</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Debit (Dr)</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Credit (Cr)</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Balance (Rs.)</th>
           </tr>
-        )}
-      />
+        </thead>
+        <tbody>
+          {runningKhaata.map((row, idx) => (
+            <tr key={idx} style={{ fontWeight: row.type === 'Opening Balance' ? 'bold' : 'normal', backgroundColor: row.type === 'Opening Balance' ? '#f9f9f9' : '#ffffff' }}>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.date}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.type}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{row.invNo}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center' }}>{row.billNo}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>
+                {row.chequeNo ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', lineHeight: '1.5' }}>
+                    <span><span style={{ color: '#888888', fontWeight: 'bold' }}>Cheque No:</span> {row.chequeNo}</span>
+                    <span><span style={{ color: '#888888', fontWeight: 'bold' }}>Date:</span> {row.chequeDate}</span>
+                    <span><span style={{ color: '#888888', fontWeight: 'bold' }}>Rcvd:</span> {row.chequeReceivedDate || 'Pending'}</span>
+                  </div>
+                ) : row.narration}
+              </td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right' }}>{row.pairs > 0 ? row.pairs : '-'}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold' }}>{formatCurrency(Math.abs(row.balance))}</td>
+            </tr>
+          ))}
+          <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
+            <td colSpan={6} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>GRAND TOTAL</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(ledger?.total_debit || 0)}</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(ledger?.total_credit || 0)}</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(Math.abs(runningKhaata[runningKhaata.length - 1]?.balance || 0))}</td>
+          </tr>
+        </tbody>
+      </table>
 
-      <ReportFooter printedBy="Admin Operator" notes="Computer generated customer statement." />
-    </ReportContainer>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '40px', padding: '0 10px' }}>
+        <div style={{ textAlign: 'center', width: '150px' }}>
+          <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
+        </div>
+        <div style={{ textAlign: 'center', width: '150px' }}>
+          <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
+        </div>
+        <div style={{ textAlign: 'center', width: '150px' }}>
+          <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
+        </div>
+      </div>
+    </div>
   );
 
   return (
@@ -324,18 +344,6 @@ export function ReportKhaataContent() {
                   >
                     <Eye size={15} /> Show Print Preview
                   </button>
-                  <button
-                    onClick={() => setIsPreviewOpen(true)}
-                    className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer"
-                  >
-                    <Printer size={14} /> Print Statement
-                  </button>
-                  <button
-                    onClick={handleExportExcel}
-                    className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer"
-                  >
-                    <FileSpreadsheet size={14} /> Export Excel
-                  </button>
                 </div>
               </div>
             </div>
@@ -346,7 +354,7 @@ export function ReportKhaataContent() {
               {/* Header details */}
               <div className="flex items-center justify-between border-b pb-4 mb-6">
                 <div>
-                  <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTO ERP</h1>
+                  <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTOX</h1>
                   <p className="text-xs uppercase tracking-widest text-slate-500 font-inter">Business Accounts Ledger</p>
                 </div>
                 <div className="text-right">
@@ -455,7 +463,7 @@ export function ReportKhaataContent() {
         isOpen={isPreviewOpen}
         onClose={() => setIsPreviewOpen(false)}
         title={`Customer Khaata Ledger - ${selectedCustomer?.name || ''}`}
-        orientation="portrait"
+        orientation="landscape"
         onExportExcel={handleExportExcel}
       >
         {renderPrintableReport()}

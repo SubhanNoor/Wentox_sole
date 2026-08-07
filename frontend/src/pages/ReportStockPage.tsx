@@ -1,7 +1,7 @@
 import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
-import { Search, Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet, LayoutList, X, Eye } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight, LayoutList, X, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import * as api from '@/lib/api';
@@ -285,21 +285,15 @@ export default function ReportStockPage() {
   const totalProductionPairsDirect = useMemo(() => filteredLogs.reduce((sum, log) => sum + (log.input_unit === 'PAIRS' ? (log.input_qty || 0) : 0), 0), [filteredLogs]);
   const totalProductionPairs = useMemo(() => filteredLogs.reduce((sum, log) => sum + log.qty_pairs, 0), [filteredLogs]);
 
-  const handleExportColorReportExcel = () => {
-    const headers = ['Product Code', 'Article', 'Category', ...allColorsAcrossArticles.map(c => `${c} (Ctn/Prs)`), 'Total Pairs'];
-    const rows = colorReportRows.map(r => [
-      r.code, r.commonName, r.categoryName,
-      ...allColorsAcrossArticles.map(c => `${r.byColor[c]?.cartons ?? 0}/${r.byColor[c]?.extraPairs ?? 0}`),
-      r.totalPairs
-    ]);
-    exportRowsToExcel('current-stock-full-report', headers, rows);
-  };
-
   const handleExportExcel = () => {
     if (activeStockTab === 'current') {
-      const headers = ['Product Code', 'Category', 'Total Pairs'];
-      const rows = groupedArticles.map(g => [g.code, g.categoryName, g.rows.reduce((s, r) => s + r.total_pairs, 0)]);
-      exportRowsToExcel('current-stock', headers, rows);
+      const headers = ['Product Code', 'Article', 'Category', ...allColorsAcrossArticles.map(c => `${c} (Ctn/Prs)`), 'Total Pairs'];
+      const rows = colorReportRows.map(r => [
+        r.code, r.commonName, r.categoryName,
+        ...allColorsAcrossArticles.map(c => `${r.byColor[c]?.cartons ?? 0}/${r.byColor[c]?.extraPairs ?? 0}`),
+        r.totalPairs
+      ]);
+      exportRowsToExcel('current-stock-full-report', headers, rows);
     } else if (activeStockTab === 'material') {
       const headers = ['Vendor', 'Material', 'Unit', 'Purchased', 'Returned', 'Current Stock'];
       const rows = materialStockRows.map(r => [r.vendor_name, r.material_name, r.unit, r.purchased_qty, r.returned_qty, r.on_hand]);
@@ -315,10 +309,16 @@ export default function ReportStockPage() {
     }
   };
 
+  const reportOrientation: 'portrait' | 'landscape' = useMemo(() => {
+    if (activeStockTab === 'current' && allColorsAcrossArticles.length > 3) {
+      return 'landscape';
+    }
+    return 'portrait';
+  }, [activeStockTab, allColorsAcrossArticles.length]);
+
   const renderPrintableDocument = () => {
-    let reportTitle = 'FINISHED GOODS STOCK INVENTORY';
-    if (showColorReport) reportTitle = 'CURRENT FINISHED STOCK - FULL COLOR MATRIX REPORT';
-    else if (activeStockTab === 'material') reportTitle = 'RAW MATERIAL INVENTORY REPORT';
+    let reportTitle = 'CURRENT FINISHED STOCK - FULL COLOR MATRIX REPORT';
+    if (activeStockTab === 'material') reportTitle = 'RAW MATERIAL INVENTORY REPORT';
     else if (activeStockTab === 'ledger') reportTitle = 'PRODUCT MOVEMENT LEDGER';
     else if (activeStockTab === 'daily') reportTitle = `DAILY PRODUCTION LOG (${dailyDate})`;
     else if (activeStockTab === 'weekly') reportTitle = 'WEEKLY PRODUCTION REPORT';
@@ -343,60 +343,8 @@ export default function ReportStockPage() {
           </div>
         </div>
 
-        {/* Current Stock Table */}
-        {(activeStockTab === 'current' && !showColorReport) && (
-          <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
-            <thead>
-              <tr>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Article Code</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Article Name</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Category</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Packing</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Cartons</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Extra Pairs</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Total Pairs</th>
-              </tr>
-            </thead>
-            <tbody>
-              {groupedArticles.length === 0 ? (
-                <tr>
-                  <td colSpan={7} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
-                    No stock inventory found.
-                  </td>
-                </tr>
-              ) : (
-                groupedArticles.map(group => {
-                  const catName = group.categoryName || 'General';
-                  const sumPairs = group.rows.reduce((s, r) => s + r.total_pairs, 0);
-                  const packing = group.packing || 12;
-                  const cartons = Math.floor(sumPairs / packing);
-                  const extra = sumPairs % packing;
-
-                  return (
-                    <tr key={group.code}>
-                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace', fontWeight: 'bold' }}>{group.code}</td>
-                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{group.commonName}</td>
-                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{catName}</td>
-                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{packing}</td>
-                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{cartons}</td>
-                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{extra}</td>
-                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{sumPairs.toLocaleString()}</td>
-                    </tr>
-                  );
-                })
-              )}
-              <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
-                <td colSpan={4} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>TOTAL INVENTORY SUM</td>
-                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totalCartons}</td>
-                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totalExtraPairs}</td>
-                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{totalPairs.toLocaleString()}</td>
-              </tr>
-            </tbody>
-          </table>
-        )}
-
-        {/* Full Color Report Matrix */}
-        {showColorReport && (
+        {/* Current Stock Full Color Matrix Report Table */}
+        {activeStockTab === 'current' && (
           <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
             <thead>
               <tr>
@@ -462,6 +410,110 @@ export default function ReportStockPage() {
                   </tr>
                 ))
               )}
+            </tbody>
+          </table>
+        )}
+
+        {/* Product Ledger Table */}
+        {activeStockTab === 'ledger' && (
+          <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+            <thead>
+              <tr>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Date</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Code</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '18%' }}>Article</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Color</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '14%' }}>Vendor</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Type</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '9%' }}>Ref</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '9%' }}>Debit (IN)</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '9%' }}>Credit (OUT)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ledgerResult.rows.length === 0 ? (
+                <tr>
+                  <td colSpan={10} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
+                    No product ledger movements found matching your filters.
+                  </td>
+                </tr>
+              ) : (
+                ledgerResult.rows.map((e, idx) => (
+                  <tr key={e.movement_id}>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{idx + 1}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{e.movement_date}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace', fontWeight: 'bold' }}>{e.article_code}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{e.article_name}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{e.color}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{e.vendor_name || '—'}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontWeight: 'bold' }}>{MOVEMENT_TYPE_LABEL[e.movement_type]}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>#{e.movement_id}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#047857' }}>{e.debit > 0 ? e.debit : '-'}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#e11d48' }}>{e.credit > 0 ? e.credit : '-'}</td>
+                  </tr>
+                ))
+              )}
+              <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
+                <td colSpan={8} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{ledgerResult.total_in.toLocaleString()}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>{ledgerResult.total_out.toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+
+        {/* Production Logs Table */}
+        {(activeStockTab === 'daily' || activeStockTab === 'weekly' || activeStockTab === 'monthly' || activeStockTab === 'overall') && (
+          <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+            <thead>
+              <tr>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '12%' }}>Date</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '12%' }}>Code</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '23%' }}>Article Description</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Color</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '12%' }}>Category</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center', width: '8%' }}>Packing</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '8%' }}>Qty</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '8%' }}>Unit</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '10%' }}>Total Pairs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredLogs.length === 0 ? (
+                <tr>
+                  <td colSpan={10} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
+                    No production records found for the selected criteria.
+                  </td>
+                </tr>
+              ) : (
+                filteredLogs.map((log, idx) => (
+                  <tr key={log.movement_id}>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{idx + 1}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{log.movement_date}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace', fontWeight: 'bold' }}>{log.article_code}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{log.article_name}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{log.color}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{log.category_name}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{log.packing}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{log.input_qty}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textTransform: 'capitalize' }}>{log.input_unit?.toLowerCase()}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{log.qty_pairs.toLocaleString()}</td>
+                  </tr>
+                ))
+              )}
+              <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
+                <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>PRODUCTION TOTAL</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>
+                  {totalProductionCartons > 0 && `${totalProductionCartons} ctn`}
+                  {totalProductionCartons > 0 && totalProductionPairsDirect > 0 && ' + '}
+                  {totalProductionPairsDirect > 0 && `${totalProductionPairsDirect} prs`}
+                  {totalProductionCartons === 0 && totalProductionPairsDirect === 0 && '-'}
+                </td>
+                <td style={{ border: '1px solid #000000', padding: '6px' }}></td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{totalProductionPairs.toLocaleString()}</td>
+              </tr>
             </tbody>
           </table>
         )}
@@ -570,7 +622,8 @@ export default function ReportStockPage() {
         <div data-no-print className={`transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
           {/* Search and Filters */}
           <div className="p-3 rounded-lg border mb-4 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2.5">
+              {/* Left Side: Search */}
               <div className="relative w-56 md:w-64 shrink-0">
                 <Search className="absolute left-3 top-2 text-slate-400" size={16} />
                 <input
@@ -582,43 +635,37 @@ export default function ReportStockPage() {
                 />
               </div>
 
-              <div className="w-44 shrink-0">
-                <SearchableSelect
-                  options={[
-                    { value: 'all', label: 'All Categories' },
-                    ...categories.map(cat => ({ value: String(cat.category_id), label: cat.name }))
-                  ]}
-                  value={selectedCategory}
-                  onChange={setSelectedCategory}
-                  placeholder="All Categories"
-                  searchPlaceholder="Filter category..."
-                />
-              </div>
+              {/* Right Side: Category Filter, View Full Report, Show Print Preview */}
+              <div className="flex flex-wrap items-center gap-2.5 ml-auto">
+                <div className="w-44 shrink-0">
+                  <SearchableSelect
+                    options={[
+                      { value: 'all', label: 'All Categories' },
+                      ...categories.map(cat => ({ value: String(cat.category_id), label: cat.name }))
+                    ]}
+                    value={selectedCategory}
+                    onChange={setSelectedCategory}
+                    placeholder="All Categories"
+                    searchPlaceholder="Filter category..."
+                  />
+                </div>
 
-              {activeStockTab === 'current' && (
+                {activeStockTab === 'current' && (
+                  <button
+                    onClick={() => setShowColorReport(true)}
+                    className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0"
+                  >
+                    <LayoutList size={14} /> View Full Report
+                  </button>
+                )}
+
                 <button
-                  onClick={() => setShowColorReport(true)}
-                  className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0"
+                  onClick={() => setIsPreviewOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs shrink-0"
                 >
-                  <LayoutList size={14} /> View Full Report
+                  <Eye size={14} /> Show Print Preview
                 </button>
-              )}
-
-              <button
-                onClick={() => setIsPreviewOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs shrink-0"
-              >
-                <Eye size={14} /> Show Print Preview
-              </button>
-              <button onClick={() => setIsPreviewOpen(true)} className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0">
-                <Printer size={14} /> Print Report
-              </button>
-              <button onClick={() => setIsPreviewOpen(true)} className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0">
-                <FileDown size={14} /> Export PDF
-              </button>
-              <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0">
-                <FileSpreadsheet size={14} /> Export Excel
-              </button>
+              </div>
             </div>
 
             {/* Timeframe Filters based on Active Tab */}
@@ -1370,15 +1417,9 @@ export default function ReportStockPage() {
                 <p className="text-xs text-slate-500 mt-0.5">Every article × every color, cartons/extra-pairs (0/0 if the article has none of that color)</p>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
-                  <Printer size={14} /> Print
-                </button>
-                <button onClick={handleExportColorReportExcel} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
-                  <FileSpreadsheet size={14} /> Export Excel
-                </button>
                 <button
                   onClick={() => setShowColorReport(false)}
-                  className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+                  className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors cursor-pointer"
                   title="Close"
                 >
                   <X size={18} />
@@ -1703,7 +1744,7 @@ export default function ReportStockPage() {
         isOpen={isPreviewOpen}
         onClose={() => setIsPreviewOpen(false)}
         title="Stock Inventory Report - Print Preview"
-        orientation="portrait"
+        orientation={reportOrientation}
         onExportExcel={handleExportExcel}
       >
         {renderPrintableDocument()}

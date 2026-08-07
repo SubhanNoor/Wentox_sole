@@ -1,8 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
+import { Eye } from 'lucide-react';
 import * as api from '@/lib/api';
+import { exportRowsToExcel } from '@/lib/export';
 import type { ProductLedgerResult, CategoryRow, VendorRow, StockMovementType } from '@/lib/api';
+import wentoxLogo from '@/assets/wentox_logo.png';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
 const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
   PRODUCTION: 'Production',
@@ -26,6 +30,7 @@ export default function ProductLedgerContent() {
   const [vendors, setVendors] = useState<VendorRow[]>([]);
   const [result, setResult] = useState<ProductLedgerResult>({ rows: [], total_in: 0, total_out: 0, net: 0 });
   const [loading, setLoading] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   useEffect(() => {
     api.listCategories().then(r => { if (r.ok) setCategories(r.data); });
@@ -46,6 +51,84 @@ export default function ProductLedgerContent() {
   }, [selectedCategory, vendorFilter, searchQuery, fromDate, toDate]);
 
   useEffect(() => { load(); }, [load]);
+
+  const handleExportExcel = () => {
+    const headers = ['Date', 'Product Code', 'Article', 'Color', 'Vendor', 'Type', 'Ref #', 'Debit (IN)', 'Credit (OUT)'];
+    const rows = result.rows.map(r => [r.movement_date, r.article_code, r.article_name, r.color, r.vendor_name || '', MOVEMENT_TYPE_LABEL[r.movement_type], `#${r.movement_id}`, r.debit, r.credit]);
+    exportRowsToExcel('product-ledger', headers, rows);
+  };
+
+  const renderPrintableDocument = () => {
+    return (
+      <div className="excel-print-container">
+        <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
+          <div>
+            <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '180px', width: 'auto', objectFit: 'contain' }} />
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>PRODUCT LEDGER REPORT</h2>
+            <p style={{ margin: '6px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>
+              Period: {fromDate || 'Start'} to {toDate || 'End'}
+            </p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
+              Date of Print: {new Date().toLocaleDateString()}
+            </p>
+          </div>
+        </div>
+
+        <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+          <thead>
+            <tr>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Date</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Code</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Article</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Color</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Vendor</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Type</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Ref #</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Debit (IN)</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Credit (OUT)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {result.rows.map(entry => (
+              <tr key={entry.movement_id}>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{entry.movement_date}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace', fontWeight: 'bold' }}>{entry.article_code}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{entry.article_name}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{entry.color}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{entry.vendor_name || '—'}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{MOVEMENT_TYPE_LABEL[entry.movement_type]}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>#{entry.movement_id}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#047857' }}>{entry.debit > 0 ? entry.debit : '-'}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#e11d48' }}>{entry.credit > 0 ? entry.credit : '-'}</td>
+              </tr>
+            ))}
+            <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
+              <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{result.total_in.toLocaleString()}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{result.total_out.toLocaleString()}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '40px', padding: '0 10px' }}>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1100 }}>
@@ -84,15 +167,23 @@ export default function ProductLedgerContent() {
             />
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2">
-            <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
-            <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
+              <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
+              <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
-            <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
-          </div>
+          <button
+            onClick={() => setIsPreviewOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+          >
+            <Eye size={14} /> Show Print Preview
+          </button>
         </div>
       </div>
 
@@ -156,6 +247,16 @@ export default function ProductLedgerContent() {
           </table>
         </div>
       </div>
+
+      <ReportPrintPreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        title="Product Ledger Report - Print Preview"
+        orientation="portrait"
+        onExportExcel={handleExportExcel}
+      >
+        {renderPrintableDocument()}
+      </ReportPrintPreviewModal>
     </div>
   );
 }

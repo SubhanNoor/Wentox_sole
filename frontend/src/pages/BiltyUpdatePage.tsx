@@ -255,11 +255,10 @@ export default function BiltyUpdatePage() {
                       key={opt.id}
                       type="button"
                       onClick={() => setBiltyStatusFilter(opt.id as 'all' | 'no-bilty' | 'no-adda' | 'has-bilty')}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold cursor-pointer transition-all select-none ${
-                        biltyStatusFilter === opt.id
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold cursor-pointer transition-all select-none ${biltyStatusFilter === opt.id
                           ? 'bg-[#111c2a] text-white border-[#111c2a] shadow-sm font-bold'
                           : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                      }`}
+                        }`}
                     >
                       <span className="w-2 h-2 rounded-full flex-shrink-0 bg-slate-300" />
                       {opt.label}
@@ -278,11 +277,10 @@ export default function BiltyUpdatePage() {
                       key={opt.id}
                       type="button"
                       onClick={() => setSortBy(opt.id as 'inv-no' | 'bill-no')}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold cursor-pointer transition-all select-none ${
-                        sortBy === opt.id
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold cursor-pointer transition-all select-none ${sortBy === opt.id
                           ? 'bg-[#111c2a] text-white border-[#111c2a] shadow-sm font-bold'
                           : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                      }`}
+                        }`}
                     >
                       <span className="w-2 h-2 rounded-full flex-shrink-0 bg-slate-300" />
                       {opt.label}

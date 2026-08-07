@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { SaleBillRow, SaleBillItemRow, CustomerRow, SubCustomerRow, AddaRow, ProductRow } from '@/lib/api';
-import { Search, Printer, Calendar, FileText, User, Edit2, Package, Truck, Layers, FileDown, FileSpreadsheet, RotateCcw, Eye } from 'lucide-react';
+import { Search, Printer, Calendar, FileText, User, Edit2, Package, Truck, Layers, RotateCcw, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -434,15 +434,6 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
               >
                 <Eye size={14} /> Show Print Preview
-              </button>
-              <button onClick={() => setIsPreviewOpen(true)} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer">
-                <Printer size={14} /> Print Results
-              </button>
-              <button onClick={() => setIsPreviewOpen(true)} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer">
-                <FileDown size={14} /> Export PDF
-              </button>
-              <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer">
-                <FileSpreadsheet size={14} /> Export Excel
               </button>
             </div>
           </div>

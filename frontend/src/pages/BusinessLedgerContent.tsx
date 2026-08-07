@@ -2,8 +2,12 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
+import { Eye } from 'lucide-react';
 import * as api from '@/lib/api';
+import { exportRowsToExcel } from '@/lib/export';
 import type { BusinessLedgerSummaryRow, LedgerRow } from '@/lib/api';
+import wentoxLogo from '@/assets/wentox_logo.png';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
 // Business Accounts Ledger — a general-purpose ledger over ALL business accounts (not just
 // customers), since Account Ledger (Khaata) is scoped to customers only and Vendor Report is
@@ -17,6 +21,7 @@ export default function BusinessLedgerContent() {
   const [summaryRows, setSummaryRows] = useState<BusinessLedgerSummaryRow[]>([]);
   const [detail, setDetail] = useState<{ opening_balance: number; rows: LedgerRow[]; total_debit: number; total_credit: number; closing_balance: number } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const loadSummary = useCallback(async () => {
     setLoading(true);
@@ -43,6 +48,114 @@ export default function BusinessLedgerContent() {
   useEffect(() => { if (viewMode === 'detail' && accountFilter) loadDetail(); }, [viewMode, accountFilter, loadDetail]);
 
   const selectedAccount = useMemo(() => summaryRows.find(b => b.ba_id === accountFilter), [accountFilter, summaryRows]);
+
+  const handleExportExcel = () => {
+    if (viewMode === 'detail') {
+      const headers = ['Date', 'Type', 'Ref', 'Debit', 'Credit', 'Balance'];
+      const rows = (detail?.rows || []).map(e => [e.date, e.type, e.inv_no ?? e.bill_no ?? `#${e.entry_id}`, e.debit, e.credit, e.balance]);
+      exportRowsToExcel(`business-ledger-${selectedAccount?.name || 'detail'}`, headers, rows);
+    } else {
+      const headers = ['Code', 'Description', 'Main Account', 'City / Region', 'Closing Balance'];
+      const rows = visibleSummaryRows.map(r => [r.code, r.name, r.main_account, r.city_name || '', r.closing_balance]);
+      exportRowsToExcel('business-ledger-summary', headers, rows);
+    }
+  };
+
+  const renderPrintableDocument = () => {
+    return (
+      <div className="excel-print-container">
+        <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
+          <div>
+            <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '180px', width: 'auto', objectFit: 'contain' }} />
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>
+              BUSINESS LEDGER REPORT — {viewMode.toUpperCase()} VIEW
+            </h2>
+            <p style={{ margin: '6px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>
+              Period: {fromDate || 'Start'} to {toDate || 'End'}
+            </p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
+              Date of Print: {new Date().toLocaleDateString()}
+            </p>
+          </div>
+        </div>
+
+        {viewMode === 'detail' && selectedAccount ? (
+          <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+            <thead>
+              <tr>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Date</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Transaction Type</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Ref #</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Debit (IN)</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Credit (OUT)</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Balance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(detail?.rows || []).map(e => (
+                <tr key={e.entry_id}>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{e.date}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{e.type}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{e.inv_no ?? e.bill_no ?? `#${e.entry_id}`}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{e.debit > 0 ? formatCurrency(e.debit) : '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{e.credit > 0 ? formatCurrency(e.credit) : '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(e.balance)}</td>
+                </tr>
+              ))}
+              {detail && (
+                <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
+                  <td colSpan={3} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(detail.total_debit)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(detail.total_credit)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(detail.closing_balance)}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        ) : (
+          <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+            <thead>
+              <tr>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Code</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Account Description</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Main Account</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>City / Region</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Closing Balance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleSummaryRows.map(row => (
+                <tr key={row.ba_id}>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontFamily: 'monospace', fontWeight: 'bold' }}>{row.code}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{row.name}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{row.main_account}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{row.city_name || '—'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(row.closing_balance)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '40px', padding: '0 10px' }}>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1100 }}>
@@ -77,6 +190,15 @@ export default function BusinessLedgerContent() {
             <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
             <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
           </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsPreviewOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+          >
+            <Eye size={14} /> Show Print Preview
+          </button>
         </div>
       </div>
 
@@ -170,6 +292,16 @@ export default function BusinessLedgerContent() {
           </div>
         )}
       </div>
+
+      <ReportPrintPreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        title="Business Ledger Report - Print Preview"
+        orientation="portrait"
+        onExportExcel={handleExportExcel}
+      >
+        {renderPrintableDocument()}
+      </ReportPrintPreviewModal>
     </div>
   );
 }

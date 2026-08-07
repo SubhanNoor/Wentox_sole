@@ -1,11 +1,13 @@
 import { useState, useMemo, useEffect, useCallback, Fragment } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import SearchableSelect from '@/components/SearchableSelect';
-import { Search, Printer, FileDown, FileSpreadsheet, ArrowLeft, ChevronRight, Filter } from 'lucide-react';
-import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { Search, ArrowLeft, ChevronRight, Filter, Eye, RotateCcw } from 'lucide-react';
+import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { OverallTrailRow, LedgerRow } from '@/lib/api';
+import wentoxLogo from '@/assets/wentox_logo.png';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
 type AccountGroupType = 'all' | 'customer' | 'vendor' | 'employee' | 'bank' | 'chart_account' | 'business_account';
 
@@ -13,6 +15,14 @@ export default function OverallTrailContent() {
   const [asOfDate, setAsOfDate] = useState(getTodayDate());
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<AccountGroupType>('all');
+  const [reportVisible, setReportVisible] = useState(true);
+
+  const handleClearFilters = () => {
+    setSearchQuery('');
+    setSelectedGroup('all');
+    setAsOfDate(getTodayDate());
+    setReportVisible(false);
+  };
 
   const [selectedAccount, setSelectedAccount] = useState<OverallTrailRow | null>(null);
   const [isClosing, setIsClosing] = useState(false);
@@ -30,6 +40,7 @@ export default function OverallTrailContent() {
 
   const [trailBalances, setTrailBalances] = useState<OverallTrailRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const loadTrail = useCallback(async () => {
     setLoading(true);
@@ -74,8 +85,6 @@ export default function OverallTrailContent() {
     }), { totalDebit: 0, totalCredit: 0 });
   }, [filteredBalances]);
 
-  // Drill-down: every row already carries either ba_id or ac_id — reuse the same
-  // reports.accountLedger() channel every other ledger view uses.
   const [ledger, setLedger] = useState<{ opening_balance: number; rows: LedgerRow[]; closing_balance: number } | null>(null);
   const [ledgerLoading, setLedgerLoading] = useState(false);
 
@@ -106,6 +115,98 @@ export default function OverallTrailContent() {
       ['Total', '', '', filteredTotals.totalDebit, `(${filteredTotals.totalCredit})`, filteredTotals.totalDebit - filteredTotals.totalCredit]
     ];
     exportRowsToExcel(`overall-trail-balances-${asOfDate}`, headers, rows);
+  };
+
+  const renderPrintableDocument = () => {
+    return (
+      <div className="excel-print-container">
+        {/* Header */}
+        <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
+          <div>
+            <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '180px', width: 'auto', objectFit: 'contain' }} />
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>OVERALL TRIAL BALANCE REPORT</h2>
+            <p style={{ margin: '6px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>As On: {asOfDate}</p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Date of Print: {new Date().toLocaleDateString()}</p>
+          </div>
+        </div>
+
+        {/* Table — same structure as on-screen: Code | Description | Debit | Credit */}
+        <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+          <thead>
+            {/* Row 1: merged group header */}
+            <tr>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Account Code</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Account Description</th>
+              <th colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Trail Balances</th>
+            </tr>
+            {/* Row 2: sub-headers for balances */}
+            <tr>
+              <th style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10px', backgroundColor: '#f8f8f8', fontWeight: 'bold', textAlign: 'left' }}></th>
+              <th style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10px', backgroundColor: '#f8f8f8', fontWeight: 'bold', textAlign: 'left' }}></th>
+              <th style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10px', backgroundColor: '#f8f8f8', fontWeight: 'bold', textAlign: 'right', width: '140px' }}>Debit (Naam)</th>
+              <th style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10px', backgroundColor: '#f8f8f8', fontWeight: 'bold', textAlign: 'right', width: '140px' }}>Credit (Jamma)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groupedBalances.map(([groupName, groupRows]) => {
+              const sectionDebit = groupRows.reduce((s, r) => s + r.debit, 0);
+              const sectionCredit = groupRows.reduce((s, r) => s + r.credit, 0);
+              return (
+                <Fragment key={groupName}>
+                  {/* Section header */}
+                  <tr style={{ backgroundColor: '#e8e8e8' }}>
+                    <td colSpan={4} style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '10.5px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      {groupName}
+                    </td>
+                  </tr>
+                  {/* Account rows */}
+                  {groupRows.map(r => (
+                    <tr key={`${r.type}-${r.code}`}>
+                      <td style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10.5px', fontFamily: 'monospace' }}>{r.code}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10.5px' }}>{r.description}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{r.debit > 0 ? formatCurrency(r.debit) : '-'}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{r.credit > 0 ? `(${formatCurrency(r.credit)})` : '-'}</td>
+                    </tr>
+                  ))}
+                  {/* Section subtotal — single line */}
+                  <tr style={{ backgroundColor: '#f5f5f5', fontWeight: 'bold', borderTop: '1.5px solid #888888' }}>
+                    <td colSpan={2} style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '10.5px', textAlign: 'left' }}>
+                      Subtotal for {groupName} ({groupRows.length} accounts):
+                    </td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold' }}>{sectionDebit > 0 ? formatCurrency(sectionDebit) : '-'}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold' }}>{sectionCredit > 0 ? `(${formatCurrency(sectionCredit)})` : '-'}</td>
+                  </tr>
+                </Fragment>
+              );
+            })}
+            {/* Grand Total */}
+            <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#e8e8e8' }}>
+              <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Grand Total</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(filteredTotals.totalDebit)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>({formatCurrency(filteredTotals.totalCredit)})</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* Signature footer */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '40px', padding: '0 10px' }}>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -155,7 +256,7 @@ export default function OverallTrailContent() {
                   <input
                     type="date"
                     value={asOfDate}
-                    onChange={e => setAsOfDate(e.target.value)}
+                    onChange={e => { setAsOfDate(e.target.value); setReportVisible(true); }}
                     className="soleria-input py-1.5 px-3 text-xs font-semibold"
                   />
                 </div>
@@ -163,14 +264,17 @@ export default function OverallTrailContent() {
 
               {/* Action Buttons */}
               <div className="flex items-center gap-2 shrink-0">
-                <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold">
-                  <Printer size={14} /> Print Report
+                <button
+                  onClick={handleClearFilters}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-500 font-semibold rounded-full text-xs transition-all cursor-pointer border border-rose-200 hover:border-rose-300"
+                >
+                  <RotateCcw size={13} /> Clear All
                 </button>
-                <button onClick={() => exportToPDF()} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold">
-                  <FileDown size={14} /> Export PDF
-                </button>
-                <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold">
-                  <FileSpreadsheet size={14} /> Export Excel
+                <button
+                  onClick={() => { setReportVisible(true); setIsPreviewOpen(true); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+                >
+                  <Eye size={14} /> Show Print Preview
                 </button>
               </div>
             </div>
@@ -184,9 +288,9 @@ export default function OverallTrailContent() {
                 <button
                   key={grp}
                   type="button"
-                  onClick={() => setSelectedGroup(grp)}
+                  onClick={() => { setSelectedGroup(grp); setReportVisible(true); }}
                   className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-                    selectedGroup === grp
+                    reportVisible && selectedGroup === grp
                       ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold'
                       : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
                   }`}
@@ -198,44 +302,50 @@ export default function OverallTrailContent() {
           </div>
 
           {/* Main Balances Table */}
-          <div className="card-white p-5 md:p-6 bg-white border">
-            {/* Header metadata */}
-            <div className="border-b pb-3 mb-4 flex justify-between items-start">
+          {!reportVisible ? (
+            <div className="card-white p-12 bg-white border border-slate-200/80 rounded-2xl text-center">
+              <div className="text-slate-300 mb-4">
+                <Filter size={48} className="mx-auto" />
+              </div>
+              <p className="text-slate-500 font-semibold text-sm">Filters cleared. Use the quick filters or search above, then your report will appear.</p>
+            </div>
+          ) : (
+          <div className="card-white bg-white border border-slate-200/80 rounded-2xl overflow-hidden">
+            {/* Card Header */}
+            <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-start">
               <div>
                 <h3 className="font-lora font-bold text-lg text-slate-900">Business Accounts Balances Details</h3>
                 <p className="text-xs text-slate-500 font-medium">As On Date: <span className="font-bold text-slate-700">{asOfDate || 'Today'}</span></p>
               </div>
               <div className="text-right text-xs text-slate-500">
                 <p className="font-bold text-slate-800 uppercase tracking-wider">WENTOX FOOTWEAR DISTRIBUTION</p>
-                <p className="text-[#B08D57] font-semibold">Overall Trail Balances Statement</p>
+                <p style={{ color: 'var(--brand-gold)' }} className="font-semibold">Overall Trial Balances Statement</p>
               </div>
             </div>
 
+            {/* Table */}
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="bg-[#111c2a] text-[#B08D57] font-bold uppercase tracking-wider text-[11px] border-b border-[#1a293d]">
-                    <th className="p-3 border-r border-[#1a293d]" style={{ width: '160px' }}>Account Code</th>
-                    <th className="p-3 border-r border-[#1a293d]">Account Description</th>
-                    <th className="p-3 border-r border-[#1a293d]" style={{ width: '130px' }}>Category</th>
-                    <th className="p-3 text-center border-r border-[#1a293d]" colSpan={2}>
-                      Trail Balances
-                    </th>
-                    <th className="p-3 text-center" style={{ width: '100px' }}>Action</th>
+                  {/* Merged header: Account Description | Trail Balances (spans Debit+Credit) */}
+                  <tr className="bg-slate-50 text-slate-700 font-bold text-[11px] border-b border-slate-200">
+                    <th className="p-3" style={{ width: '155px' }}>Account Code</th>
+                    <th className="p-3">Account Description</th>
+                    <th className="p-3 text-center border-l border-slate-200" colSpan={2} style={{ width: '300px' }}>Trail Balances</th>
                   </tr>
-                  <tr className="bg-[#1a293d] text-[#B08D57]/90 font-bold uppercase tracking-wider text-[10px] border-b border-slate-700">
-                    <th className="p-2 border-r border-[#1a293d]" colSpan={3}></th>
-                    <th className="p-2 text-right border-r border-[#1a293d]" style={{ width: '150px' }}>Debit (Naam)</th>
-                    <th className="p-2 text-right border-r border-[#1a293d]" style={{ width: '150px' }}>Credit (Jamma)</th>
+                  <tr className="bg-slate-50 text-slate-500 font-semibold text-[10.5px] border-b-2 border-slate-300">
+                    <th className="p-2 pl-3"></th>
                     <th className="p-2"></th>
+                    <th className="p-2 text-right border-l border-slate-200" style={{ width: '150px' }}>Debit (Naam)</th>
+                    <th className="p-2 text-right border-l border-slate-200" style={{ width: '150px' }}>Credit (Jamma)</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody>
                   {loading ? (
-                    <tr><td colSpan={6} className="text-center p-8 text-slate-400 italic">Loading…</td></tr>
+                    <tr><td colSpan={4} className="text-center p-8 text-slate-400 italic">Loading…</td></tr>
                   ) : filteredBalances.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="text-center p-8 text-slate-400 italic">
+                      <td colSpan={4} className="text-center p-8 text-slate-400 italic">
                         No account balances found for the selected filter.
                       </td>
                     </tr>
@@ -246,73 +356,47 @@ export default function OverallTrailContent() {
 
                       return (
                         <Fragment key={groupName}>
-                          <tr className="bg-[#111c2a] text-[#B08D57] font-bold text-xs border-y border-[#B08D57]/30">
-                            <td colSpan={6} className="py-2.5 px-4 font-lora font-bold text-xs text-[#B08D57] uppercase tracking-wider">
-                              CATEGORY SECTION: {groupName.toUpperCase()} ({groupRows.length} ACCOUNTS)
+                          {/* Section header — plain grey strip */}
+                          <tr className="bg-slate-100">
+                            <td colSpan={4} className="py-1.5 px-3 text-[10.5px] font-bold text-slate-600 uppercase tracking-widest border-y border-slate-200">
+                              {groupName}
                             </td>
                           </tr>
 
+                          {/* Account rows */}
                           {groupRows.map((row, idx) => (
                             <tr
                               key={`${row.type}-${row.code}-${idx}`}
                               onClick={() => setSelectedAccount(row)}
-                              className="hover:bg-slate-50/80 transition-colors cursor-pointer group even:bg-slate-50/30"
+                              className="border-b border-slate-100 hover:bg-amber-50/30 transition-colors cursor-pointer group"
                             >
-                              <td className="p-2.5 pl-3 border-r border-slate-100">
-                                <span className="inline-block px-3 py-1 text-xs font-mono font-bold rounded-full bg-[#111c2a] text-[#B08D57] border border-[#B08D57]/30 shadow-xs">
-                                  {row.code}
-                                </span>
-                              </td>
-                              <td className="p-2.5 font-bold text-slate-900 group-hover:text-[#B08D57] transition-colors border-r border-slate-100">
+                              <td className="p-2.5 pl-3 font-mono text-[11px] text-slate-600 whitespace-nowrap">{row.code}</td>
+                              <td className="p-2.5 text-slate-800 group-hover:text-[var(--brand-gold)] transition-colors">
                                 <div className="flex items-center justify-between">
                                   <span>{row.description}</span>
-                                  <ChevronRight size={14} className="text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                  <ChevronRight size={12} className="text-slate-300 opacity-0 group-hover:opacity-100 ml-2 shrink-0" />
                                 </div>
                               </td>
-                              <td className="p-2.5 border-r border-slate-100">
-                                <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border uppercase tracking-wider">
-                                  {row.type_label}
-                                </span>
+                              <td className="p-2.5 text-right font-mono border-l border-slate-100 text-[11px]">
+                                {row.debit > 0 ? <span className="text-slate-800">{formatCurrency(row.debit)}</span> : <span className="text-slate-300">-</span>}
                               </td>
-                              <td className="p-2.5 text-right font-bold text-slate-900 border-r border-slate-100 font-mono">
-                                {row.debit > 0 ? (
-                                  <span className="text-emerald-700 font-semibold">{formatCurrency(row.debit)}</span>
-                                ) : (
-                                  <span className="text-slate-300">-</span>
-                                )}
-                              </td>
-                              <td className="p-2.5 text-right font-bold text-slate-900 border-r border-slate-100 font-mono">
-                                {row.credit > 0 ? (
-                                  <span className="text-rose-700 font-semibold">({formatCurrency(row.credit)})</span>
-                                ) : (
-                                  <span className="text-slate-300">-</span>
-                                )}
-                              </td>
-                              <td className="p-2.5 text-center">
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSelectedAccount(row);
-                                  }}
-                                  className="px-3.5 py-1 text-[11px] font-semibold text-[#111c2a] bg-[#B08D57] hover:bg-[#111c2a] hover:text-[#B08D57] border border-[#B08D57] rounded-full transition-all shadow-xs"
-                                >
-                                  View Ledger
-                                </button>
+                              <td className="p-2.5 text-right font-mono border-l border-slate-100 text-[11px]">
+                                {row.credit > 0 ? <span className="text-slate-800">({formatCurrency(row.credit)})</span> : <span className="text-slate-300">-</span>}
                               </td>
                             </tr>
                           ))}
 
-                          <tr className="bg-[#111c2a] text-[#B08D57] font-bold text-xs border-y-2 border-[#B08D57]">
-                            <td colSpan={3} className="p-3 text-left pl-4 font-bold text-[#B08D57] uppercase tracking-wider border-r border-[#1a293d] font-lora">
-                              SUBTOTAL SUMMARY FOR {groupName.toUpperCase()} ({groupRows.length} ACCOUNTS):
+                          {/* Subtotal — single summary line at end of section */}
+                          <tr className="border-t border-slate-400 bg-slate-50">
+                            <td colSpan={2} className="py-2 px-3 text-[10.5px] font-bold text-slate-600 uppercase tracking-wider">
+                              Subtotal for {groupName} ({groupRows.length} accounts):
                             </td>
-                            <td className="p-3 text-right font-bold text-emerald-400 border-r border-[#1a293d] font-mono">
+                            <td className="py-2 px-2.5 text-right font-mono font-bold text-slate-800 border-l border-slate-200 text-[11px]">
                               {sectionDebit > 0 ? formatCurrency(sectionDebit) : '-'}
                             </td>
-                            <td className="p-3 text-right font-bold text-rose-300 border-r border-[#1a293d] font-mono">
+                            <td className="py-2 px-2.5 text-right font-mono font-bold text-slate-800 border-l border-slate-200 text-[11px]">
                               {sectionCredit > 0 ? `(${formatCurrency(sectionCredit)})` : '-'}
                             </td>
-                            <td className="p-3"></td>
                           </tr>
                         </Fragment>
                       );
@@ -320,18 +404,16 @@ export default function OverallTrailContent() {
                   )}
                 </tbody>
                 <tfoot>
-                  <tr className="bg-[#111c2a] text-white font-bold text-xs">
-                    <td colSpan={3} className="p-3 text-right uppercase tracking-wider text-[#B08D57] border-r border-slate-800 font-bold">
-                      Grand Total Trail Balances
-                    </td>
-                    <td className="p-3 text-right border-r border-slate-800 text-emerald-400 font-bold font-mono">{formatCurrency(filteredTotals.totalDebit)}</td>
-                    <td className="p-3 text-right border-r border-slate-800 text-rose-300 font-bold font-mono">({formatCurrency(filteredTotals.totalCredit)})</td>
-                    <td className="p-3"></td>
+                  <tr className="border-t-2 border-slate-800 bg-[var(--brand-navy)] text-white font-bold text-xs">
+                    <td colSpan={2} className="p-3 uppercase tracking-wider text-right" style={{ color: 'var(--brand-gold)' }}>Grand Total Trail Balances</td>
+                    <td className="p-3 text-right font-mono border-l border-slate-600">{formatCurrency(filteredTotals.totalDebit)}</td>
+                    <td className="p-3 text-right font-mono border-l border-slate-600">({formatCurrency(filteredTotals.totalCredit)})</td>
                   </tr>
                 </tfoot>
               </table>
             </div>
           </div>
+          )}
         </div>
       ) : (
         /* VIEW 2: Drill-down Specific Account Ledger */
@@ -354,18 +436,7 @@ export default function OverallTrailContent() {
                 </p>
               </div>
             </div>
-
-            {/* Print & Export Controls */}
-            <div className="flex items-center gap-2">
-              <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold">
-                <Printer size={14} /> Print Ledger
-              </button>
-              <button onClick={() => exportToPDF()} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold">
-                <FileDown size={14} /> Export PDF
-              </button>
-            </div>
           </div>
-
           {/* Date Filter Bar */}
           <div className="p-3 rounded-lg border mb-6 bg-white shadow-sm flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }}>
             <div className="flex flex-wrap items-center gap-4">
@@ -459,6 +530,16 @@ export default function OverallTrailContent() {
           </div>
         </div>
       )}
+
+      <ReportPrintPreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        title="Overall Trial Balance - Print Preview"
+        orientation="portrait"
+        onExportExcel={handleExportExcel}
+      >
+        {renderPrintableDocument()}
+      </ReportPrintPreviewModal>
     </div>
   );
 }

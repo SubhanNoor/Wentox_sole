@@ -1,11 +1,13 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Printer, Search, FileDown, FileSpreadsheet } from 'lucide-react';
-import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { Search, Eye } from 'lucide-react';
+import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { VendorReportRow, VendorRow, LedgerRow } from '@/lib/api';
+import wentoxLogo from '@/assets/wentox_logo.png';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
 export function VendorReportContent() {
   const [selectedVendorId, setSelectedVendorId] = useState<number | null>(null);
@@ -78,6 +80,103 @@ export function VendorReportContent() {
     exportRowsToExcel(`vendor-ledger-${selectedVendor?.name || 'export'}`, headers, rows);
   };
 
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  const renderPrintableDocument = () => {
+    return (
+      <div className="excel-print-container">
+        <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
+          <div>
+            <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '180px', width: 'auto', objectFit: 'contain' }} />
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>
+              {selectedVendorId ? `VENDOR LEDGER STATEMENT — ${selectedVendor?.name?.toUpperCase()}` : 'VENDOR REPORT — GROUPED SUMMARY'}
+            </h2>
+            <p style={{ margin: '6px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>
+              Period: {fromDate || 'Start'} to {toDate || 'End'}
+            </p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
+              Date of Print: {new Date().toLocaleDateString()}
+            </p>
+          </div>
+        </div>
+
+        {!selectedVendorId ? (
+          <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+            <thead>
+              <tr>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Vendor / Supplier</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Total Purchase</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Purchase Return</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Net Purchase</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Payment Paid</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredGroupRows.map(row => (
+                <tr key={row.vendor_id}>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{row.vendor_name}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{row.total_purchase > 0 ? formatCurrency(row.total_purchase) : '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{row.total_return > 0 ? formatCurrency(row.total_return) : '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(row.net_purchase)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{row.payment_paid > 0 ? formatCurrency(row.payment_paid) : '-'}</td>
+                </tr>
+              ))}
+              <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>GRAND TOTAL</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(grandTotals.totalPurchase)}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(grandTotals.purchaseReturn)}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(grandTotals.netPurchase)}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(grandTotals.paymentPaid)}</td>
+              </tr>
+            </tbody>
+          </table>
+        ) : (
+          <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+            <thead>
+              <tr>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Date</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Transaction Type</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Ref #</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Debit (IN)</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Credit (OUT)</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Balance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runningVendorLedger.map((row, idx) => (
+                <tr key={idx} style={{ backgroundColor: idx === 0 ? '#f9f9f9' : '#ffffff', fontWeight: idx === 0 ? 'bold' : 'normal' }}>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{row.date}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{row.type}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{row.ref}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(row.balance)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '40px', padding: '0 10px' }}>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
       <div className="mx-auto" style={{ maxWidth: 1150 }}>
 
@@ -109,14 +208,11 @@ export function VendorReportContent() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-                  <Printer size={16} /> Print
-                </button>
-                <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-                  <FileDown size={16} /> Export PDF
-                </button>
-                <button onClick={handleExportGroupedExcel} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-                  <FileSpreadsheet size={16} /> Export Excel
+                <button
+                  onClick={() => setIsPreviewOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+                >
+                  <Eye size={14} /> Show Print Preview
                 </button>
               </div>
             </div>
@@ -213,14 +309,11 @@ export function VendorReportContent() {
                     <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1 text-xs" />
                   </div>
                 </div>
-                <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm self-end h-9 mt-4">
-                  <Printer size={16} /> Print Statement
-                </button>
-                <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm self-end h-9 mt-4">
-                  <FileDown size={16} /> Export PDF
-                </button>
-                <button onClick={handleExportLedgerExcel} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm self-end h-9 mt-4">
-                  <FileSpreadsheet size={16} /> Export Excel
+                <button
+                  onClick={() => setIsPreviewOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs self-end h-9 mt-4"
+                >
+                  <Eye size={14} /> Show Print Preview
                 </button>
               </div>
             </div>
@@ -236,7 +329,7 @@ export function VendorReportContent() {
                   <div className="text-sm font-semibold text-slate-700 mt-1">{selectedVendor?.name}</div>
                   <div className="text-[10px] font-semibold uppercase text-slate-500">Opening Balance</div>
                   <div className="font-bold font-mono text-sm" style={{ color: 'var(--brand-gold)' }}>
-                    {formatCurrency(Math.abs(runningVendorLedger[0]?.balance || 0))}
+                    {formatCurrency(ledger?.opening_balance || 0)}
                   </div>
                 </div>
               </div>
@@ -247,30 +340,22 @@ export function VendorReportContent() {
                     <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                       <th className="p-3 pl-4">Date</th>
                       <th className="p-3">Type</th>
-                      <th className="p-3 text-center">Ref</th>
-                      <th className="p-3 text-right">Debit</th>
-                      <th className="p-3 text-right">Credit</th>
+                      <th className="p-3 text-center">Ref #</th>
+                      <th className="p-3 text-right">Debit (IN)</th>
+                      <th className="p-3 text-right">Credit (OUT)</th>
                       <th className="p-3 text-right">Balance</th>
                     </tr>
                   </thead>
                   <tbody>
                     {loading ? (
                       <tr><td colSpan={6} className="text-center p-8 text-slate-400">Loading…</td></tr>
-                    ) : runningVendorLedger.length === 1 ? (
-                      <tr><td colSpan={6} className="text-center p-8 text-slate-400">No ledger entries found for this vendor / date range.</td></tr>
+                    ) : runningVendorLedger.length === 0 ? (
+                      <tr><td colSpan={6} className="text-center p-8 text-slate-400">No transactions found for this period.</td></tr>
                     ) : (
                       runningVendorLedger.map((row, idx) => (
-                        <tr
-                          key={idx}
-                          className={`border-b ${row.type === 'Opening Balance' ? 'bg-slate-50 font-medium text-slate-700' : row.credit > 0 ? 'text-rose-700 hover:bg-rose-50/30' : 'text-slate-700 hover:bg-slate-50/30'}`}
-                          style={{ borderColor: 'var(--border-table)' }}
-                        >
-                          <td className="p-3 pl-4 font-semibold">{row.date}</td>
-                          <td className="p-3">
-                            <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${row.type === 'Purchase' ? 'bg-rose-50 text-rose-700' : row.type === 'Payment' ? 'bg-emerald-50 text-emerald-700' : row.type === 'Purchase Return' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-700'}`}>
-                              {row.type}
-                            </span>
-                          </td>
+                        <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                          <td className="p-3 pl-4 text-slate-700 font-semibold">{row.date}</td>
+                          <td className="p-3 font-semibold text-slate-800">{row.type}</td>
                           <td className="p-3 text-center font-mono text-xs">{row.ref}</td>
                           <td className="p-3 text-right font-bold text-rose-700">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
                           <td className="p-3 text-right font-bold text-emerald-700">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
@@ -285,6 +370,15 @@ export function VendorReportContent() {
           </>
         )}
 
+        <ReportPrintPreviewModal
+          isOpen={isPreviewOpen}
+          onClose={() => setIsPreviewOpen(false)}
+          title={selectedVendorId ? `Vendor Ledger - ${selectedVendor?.name}` : 'Vendor Report - Print Preview'}
+          orientation="portrait"
+          onExportExcel={selectedVendorId ? handleExportLedgerExcel : handleExportGroupedExcel}
+        >
+          {renderPrintableDocument()}
+        </ReportPrintPreviewModal>
       </div>
   );
 }
