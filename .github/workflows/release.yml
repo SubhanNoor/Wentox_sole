@@ -12,7 +12,14 @@ permissions:
   contents: write
 
 jobs:
+  # Gate: catches a broken installer.nsh on Linux in ~30s rather than partway through the Windows
+  # packaging job below, where the failure mode is obscure (the uninstaller pass compiles that file
+  # with none of the hooks that reference it).
+  nsis-lint:
+    uses: ./.github/workflows/nsis-lint.yml
+
   release:
+    needs: nsis-lint
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

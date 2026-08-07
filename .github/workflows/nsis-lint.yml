@@ -1,0 +1,27 @@
+name: NSIS script lint
+
+# Compile-checks backend/build/installer.nsh on Linux in seconds, instead of discovering a broken
+# installer script partway through the ~4-minute Windows packaging job. Runs on its own for fast
+# feedback, and is called by release.yml as a gate before the real build.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/build/**'
+      - '.github/workflows/nsis-lint.yml'
+  pull_request:
+    paths:
+      - 'backend/build/**'
+  workflow_call:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install NSIS
+        run: sudo apt-get update && sudo apt-get install -y nsis
+
+      - name: Compile-check installer.nsh in both electron-builder passes
+        run: backend/build/lint-nsis.sh

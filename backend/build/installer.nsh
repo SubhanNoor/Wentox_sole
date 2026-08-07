@@ -16,6 +16,33 @@
 ; so including it again here is safe.
 !include "MUI2.nsh"
 
+; ---------------------------------------------------------------------------------------------
+; EVERYTHING that emits a Function OR declares a Var must live inside this guard.
+;
+; electron-builder compiles installer.nsi TWICE: once with BUILD_UNINSTALLER defined (to emit the
+; uninstaller executable), then again for the real installer. This file is !include-d in BOTH
+; passes, but the hooks that reference our functions are not:
+;   - assistedInstaller.nsh:7 wraps the whole page block (incl. !insertmacro
+;     customPageAfterChangeDir) in !ifndef BUILD_UNINSTALLER
+;   - installer.nsi:115 only !include-s installSection.nsh (which inserts customInstall) inside
+;     that same guard
+; So in the uninstaller pass our page functions/vars would compile with nothing referencing them,
+; and makensis emits "warning 6010: install function ... not referenced" / "warning 6001: Variable
+; ... not referenced or never set" — which electron-builder makes fatal by passing -WX. Guarding
+; them here means the uninstaller pass sees neither. Vars matter as much as Functions here: 6001
+; is just as fatal as 6010.
+;
+; (customPageAfterChangeDir IS the right hook and is inserted regardless of
+; allowToChangeInstallationDirectory — that !ifmacrodef block sits after/outside the !ifdef for
+; the change-directory page. There is no customPageBeforeInstall hook.)
+!ifndef BUILD_UNINSTALLER
+
+; WordFunc's ${WordReplace} is only a *call* macro — the function it calls has to be instantiated
+; explicitly, or linking fails with an undefined-function error. It emits a Function, so it belongs
+; inside this guard too: customInstall (its only caller) isn't inserted in the uninstaller pass, so
+; instantiating it there would trip the exact same warning 6010.
+!insertmacro WordReplace
+
 Var DbServerText
 Var DbPortText
 Var DbNameText
@@ -31,13 +58,6 @@ Var BackupPathPage
 Var BackupPathText
 Var BackupPathValue
 
-; customPageAfterChangeDir is the correct hook and IS inserted unconditionally — see
-; app-builder-lib/templates/nsis/assistedInstaller.nsh, where the `!ifmacrodef
-; customPageAfterChangeDir` block sits OUTSIDE (after) the `!ifdef
-; allowToChangeInstallationDirectory` block, so disabling the change-directory page doesn't
-; suppress it. There is no `customPageBeforeInstall` hook; naming it that meant the macro was
-; never inserted, so these Page custom lines never got emitted and NSIS failed the build with
-; "install function ... not referenced" (electron-builder treats makensis warnings as fatal).
 !macro customPageAfterChangeDir
   Page custom DbConnectionPageCreate DbConnectionPageLeave
   Page custom BackupPathPageCreate BackupPathPageLeave
@@ -155,6 +175,11 @@ Function BackupPathPageLeave
   ${EndIf}
 FunctionEnd
 
+!endif ; BUILD_UNINSTALLER
+
+; Macros below emit no code unless inserted, so they're safe to define in both passes.
+; customInstall is only inserted by installSection.nsh, which is itself installer-pass-only.
+;
 ; Escapes a value for safe embedding in a JSON string: backslash first (so the escaping backslash
 ; itself doesn't get re-escaped), then double-quote. Needed for the password field especially —
 ; server/db/user are unlikely to contain either, but there's no reason not to be defensive here too.
@@ -164,6 +189,15 @@ FunctionEnd
 !macroend
 
 !macro customInstall
+  ; This runs inside electron-builder's own install Section (installSection.nsh), so the scratch
+  ; registers we use here are not ours to trash — save and restore them.
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  Push $9
+
   CreateDirectory "$APPDATA\Wentox"
   CreateDirectory "$BackupPathValue"
 
@@ -178,4 +212,11 @@ FunctionEnd
   FileOpen $4 "$APPDATA\Wentox\app-config.json" w
   FileWrite $4 '{"dbServer": "$6", "dbPort": "$DbPortValue", "dbName": "$7", "dbUser": "$8", "dbPassword": "$9", "backupDbFolder": "$5"}'
   FileClose $4
+
+  Pop $9
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
 !macroend
