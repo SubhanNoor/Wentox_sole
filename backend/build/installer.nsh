@@ -1,15 +1,12 @@
-; One custom NSIS page (both a DB connection form AND a backup folder picker on it — merged into a
-; single page after two separate `Page custom` calls in one macro turned out to only register one
-; of them with NSIS's compiler, "install function ... not referenced", which electron-builder
-; treats as a fatal warning) that writes into %APPDATA%\Wentox\app-config.json, which
+; Two custom NSIS pages, both write into %APPDATA%\Wentox\app-config.json, which
 ; backend/src/config/appConfig.js reads at runtime:
-;   - DB connection fields — the packaged app never ships `.env` (dev-only, and shouldn't carry a
-;     real shop PC's SQL Server password into git anyway), so this is how a packaged install
-;     learns its SQL Server details. backend/src/config/index.js falls back to `.env` only when
-;     this file doesn't exist, i.e. on a dev checkout — nothing here affects local dev.
-;   - Backup folder field — where the live backup database's data/log files should live. The
-;     install location itself stays fixed (nsis.allowToChangeInstallationDirectory: false in
-;     package.json); this page is the only thing the installer lets the user choose.
+;   1. DB connection page — the packaged app never ships `.env` (dev-only, and shouldn't carry a
+;      real shop PC's SQL Server password into git anyway), so this is how a packaged install
+;      learns its SQL Server details. backend/src/config/index.js falls back to `.env` only when
+;      this file doesn't exist, i.e. on a dev checkout — nothing here affects local dev.
+;   2. Backup folder page — where the live backup database's data/log files should live. The
+;      install location itself stays fixed (nsis.allowToChangeInstallationDirectory: false in
+;      package.json); these two pages are the only things the installer lets the user choose.
 !include "nsDialogs.nsh"
 !include "LogicLib.nsh"
 !include "WordFunc.nsh"
@@ -30,19 +27,24 @@ Var DbNameValue
 Var DbUserValue
 Var DbPasswordValue
 
+Var BackupPathPage
 Var BackupPathText
 Var BackupPathValue
 
-; customPageAfterChangeDir is only inserted when nsis.allowToChangeInstallationDirectory is true —
-; it's tied to the "change install dir" page, which we deliberately disabled (fixed install path).
-; customPageBeforeInstall is electron-builder's unconditional hook, always inserted right before
-; the InstFiles page regardless of the directory-page setting, so this page reliably shows.
-!macro customPageBeforeInstall
-  Page custom SetupPageCreate SetupPageLeave
+; customPageAfterChangeDir is the correct hook and IS inserted unconditionally — see
+; app-builder-lib/templates/nsis/assistedInstaller.nsh, where the `!ifmacrodef
+; customPageAfterChangeDir` block sits OUTSIDE (after) the `!ifdef
+; allowToChangeInstallationDirectory` block, so disabling the change-directory page doesn't
+; suppress it. There is no `customPageBeforeInstall` hook; naming it that meant the macro was
+; never inserted, so these Page custom lines never got emitted and NSIS failed the build with
+; "install function ... not referenced" (electron-builder treats makensis warnings as fatal).
+!macro customPageAfterChangeDir
+  Page custom DbConnectionPageCreate DbConnectionPageLeave
+  Page custom BackupPathPageCreate BackupPathPageLeave
 !macroend
 
-Function SetupPageCreate
-  !insertmacro MUI_HEADER_TEXT "Database Setup" "Enter the SQL Server connection and choose a backup location."
+Function DbConnectionPageCreate
+  !insertmacro MUI_HEADER_TEXT "Database Connection" "Enter the SQL Server this PC will use for Wentox."
 
   nsDialogs::Create 1018
   Pop $0
@@ -66,43 +68,70 @@ Function SetupPageCreate
     StrCpy $DbUserValue "sa"
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 20u 30% 12u "Server"
+  ${NSD_CreateLabel} 0 22u 30% 12u "Server"
   Pop $0
-  ${NSD_CreateText} 32% 18u 68% 12u "$DbServerValue"
+  ${NSD_CreateText} 32% 20u 68% 12u "$DbServerValue"
   Pop $DbServerText
 
-  ${NSD_CreateLabel} 0 36u 30% 12u "Port"
+  ${NSD_CreateLabel} 0 38u 30% 12u "Port"
   Pop $0
-  ${NSD_CreateText} 32% 34u 68% 12u "$DbPortValue"
+  ${NSD_CreateText} 32% 36u 68% 12u "$DbPortValue"
   Pop $DbPortText
 
-  ${NSD_CreateLabel} 0 52u 30% 12u "Database Name"
+  ${NSD_CreateLabel} 0 54u 30% 12u "Database Name"
   Pop $0
-  ${NSD_CreateText} 32% 50u 68% 12u "$DbNameValue"
+  ${NSD_CreateText} 32% 52u 68% 12u "$DbNameValue"
   Pop $DbNameText
 
-  ${NSD_CreateLabel} 0 68u 30% 12u "Username"
+  ${NSD_CreateLabel} 0 70u 30% 12u "Username"
   Pop $0
-  ${NSD_CreateText} 32% 66u 68% 12u "$DbUserValue"
+  ${NSD_CreateText} 32% 68u 68% 12u "$DbUserValue"
   Pop $DbUserText
 
-  ${NSD_CreateLabel} 0 84u 30% 12u "Password"
+  ${NSD_CreateLabel} 0 86u 30% 12u "Password"
   Pop $0
-  ${NSD_CreateText} 32% 82u 68% 12u "$DbPasswordValue"
+  ${NSD_CreateText} 32% 84u 68% 12u "$DbPasswordValue"
   Pop $DbPasswordText
   ${NSD_AddStyle} $DbPasswordText 0x0020 ; ES_PASSWORD — masks the input; not predefined by nsDialogs.nsh, so hardcoded
 
-  ${NSD_CreateLabel} 0 106u 100% 24u "Wentox keeps a second, live backup copy of the database in case the main one is ever lost. Choose the folder its files should live in:"
+  nsDialogs::Show
+FunctionEnd
+
+Function DbConnectionPageLeave
+  ${NSD_GetText} $DbServerText $DbServerValue
+  ${NSD_GetText} $DbPortText $DbPortValue
+  ${NSD_GetText} $DbNameText $DbNameValue
+  ${NSD_GetText} $DbUserText $DbUserValue
+  ${NSD_GetText} $DbPasswordText $DbPasswordValue
+
+  ${If} $DbServerValue == ""
+  ${OrIf} $DbNameValue == ""
+  ${OrIf} $DbUserValue == ""
+    MessageBox MB_ICONEXCLAMATION "Please fill in the server, database name, and username."
+    Abort
+  ${EndIf}
+FunctionEnd
+
+Function BackupPathPageCreate
+  !insertmacro MUI_HEADER_TEXT "Backup Database Location" "Choose where Wentox should keep its backup database."
+
+  nsDialogs::Create 1018
+  Pop $BackupPathPage
+  ${If} $BackupPathPage == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 24u "Wentox keeps a second, live backup copy of the database in case the main one is ever lost. Choose the folder its files should live in:"
   Pop $0
 
   ${If} $BackupPathValue == ""
     StrCpy $BackupPathValue "$DOCUMENTS\Wentox Backup"
   ${EndIf}
 
-  ${NSD_CreateText} 0 132u 70% 12u "$BackupPathValue"
+  ${NSD_CreateText} 0 30u 70% 12u "$BackupPathValue"
   Pop $BackupPathText
 
-  ${NSD_CreateBrowseButton} 72% 132u 28% 12u "Browse..."
+  ${NSD_CreateBrowseButton} 72% 30u 28% 12u "Browse..."
   Pop $1
   ${NSD_OnClick} $1 BackupPathBrowse
 
@@ -118,21 +147,8 @@ Function BackupPathBrowse
   ${EndIf}
 FunctionEnd
 
-Function SetupPageLeave
-  ${NSD_GetText} $DbServerText $DbServerValue
-  ${NSD_GetText} $DbPortText $DbPortValue
-  ${NSD_GetText} $DbNameText $DbNameValue
-  ${NSD_GetText} $DbUserText $DbUserValue
-  ${NSD_GetText} $DbPasswordText $DbPasswordValue
+Function BackupPathPageLeave
   ${NSD_GetText} $BackupPathText $BackupPathValue
-
-  ${If} $DbServerValue == ""
-  ${OrIf} $DbNameValue == ""
-  ${OrIf} $DbUserValue == ""
-    MessageBox MB_ICONEXCLAMATION "Please fill in the server, database name, and username."
-    Abort
-  ${EndIf}
-
   ${If} $BackupPathValue == ""
     MessageBox MB_ICONEXCLAMATION "Please choose a backup database folder."
     Abort
