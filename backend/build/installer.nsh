@@ -318,6 +318,34 @@ FunctionEnd
     ${EndIf}
   ${EndIf}
 
+  ; Configure the LOCAL SQL Server — for a freshly auto-installed one this is mostly a no-op
+  ; (setup already applied the same settings), but it's what repairs a PRE-EXISTING instance:
+  ; enabling mixed-mode auth, enabling the sa login, setting its password to what was entered, and
+  ; pinning TCP to 1433. That gap is why detecting an existing SQL Server and skipping straight to
+  ; manual entry still left the app unable to log in — sa is disabled by default, so whatever
+  ; password the user typed could never have worked.
+  ; Only meaningful against this machine; a remote server can't be reconfigured from here.
+  ${If} $DbServerValue == "localhost"
+  ${OrIf} $DbServerValue == "."
+  ${OrIf} $DbServerValue == "127.0.0.1"
+    ${If} ${FileExists} "$INSTDIR\resources\configure-sqlserver.ps1"
+      DetailPrint "Configuring SQL Server for Wentox..."
+      ; Password goes via a file in $PLUGINSDIR (auto-wiped when the installer exits) rather than
+      ; the command line, so it never lands in the process list and NSIS doesn't have to escape
+      ; quotes into a command string.
+      FileOpen $4 "$PLUGINSDIR\sapwd.txt" w
+      FileWrite $4 "$DbPasswordValue"
+      FileClose $4
+      ExecWait 'powershell.exe -ExecutionPolicy Bypass -NoProfile -File "$INSTDIR\resources\configure-sqlserver.ps1" -PasswordFile "$PLUGINSDIR\sapwd.txt"' $0
+      Delete "$PLUGINSDIR\sapwd.txt"
+      ${If} $0 != 0
+        MessageBox MB_ICONEXCLAMATION "Could not finish configuring SQL Server (exit code $0). If Wentox cannot log in, the sa account may need to be enabled manually in SQL Server Management Studio."
+      ${Else}
+        DetailPrint "SQL Server configured successfully."
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
   CreateDirectory "$APPDATA\Wentox"
   CreateDirectory "$BackupPathValue"
 
