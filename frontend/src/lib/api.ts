@@ -1457,6 +1457,12 @@ declare global {
         check: () => Promise<ApiResult<{ updateAvailable: boolean; currentVersion?: string; latestVersion?: string; packaged?: boolean }>>;
         install: () => Promise<ApiResult<{ ok: true }>>;
       };
+      backup: {
+        // backup.ipc.js's runNow resolves service.sync(), which has no explicit return value —
+        // wrap.js yields { ok: true, data: undefined } on success, not a real payload.
+        runNow: () => Promise<ApiResult<undefined>>;
+        status: () => Promise<ApiResult<{ lastSyncAt: string | null; lastSyncError: string | null; configured: boolean }>>;
+      };
       alerts: {
         list: () => Promise<ApiResult<AlertRow[]>>;
         dismiss: (payload: { alert_key: string }) => Promise<ApiResult<{ ok: true }>>;
