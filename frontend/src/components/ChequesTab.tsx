@@ -1,11 +1,13 @@
 import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import { todayISO } from '@/lib/cheques';
-import { Printer, FileDown, FileSpreadsheet, Search, AlertTriangle } from 'lucide-react';
-import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { Printer, FileDown, FileSpreadsheet, Search, AlertTriangle, Eye } from 'lucide-react';
+import { exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { ChequeRow, ChequeAllocationRow, ChequeStatus, ChequeDispositionType, VendorRow, BankAccountRow, BusinessAccountRow } from '@/lib/api';
+import wentoxLogo from '@/assets/wentox_logo.png';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
 const STATUS_STYLES: Record<ChequeStatus, string> = {
   PENDING: 'bg-amber-50 text-amber-800 border-amber-200',
@@ -33,6 +35,23 @@ export default function ChequesTab() {
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | ChequeStatus>('open');
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  const statusOptionsList: { value: 'all' | 'open' | ChequeStatus; label: string }[] = [
+    { value: 'open', label: 'Open (Pending / Partial)' },
+    { value: 'all', label: 'All cheques' },
+    { value: 'PENDING', label: 'Pending' },
+    { value: 'PARTIALLY_ENDORSED', label: 'Partially Endorsed' },
+    { value: 'ENDORSED', label: 'Endorsed' },
+    { value: 'DEPOSITED', label: 'Deposited' },
+    { value: 'CLEARED', label: 'Cleared' },
+    { value: 'BOUNCED', label: 'Bounced' },
+    { value: 'RETURNED', label: 'Returned to Sender' },
+  ];
+
+  const selectedStatusLabel = useMemo(() => {
+    return statusOptionsList.find(o => o.value === statusFilter)?.label || 'Open (Pending / Partial)';
+  }, [statusFilter]);
 
   // Dispose dialog state
   const [disposingCheque, setDisposingCheque] = useState<ChequeRow | null>(null);
@@ -249,6 +268,84 @@ export default function ChequesTab() {
     exportRowsToExcel('cheque-register', headers, rows);
   };
 
+  const totalValue = useMemo(() => chequeRows.reduce((sum, r) => sum + (r.cheque.receipt_amount ?? 0), 0), [chequeRows]);
+  const totalUnallocated = useMemo(() => chequeRows.reduce((sum, r) => sum + r.unallocated, 0), [chequeRows]);
+
+  const renderPrintableDocument = () => (
+    <div className="excel-print-container">
+      {/* Header Section with Huge Prominent Logo */}
+      <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
+        <div>
+          <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '180px', width: 'auto', objectFit: 'contain' }} />
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold' }}>CHEQUES RECEIVED DIRECTORY</h2>
+          <p style={{ margin: '6px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>
+            Filter: {selectedStatusLabel}
+          </p>
+          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
+            Date of Print: {new Date().toLocaleDateString()}
+          </p>
+        </div>
+      </div>
+
+      {/* Results Table */}
+      <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+        <thead>
+          <tr>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Cheque No.</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Cheque Date</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Customer</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Status</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Total (Rs.)</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Unassigned (Rs.)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {chequeRows.length === 0 ? (
+            <tr>
+              <td colSpan={6} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
+                No cheques match the selected filter.
+              </td>
+            </tr>
+          ) : (
+            chequeRows.map(row => (
+              <tr key={row.cheque.cheque_id}>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace', fontWeight: 'bold' }}>{row.cheque.cheque_no || '-'}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{row.cheque.cheque_date || '-'}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{row.customerName}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontWeight: 'bold' }}>{row.status}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(row.cheque.receipt_amount ?? 0)}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(row.unallocated)}</td>
+              </tr>
+            ))
+          )}
+          <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
+            <td colSpan={4} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL SUM</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totalValue)}</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totalUnallocated)}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* Signatures */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '40px', padding: '0 10px' }}>
+        <div style={{ textAlign: 'center', width: '150px' }}>
+          <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
+        </div>
+        <div style={{ textAlign: 'center', width: '150px' }}>
+          <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
+        </div>
+        <div style={{ textAlign: 'center', width: '150px' }}>
+          <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div>
       {successMsg && (
@@ -298,14 +395,20 @@ export default function ChequesTab() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-            <Printer size={16} /> Print
+          <button
+            onClick={() => setIsPreviewOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+          >
+            <Eye size={15} /> Show Print Preview
           </button>
-          <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-            <FileDown size={16} /> Export PDF
+          <button onClick={() => setIsPreviewOpen(true)} className="btn-outline flex items-center gap-1.5 px-3.5 py-2 text-xs cursor-pointer">
+            <Printer size={15} /> Print
           </button>
-          <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-            <FileSpreadsheet size={16} /> Export Excel
+          <button onClick={() => setIsPreviewOpen(true)} className="btn-outline flex items-center gap-1.5 px-3.5 py-2 text-xs cursor-pointer">
+            <FileDown size={15} /> Export PDF
+          </button>
+          <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3.5 py-2 text-xs cursor-pointer">
+            <FileSpreadsheet size={15} /> Export Excel
           </button>
         </div>
       </div>
@@ -663,6 +766,21 @@ export default function ChequesTab() {
           </div>
         </div>
       )}
+      {/* Native @media print container */}
+      <div className="hidden print:block">
+        {renderPrintableDocument()}
+      </div>
+
+      {/* Full-Screen Interactive Print Preview Modal */}
+      <ReportPrintPreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        title="Cheques Received Directory - Print Preview"
+        orientation="portrait"
+        onExportExcel={handleExportExcel}
+      >
+        {renderPrintableDocument()}
+      </ReportPrintPreviewModal>
     </div>
   );
 }

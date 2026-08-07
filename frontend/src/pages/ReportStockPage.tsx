@@ -1,11 +1,13 @@
 import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
-import { Search, Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet, LayoutList, X } from 'lucide-react';
-import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { Search, Printer, ChevronDown, ChevronRight, FileDown, FileSpreadsheet, LayoutList, X, Eye } from 'lucide-react';
+import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { StockRow, VendorStockRow, ProductLedgerResult, StockMovementRow, StockMovementType, CategoryRow, VendorRow } from '@/lib/api';
+import wentoxLogo from '@/assets/wentox_logo.png';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
 const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
   PRODUCTION: 'Production',
@@ -43,6 +45,7 @@ export default function ReportStockPage() {
   type StockTab = 'current' | 'material' | 'ledger' | 'daily' | 'weekly' | 'monthly' | 'overall';
   const [activeStockTab, setActiveStockTab] = useState<StockTab>('current');
   const [tabAnimating, setTabAnimating] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const switchStockTab = (next: StockTab) => {
     if (next === activeStockTab) return;
@@ -312,6 +315,176 @@ export default function ReportStockPage() {
     }
   };
 
+  const renderPrintableDocument = () => {
+    let reportTitle = 'FINISHED GOODS STOCK INVENTORY';
+    if (showColorReport) reportTitle = 'CURRENT FINISHED STOCK - FULL COLOR MATRIX REPORT';
+    else if (activeStockTab === 'material') reportTitle = 'RAW MATERIAL INVENTORY REPORT';
+    else if (activeStockTab === 'ledger') reportTitle = 'PRODUCT MOVEMENT LEDGER';
+    else if (activeStockTab === 'daily') reportTitle = `DAILY PRODUCTION LOG (${dailyDate})`;
+    else if (activeStockTab === 'weekly') reportTitle = 'WEEKLY PRODUCTION REPORT';
+    else if (activeStockTab === 'monthly') reportTitle = `MONTHLY PRODUCTION REPORT (${getMonthName(monthlyMonth)} ${monthlyYear})`;
+    else if (activeStockTab === 'overall') reportTitle = 'CUMULATIVE OVERALL PRODUCTION REPORT';
+
+    return (
+      <div className="excel-print-container">
+        {/* Header Section with Prominent 180px Logo */}
+        <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
+          <div>
+            <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '180px', width: 'auto', objectFit: 'contain' }} />
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>{reportTitle}</h2>
+            <p style={{ margin: '6px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>
+              Category: {selectedCategory === 'all' ? 'All Categories' : categories.find(c => String(c.category_id) === selectedCategory)?.name}
+            </p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
+              Date of Print: {new Date().toLocaleDateString()}
+            </p>
+          </div>
+        </div>
+
+        {/* Current Stock Table */}
+        {(activeStockTab === 'current' && !showColorReport) && (
+          <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+            <thead>
+              <tr>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Article Code</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Article Name</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Category</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Packing</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Cartons</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Extra Pairs</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Total Pairs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groupedArticles.length === 0 ? (
+                <tr>
+                  <td colSpan={7} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
+                    No stock inventory found.
+                  </td>
+                </tr>
+              ) : (
+                groupedArticles.map(group => {
+                  const catName = group.categoryName || 'General';
+                  const sumPairs = group.rows.reduce((s, r) => s + r.total_pairs, 0);
+                  const packing = group.packing || 12;
+                  const cartons = Math.floor(sumPairs / packing);
+                  const extra = sumPairs % packing;
+
+                  return (
+                    <tr key={group.code}>
+                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace', fontWeight: 'bold' }}>{group.code}</td>
+                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{group.commonName}</td>
+                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{catName}</td>
+                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{packing}</td>
+                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{cartons}</td>
+                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{extra}</td>
+                      <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{sumPairs.toLocaleString()}</td>
+                    </tr>
+                  );
+                })
+              )}
+              <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
+                <td colSpan={4} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>TOTAL INVENTORY SUM</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totalCartons}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totalExtraPairs}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{totalPairs.toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+
+        {/* Full Color Report Matrix */}
+        {showColorReport && (
+          <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+            <thead>
+              <tr>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '10.5px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Code</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '10.5px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Article</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '10.5px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Category</th>
+                {allColorsAcrossArticles.map(c => (
+                  <th key={c} style={{ border: '1px solid #000000', padding: '6px', fontSize: '10.5px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>{c}</th>
+                ))}
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '10.5px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Total Pairs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {colorReportRows.map(row => (
+                <tr key={row.code}>
+                  <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10px', fontFamily: 'monospace', fontWeight: 'bold' }}>{row.code}</td>
+                  <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{row.commonName}</td>
+                  <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10px' }}>{row.categoryName}</td>
+                  {allColorsAcrossArticles.map(c => {
+                    const st = row.byColor[c];
+                    return (
+                      <td key={c} style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10px', textAlign: 'center', fontFamily: 'monospace' }}>
+                        {st ? `${st.cartons}/${st.extraPairs}` : '-'}
+                      </td>
+                    );
+                  })}
+                  <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{row.totalPairs.toLocaleString()}</td>
+                </tr>
+              ))}
+              <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
+                <td colSpan={3 + allColorsAcrossArticles.length} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>TOTAL PAIRS ACROSS ALL ARTICLES & COLORS</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{colorReportTotalPairs.toLocaleString()}</td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+
+        {/* Material Stock Table */}
+        {activeStockTab === 'material' && (
+          <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+            <thead>
+              <tr>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Vendor</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Material Name</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Unit</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Available Stock</th>
+              </tr>
+            </thead>
+            <tbody>
+              {materialStockRows.length === 0 ? (
+                <tr>
+                  <td colSpan={4} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
+                    No raw materials match the selected filter.
+                  </td>
+                </tr>
+              ) : (
+                materialStockRows.map(row => (
+                  <tr key={`${row.vendor_id}-${row.material_name}`}>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{row.vendor_name}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{row.material_name}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.unit}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{row.on_hand.toLocaleString()}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        )}
+
+        {/* Signatures */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '40px', padding: '0 10px' }}>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <AppLayout pageTitle="Stock & Production Center">
       <div className="mx-auto" style={{ maxWidth: 1000 }}>
@@ -431,10 +604,16 @@ export default function ReportStockPage() {
                 </button>
               )}
 
-              <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0">
+              <button
+                onClick={() => setIsPreviewOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs shrink-0"
+              >
+                <Eye size={14} /> Show Print Preview
+              </button>
+              <button onClick={() => setIsPreviewOpen(true)} className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0">
                 <Printer size={14} /> Print Report
               </button>
-              <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0">
+              <button onClick={() => setIsPreviewOpen(true)} className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0">
                 <FileDown size={14} /> Export PDF
               </button>
               <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold shrink-0">
@@ -1514,6 +1693,21 @@ export default function ReportStockPage() {
           </div>
         </div>
       )}
+      {/* Native @media print container */}
+      <div className="hidden print:block">
+        {renderPrintableDocument()}
+      </div>
+
+      {/* Full-Screen Interactive Print Preview Modal */}
+      <ReportPrintPreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        title="Stock Inventory Report - Print Preview"
+        orientation="portrait"
+        onExportExcel={handleExportExcel}
+      >
+        {renderPrintableDocument()}
+      </ReportPrintPreviewModal>
     </AppLayout>
   );
 }
