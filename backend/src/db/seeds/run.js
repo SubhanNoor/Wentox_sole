@@ -82,6 +82,21 @@ async function seed() {
     console.log('seeded admin user (username: admin, password: admin123 — change immediately)');
   }
 
+  // --- Default non-admin user ---
+  const userExists = await pool.request()
+    .input('username', sql.VarChar, 'user')
+    .query('SELECT 1 FROM dbo.users WHERE username = @username');
+  if (!userExists.recordset.length) {
+    const passwordHash = await bcrypt.hash('user123', 10);
+    await pool.request()
+      .input('username', sql.VarChar, 'user')
+      .input('passwordHash', sql.VarChar, passwordHash)
+      .input('role', sql.VarChar, 'USER')
+      .query(`INSERT INTO dbo.users (username, password_hash, role)
+              VALUES (@username, @passwordHash, @role)`);
+    console.log('seeded default user (username: user, password: user123 — change immediately)');
+  }
+
   // --- Account classes (§8) ---
   const classes = [
     { code: 'ASSETS', name: 'Assets' },
