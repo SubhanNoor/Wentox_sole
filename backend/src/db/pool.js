@@ -8,6 +8,29 @@ function getPool() {
   return poolPromise;
 }
 
+// Set whenever a write transaction commits against the main DB; backup.service reads/clears it to
+// decide whether the periodic sync has anything new to copy over. Plain writes via `query()`
+// (rare — reads mostly use it) aren't tracked, since every real write in this codebase goes
+// through `withTransaction()` per the "Posting" convention in CLAUDE.md.
+let dirtySinceLastBackup = false;
+
+function markDirty() {
+  dirtySinceLastBackup = true;
+}
+
+function consumeDirty() {
+  const wasDirty = dirtySinceLastBackup;
+  dirtySinceLastBackup = false;
+  return wasDirty;
+}
+
+// Non-consuming peek — lets a caller decide whether to bother starting a sync at all without
+// clearing the flag itself (see backup.service.js#sync(), which only consumes the flag at the
+// moment it actually kicks off a NEW run, not when joining an already-in-flight one).
+function isDirty() {
+  return dirtySinceLastBackup;
+}
+
 // Runs a parameterized query. `params` is an object of named params:
 // query('SELECT * FROM dbo.cities WHERE city_id = @id', { id: { type: sql.Int, value: 5 } })
 // Each value may be a plain value (type inferred by mssql) or { type, value } for an explicit sql.* type.
@@ -27,6 +50,7 @@ async function withTransaction(fn) {
   try {
     const result = await fn(transaction);
     await transaction.commit();
+    markDirty();
     return result;
   } catch (err) {
     await transaction.rollback();
@@ -51,4 +75,4 @@ function applyParams(request, params) {
   }
 }
 
-module.exports = { sql, getPool, query, withTransaction, requestWithParams };
+module.exports = { sql, getPool, query, withTransaction, requestWithParams, consumeDirty, isDirty };

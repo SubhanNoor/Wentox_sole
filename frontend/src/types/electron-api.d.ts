@@ -15,12 +15,24 @@ export interface UpdateCheckResult {
   packaged?: boolean;
 }
 
+export interface BackupStatusResult {
+  lastSyncAt: string | null;
+  lastSyncError: string | null;
+  configured: boolean;
+}
+
 declare global {
   interface Window {
     api?: {
       updates: {
         check: () => Promise<IpcResult<UpdateCheckResult>>;
         install: () => Promise<IpcResult<{ ok: true }>>;
+      };
+      backup: {
+        // backup.ipc.js's runNow resolves service.sync(), which has no explicit return value —
+        // wrap.js yields { ok: true, data: undefined } on success, not a real payload.
+        runNow: () => Promise<IpcResult<undefined>>;
+        status: () => Promise<IpcResult<BackupStatusResult>>;
       };
       [feature: string]: unknown;
     };

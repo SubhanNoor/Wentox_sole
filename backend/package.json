@@ -10,7 +10,10 @@
     "migrate": "node src/db/migrate.js",
     "seed": "node src/db/seeds/run.js",
     "seed:dev": "node src/db/seeds/dev-sample-data.js",
-    "electron:dev": "concurrently \"npm --prefix ../frontend run dev\" \"cross-env VITE_DEV_SERVER_URL=http://localhost:3000 electron .\""
+    "electron:dev": "concurrently \"npm --prefix ../frontend run dev\" \"cross-env VITE_DEV_SERVER_URL=http://localhost:3000 electron .\"",
+    "build:frontend": "npm --prefix ../frontend run build",
+    "dist:win": "npm run build:frontend && electron-builder --win",
+    "release:win": "npm run build:frontend && electron-builder --win --publish always"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
@@ -24,5 +27,38 @@
     "electron": "^33.4.11",
     "electron-builder": "^25.0.0",
     "nodemon": "^3.1.4"
+  },
+  "build": {
+    "appId": "com.wentox.erp",
+    "productName": "Wentox",
+    "directories": {
+      "output": "dist-installer"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "package.json",
+      "!**/*.test.js"
+    ],
+    "extraResources": [
+      {
+        "from": "../frontend/dist",
+        "to": "frontend/dist"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": false,
+      "perMachine": true,
+      "include": "build/installer.nsh"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "SubhanNoor",
+      "repo": "Wentox_sole"
+    }
   }
 }

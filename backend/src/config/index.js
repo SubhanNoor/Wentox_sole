@@ -12,4 +12,7 @@ module.exports = {
       trustServerCertificate: process.env.DB_TRUST_SERVER_CERT !== 'false',
     },
   },
+  // Same SQL Server instance/credentials as `db` above — only the database name and physical data
+  // file location (from appConfig.getBackupDbFolder(), chosen at install time) differ.
+  backupDbName: process.env.BACKUP_DB_NAME || `${process.env.DB_NAME || 'wentox'}_backup`,
 };

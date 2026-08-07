@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
-import { Save, Lock, User, RefreshCw, Download, CheckCircle2, AlertTriangle, ShieldCheck, Cpu, Sparkles, Server } from 'lucide-react';
+import { Save, Lock, User, RefreshCw, Download, CheckCircle2, AlertTriangle, ShieldCheck, Cpu, Sparkles, Server, DatabaseBackup } from 'lucide-react';
 
 type SettingsTab = 'credentials' | 'updates';
 type UpdateStatus = 'idle' | 'checking' | 'no-internet' | 'error' | 'up-to-date' | 'update-available' | 'downloading' | 'installed';
@@ -116,6 +116,40 @@ export default function SettingsPage() {
     setUpdateMessage('');
   };
 
+  // Backup DB State — syncs the live backup database (via native SQL Server BACKUP/RESTORE, see
+  // backend/src/services/backup.service.js) on top of the periodic 10-minute auto-sync; lets the
+  // shop PC user force it when they need certainty (e.g. right before closing for the day).
+  const [backupRunning, setBackupRunning] = useState(false);
+  const [backupMessage, setBackupMessage] = useState('');
+  const [backupError, setBackupError] = useState('');
+  const [backupLastSync, setBackupLastSync] = useState<string | null>(null);
+
+  const handleBackupNow = async () => {
+    setBackupRunning(true);
+    setBackupMessage('');
+    setBackupError('');
+
+    if (!window.api?.backup) {
+      setTimeout(() => {
+        setBackupRunning(false);
+        setBackupMessage('Preview mode — backup runs only in the desktop app.');
+      }, 800);
+      return;
+    }
+
+    const res = await window.api.backup.runNow();
+    setBackupRunning(false);
+    if (!res.ok) {
+      setBackupError(res.error?.message || 'Backup sync failed.');
+      return;
+    }
+    const statusRes = await window.api.backup.status();
+    if (statusRes.ok && statusRes.data?.lastSyncAt) {
+      setBackupLastSync(new Date(statusRes.data.lastSyncAt).toLocaleString());
+    }
+    setBackupMessage('Backup database synced successfully.');
+  };
+
   return (
     <AppLayout pageTitle="Settings">
       <div className="mx-auto" style={{ maxWidth: 900 }}>
@@ -220,6 +254,39 @@ export default function SettingsPage() {
                 </button>
               </form>
             </div>
+
+            <div className="card-white p-6 md:p-8 bg-white border max-w-xl mx-auto mt-6">
+              <div className="border-b pb-4 mb-6">
+                <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
+                  <DatabaseBackup size={20} className="text-[#B08D57]" /> Backup Database
+                </h3>
+                <p className="text-xs text-slate-500 font-medium">
+                  Syncs automatically every 10 minutes when there's new data. Use this to force a sync right now.
+                </p>
+              </div>
+
+              {backupMessage && (
+                <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{backupMessage}</div>
+              )}
+              {backupError && (
+                <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{backupError}</div>
+              )}
+
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="text-xs text-slate-600 font-medium">
+                  Last backup sync: <span className="font-semibold text-slate-800">{backupLastSync || 'Not yet run'}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleBackupNow}
+                  disabled={backupRunning}
+                  className="btn-gold flex items-center justify-center gap-2 px-6 py-2.5 text-xs font-semibold disabled:opacity-60 cursor-pointer w-full sm:w-auto"
+                >
+                  <DatabaseBackup size={15} className={backupRunning ? 'animate-pulse' : ''} />
+                  {backupRunning ? 'Syncing Backup…' : 'Backup Now'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -318,7 +385,7 @@ export default function SettingsPage() {
                   </div>
                   <div>
                     <h5 className="font-bold text-xs text-slate-800 mb-0.5">Auto Backup</h5>
-                    <p className="text-[11px] text-slate-500 font-medium">Encrypted daily database snapshots active</p>
+                    <p className="text-[11px] text-slate-500 font-medium">Syncs automatically every 10 minutes when there's new data</p>
                   </div>
                 </div>
 

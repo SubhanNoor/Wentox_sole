@@ -2009,4 +2009,34 @@ _Not started._
 _Not started._
 
 ## Milestone 9 — Alerts, Frontend Integration & Electron
-_Not started._
+- Module 9.1 (Alerts) and most of 9.3 (Electron main/preload, dev script, update-check page) were
+  already done in an earlier session but never reflected here — this entry had gone stale. Module
+  9.2 (frontend wired to real `window.api` calls, off `AppContext` demo data) confirmed complete
+  by explicit user confirmation this session — not independently re-verified line-by-line here.
+- **New scope: live backup database.** A second SQL Server database, kept in sync via native
+  `BACKUP DATABASE`/`RESTORE DATABASE` (not row-by-row dual writes — avoids `IDENTITY` id drift
+  between the two DBs) rather than a live queryable mirror written to on every insert.
+  `backend/src/services/backup.service.js` — `sync()`/`syncIfDirty()`, an in-flight-promise guard
+  so a manual click during an auto-sync just awaits the same run. `pool.js#withTransaction()` now
+  sets a dirty flag on commit; a 10-minute timer in `electron/main.js` calls `syncIfDirty()`,
+  skipping the (expensive) BACKUP/RESTORE entirely when nothing changed. Failures are caught/
+  logged, never block or roll back the main write. `backup:runNow`/`backup:status` IPC (admin-
+  only) + a "Backup Database" card on `SettingsPage.tsx` (Backup Now button, last-sync display).
+  Install-time: `build/installer.nsh` adds one custom NSIS page (main install path stays fixed,
+  per explicit requirement) asking for the backup folder, writes it to
+  `%APPDATA%\Wentox\backup-config.json`; `src/config/appConfig.js` reads it at runtime via
+  `app.getPath('userData')` (`app.setName('Wentox')` added to `main.js` so that path resolves
+  correctly — package.json's own `name` is the npm package `wentox-backend`, not this).
+  electron-builder config added to `package.json` (`build` block, NSIS target, `extraResources`
+  copying `frontend/dist` in since the packaged app can't rely on the monorepo's relative
+  `../../frontend` layout) — new `npm run dist:win` script.
+- **Not yet live-verified** — no SQL Server reachable in this sandbox, and `electron-builder --win`
+  needs an actual Windows build to confirm the NSIS script and packaged app end-to-end. Next real
+  step: run `npm run dist:win` on a Windows machine (or CI), install it, and confirm the backup
+  page appears, the config file lands correctly, and Backup Now actually produces a synced
+  `wentox_backup` database.
+- **Files:** `backend/src/services/backup.service.js`, `backend/src/ipc/backup.ipc.js`,
+  `backend/src/config/appConfig.js`, `backend/src/config/index.js`, `backend/src/db/pool.js`,
+  `backend/src/ipc/index.js`, `backend/electron/main.js`, `backend/build/installer.nsh`,
+  `backend/package.json`, `frontend/src/pages/SettingsPage.tsx`,
+  `frontend/src/lib/ipcBridge.ts`, `frontend/src/types/electron-api.d.ts`

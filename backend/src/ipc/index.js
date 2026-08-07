@@ -6,6 +6,7 @@ const registerAccountClasses = require('./accountClasses.ipc');
 const registerAlerts = require('./alerts.ipc');
 const registerAuth = require('./auth.ipc');
 const registerAddas = require('./addas.ipc');
+const registerBackup = require('./backup.ipc');
 const registerBankAccounts = require('./bankAccounts.ipc');
 const registerBusinessAccounts = require('./businessAccounts.ipc');
 const registerCategories = require('./categories.ipc');
@@ -48,6 +49,7 @@ module.exports = function registerIpcHandlers() {
   registerAlerts();
   registerAuth();
   registerAddas();
+  registerBackup();
   registerBankAccounts();
   registerBusinessAccounts();
   registerCategories();
