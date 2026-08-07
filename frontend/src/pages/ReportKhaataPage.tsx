@@ -1,548 +1,378 @@
-import { useState, useMemo } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Printer, Search, FileDown, FileSpreadsheet } from 'lucide-react';
-import { exportToPDF, exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { formatCurrency } from '@/context/AppContext';
+import * as api from '@/lib/api';
+import type { CustomerRow, SaleBillRow, SaleReturnRow } from '@/lib/api';
+import { Search, Printer, Calendar, FileText, User, ChevronDown, Check, Eye } from 'lucide-react';
+import { exportRowsToExcel } from '@/lib/export';
+import { ReportContainer } from '@/components/reports/ReportContainer';
+import { ReportHeader } from '@/components/reports/ReportHeader';
+import { ReportTable, type ColumnDef } from '@/components/reports/ReportTable';
+import { ReportFooter } from '@/components/reports/ReportFooter';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
-interface KhaataRow {
+interface KhaataEntry {
   date: string;
-  type: 'Opening Balance' | 'Sale Bill' | 'Sale Return' | 'Receipt (Jamma)' | 'Commission' | 'Cheque Bounced' | 'Cheque Returned';
-  invNo: string;    // system-generated id
-  billNo: string;   // manual bill number, '-' for non-bill rows
-  narration: string; // free text (blank for cheque rows, which use the 3 sub-columns instead)
-  chequeNo?: string;
-  chequeDate?: string;
-  chequeReceivedDate?: string;
-  pairs: number;    // only filled for sale/return rows
-  debit: number;  // increases customer receivable
-  credit: number; // decreases customer receivable
+  sysId: string | number;
+  docNo: string;
+  type: 'SALE' | 'RETURN';
+  description: string;
+  cartons: number;
+  pairs: number;
+  debit: number;
+  credit: number;
+  balance: number;
 }
 
 export function ReportKhaataContent() {
-  const { state } = useApp();
+  const [customers, setCustomers] = useState<CustomerRow[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
+  const [bills, setBills] = useState<SaleBillRow[]>([]);
+  const [returns, setReturns] = useState<SaleReturnRow[]>([]);
+  const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
+  const [customerSearchQuery, setCustomerSearchQuery] = useState('');
+  const customerDropdownRef = useRef<HTMLDivElement>(null);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
-  const [customerId, setCustomerId] = useState('');
-  const [isClosing, setIsClosing] = useState(false);
-  const [accountSearch, setAccountSearch] = useState('');
+  useEffect(() => {
+    (async () => {
+      const res = await api.listCustomers();
+      if (res.ok) setCustomers(res.data);
+    })();
+  }, []);
 
-  const handleCloseDetail = () => {
-    setIsClosing(true);
-    setTimeout(() => {
-      setCustomerId('');
-      setIsClosing(false);
-    }, 200);
-  };
-  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
-  const [toDate, setToDate] = useState(getTodayDate());
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (customerDropdownRef.current && !customerDropdownRef.current.contains(event.target as Node)) {
+        setIsCustomerDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
-  // Find selected customer info
-  const selectedCustomer = useMemo(() => {
-    return state.customers.find(c => c.id === customerId);
-  }, [customerId, state.customers]);
+  useEffect(() => {
+    if (!selectedCustomerId) {
+      setBills([]);
+      setReturns([]);
+      return;
+    }
+    (async () => {
+      const custId = Number(selectedCustomerId);
+      const [bRes, rRes] = await Promise.all([
+        api.saleBills.list({ customer_id: custId }),
+        api.saleReturns.list({ customer_id: custId })
+      ]);
+      if (bRes.ok) setBills(bRes.data);
+      if (rRes.ok) setReturns(rRes.data);
+    })();
+  }, [selectedCustomerId]);
 
-  // Helper to format/generate account code
-  const getAccountCode = (cust: any) => {
-    if (!cust) return '';
-    const ba = state.businessAccounts.find(b => b.name === cust.name);
-    if (ba) return ba.id;
-    // Fallback: use acId + padded customer index
-    const idx = state.customers.findIndex(c => c.id === cust.id);
-    const suffix = (idx !== -1 ? idx + 1 : 1).toString().padStart(2, '0');
-    return `${cust.acId}${suffix}`;
-  };
-
-  const filteredCustomers = useMemo(() => {
-    if (!accountSearch.trim()) return state.customers;
-    const q = accountSearch.toLowerCase();
-    return state.customers.filter(c => {
-      const code = getAccountCode(c);
-      const name = c.name.toLowerCase();
-      const mainAc = (state.chartAccounts.find(coa => coa.id === c.acId)?.name || 'CUSTOMERS ACCOUNTS').toLowerCase();
-      const city = (state.cities.find(ct => ct.id === c.cityId)?.name || 'General').toLowerCase();
-      
-      return (
-        code.includes(q) ||
-        name.includes(q) ||
-        mainAc.includes(q) ||
-        city.includes(q)
-      );
-    });
-  }, [state.customers, accountSearch, state.chartAccounts, state.cities, state.businessAccounts]);
+  const selectedCustomerObj = useMemo(() => {
+    return customers.find(c => c.customer_id === Number(selectedCustomerId));
+  }, [customers, selectedCustomerId]);
 
   const khaataEntries = useMemo(() => {
-    if (!customerId) return [];
-    const entries: KhaataRow[] = [];
+    if (!selectedCustomerId) return [];
 
-    const deliveryNarration = (subCustomerId: string | null) => {
-      if (!subCustomerId) return 'SAME';
-      return state.subCustomers.find(sc => sc.id === subCustomerId)?.name || 'SAME';
-    };
+    const entries: { date: string; sysId: string | number; docNo: string; type: 'SALE' | 'RETURN'; description: string; cartons: number; pairs: number; debit: number; credit: number }[] = [];
 
-    // 1. Sale Bills (Debit the Customer)
-    state.saleBills.forEach(bill => {
-      if (bill.customerId !== customerId || bill.status !== 'Posted') return;
+    bills.forEach(b => {
       entries.push({
-        date: bill.date,
-        type: 'Sale Bill',
-        invNo: bill.id,
-        billNo: bill.billNo,
-        narration: deliveryNarration(bill.subCustomerId),
-        pairs: bill.items.reduce((s, it) => s + it.pairs, 0),
-        debit: bill.totalValue,
+        date: b.bill_date,
+        sysId: b.bill_id,
+        docNo: b.bill_no,
+        type: 'SALE',
+        description: `Sale Invoice #${b.bill_no}`,
+        cartons: b.total_cartons,
+        pairs: b.total_pairs,
+        debit: b.net_value,
         credit: 0
       });
     });
 
-    // 2. Sale Returns (Credit the Customer)
-    state.saleReturns.forEach(ret => {
-      if (ret.customerId !== customerId || ret.status !== 'Posted') return;
-      const totalCreditVal = ret.items.reduce((s, it) => s + it.value, 0);
+    returns.forEach(r => {
       entries.push({
-        date: ret.date,
-        type: 'Sale Return',
-        invNo: ret.id,
-        billNo: ret.billNo,
-        narration: deliveryNarration(ret.subCustomerId),
-        pairs: ret.items.reduce((s, it) => s + it.pairs, 0),
+        date: r.return_date,
+        sysId: r.return_id,
+        docNo: r.bill_no,
+        type: 'RETURN',
+        description: `Sale Return #${r.bill_no}`,
+        cartons: r.total_cartons,
+        pairs: r.total_pairs,
         debit: 0,
-        credit: totalCreditVal
+        credit: r.net_value
       });
     });
 
-    // 3. Receipts / Payments Jamma (Credit the Customer)
-    state.receipts.forEach(rec => {
-      if (rec.customerId !== customerId) return;
-      const isCheque = rec.paymentMode === 'Cheque';
-      entries.push({
-        date: rec.date,
-        type: 'Receipt (Jamma)',
-        invNo: rec.id,
-        billNo: '-',
-        narration: isCheque ? '' : (rec.remarks || rec.details || rec.paymentMode.toUpperCase()),
-        chequeNo: isCheque ? rec.chequeNo : undefined,
-        chequeDate: isCheque ? rec.chequeDate : undefined,
-        chequeReceivedDate: isCheque ? rec.chequeReceivedDate : undefined,
-        pairs: 0,
-        debit: 0,
-        credit: rec.amount
-      });
-
-      // 4. Commission — payment-time only, credit side, same as the payment
-      if (rec.commission && rec.commission > 0) {
-        entries.push({
-          date: rec.date,
-          type: 'Commission',
-          invNo: rec.id,
-          billNo: '-',
-          narration: 'Commission',
-          pairs: 0,
-          debit: 0,
-          credit: rec.commission
-        });
-      }
-
-      // 5. Bounce (§13) — the credit above stands on its original date; the
-      //    cancellation is a debit dated the bounce, so the customer's due goes
-      //    back up without rewriting a statement that was already printed.
-      if (rec.chequeStatus === 'BOUNCED' && rec.bouncedDate) {
-        entries.push({
-          date: rec.bouncedDate,
-          type: 'Cheque Bounced',
-          invNo: rec.id,
-          billNo: '-',
-          narration: `Cheque ${rec.chequeNo || ''} bounced — reverses receipt of ${rec.date}`,
-          pairs: 0,
-          debit: rec.amount + (rec.commission || 0),
-          credit: 0
-        });
-      }
-
-      // 6. Return to sender — same reversal shape as a bounce, distinct wording (we handed the
-      //    overdue cheque back voluntarily, not a bank rejection).
-      if (rec.chequeStatus === 'RETURNED' && rec.returnedDate) {
-        entries.push({
-          date: rec.returnedDate,
-          type: 'Cheque Returned',
-          invNo: rec.id,
-          billNo: '-',
-          narration: `Cheque ${rec.chequeNo || ''} returned to sender — reverses receipt of ${rec.date}`,
-          pairs: 0,
-          debit: rec.amount + (rec.commission || 0),
-          credit: 0
-        });
-      }
-    });
-
-    // Sort by Date
     entries.sort((a, b) => a.date.localeCompare(b.date));
 
-    return entries;
-  }, [customerId, state.saleBills, state.saleReturns, state.receipts, state.subCustomers, state.chequeAllocations]);
+    let runningBalance = 0;
+    return entries.map(e => {
+      runningBalance += (e.debit - e.credit);
+      return {
+        ...e,
+        balance: runningBalance
+      };
+    });
+  }, [bills, returns, selectedCustomerId]);
 
-  // Compute running balance with date filtering
-  const runningKhaata = useMemo(() => {
-    let openingBalance = 0;
+  const totals = useMemo(() => {
+    let cartons = 0;
+    let pairs = 0;
+    let debit = 0;
+    let credit = 0;
+    khaataEntries.forEach(e => {
+      cartons += e.cartons;
+      pairs += e.pairs;
+      debit += e.debit;
+      credit += e.credit;
+    });
+    return { cartons, pairs, debit, credit, closingBalance: debit - credit };
+  }, [khaataEntries]);
 
-    // Filter by date
-    let beforeEntries = khaataEntries;
-    let filtered = khaataEntries;
-
-    if (fromDate) {
-      beforeEntries = khaataEntries.filter(e => e.date < fromDate);
-      filtered = khaataEntries.filter(e => e.date >= fromDate);
-    }
-    if (toDate) {
-      filtered = filtered.filter(e => e.date <= toDate);
-    }
-
-    // Calculate opening balance from entries before fromDate
-    openingBalance = beforeEntries.reduce((sum, e) => sum + e.debit - e.credit, 0);
-
-    let balance = openingBalance;
-
-    const finalRows = [
-      {
-        date: fromDate ? `Before ${fromDate}` : '---',
-        type: 'Opening Balance' as const,
-        invNo: '-',
-        billNo: '-',
-        narration: fromDate ? `Opening balance before ${fromDate}` : 'Opening Balance brought forward',
-        pairs: 0,
-        debit: 0,
-        credit: 0,
-        balance: openingBalance
-      },
-      ...filtered.map(e => {
-        balance = balance + e.debit - e.credit;
-        return {
-          ...e,
-          balance
-        };
-      })
-    ];
-
-    return finalRows;
-  }, [khaataEntries, fromDate, toDate]);
-
-  const khaataTotals = useMemo(() => {
-    return khaataEntries.reduce((acc, e) => {
-      const inRange = (!fromDate || e.date >= fromDate) && (!toDate || e.date <= toDate);
-      if (!inRange) return acc;
-      return { debit: acc.debit + e.debit, credit: acc.credit + e.credit };
-    }, { debit: 0, credit: 0 });
-  }, [khaataEntries, fromDate, toDate]);
+  const filteredCustomers = useMemo(() => {
+    if (!customerSearchQuery.trim()) return customers;
+    return customers.filter(c => c.name.toLowerCase().includes(customerSearchQuery.toLowerCase()));
+  }, [customers, customerSearchQuery]);
 
   const handleExportExcel = () => {
-    const headers = ['Date', 'Type', 'Inv #', 'Bill #', 'Narration', 'Pairs', 'Debit', 'Credit', 'Balance'];
-    const rows = runningKhaata.map(row => [
-      row.date, row.type, row.invNo, row.billNo,
-      row.chequeNo ? `Cheque ${row.chequeNo} / ${row.chequeDate} / Recv ${row.chequeReceivedDate}` : row.narration,
-      row.pairs, row.debit, row.credit, row.balance
+    if (!selectedCustomerObj) return;
+    const headers = ['Date', 'Sys ID', 'Doc No.', 'Type', 'Description', 'Cartons', 'Pairs', 'Debit (Rs.)', 'Credit (Rs.)', 'Balance (Rs.)'];
+    const rows = khaataEntries.map(e => [
+      e.date.slice(0, 10),
+      e.sysId,
+      e.docNo,
+      e.type,
+      e.description,
+      e.cartons,
+      e.pairs,
+      e.debit,
+      e.credit,
+      e.balance
     ]);
-    exportRowsToExcel(`account-ledger-${selectedCustomer?.name || 'export'}`, headers, rows);
+    exportRowsToExcel(`khaata-ledger-${selectedCustomerObj.name}`, headers, rows);
   };
 
+  const columns: ColumnDef<KhaataEntry>[] = [
+    { key: 'date', header: 'Date', width: '110px', accessor: r => <span className="font-mono">{r.date.slice(0, 10)}</span> },
+    { key: 'sysId', header: 'Sys ID', align: 'center', width: '80px', accessor: r => <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-[10px]">{r.sysId}</span> },
+    { key: 'docNo', header: 'Doc No.', align: 'center', width: '90px', accessor: r => <span className="font-mono font-bold">{r.docNo}</span> },
+    { key: 'type', header: 'Type', align: 'center', width: '80px', accessor: r => (
+      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${r.type === 'SALE' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+        {r.type}
+      </span>
+    )},
+    { key: 'description', header: 'Description', accessor: r => <span className="font-medium text-slate-800">{r.description}</span> },
+    { key: 'cartons', header: 'Cartons', align: 'right', width: '75px', accessor: r => <span className="font-mono font-bold">{r.cartons}</span> },
+    { key: 'pairs', header: 'Pairs', align: 'right', width: '80px', accessor: r => <span className="font-mono">{r.pairs}</span> },
+    { key: 'debit', header: 'Debit (Rs.)', align: 'right', width: '110px', accessor: r => <span className="font-mono text-emerald-700 font-bold">{r.debit ? formatCurrency(r.debit) : '-'}</span> },
+    { key: 'credit', header: 'Credit (Rs.)', align: 'right', width: '110px', accessor: r => <span className="font-mono text-rose-700 font-bold">{r.credit ? formatCurrency(r.credit) : '-'}</span> },
+    { key: 'balance', header: 'Balance (Rs.)', align: 'right', width: '120px', accessor: r => <span className="font-mono font-bold text-slate-900">{formatCurrency(r.balance)}</span> },
+  ];
+
+  const renderPrintableReport = () => (
+    <ReportContainer orientation="portrait">
+      <ReportHeader
+        title="CUSTOMER KHAATA LEDGER STATEMENT"
+        subtitle={`Party Khaata Record: ${selectedCustomerObj?.name || 'All Customers'}`}
+        metadata={[
+          { label: 'Customer Name', value: selectedCustomerObj?.name || 'All' },
+          { label: 'Customer ID', value: selectedCustomerObj ? `#${selectedCustomerObj.customer_id}` : 'All' },
+          { label: 'Total Invoices', value: bills.length },
+          { label: 'Total Returns', value: returns.length },
+        ]}
+      />
+
+      <ReportTable
+        columns={columns}
+        data={khaataEntries}
+        rowKeyExtractor={(r, idx) => `${r.type}-${r.sysId}-${idx}`}
+        summaryRow={(
+          <tr className="bg-slate-100 font-bold border-t-2 border-slate-900 text-xs font-mono">
+            <td colSpan={5} className="py-2.5 px-3 text-left font-bold uppercase tracking-wider">TOTAL CUMULATIVE SUM</td>
+            <td className="py-2.5 px-3 text-right">{totals.cartons}</td>
+            <td className="py-2.5 px-3 text-right">{totals.pairs.toLocaleString()}</td>
+            <td className="py-2.5 px-3 text-right text-emerald-800">{formatCurrency(totals.debit)}</td>
+            <td className="py-2.5 px-3 text-right text-rose-800">{formatCurrency(totals.credit)}</td>
+            <td className="py-2.5 px-3 text-right text-slate-950 underline">{formatCurrency(totals.closingBalance)}</td>
+          </tr>
+        )}
+      />
+
+      <ReportFooter printedBy="Admin Operator" notes="Computer generated customer statement." />
+    </ReportContainer>
+  );
+
   return (
-      <div className="mx-auto" style={{ maxWidth: 1000 }}>
-        
-        {/* 1. Accounts Directory View (When no customer is selected) */}
-        {!customerId ? (
-          <>
-            {/* Selection Bar / Search & Date filters - data-no-print */}
-            <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
-              <div className="relative flex-1 min-w-[280px]">
-                <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search Account:</span>
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="Search by Code, Description, Main Account or City..."
-                    value={accountSearch}
-                    onChange={e => setAccountSearch(e.target.value)}
-                    className="soleria-input w-full py-2 text-sm pr-10 font-semibold"
-                  />
-                  <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
-                </div>
-              </div>
-
-              {/* Date Filters */}
-              <div className="flex items-center gap-3">
-                <div>
-                  <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">From Date:</span>
-                  <input
-                    type="date"
-                    value={fromDate}
-                    onChange={e => setFromDate(e.target.value)}
-                    className="soleria-input py-1.5 text-xs"
-                  />
-                </div>
-                <div>
-                  <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">To Date:</span>
-                  <input
-                    type="date"
-                    value={toDate}
-                    onChange={e => setToDate(e.target.value)}
-                    className="soleria-input py-1.5 text-xs"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* List directory grid of cards */}
-            <div className="mb-6">
-              <div className="flex justify-between items-center mb-4">
-                <div>
-                  <h3 className="font-lora font-semibold text-lg text-slate-800">Accounts Directory</h3>
-                  <p className="text-xs text-slate-500 font-medium">Select an account card below to view its detailed statement ledger.</p>
-                </div>
-                <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-1 rounded-full border border-slate-200">
-                  Total: {filteredCustomers.length} Accounts
-                </div>
-              </div>
-
-              {filteredCustomers.length === 0 ? (
-                <div className="card-white p-12 text-center text-slate-400 border bg-white">
-                  No accounts found matching your search.
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {filteredCustomers.map(c => {
-                    const code = getAccountCode(c);
-                    const mainAc = state.chartAccounts.find(coa => coa.id === c.acId)?.name || 'CUSTOMERS ACCOUNTS';
-                    const city = state.cities.find(ct => ct.id === c.cityId)?.name || 'General';
-                    const initialLetter = c.name.charAt(0).toUpperCase();
-
-                    return (
-                      <div
-                        key={c.id}
-                        onClick={() => setCustomerId(c.id)}
-                        className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
-                      >
-                        <div>
-                          {/* Card Top: Code & City badge */}
-                          <div className="flex items-center justify-between mb-3.5">
-                            <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
-                              Code: {code}
-                            </span>
-                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200/50 uppercase tracking-wider">
-                              {city}
-                            </span>
-                          </div>
-
-                          {/* Card Middle: Avatar circle + Name */}
-                          <div className="flex items-start gap-3 mb-4">
-                            <div className="w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm bg-slate-50 text-slate-600 group-hover:bg-[#111c2a] group-hover:text-[#B08D57] transition-all duration-300 flex-shrink-0">
-                              {initialLetter}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
-                                {c.name}
-                              </h4>
-                              <p className="text-[11px] text-slate-400 font-medium mt-0.5 uppercase tracking-wider truncate">
-                                {mainAc}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Card Bottom: Action indicator */}
-                        <div className="border-t pt-3 mt-1 flex items-center justify-between text-xs font-semibold text-slate-400 group-hover:text-[#B08D57] transition-colors">
-                          <span>View Statement</span>
-                          <span className="text-sm font-bold group-hover:translate-x-1 transition-transform">&rarr;</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </>
-        ) : (
-          /* 2. Specific Account Statement Ledger View */
-          <div className={`transition-all duration-200 ${isClosing ? 'opacity-0 translate-y-2 scale-98' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
-            {/* Navigation & Action Card - data-no-print */}
-            <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-6 shadow-2xs" data-no-print>
-              {/* ROW 1: Back Button & Customer Name (Left), Opening Balance (Right) */}
-              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-3 mb-4">
-                <div className="flex flex-wrap items-center gap-3">
-                  <button
-                    onClick={handleCloseDetail}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-50/80 hover:bg-amber-100/90 text-amber-900 border border-amber-200/80 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer shadow-2xs hover:shadow-xs"
-                  >
-                    &larr; Back to Accounts Directory
-                  </button>
-                  <div className="text-sm font-semibold text-slate-700">
-                    Viewing Ledger: <span className="font-lora font-bold text-slate-900 text-base ml-1">{selectedCustomer?.name}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
-                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Opening Balance:</span>
-                  <span className="font-bold font-mono text-sm text-[var(--brand-gold)]">
-                    {formatCurrency(Math.abs(runningKhaata[0]?.balance || 0))}
+    <>
+      <div className="mx-auto print:hidden px-2" style={{ maxWidth: 1400 }}>
+        {/* Selector Card */}
+        <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-6 shadow-2xs">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3 flex-1 min-w-[280px]">
+              <User className="text-[var(--brand-navy)]" size={20} />
+              <div className="flex-1 relative" ref={customerDropdownRef}>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
+                  Select Customer Party
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsCustomerDropdownOpen(!isCustomerDropdownOpen)}
+                  className="flex items-center justify-between w-full px-4 py-2.5 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium transition-all cursor-pointer shadow-2xs"
+                >
+                  <span className="truncate text-slate-800 font-semibold">
+                    {selectedCustomerObj ? `${selectedCustomerObj.name} (#${selectedCustomerObj.customer_id})` : 'Select a customer...'}
                   </span>
-                </div>
-              </div>
+                  <ChevronDown className={`text-slate-400 transition-transform duration-200 ${isCustomerDropdownOpen ? 'rotate-180 text-[var(--brand-gold)]' : ''}`} size={18} />
+                </button>
 
-              {/* ROW 2: Date Filters (Left), Print & Export Buttons (Right) */}
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
-                    <input
-                      type="date"
-                      value={fromDate}
-                      onChange={e => setFromDate(e.target.value)}
-                      className="soleria-input py-1.5 px-3 text-xs font-semibold"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
-                    <input
-                      type="date"
-                      value={toDate}
-                      onChange={e => setToDate(e.target.value)}
-                      className="soleria-input py-1.5 px-3 text-xs font-semibold"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => window.print()}
-                    className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer"
-                  >
-                    <Printer size={14} /> Print Statement
-                  </button>
-                  <button
-                    onClick={exportToPDF}
-                    className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer"
-                  >
-                    <FileDown size={14} /> Export PDF
-                  </button>
-                  <button
-                    onClick={handleExportExcel}
-                    className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer"
-                  >
-                    <FileSpreadsheet size={14} /> Export Excel
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Printable Statement Sheet */}
-            <div className="card-white p-6 md:p-8 bg-white border">
-              
-              {/* Header details */}
-              <div className="flex items-center justify-between border-b pb-4 mb-6">
-                <div>
-                  <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTO ERP</h1>
-                  <p className="text-xs uppercase tracking-widest text-slate-500 font-inter">Business Accounts Ledger</p>
-                </div>
-                <div className="text-right">
-                  <h2 className="font-lora font-semibold text-lg uppercase">Account Statement (Khaata)</h2>
-                  <div className="text-sm font-semibold text-slate-700 mt-1">{selectedCustomer?.name}</div>
-                  <div className="text-xs text-slate-500 font-medium">
-                    Account ID: {getAccountCode(selectedCustomer)} | City: {state.cities.find(ct => ct.id === selectedCustomer?.cityId)?.name || 'General'}
-                  </div>
-                  {(fromDate || toDate) && (
-                    <div className="text-xs text-amber-700 font-semibold mt-0.5">
-                      Period: {fromDate || 'Start'} to {toDate || 'End'}
+                {isCustomerDropdownOpen && (
+                  <div className="absolute left-0 mt-1.5 w-full bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden">
+                    <div className="p-2 border-b border-slate-100">
+                      <div className="relative">
+                        <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="Search customer name..."
+                          value={customerSearchQuery}
+                          onChange={e => setCustomerSearchQuery(e.target.value)}
+                          className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[var(--brand-gold)]"
+                        />
+                      </div>
                     </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Table */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                      <th className="p-3 pl-4">Date</th>
-                      <th className="p-3">Type</th>
-                      <th className="p-3 text-center">Inv #</th>
-                      <th className="p-3 text-center">Bill #</th>
-                      <th className="p-3" style={{ minWidth: '220px' }}>Narration</th>
-                      <th className="p-3 text-center">Pairs</th>
-                      <th className="p-3 text-right">Debit (Dr)</th>
-                      <th className="p-3 text-right">Credit (Cr)</th>
-                      <th className="p-3 text-right">Balance</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {runningKhaata.length === 1 && runningKhaata[0].balance === 0 && runningKhaata[0].debit === 0 && runningKhaata[0].credit === 0 ? (
-                      <tr>
-                        <td colSpan={9} className="text-center p-8 text-slate-400">
-                          No ledger entries found matching selection or date range.
-                        </td>
-                      </tr>
-                    ) : (
-                      runningKhaata.map((row, idx) => {
-                        const displayBal = Math.abs(row.balance);
-                        const isRed = row.credit > 0;
-
-                        return (
-                          <tr
-                            key={idx}
-                            className={`border-b ${row.type === 'Opening Balance' ? 'bg-slate-50 font-medium text-slate-700' : isRed ? 'text-rose-700 hover:bg-rose-50/30' : 'text-slate-700 hover:bg-slate-50/30'}`}
-                            style={{ borderColor: 'var(--border-table)' }}
+                    <div className="max-h-60 overflow-y-auto">
+                      {filteredCustomers.length === 0 ? (
+                        <div className="p-3 text-xs text-slate-400 text-center">No customers found</div>
+                      ) : (
+                        filteredCustomers.map(c => (
+                          <button
+                            key={c.customer_id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedCustomerId(String(c.customer_id));
+                              setIsCustomerDropdownOpen(false);
+                            }}
+                            className={`flex items-center justify-between w-full px-4 py-2.5 text-xs text-left transition-colors cursor-pointer ${selectedCustomerId === String(c.customer_id) ? 'bg-[var(--brand-gold)] text-white font-semibold' : 'hover:bg-[#fbf7f0] text-slate-700'}`}
                           >
-                            <td className="p-3 pl-4 font-semibold">{row.date}</td>
-                            <td className="p-3">
-                              <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${row.type === 'Sale Bill' ? 'bg-rose-50 text-rose-700' : row.type === 'Receipt (Jamma)' ? 'bg-emerald-50 text-emerald-700' : row.type === 'Sale Return' ? 'bg-blue-50 text-blue-700' : row.type === 'Commission' ? 'bg-amber-50 text-amber-700' : row.type === 'Cheque Bounced' ? 'bg-rose-100 text-rose-800' : 'bg-slate-100 text-slate-700'}`}>
-                                {row.type}
-                              </span>
-                            </td>
-                            <td className="p-3 text-center font-mono text-xs">{row.invNo}</td>
-                            <td className="p-3 text-center font-medium">{row.billNo}</td>
-                            <td className="p-3 text-xs font-medium">
-                              {row.chequeNo ? (
-                                <div className="flex flex-col gap-0.5">
-                                  <span><span className="text-slate-400">Cheque No:</span> {row.chequeNo}</span>
-                                  <span><span className="text-slate-400">Date on Cheque:</span> {row.chequeDate}</span>
-                                  <span><span className="text-slate-400">Received:</span> {row.chequeReceivedDate}</span>
-                                </div>
-                              ) : (
-                                row.narration
-                              )}
-                            </td>
-                            <td className="p-3 text-center text-slate-600 font-medium">{row.pairs > 0 ? row.pairs : '-'}</td>
-                            <td className="p-3 text-right text-rose-700 font-bold">
-                              {row.debit > 0 ? formatCurrency(row.debit) : '-'}
-                            </td>
-                            <td className="p-3 text-right text-emerald-700 font-bold">
-                              {row.credit > 0 ? formatCurrency(row.credit) : '-'}
-                            </td>
-                            <td className="p-3 text-right font-bold text-slate-800">
-                              {formatCurrency(displayBal)}
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                  <tfoot>
-                    <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                      <td colSpan={6} className="p-4 text-left font-lora">TOTAL</td>
-                      <td className="p-4 text-right text-rose-800">{formatCurrency(khaataTotals.debit)}</td>
-                      <td className="p-4 text-right text-emerald-800">{formatCurrency(khaataTotals.credit)}</td>
-                      <td className="p-4 text-right" style={{ color: 'var(--brand-gold)' }}>
-                        {formatCurrency(Math.abs(runningKhaata[runningKhaata.length - 1]?.balance || 0))}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
+                            <span>{c.name} <span className="opacity-70 font-mono">(#{c.customer_id})</span></span>
+                            {selectedCustomerId === String(c.customer_id) && <Check size={14} />}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
+
+            {selectedCustomerId && (
+              <div className="flex items-center gap-2 self-end">
+                <button
+                  onClick={() => setIsPreviewOpen(true)}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+                >
+                  <Eye size={15} /> Show Print Preview
+                </button>
+                <button onClick={() => setIsPreviewOpen(true)} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-xs cursor-pointer">
+                  <Printer size={15} /> Print Document
+                </button>
+                <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-4 py-2 text-xs cursor-pointer">
+                  <FileText size={15} /> Export Excel
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Khaata Content */}
+        {selectedCustomerId && selectedCustomerObj ? (
+          <div className="card-white p-6 bg-white border border-slate-200/80 shadow-md rounded-2xl">
+            <div className="flex items-center justify-between border-b pb-4 mb-4">
+              <div>
+                <h3 className="font-lora font-bold text-xl text-slate-900">
+                  {selectedCustomerObj.name}
+                </h3>
+                <p className="text-xs text-slate-500 font-mono mt-0.5">
+                  Customer ID: #{selectedCustomerObj.customer_id} • Total Transactions: {khaataEntries.length}
+                </p>
+              </div>
+              <div className="text-right">
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">Closing Balance</span>
+                <span className="text-2xl font-bold font-mono text-[var(--brand-gold)]">{formatCurrency(totals.closingBalance)}</span>
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-xl border border-slate-200 shadow-sm">
+              <table className="w-full text-left border-collapse text-sm font-inter">
+                <thead>
+                  <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500 border-slate-200">
+                    <th className="p-3.5 pl-4">Date</th>
+                    <th className="p-3.5 text-center">Sys ID</th>
+                    <th className="p-3.5 text-center">Doc No.</th>
+                    <th className="p-3.5 text-center">Type</th>
+                    <th className="p-3.5">Description</th>
+                    <th className="p-3.5 text-right">Cartons</th>
+                    <th className="p-3.5 text-right">Pairs</th>
+                    <th className="p-3.5 text-right">Debit</th>
+                    <th className="p-3.5 text-right">Credit</th>
+                    <th className="p-3.5 text-right pr-4">Balance</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {khaataEntries.map((e, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="p-3.5 pl-4 font-mono text-slate-600">{e.date.slice(0, 10)}</td>
+                      <td className="p-3.5 text-center font-mono text-xs">{e.sysId}</td>
+                      <td className="p-3.5 text-center font-mono font-bold text-slate-800">{e.docNo}</td>
+                      <td className="p-3.5 text-center">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${e.type === 'SALE' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                          {e.type}
+                        </span>
+                      </td>
+                      <td className="p-3.5 font-medium text-slate-800">{e.description}</td>
+                      <td className="p-3.5 text-right font-mono font-semibold">{e.cartons}</td>
+                      <td className="p-3.5 text-right font-mono">{e.pairs}</td>
+                      <td className="p-3.5 text-right font-mono font-bold text-emerald-700">{e.debit ? formatCurrency(e.debit) : '-'}</td>
+                      <td className="p-3.5 text-right font-mono font-bold text-rose-700">{e.credit ? formatCurrency(e.credit) : '-'}</td>
+                      <td className="p-3.5 text-right font-mono font-bold text-slate-900 pr-4">{formatCurrency(e.balance)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className="card-white p-12 text-center text-slate-400 bg-white border border-slate-200/80 rounded-2xl">
+            <Calendar size={48} className="mx-auto mb-3 text-slate-300" />
+            <p className="font-lora text-lg font-semibold text-slate-600">Select a Customer Party</p>
+            <p className="text-xs text-slate-400 mt-1">Choose a customer from the dropdown above to generate their complete Khaata Ledger Statement.</p>
           </div>
         )}
       </div>
+
+      {/* Native @media print container */}
+      <div className="hidden print:block">
+        {renderPrintableReport()}
+      </div>
+
+      {/* Print Preview Modal */}
+      <ReportPrintPreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        title={`Customer Khaata Ledger - ${selectedCustomerObj?.name || ''}`}
+        orientation="portrait"
+        onExportExcel={handleExportExcel}
+      >
+        {renderPrintableReport()}
+      </ReportPrintPreviewModal>
+    </>
   );
 }
 
 export default function ReportKhaataPage() {
   return (
-    <AppLayout pageTitle="Accounts Ledger / Khaata">
+    <AppLayout pageTitle="Customer Khaata Ledger">
       <ReportKhaataContent />
     </AppLayout>
   );

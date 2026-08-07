@@ -2,9 +2,11 @@ import { useState, useEffect, useMemo } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { SaleReturnRow, SaleReturnItemRow, CustomerRow, SubCustomerRow, ProductRow } from '@/lib/api';
-import { Search, Printer, Calendar, FileText, User, Edit2, Package, Layers, FileDown, FileSpreadsheet, RotateCcw } from 'lucide-react';
-import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { Search, Printer, Calendar, FileText, User, Edit2, Package, Layers, FileDown, FileSpreadsheet, RotateCcw, Eye } from 'lucide-react';
+import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import wentoxLogo from '@/assets/wentox_logo.png';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
 interface FindReturnTabProps {
   onEditReturn: (ret: SaleReturnRow) => void;
@@ -16,6 +18,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [subCustomers, setSubCustomers] = useState<SubCustomerRow[]>([]);
   const [products, setProducts] = useState<ProductRow[]>([]);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -33,13 +36,11 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
   const [toDate, setToDate]                 = useState(getTodayDate());
   const [customerQuery, setCustomerQuery]   = useState('');
   const [subCustomerQuery, setSubCustomerQuery] = useState('');
-  const [billNoQuery, setBillNoQuery]       = useState('');
+  const [returnNoQuery, setReturnNoQuery]   = useState('');
   const [biltyNoQuery, setBiltyNoQuery]     = useState('');
+  const [gpNoQuery, setGpNoQuery]           = useState('');
   const [articleFilter, setArticleFilter]   = useState('');
-  const [missingFilter, setMissingFilter]   = useState<'all' | 'no_bilty'>('all');
 
-  // list() doesn't include line items (only get() does) — fetched lazily per return only when the
-  // Article filter is actually in use, and cached by return_id so re-filtering doesn't re-fetch.
   const [itemsCache, setItemsCache] = useState<Record<number, SaleReturnItemRow[]>>({});
   useEffect(() => {
     if (!articleFilter) return;
@@ -49,32 +50,34 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
       const results = await Promise.all(missing.map(r => api.saleReturns.get(r.return_id)));
       setItemsCache(prev => {
         const next = { ...prev };
-        results.forEach((r, i) => { if (r.ok) next[missing[i].return_id] = r.data.items; });
+        results.forEach((res, i) => { if (res.ok) next[missing[i].return_id] = res.data.items; });
         return next;
       });
     })();
   }, [articleFilter, returns, itemsCache]);
 
-  // The backend filters by date range + exact bill number; everything else (name/agent/article/
-  // audit pill) is applied client-side over the fetched result below.
   useEffect(() => {
     (async () => {
       const res = await api.saleReturns.list({
         date_from: fromDate || undefined,
         date_to: toDate || undefined,
-        bill_no: billNoQuery.trim() || undefined
+        bill_no: returnNoQuery.trim() || undefined
       });
       if (res.ok) setReturns(res.data);
     })();
-  }, [fromDate, toDate, billNoQuery]);
+  }, [fromDate, toDate, returnNoQuery]);
 
-  // ── Filtered Returns List ────────────────────────────────────────────────────
   const filteredReturns = useMemo(() => {
     let result = [...returns];
 
     if (biltyNoQuery.trim()) {
       const q = biltyNoQuery.trim().toLowerCase();
       result = result.filter(r => (r.bilty_no || '').toLowerCase().includes(q));
+    }
+
+    if (gpNoQuery.trim()) {
+      const q = gpNoQuery.trim().toLowerCase();
+      result = result.filter(r => (r.gp_no || '').toLowerCase().includes(q));
     }
 
     if (customerQuery.trim()) {
@@ -101,24 +104,10 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
       }
     }
 
-    if (missingFilter === 'no_bilty') {
-      result = result.filter(r => !r.bilty_no || !r.bilty_no.trim() || r.bilty_no === '0');
-    }
-
     result.sort((a, b) => b.return_date.localeCompare(a.return_date));
     return result;
-  }, [returns, customers, subCustomers, products, biltyNoQuery, customerQuery, subCustomerQuery, articleFilter, missingFilter, itemsCache]);
+  }, [returns, customers, subCustomers, biltyNoQuery, gpNoQuery, customerQuery, subCustomerQuery, articleFilter, itemsCache, products]);
 
-  const handleExportExcel = () => {
-    const headers = ['Date', 'Sys ID', 'Bill No.', 'Customer', 'Cartons', 'Pairs', 'Total Value', 'Status'];
-    const rows = filteredReturns.map(ret => {
-      const cust = customers.find(c => c.customer_id === ret.customer_id);
-      return [ret.return_date.slice(0, 10), ret.return_id, ret.bill_no, cust?.name || '-', ret.total_cartons, ret.total_pairs, ret.net_value, ret.is_posted ? 'Posted' : 'Unposted'];
-    });
-    exportRowsToExcel('sale-returns-search', headers, rows);
-  };
-
-  // Compute overall summary totals for return logs search
   const { totalCartons, totalPairs, totalValue } = useMemo(() => {
     let cartons = 0;
     let pairs = 0;
@@ -131,24 +120,131 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
     return { totalCartons: cartons, totalPairs: pairs, totalValue: value };
   }, [filteredReturns]);
 
-  const hasFilters = fromDate || toDate || billNoQuery || biltyNoQuery || customerQuery || subCustomerQuery || articleFilter || missingFilter !== 'all';
+  const handleExportExcel = () => {
+    const headers = ['Date', 'Sys ID', 'Return No.', 'Customer', 'Cartons', 'Pairs', 'Total Value', 'Status'];
+    const rows = filteredReturns.map(ret => {
+      const cust = customers.find(c => c.customer_id === ret.customer_id);
+      return [ret.return_date.slice(0, 10), ret.return_id, ret.bill_no, cust?.name || '-', ret.total_cartons, ret.total_pairs, ret.net_value, ret.is_posted ? 'Posted' : 'Unposted'];
+    });
+    exportRowsToExcel('sale-returns-search', headers, rows);
+  };
+
+  const hasFilters = fromDate || toDate || returnNoQuery || biltyNoQuery || gpNoQuery || customerQuery || subCustomerQuery || articleFilter;
 
   const clearAllFilters = () => {
-    setFromDate(getThreeMonthsAgoDate()); setToDate(getTodayDate()); setBillNoQuery(''); setBiltyNoQuery('');
-    setCustomerQuery(''); setSubCustomerQuery(''); setArticleFilter('');
-    setMissingFilter('all');
+    setFromDate(getThreeMonthsAgoDate()); setToDate(getTodayDate()); setReturnNoQuery(''); setBiltyNoQuery('');
+    setGpNoQuery(''); setCustomerQuery(''); setSubCustomerQuery(''); setArticleFilter('');
   };
+
+  const renderPrintableDocument = () => (
+    <div className="excel-print-container">
+      {/* Header Section with Huge Prominent Logo */}
+      <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
+        <div>
+          <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '180px', width: 'auto', objectFit: 'contain' }} />
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>SALE RETURNS DIRECTORY</h2>
+          <p style={{ margin: '6px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>
+            Period: {fromDate || 'Start'} to {toDate || 'End'}
+          </p>
+          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
+            Date of Print: {new Date().toLocaleDateString()}
+          </p>
+          {(customerQuery || returnNoQuery || biltyNoQuery || gpNoQuery || subCustomerQuery) && (
+            <div style={{ marginTop: '6px', fontSize: '10.5px', color: '#444444' }}>
+              {customerQuery && <span style={{ marginRight: '10px' }}><strong>Customer:</strong> {customerQuery}</span>}
+              {subCustomerQuery && <span style={{ marginRight: '10px' }}><strong>Sub-Customer:</strong> {subCustomerQuery}</span>}
+              {returnNoQuery && <span style={{ marginRight: '10px' }}><strong>Return #:</strong> {returnNoQuery}</span>}
+              {biltyNoQuery && <span style={{ marginRight: '10px' }}><strong>Bilty #:</strong> {biltyNoQuery}</span>}
+              {gpNoQuery && <span style={{ marginRight: '10px' }}><strong>GP #:</strong> {gpNoQuery}</span>}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Results Table */}
+      <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+        <thead>
+          <tr>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Date</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Sys ID</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Return No.</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Customer</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Delivery Agent</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Bilty No.</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>GP No.</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Cartons</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Pairs</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Total Credit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filteredReturns.length === 0 ? (
+            <tr>
+              <td colSpan={10} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
+                No returns found matching criteria.
+              </td>
+            </tr>
+          ) : (
+            filteredReturns.map(ret => {
+              const cust = customers.find(c => c.customer_id === ret.customer_id);
+              const subCust = ret.sub_customer_id ? subCustomers.find(sc => sc.sub_customer_id === ret.sub_customer_id) : null;
+
+              return (
+                <tr key={ret.return_id}>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{ret.return_date.slice(0, 10)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontFamily: 'monospace' }}>{ret.return_id}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontWeight: 'bold', fontFamily: 'monospace' }}>{ret.bill_no}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{cust?.name || 'Walk-in'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px' }}>{subCust ? subCust.name : '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{ret.bilty_no || '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{ret.gp_no || '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{ret.total_cartons}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace' }}>{ret.total_pairs}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(ret.net_value)}</td>
+                </tr>
+              );
+            })
+          )}
+
+          <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
+            <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totalCartons}</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totalPairs.toLocaleString()}</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(totalValue)}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* Signatures */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '35px', padding: '0 10px' }}>
+        <div style={{ textAlign: 'center', width: '150px' }}>
+          <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
+        </div>
+        <div style={{ textAlign: 'center', width: '150px' }}>
+          <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
+        </div>
+        <div style={{ textAlign: 'center', width: '150px' }}>
+          <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <>
-      {/* ── Screen-only UI Container ── */}
+      {/* Screen-only UI Container */}
       <div className="mx-auto print:hidden px-2" style={{ maxWidth: 1400 }}>
 
-        {/* ── Search Filters Card ── */}
+        {/* Search Filters Card */}
         <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-5 shadow-2xs">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
-            <h3 className="font-lora font-semibold text-base text-slate-800 flex items-center gap-2">
-              <Search size={16} className="text-blue-600" /> Search Filters
+            <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
+              <Search size={18} className="text-[var(--brand-navy)]" /> Search Filters
             </h3>
             {hasFilters && (
               <button
@@ -162,7 +258,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
             )}
           </div>
 
-          {/* Row 1 — Date range, Return No., Bilty No. */}
+          {/* Row 1 — Date range, Return No., Bilty No., GP No. */}
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-3">
             <div>
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
@@ -181,8 +277,8 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
                 <FileText size={12} /> By Return No.
               </label>
               <input
-                type="text" placeholder="e.g. RET-1004"
-                value={billNoQuery} onChange={e => setBillNoQuery(e.target.value)}
+                type="text" placeholder="e.g. 10046"
+                value={returnNoQuery} onChange={e => setReturnNoQuery(e.target.value)}
                 className="soleria-input text-xs font-mono"
               />
             </div>
@@ -198,7 +294,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
             </div>
           </div>
 
-          {/* Row 2 — Customer, Sub-Customer, Article */}
+          {/* Row 2 — Customer, Sub-Customer, GP No. */}
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
             <div>
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
@@ -212,64 +308,32 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
             </div>
             <div>
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
-                <User size={12} /> By Delivery Agent / Sub-Cust
+                <User size={12} /> By Sub-Customer
               </label>
               <input
-                type="text" placeholder="Sub-customer or agent..."
+                type="text" placeholder="Sub-customer / agent..."
                 value={subCustomerQuery} onChange={e => setSubCustomerQuery(e.target.value)}
                 className="soleria-input text-xs"
               />
             </div>
             <div>
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
-                <Package size={12} /> By Article
+                <FileText size={12} /> By Gate Pass (GP) No.
               </label>
-              <select value={articleFilter} onChange={e => setArticleFilter(e.target.value)} className="soleria-input text-xs cursor-pointer">
-                <option value="">All Articles</option>
-                {products.map(p => (
-                  <option key={p.article_id} value={p.article_id}>{p.name}</option>
-                ))}
-              </select>
+              <input
+                type="text" placeholder="e.g. GP-54"
+                value={gpNoQuery} onChange={e => setGpNoQuery(e.target.value)}
+                className="soleria-input text-xs font-mono"
+              />
             </div>
-          </div>
-
-          {/* Quick Audit Radio Pills */}
-          <div className="flex flex-wrap items-center gap-2 border-t pt-4 mt-4 border-slate-100">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider mr-1">Quick Audit:</span>
-            {([
-              { value: 'all',      label: 'All Returns' },
-              { value: 'no_bilty', label: 'Missing Bilty No.' },
-            ] as const).map(opt => (
-              <label
-                key={opt.value}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold cursor-pointer transition-all select-none ${
-                  missingFilter === opt.value
-                    ? 'bg-[#111c2a] text-white border-[#111c2a] shadow-sm'
-                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="missingFilter"
-                  value={opt.value}
-                  checked={missingFilter === opt.value}
-                  onChange={() => setMissingFilter(opt.value)}
-                  className="sr-only"
-                />
-                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                  missingFilter === opt.value ? 'bg-white/70' : 'bg-slate-300'
-                }`} />
-                {opt.label}
-              </label>
-            ))}
           </div>
         </div>
 
-        {/* Summary Dashboard Panels (Visible on Screen only) */}
+        {/* Summary Dashboard Panels */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
           <div className="group relative bg-white p-5 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex items-center justify-between">
             <div>
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider group-hover:text-[var(--brand-navy)] transition-colors">Total Return Cartons</span>
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider group-hover:text-[var(--brand-navy)] transition-colors">Total Filtered Cartons</span>
               <h4 className="text-2xl font-bold font-mono text-slate-900 mt-1">{totalCartons} ctn</h4>
             </div>
             <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center transition-transform group-hover:scale-110">
@@ -278,7 +342,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
           </div>
           <div className="group relative bg-white p-5 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex items-center justify-between">
             <div>
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider group-hover:text-[var(--brand-navy)] transition-colors">Total Return Pairs</span>
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider group-hover:text-[var(--brand-navy)] transition-colors">Total Filtered Pairs</span>
               <h4 className="text-2xl font-bold font-mono text-slate-900 mt-1">{totalPairs.toLocaleString()} prs</h4>
             </div>
             <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center transition-transform group-hover:scale-110">
@@ -287,16 +351,16 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
           </div>
           <div className="group relative bg-white p-5 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex items-center justify-between">
             <div>
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider group-hover:text-[var(--brand-navy)] transition-colors">Cumulative Credit Value</span>
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider group-hover:text-[var(--brand-navy)] transition-colors">Cumulative Credit Total</span>
               <h4 className="text-2xl font-bold font-mono text-[var(--brand-gold)] mt-1">{formatCurrency(totalValue)}</h4>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center transition-transform group-hover:scale-110">
+            <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center transition-transform group-hover:scale-110">
               <FileText size={22} />
             </div>
           </div>
         </div>
 
-        {/* ── Results Table ── */}
+        {/* Results Table Card */}
         <div className="card-white bg-white border border-slate-200 rounded-xl shadow-sm">
           <div className="p-4 border-b bg-slate-50/60 flex items-center justify-between rounded-t-xl">
             <span className="text-sm font-semibold text-slate-700">
@@ -304,14 +368,20 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
               <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs font-bold ml-1">{filteredReturns.length}</span>
             </span>
             <div className="flex items-center gap-2">
-              <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
-                <Printer size={12} /> Print Results
+              <button
+                onClick={() => setIsPreviewOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+              >
+                <Eye size={14} /> Show Print Preview
               </button>
-              <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
-                <FileDown size={12} /> Export PDF
+              <button onClick={() => setIsPreviewOpen(true)} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer">
+                <Printer size={14} /> Print Results
               </button>
-              <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs">
-                <FileSpreadsheet size={12} /> Export Excel
+              <button onClick={() => setIsPreviewOpen(true)} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer">
+                <FileDown size={14} /> Export PDF
+              </button>
+              <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer">
+                <FileSpreadsheet size={14} /> Export Excel
               </button>
             </div>
           </div>
@@ -344,8 +414,6 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
                   filteredReturns.map(ret => {
                     const cust     = customers.find(c => c.customer_id === ret.customer_id);
                     const subCust  = ret.sub_customer_id ? subCustomers.find(sc => sc.sub_customer_id === ret.sub_customer_id) : null;
-                    const retCartons = ret.total_cartons;
-                    const retPairs = ret.total_pairs;
 
                     return (
                       <tr
@@ -366,27 +434,27 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
                             : <span className="text-slate-400 italic text-xs">SAME (Direct)</span>}
                         </td>
                         <td className="p-3.5 font-mono font-semibold">
-                          {ret.bilty_no && ret.bilty_no !== '0'
+                          {ret.bilty_no
                             ? <span className="text-slate-800">{ret.bilty_no}</span>
                             : <span className="bg-red-50 text-red-600 border border-red-100 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Missing</span>}
                         </td>
-                        <td className="p-3.5 font-mono font-semibold text-slate-600">{ret.gp_no || '-'}</td>
-                        <td className="p-3.5 text-right font-mono font-semibold text-slate-700">{retCartons}</td>
-                        <td className="p-3.5 text-right font-mono text-slate-700">{retPairs.toLocaleString()}</td>
-                        <td className="p-3.5 text-right font-mono font-bold text-amber-800 pr-4">{formatCurrency(ret.net_value)}</td>
+                        <td className="p-3.5 font-mono text-slate-700">{ret.gp_no || '-'}</td>
+                        <td className="p-3.5 text-right font-mono font-semibold text-slate-700">{ret.total_cartons}</td>
+                        <td className="p-3.5 text-right font-mono text-slate-700">{ret.total_pairs.toLocaleString()}</td>
+                        <td className="p-3.5 text-right font-mono font-bold text-slate-900 pr-4">{formatCurrency(ret.net_value)}</td>
                         <td className="p-3.5 text-center pr-4" onClick={e => e.stopPropagation()}>
-                          <div className="flex justify-center items-center gap-3">
+                          <div className="flex justify-center items-center gap-1.5">
                             <button
                               onClick={() => onEditReturn(ret)}
                               title="Edit Return"
-                              className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
+                              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
                             >
                               <Edit2 size={15} />
                             </button>
                             <button
                               onClick={() => onPrintReturn(ret)}
                               title="Print Return"
-                              className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-[#B08D57] transition-colors"
+                              className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-500 hover:text-[var(--brand-gold)] transition-colors cursor-pointer"
                             >
                               <Printer size={15} />
                             </button>
@@ -402,110 +470,21 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
         </div>
       </div>
 
-      {/* ── Printable Excel-style layout for physical printers (A4) ── */}
-      <div className="hidden print:block excel-print-container">
-        <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '10px' }}>
-          <div>
-            <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>WENTOX WAREHOUSE</h1>
-            <p style={{ margin: 0, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', color: '#555555' }}>
-              Footwear Wholesale Distribution
-            </p>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 'bold' }}>SALE RETURNS DIRECTORY</h2>
-            <p style={{ margin: 0, fontSize: '11px', color: '#555555' }}>Date of Print: {new Date().toLocaleDateString()}</p>
-          </div>
-        </div>
-
-        {/* Filter context block to know what search parameters generated this print */}
-        <div className="excel-grid-info" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', border: '1px solid #000000', marginBottom: '15px' }}>
-          <div style={{ borderRight: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <strong>Date range:</strong> {fromDate || 'Start'} to {toDate || 'End'}
-          </div>
-          <div style={{ borderRight: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <strong>Customer Query:</strong> {customerQuery || 'All'}
-          </div>
-          <div style={{ borderRight: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <strong>Agent Query:</strong> {subCustomerQuery || 'All'}
-          </div>
-          <div style={{ padding: '5px 8px', fontSize: '11px' }}>
-            <strong>Article Filter:</strong> {articleFilter ? (products.find(p => p.article_id === Number(articleFilter))?.name) : 'All'}
-          </div>
-        </div>
-
-        {/* Excel Print Table */}
-        <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
-          <thead>
-            <tr>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Date</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Sys ID</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Return No.</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Customer</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Delivery Agent</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Bilty No.</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>GP No.</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Cartons</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Pairs</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Total Credit</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredReturns.length === 0 ? (
-              <tr>
-                <td colSpan={10} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
-                  No returns found matching criteria.
-                </td>
-              </tr>
-            ) : (
-              filteredReturns.map(ret => {
-                const cust = customers.find(c => c.customer_id === ret.customer_id);
-                const subCust = ret.sub_customer_id ? subCustomers.find(sc => sc.sub_customer_id === ret.sub_customer_id) : null;
-                const retCartons = ret.total_cartons;
-                const retPairs = ret.total_pairs;
-
-                return (
-                  <tr key={ret.return_id}>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{ret.return_date.slice(0, 10)}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontFamily: 'monospace' }}>{ret.return_id}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontWeight: 'bold', fontFamily: 'monospace' }}>{ret.bill_no}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{cust?.name || 'Walk-in'}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px' }}>{subCust ? subCust.name : '-'}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{ret.bilty_no && ret.bilty_no !== '0' ? ret.bilty_no : '-'}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px' }}>{ret.gp_no || '-'}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{retCartons}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace' }}>{retPairs}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(ret.net_value)}</td>
-                  </tr>
-                );
-              })
-            )}
-
-            {/* Summed totals footer row */}
-            <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
-              <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totalCartons}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totalPairs.toLocaleString()}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(totalValue)}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        {/* Manager/Auditor/Prepared Signatures block */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '35px', padding: '0 10px' }}>
-          <div style={{ textAlign: 'center', width: '150px' }}>
-            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
-            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
-          </div>
-          <div style={{ textAlign: 'center', width: '150px' }}>
-            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
-            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
-          </div>
-          <div style={{ textAlign: 'center', width: '150px' }}>
-            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
-            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
-          </div>
-        </div>
+      {/* Native @media print container */}
+      <div className="hidden print:block">
+        {renderPrintableDocument()}
       </div>
+
+      {/* Full-Screen Interactive Print Preview Modal */}
+      <ReportPrintPreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        title="Sale Returns Directory - Print Preview"
+        orientation="portrait"
+        onExportExcel={handleExportExcel}
+      >
+        {renderPrintableDocument()}
+      </ReportPrintPreviewModal>
     </>
   );
 }
