@@ -1,0 +1,36 @@
+name: Release Windows build
+
+# Push a tag like v1.0.0 to trigger a build + GitHub Release, entirely on GitHub's own Windows
+# runner — no local Windows machine needed. electron-builder's publish step uses the built-in
+# GITHUB_TOKEN (scoped to this repo, provided automatically by Actions), not a personal PAT.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        run: npm install
+        working-directory: frontend
+
+      - name: Install backend dependencies
+        run: npm install
+        working-directory: backend
+
+      - name: Build and publish
+        run: npm run release:win
+        working-directory: backend
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

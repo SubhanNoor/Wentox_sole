@@ -1,11 +1,11 @@
-// Local, machine-specific settings that aren't known until install time (e.g. the backup DB
-// folder the NSIS installer's custom page asks for) — separate from `.env`, which ships with the
-// repo and holds the main DB connection. Lives in Electron's per-user `userData` dir so it
-// survives app updates and isn't bundled into the installer itself.
+// Local, machine-specific settings that aren't known until install time — the backup DB folder
+// AND (for a packaged install, which never ships a `.env`) the main SQL Server connection details
+// — both asked by the NSIS installer's custom pages, see build/installer.nsh. Lives in Electron's
+// per-user `userData` dir so it survives app updates and isn't bundled into the installer itself.
 const fs = require('fs');
 const path = require('path');
 
-const CONFIG_FILENAME = 'backup-config.json';
+const CONFIG_FILENAME = 'app-config.json';
 
 // `app` is only available inside the Electron main process; falls back to cwd for scripts/tests
 // run standalone (e.g. `npm run migrate`) where this file is irrelevant anyway.
@@ -48,4 +48,21 @@ function setBackupDbFolder(folderPath) {
   return writeAppConfig({ backupDbFolder: folderPath });
 }
 
-module.exports = { getConfigPath, readAppConfig, writeAppConfig, getBackupDbFolder, setBackupDbFolder };
+// Main DB connection — only present when the NSIS installer's DB-connection page wrote it (a
+// packaged install with no `.env`). Returns null on a dev checkout, where config/index.js falls
+// back to `.env` instead.
+function getDbConnection() {
+  const { dbServer, dbPort, dbName, dbUser, dbPassword } = readAppConfig();
+  if (!dbServer) return null;
+  return { server: dbServer, port: dbPort, database: dbName, user: dbUser, password: dbPassword };
+}
+
+function setDbConnection({ server, port, database, user, password }) {
+  return writeAppConfig({ dbServer: server, dbPort: port, dbName: database, dbUser: user, dbPassword: password });
+}
+
+module.exports = {
+  getConfigPath, readAppConfig, writeAppConfig,
+  getBackupDbFolder, setBackupDbFolder,
+  getDbConnection, setDbConnection,
+};
