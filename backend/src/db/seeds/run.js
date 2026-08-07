@@ -171,7 +171,13 @@ async function seed() {
   console.log('seed complete');
 }
 
-seed().catch((err) => {
-  console.error('seed failed:', err.message);
-  process.exitCode = 1;
-});
+module.exports = seed;
+
+// `npm run seed` runs this file directly — keep that working. When required as a module instead
+// (electron/main.js, on every app startup), the caller decides when to run it.
+if (require.main === module) {
+  seed().catch((err) => {
+    console.error('seed failed:', err.message);
+    process.exitCode = 1;
+  });
+}

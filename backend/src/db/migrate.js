@@ -14,10 +14,16 @@ async function migrate() {
     )
   `);
 
-  // Schema source of truth lives at repo root, not in this folder — see database/schema.sql
-  // (generated from System_architecture/database_schema_v4.3.md). Tracked as one migration file
-  // named by its basename, same as anything under migrations/.
-  const schemaFile = path.join(__dirname, '..', '..', '..', 'database', 'schema.sql');
+  // Schema source of truth lives at repo root in dev (../../../database/schema.sql from here),
+  // not inside backend/ — but a packaged app only ships what's under backend/ (package.json's
+  // "files"), so package.json's extraResources copies it into resources/database/schema.sql for
+  // that case instead. Tracked as one migration file named by its basename, same as anything
+  // under migrations/.
+  let isPackaged = false;
+  try { isPackaged = require('electron').app.isPackaged; } catch { /* not running inside Electron (CLI/script use) */ }
+  const schemaFile = isPackaged
+    ? path.join(process.resourcesPath, 'database', 'schema.sql')
+    : path.join(__dirname, '..', '..', '..', 'database', 'schema.sql');
   const dir = path.join(__dirname, 'migrations');
   const laterMigrations = fs.existsSync(dir)
     ? fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).map((f) => path.join(dir, f))
@@ -61,4 +67,13 @@ async function migrate() {
   await pool.close();
 }
 
-migrate();
+module.exports = migrate;
+
+// `npm run migrate` runs this file directly — keep that working. When required as a module
+// instead (electron/main.js, on every app startup), the caller decides when to run it.
+if (require.main === module) {
+  migrate().catch((err) => {
+    console.error('migrate failed:', err.message);
+    process.exitCode = 1;
+  });
+}

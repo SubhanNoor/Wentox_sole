@@ -3,6 +3,8 @@ const { app, BrowserWindow } = require('electron');
 const registerIpcHandlers = require('../src/ipc');
 const alertsService = require('../src/services/alerts.service');
 const backupService = require('../src/services/backup.service');
+const migrate = require('../src/db/migrate');
+const seed = require('../src/db/seeds/run');
 
 // package.json's "name" (wentox-backend) is an npm package name, not a user-facing product name —
 // without this, app.getPath('userData') (where appConfig.js reads the installer-chosen backup
@@ -38,7 +40,22 @@ const ALERTS_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 // was written since the last run, so this can run less often than the alerts refresh.
 const BACKUP_SYNC_INTERVAL_MS = 10 * 60 * 1000;
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // A fresh install's SQL Server has no schema/admin user at all yet — both are idempotent
+  // (migrate tracks dbo.schema_migrations, seed does existence checks per row), so running them
+  // on every startup is safe and is what makes a first-ever launch self-sufficient: create schema
+  // → seed the default admin (admin/admin123) and reserved chart accounts → THEN open the window,
+  // so login always has something to authenticate against. If the SQL Server the installer was
+  // pointed at isn't reachable yet (e.g. set up after install, before its first real launch),
+  // this fails loudly to the console but still opens the window rather than block the app
+  // entirely — login will just fail with a real connection error instead of a confusing hang.
+  try {
+    await migrate();
+    await seed();
+  } catch (err) {
+    console.error('Startup migrate/seed failed — is SQL Server reachable?', err);
+  }
+
   registerIpcHandlers(); // every ipcMain.handle channel must exist before the renderer can call one
 
   // Alerts job (Milestone 9.1 follow-up, later widened from "startup only" to a 15-minute repeat

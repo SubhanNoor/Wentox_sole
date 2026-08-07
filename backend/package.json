@@ -44,6 +44,10 @@
       {
         "from": "../frontend/dist",
         "to": "frontend/dist"
+      },
+      {
+        "from": "../database/schema.sql",
+        "to": "database/schema.sql"
       }
     ],
     "win": {
