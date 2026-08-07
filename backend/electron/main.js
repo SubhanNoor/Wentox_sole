@@ -21,15 +21,23 @@ function createWindow() {
   }
 }
 
+const ALERTS_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+
 app.whenReady().then(() => {
   registerIpcHandlers(); // every ipcMain.handle channel must exist before the renderer can call one
 
-  // Alerts job (Milestone 9.1 follow-up): runs once per app launch, not on any repeating timer —
-  // computes cheque-due/sale-bill-due alerts and persists them into dbo.generated_alerts;
-  // alerts:list just reads that table from here on. Not awaited — the window shouldn't wait on a
-  // DB round-trip to open, and a failure here (e.g. DB briefly unreachable) shouldn't crash
-  // startup, just leave generated_alerts as it was from the last successful run.
+  // Alerts job (Milestone 9.1 follow-up, later widened from "startup only" to a 15-minute repeat
+  // per explicit request — a newly-due cheque/bill was going unnoticed for however long a session
+  // stayed open): computes cheque-due/sale-bill-due alerts and persists them into
+  // dbo.generated_alerts; alerts:list just reads that table from here on. Also exposed as
+  // alerts:refresh for an on-demand manual refresh from the renderer. Not awaited — the window
+  // shouldn't wait on a DB round-trip to open, and a failure here (e.g. DB briefly unreachable)
+  // shouldn't crash startup/the timer, just leave generated_alerts as it was from the last
+  // successful run.
   alertsService.refreshAlerts().catch((err) => console.error('Alerts refresh failed on startup:', err));
+  setInterval(() => {
+    alertsService.refreshAlerts().catch((err) => console.error('Alerts refresh failed:', err));
+  }, ALERTS_REFRESH_INTERVAL_MS);
 
   createWindow();
 

@@ -10,7 +10,6 @@ import {
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
 import * as api from '@/lib/api';
-import NotificationSidePanel from '@/components/NotificationSidePanel';
 
 interface NavItem {
   page: NavPage;
@@ -103,9 +102,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     return localStorage.getItem('wento_sidebar_hidden') !== 'false';
   });
 
-  // Home Page Notification Side Panel state (opens automatically on home page, hideable)
-  const [isHomeSidePanelOpen, setIsHomeSidePanelOpen] = useState(true);
-
   // Top Menu Bar Shortcuts State - Default is completely empty (none)
   const SHORTCUTS_STORAGE_KEY = 'wento_quick_shortcuts_clean_v3';
 
@@ -148,12 +144,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
-
-  useEffect(() => {
-    if (state.currentPage !== 'home') {
-      setIsHomeSidePanelOpen(false);
-    }
-  }, [state.currentPage]);
 
   function navigate(page: string, tab?: string) {
     dispatch({ type: 'NAVIGATE', page, tab });
@@ -482,10 +472,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
           {headerAction && (
             <div>{headerAction}</div>
           )}
-          <NotificationBell
-            isHomePage={state.currentPage === 'home'}
-            onToggleSidePanel={() => setIsHomeSidePanelOpen(!isHomeSidePanelOpen)}
-          />
+          <NotificationBell />
         </header>
 
         {/* Top Quick Access Shortcut Drop Zone / Menu Bar */}
@@ -631,11 +618,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
         </div>
       )}
 
-      {/* Notification Side Panel (Drawer shown automatically on Home Page, hideable) */}
-      <NotificationSidePanel
-        isOpen={state.currentPage === 'home' && isHomeSidePanelOpen}
-        onClose={() => setIsHomeSidePanelOpen(false)}
-      />
     </div>
   );
 }

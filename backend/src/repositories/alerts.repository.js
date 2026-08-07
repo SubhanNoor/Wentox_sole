@@ -68,19 +68,14 @@ async function insertDismissal(alertKey, userId) {
 // ── dbo.generated_alerts — written by the startup job (alerts.service.js#refreshAlerts()), read
 // by list(). Nothing else touches this table. ──────────────────────────────────────────────────
 
-async function findGeneratedByKey(alertKey) {
-  const result = await query(
-    'SELECT alert_id FROM dbo.generated_alerts WHERE alert_key = @alertKey',
-    { alertKey: { type: sql.VarChar(100), value: alertKey } },
-  );
-  return result.recordset[0] || null;
-}
-
-// Insert-or-refresh by alert_key (UQ_generated_alerts_key) — a cheque/bill already tracked from a
-// prior run just gets its display fields brought current (amount could change on the rare edit,
-// the date shouldn't but there's no reason to assume it can't); a newly-due one gets a fresh row.
-async function upsertGeneratedAlert(alert) {
-  const existing = await findGeneratedByKey(alert.key);
+// Insert-or-refresh by alert_key (UQ_generated_alerts_key) in a single round trip — a cheque/bill
+// already tracked from a prior run just gets its display fields brought current (amount could
+// change on the rare edit, the date shouldn't but there's no reason to assume it can't); a newly-due
+// one gets a fresh row. Previously this was a SELECT-then-INSERT/UPDATE (2 round trips) called
+// sequentially per alert from the service — replaced with one MERGE per alert, run in parallel
+// across alerts (see refreshAlerts()), since the old sequential 2-round-trips-per-alert pattern was
+// the actual cause of a slow manual refresh once there were more than a few due cheques/bills.
+async function mergeGeneratedAlert(alert) {
   const params = {
     alertKey: { type: sql.VarChar(100), value: alert.key },
     kind: { type: sql.VarChar(20), value: alert.kind },
@@ -91,22 +86,18 @@ async function upsertGeneratedAlert(alert) {
     targetPage: { type: sql.VarChar(50), value: alert.target_page },
     targetTab: { type: sql.VarChar(50), value: alert.target_tab ?? null },
   };
-  if (existing) {
-    await query(
-      `UPDATE dbo.generated_alerts SET
-         kind = @kind, title = @title, detail = @detail, alert_date = @alertDate, amount = @amount,
-         target_page = @targetPage, target_tab = @targetTab, updated_at = SYSUTCDATETIME()
-       WHERE alert_key = @alertKey`,
-      params,
-    );
-  } else {
-    await query(
-      `INSERT INTO dbo.generated_alerts
-         (alert_key, kind, title, detail, alert_date, amount, target_page, target_tab)
-       VALUES (@alertKey, @kind, @title, @detail, @alertDate, @amount, @targetPage, @targetTab)`,
-      params,
-    );
-  }
+  await query(
+    `MERGE dbo.generated_alerts AS target
+     USING (SELECT @alertKey AS alert_key) AS source
+       ON target.alert_key = source.alert_key
+     WHEN MATCHED THEN UPDATE SET
+       kind = @kind, title = @title, detail = @detail, alert_date = @alertDate, amount = @amount,
+       target_page = @targetPage, target_tab = @targetTab, updated_at = SYSUTCDATETIME()
+     WHEN NOT MATCHED THEN INSERT
+       (alert_key, kind, title, detail, alert_date, amount, target_page, target_tab)
+       VALUES (@alertKey, @kind, @title, @detail, @alertDate, @amount, @targetPage, @targetTab);`,
+    params,
+  );
 }
 
 // Removes any stored alert whose key isn't in the freshly computed set — e.g. a cheque got
@@ -146,5 +137,5 @@ async function listGenerated() {
 
 module.exports = {
   chequeDueRows, saleBillDueRows, activeDismissalKeys, findDismissal, insertDismissal,
-  upsertGeneratedAlert, deleteGeneratedNotIn, listGenerated,
+  mergeGeneratedAlert, deleteGeneratedNotIn, listGenerated,
 };

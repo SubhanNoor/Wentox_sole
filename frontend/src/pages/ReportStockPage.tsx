@@ -1353,7 +1353,9 @@ export default function ReportStockPage() {
                     type="number"
                     min="1"
                     value={addQuantity || ''}
-                    onChange={e => setAddQuantity(Math.max(1, parseInt(e.target.value) || 0))}
+                    onChange={e => setAddQuantity(e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
+                    onFocus={e => e.target.select()}
+                    onBlur={() => setAddQuantity(q => Math.max(1, q))}
                     className="soleria-input text-center font-bold"
                   />
                 </div>
@@ -1415,7 +1417,7 @@ export default function ReportStockPage() {
                 </button>
                 <button
                   type="button"
-                  disabled={!addColor.trim()}
+                  disabled={!addColor.trim() || addQuantity <= 0}
                   onClick={async () => {
                     const res = await api.stock.logProduction({
                       movement_date: productionDate,

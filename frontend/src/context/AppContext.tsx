@@ -769,6 +769,9 @@ export interface State {
   productionLogs: ProductionLog[];
   chequeAllocations: ChequeAllocation[];
   alertDismissals: AlertDismissal[];
+  // Session-scoped, not persisted: true once the Home page's real-alerts card has been closed this
+  // login — reset to false on every LOGIN_SUCCESS so it shows again on a fresh session.
+  homeAlertsCardClosed: boolean;
   wageRuns: WageRun[];
   salaryRuns: SalaryRun[];
   materialAdjustments: MaterialAdjustment[];
@@ -784,6 +787,7 @@ type Action =
   // The signed-in user renamed their own account from Settings — updates the display name only,
   // no navigation (unlike LOGIN_SUCCESS, which always lands on Home).
   | { type: 'RENAME_CURRENT_USER'; username: string }
+  | { type: 'CLOSE_HOME_ALERTS_CARD' }
   | { type: 'NAVIGATE'; page: string; tab?: string }
   | { type: 'ADD_PRODUCTION_LOG'; log: ProductionLog }
   | { type: 'SELECT_BILL'; billId: string | null }
@@ -896,6 +900,7 @@ const initialState: State = {
   productionLogs: demoProductionLogs,
   chequeAllocations: demoChequeAllocations,
   alertDismissals: [],
+  homeAlertsCardClosed: false,
   wageRuns: demoWageRuns,
   salaryRuns: demoSalaryRuns,
   materialAdjustments: [],
@@ -912,13 +917,16 @@ function reducer(state: State, action: Action): State {
         isLoggedIn: true,
         currentUserRole: action.payload.role,
         currentUsername: action.payload.username,
-        currentPage: 'home'
+        currentPage: 'home',
+        homeAlertsCardClosed: false
       };
     case 'LOGOUT':
       localStorage.setItem('wento_sidebar_hidden', 'true');
       return { ...state, isLoggedIn: false, currentUserRole: null, currentUsername: null, currentPage: 'login' };
     case 'RENAME_CURRENT_USER':
       return { ...state, currentUsername: action.username };
+    case 'CLOSE_HOME_ALERTS_CARD':
+      return { ...state, homeAlertsCardClosed: true };
     case 'NAVIGATE':
       return { ...state, currentPage: action.page, currentTab: action.tab ?? null };
     case 'SELECT_BILL':

@@ -15,4 +15,14 @@ module.exports = function register() {
     const session = requireSession();
     return service.dismiss(payload.alert_key, session.userId);
   }));
+
+  // Manual refresh — runs the same computation as the startup/interval job, on demand, so a user
+  // doesn't have to wait for the next 15-minute tick to see a just-created cheque/bill's alert.
+  // Returns the fresh list directly (not just a count) so the renderer doesn't need a second
+  // round trip to redraw after refreshing.
+  ipcMain.handle('alerts:refresh', wrap(async () => {
+    requireSession();
+    await service.refreshAlerts();
+    return service.list();
+  }));
 };

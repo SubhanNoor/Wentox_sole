@@ -1,31 +1,35 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
-import { computeAlerts, todayISO } from '@/lib/cheques';
-import { Bell, X, RotateCcw } from 'lucide-react';
-import type { AppAlert } from '@/types';
+import * as api from '@/lib/api';
+import type { AlertRow } from '@/lib/api';
+import { Bell, X, RotateCw } from 'lucide-react';
 
-// §12 — alerts are derived from state on every render and on a slow interval
-// (so a cheque crossing its date lights up without a reload). Nothing is
-// stored except the dismissal; this is the same derivation a future
-// `GET /api/notifications` will run server-side.
 const POLL_INTERVAL_MS = 60_000;
 
-interface NotificationBellProps {
-  onToggleSidePanel?: () => void;
-  isHomePage?: boolean;
-}
-
-export default function NotificationBell({ onToggleSidePanel, isHomePage }: NotificationBellProps = {}) {
-  const { state, dispatch } = useApp();
+export default function NotificationBell() {
+  const { dispatch } = useApp();
   const [open, setOpen] = useState(false);
-  const [today, setToday] = useState(todayISO());
+  const [alerts, setAlerts] = useState<AlertRow[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // Re-derive periodically so the badge stays honest across a long session.
-  useEffect(() => {
-    const id = setInterval(() => setToday(todayISO()), POLL_INTERVAL_MS);
-    return () => clearInterval(id);
+  const load = useCallback(async () => {
+    const res = await api.alerts.list();
+    if (res.ok) setAlerts(res.data);
   }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [load]);
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    const res = await api.alerts.refresh();
+    if (res.ok) setAlerts(res.data);
+    setRefreshing(false);
+  }
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -37,21 +41,20 @@ export default function NotificationBell({ onToggleSidePanel, isHomePage }: Noti
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
 
-  const alerts = useMemo(() => computeAlerts(state, today), [state, today]);
-
   const overdue = alerts.filter(a => a.severity === 'overdue');
   const dueSoon = alerts.filter(a => a.severity === 'due-soon');
 
-  function openAlert(alert: AppAlert) {
-    dispatch({ type: 'NAVIGATE', page: alert.targetPage, tab: alert.targetTab });
+  function openAlert(alert: AlertRow) {
+    dispatch({ type: 'NAVIGATE', page: alert.target_page, tab: alert.target_tab ?? undefined });
     setOpen(false);
   }
 
-  function dismiss(alert: AppAlert) {
-    dispatch({ type: 'DISMISS_ALERT', alertKey: alert.key, dismissedAt: new Date().toISOString() });
+  async function dismiss(alert: AlertRow) {
+    const res = await api.alerts.dismiss(alert.key);
+    if (res.ok) setAlerts(prev => prev.filter(a => a.key !== alert.key));
   }
 
-  function renderGroup(label: string, group: AppAlert[], accent: string, bg: string) {
+  function renderGroup(label: string, group: AlertRow[], accent: string, bg: string) {
     if (group.length === 0) return null;
     return (
       <div>
@@ -107,13 +110,7 @@ export default function NotificationBell({ onToggleSidePanel, isHomePage }: Noti
   return (
     <div className="relative" ref={panelRef} data-no-print>
       <button
-        onClick={() => {
-          if (isHomePage && onToggleSidePanel) {
-            onToggleSidePanel();
-          } else {
-            setOpen(!open);
-          }
-        }}
+        onClick={() => setOpen(!open)}
         className="relative flex items-center justify-center rounded-lg transition-colors hover:bg-slate-100"
         style={{ width: 36, height: 36 }}
         title="Alerts"
@@ -146,16 +143,15 @@ export default function NotificationBell({ onToggleSidePanel, isHomePage }: Noti
             style={{ borderColor: 'var(--border-color)', background: 'var(--brand-navy)' }}
           >
             <span className="font-lora font-semibold text-sm text-white">Alerts</span>
-            {state.alertDismissals.length > 0 && (
-              <button
-                onClick={() => dispatch({ type: 'RESTORE_ALERTS' })}
-                className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider hover:opacity-80"
-                style={{ color: 'var(--brand-gold)' }}
-                title="Bring back dismissed alerts"
-              >
-                <RotateCcw size={11} /> Restore ({state.alertDismissals.length})
-              </button>
-            )}
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="p-1 text-slate-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
+              title="Refresh"
+              aria-label="Refresh alerts"
+            >
+              <RotateCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            </button>
           </div>
 
           <div style={{ maxHeight: 380, overflowY: 'auto' }}>

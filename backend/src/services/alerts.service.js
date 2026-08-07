@@ -69,9 +69,10 @@ async function refreshAlerts() {
     ...billRows.map(saleBillDueAlert),
   ];
 
-  for (const alert of alerts) {
-    await repository.upsertGeneratedAlert(alert);
-  }
+  // Parallel, not sequential — each alert's MERGE is an independent round trip, and awaiting them
+  // one at a time was the real cause of a slow manual refresh once more than a couple of alerts
+  // were due at once.
+  await Promise.all(alerts.map((alert) => repository.mergeGeneratedAlert(alert)));
   await repository.deleteGeneratedNotIn(alerts.map((a) => a.key));
 
   return { count: alerts.length };

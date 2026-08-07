@@ -1457,6 +1457,11 @@ declare global {
         check: () => Promise<ApiResult<{ updateAvailable: boolean; currentVersion?: string; latestVersion?: string; packaged?: boolean }>>;
         install: () => Promise<ApiResult<{ ok: true }>>;
       };
+      alerts: {
+        list: () => Promise<ApiResult<AlertRow[]>>;
+        dismiss: (payload: { alert_key: string }) => Promise<ApiResult<{ ok: true }>>;
+        refresh: () => Promise<ApiResult<AlertRow[]>>;
+      };
       stages: {
         list: () => Promise<ApiResult<StageRow[]>>;
       };
@@ -1528,6 +1533,25 @@ const NO_BRIDGE: ApiFail = {
 function mapRole(role: 'ADMIN' | 'USER'): UserRole {
   return role === 'ADMIN' ? 'Admin' : 'User';
 }
+
+export interface AlertRow {
+  key: string;
+  kind: 'CHEQUE_DUE' | 'PAYMENT_OVERDUE';
+  severity: 'overdue' | 'due-soon';
+  title: string;
+  detail: string | null;
+  date: string;
+  amount: number;
+  target_page: string;
+  target_tab: string | null;
+}
+
+export const alerts = {
+  list: () => window.api ? window.api.alerts.list() : Promise.resolve(NO_BRIDGE),
+  dismiss: (alertKey: string) =>
+    window.api ? window.api.alerts.dismiss({ alert_key: alertKey }) : Promise.resolve(NO_BRIDGE),
+  refresh: () => window.api ? window.api.alerts.refresh() : Promise.resolve(NO_BRIDGE)
+};
 
 export interface UserAccountRowFromApi {
   user_id: number;
