@@ -1,12 +1,16 @@
-; Two custom NSIS pages, both write into %APPDATA%\Wentox\app-config.json, which
-; backend/src/config/appConfig.js reads at runtime:
-;   1. DB connection page — the packaged app never ships `.env` (dev-only, and shouldn't carry a
-;      real shop PC's SQL Server password into git anyway), so this is how a packaged install
-;      learns its SQL Server details. backend/src/config/index.js falls back to `.env` only when
-;      this file doesn't exist, i.e. on a dev checkout — nothing here affects local dev.
-;   2. Backup folder page — where the live backup database's data/log files should live. The
-;      install location itself stays fixed (nsis.allowToChangeInstallationDirectory: false in
-;      package.json); these two pages are the only things the installer lets the user choose.
+; Four custom NSIS pages (some conditionally skipped via Abort-in-Create — the standard NSIS
+; pattern for a page that decides at runtime whether to render), all writing into
+; %APPDATA%\Wentox\app-config.json, which backend/src/config/appConfig.js reads at runtime:
+;   1. Setup mode — detects an existing SQL Server (registry check). If found, skipped entirely
+;      (falls through to manual entry, page 3). If not found, offers a choice: auto-install SQL
+;      Server Express, or manual entry.
+;   2. Auto password — only shown if mode is AUTO. One password field, used as SQL Server's `sa`
+;      password; server/port/db/user get fixed defaults (localhost/1433/Wentox_db/sa).
+;   3. DB connection (manual) — only shown if mode is MANUAL (either chosen, or an existing SQL
+;      Server was detected). Full server/port/database/username/password form, as before.
+;   4. Backup folder — where the live backup database's data/log files should live. Always shown.
+; The install location itself stays fixed (nsis.allowToChangeInstallationDirectory: false in
+; package.json) — these pages are the only things the installer lets the user choose.
 !include "nsDialogs.nsh"
 !include "LogicLib.nsh"
 !include "WordFunc.nsh"
@@ -34,7 +38,8 @@
 ;
 ; (customPageAfterChangeDir IS the right hook and is inserted regardless of
 ; allowToChangeInstallationDirectory — that !ifmacrodef block sits after/outside the !ifdef for
-; the change-directory page. There is no customPageBeforeInstall hook.)
+; the change-directory page. There is no customPageBeforeInstall hook. Verified locally with a
+; harness that compiles both passes exactly as electron-builder does — see build/lint-nsis.sh.)
 !ifndef BUILD_UNINSTALLER
 
 ; WordFunc's ${WordReplace} is only a *call* macro — the function it calls has to be instantiated
@@ -42,6 +47,11 @@
 ; inside this guard too: customInstall (its only caller) isn't inserted in the uninstaller pass, so
 ; instantiating it there would trip the exact same warning 6010.
 !insertmacro WordReplace
+
+Var SqlServerDetected ; "1"/"0" — set once by SetupModePageCreate
+Var SqlSetupMode       ; "AUTO" or "MANUAL" — decides which of pages 2/3 actually renders
+Var RadioAuto
+Var RadioManual
 
 Var DbServerText
 Var DbPortText
@@ -59,11 +69,98 @@ Var BackupPathText
 Var BackupPathValue
 
 !macro customPageAfterChangeDir
+  Page custom SetupModePageCreate SetupModePageLeave
+  Page custom AutoPasswordPageCreate AutoPasswordPageLeave
   Page custom DbConnectionPageCreate DbConnectionPageLeave
   Page custom BackupPathPageCreate BackupPathPageLeave
 !macroend
 
+; Registry key that exists once any SQL Server instance is registered, regardless of edition/name.
+; SetRegView 64 first: SQL Server registers under the 64-bit hive, and NSIS defaults to the 32-bit
+; (WOW6432Node-redirected) view since it's a 32-bit process, which would otherwise never find it.
+Function SetupModePageCreate
+  SetRegView 64
+  ClearErrors
+  EnumRegValue $0 HKLM "SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL" 0
+  ${IfNot} ${Errors}
+    StrCpy $SqlServerDetected "1"
+    StrCpy $SqlSetupMode "MANUAL"
+    Abort ; skip this page — falls through to page 3 (manual entry), page 2 self-skips too
+  ${EndIf}
+  StrCpy $SqlServerDetected "0"
+
+  !insertmacro MUI_HEADER_TEXT "SQL Server Setup" "Choose how Wentox should connect to a database."
+
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 24u "Wentox needs a SQL Server database. No existing SQL Server installation was found on this PC."
+  Pop $0
+
+  ${NSD_CreateRadioButton} 0 30u 100% 12u "Install SQL Server Express automatically (recommended)"
+  Pop $RadioAuto
+  ${NSD_Check} $RadioAuto
+
+  ${NSD_CreateRadioButton} 0 46u 100% 12u "I already have SQL Server installed elsewhere"
+  Pop $RadioManual
+
+  nsDialogs::Show
+FunctionEnd
+
+Function SetupModePageLeave
+  ${NSD_GetState} $RadioAuto $0
+  ${If} $0 == 1 ; BST_CHECKED — hardcoded like ES_PASSWORD elsewhere in this file, not predefined by nsDialogs.nsh
+    StrCpy $SqlSetupMode "AUTO"
+  ${Else}
+    StrCpy $SqlSetupMode "MANUAL"
+  ${EndIf}
+FunctionEnd
+
+Function AutoPasswordPageCreate
+  ${If} $SqlSetupMode != "AUTO"
+    Abort ; MANUAL was chosen (or an existing SQL Server was detected) — page 3 handles it instead
+  ${EndIf}
+
+  !insertmacro MUI_HEADER_TEXT "SQL Server Password" "Choose a password for the database administrator account."
+
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 32u "Wentox will install SQL Server Express automatically. Choose a password for its 'sa' administrator account — used only by Wentox itself to connect to the database, never shown or asked for again:"
+  Pop $0
+
+  ${NSD_CreateLabel} 0 40u 30% 12u "Password"
+  Pop $0
+  ${NSD_CreateText} 32% 38u 68% 12u ""
+  Pop $DbPasswordText
+  ${NSD_AddStyle} $DbPasswordText 0x0020 ; ES_PASSWORD
+
+  nsDialogs::Show
+FunctionEnd
+
+Function AutoPasswordPageLeave
+  ${NSD_GetText} $DbPasswordText $DbPasswordValue
+  ${If} $DbPasswordValue == ""
+    MessageBox MB_ICONEXCLAMATION "Please choose a password."
+    Abort
+  ${EndIf}
+  StrCpy $DbServerValue "localhost"
+  StrCpy $DbPortValue "1433"
+  StrCpy $DbNameValue "Wentox_db"
+  StrCpy $DbUserValue "sa"
+FunctionEnd
+
 Function DbConnectionPageCreate
+  ${If} $SqlSetupMode == "AUTO"
+    Abort ; page 2 (AutoPasswordPage) already collected everything needed for this mode
+  ${EndIf}
+
   !insertmacro MUI_HEADER_TEXT "Database Connection" "Enter the SQL Server this PC will use for Wentox."
 
   nsDialogs::Create 1018
@@ -197,6 +294,29 @@ FunctionEnd
   Push $7
   Push $8
   Push $9
+
+  ; $SqlSetupMode is only ever "AUTO" when SetupModePageCreate found no existing SQL Server (see
+  ; that function) — never reinstalls over one that's already there.
+  ${If} $SqlSetupMode == "AUTO"
+    ; package.json's extraResources copies this in at the same "resources/" location the packaged
+    ; app itself reads other bundled files from (frontend/dist, database/schema.sql) via
+    ; process.resourcesPath — $INSTDIR\resources is the installed-app equivalent of that.
+    ${If} ${FileExists} "$INSTDIR\resources\sqlserver\SQLEXPR_x64_ENU.exe"
+      DetailPrint "Installing SQL Server Express - this can take 5-15 minutes, please wait..."
+      ; Default (not named) instance so it lands on port 1433 with no further config needed; mixed
+      ; SQL Server + Windows auth so the sa/password combo the app was given actually works; TCP/IP
+      ; on from the start — all three were manual troubleshooting steps before this existed.
+      ExecWait '"$INSTDIR\resources\sqlserver\SQLEXPR_x64_ENU.exe" /Q /ACTION=Install /FEATURES=SQLENGINE /INSTANCENAME=MSSQLSERVER /SECURITYMODE=SQL /SAPWD="$DbPasswordValue" /SQLSVCACCOUNT="NT AUTHORITY\SYSTEM" /SQLSYSADMINACCOUNTS="BUILTIN\Administrators" /TCPENABLED=1 /IACCEPTSQLSERVERLICENSETERMS /UPDATEENABLED=0' $0
+      ${If} $0 != 0
+        MessageBox MB_ICONEXCLAMATION "SQL Server Express setup exited with code $0. Wentox may not be able to connect until SQL Server is installed or configured manually — see Settings for the connection details to fix by hand if needed."
+      ${Else}
+        DetailPrint "SQL Server Express installed successfully."
+        Sleep 5000 ; give the service a moment to finish starting before Wentox's own first-launch migrate attempts to connect
+      ${EndIf}
+    ${Else}
+      MessageBox MB_ICONEXCLAMATION "The bundled SQL Server Express installer is missing from this package. Wentox will not be able to connect until SQL Server is installed manually."
+    ${EndIf}
+  ${EndIf}
 
   CreateDirectory "$APPDATA\Wentox"
   CreateDirectory "$BackupPathValue"

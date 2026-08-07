@@ -12,8 +12,9 @@
     "seed:dev": "node src/db/seeds/dev-sample-data.js",
     "electron:dev": "concurrently \"npm --prefix ../frontend run dev\" \"cross-env VITE_DEV_SERVER_URL=http://localhost:3000 electron .\"",
     "build:frontend": "npm --prefix ../frontend run build",
-    "dist:win": "npm run build:frontend && electron-builder --win",
-    "release:win": "npm run build:frontend && electron-builder --win --publish always"
+    "download:sqlserver": "node build/download-sqlserver.js",
+    "dist:win": "npm run download:sqlserver && npm run build:frontend && electron-builder --win",
+    "release:win": "npm run download:sqlserver && npm run build:frontend && electron-builder --win --publish always"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
@@ -48,6 +49,10 @@
       {
         "from": "../database/schema.sql",
         "to": "database/schema.sql"
+      },
+      {
+        "from": "build/sqlserver/SQLEXPR_x64_ENU.exe",
+        "to": "sqlserver/SQLEXPR_x64_ENU.exe"
       }
     ],
     "win": {
