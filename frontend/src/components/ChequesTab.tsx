@@ -1,7 +1,7 @@
 import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import { todayISO } from '@/lib/cheques';
-import { Printer, FileDown, FileSpreadsheet, Search, AlertTriangle, Eye } from 'lucide-react';
+import { Search, AlertTriangle, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
@@ -401,15 +401,6 @@ export default function ChequesTab() {
           >
             <Eye size={15} /> Show Print Preview
           </button>
-          <button onClick={() => setIsPreviewOpen(true)} className="btn-outline flex items-center gap-1.5 px-3.5 py-2 text-xs cursor-pointer">
-            <Printer size={15} /> Print
-          </button>
-          <button onClick={() => setIsPreviewOpen(true)} className="btn-outline flex items-center gap-1.5 px-3.5 py-2 text-xs cursor-pointer">
-            <FileDown size={15} /> Export PDF
-          </button>
-          <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3.5 py-2 text-xs cursor-pointer">
-            <FileSpreadsheet size={15} /> Export Excel
-          </button>
         </div>
       </div>
 
@@ -766,10 +757,6 @@ export default function ChequesTab() {
           </div>
         </div>
       )}
-      {/* Native @media print container */}
-      <div className="hidden print:block">
-        {renderPrintableDocument()}
-      </div>
 
       {/* Full-Screen Interactive Print Preview Modal */}
       <ReportPrintPreviewModal

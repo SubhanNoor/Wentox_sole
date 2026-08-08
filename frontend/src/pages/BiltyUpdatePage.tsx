@@ -1,10 +1,12 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Search, Edit2, RefreshCw, Printer, FileDown, FileSpreadsheet } from 'lucide-react';
-import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { Search, Edit2, RefreshCw, Eye } from 'lucide-react';
+import { exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { SaleBillRow, AddaRow } from '@/lib/api';
+import wentoxLogo from '@/assets/wentox_logo.png';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
 export default function BiltyUpdatePage() {
   // Search Filters State
@@ -27,6 +29,7 @@ export default function BiltyUpdatePage() {
   // Notification state
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const [addas, setAddas] = useState<AddaRow[]>([]);
   const [invoices, setInvoices] = useState<SaleBillRow[]>([]);
@@ -89,11 +92,6 @@ export default function BiltyUpdatePage() {
     loadInvoices();
   };
 
-  // Print results
-  const handlePrint = () => {
-    window.print();
-  };
-
   const handleExportExcel = () => {
     const headers = ['Invoice Date', 'Inv. No (Sys)', 'Manual No.', 'Customer Name', 'Sub Customer Name', 'Bilty No.', 'Transport Adda', 'Adda Code'];
     const rows = filteredInvoices.map(bill => [
@@ -107,8 +105,7 @@ export default function BiltyUpdatePage() {
     exportRowsToExcel('bilty-adda-search', headers, rows);
   };
 
-  // Client-side filters not covered by biltySearch() (customer/sub-customer name substring, bilty
-  // status) + sorting — biltySearch() itself only takes customer_id/sub_customer_id/bill_no/dates.
+  // Client-side filters
   const filteredInvoices = useMemo(() => {
     let result = [...invoices];
 
@@ -131,30 +128,158 @@ export default function BiltyUpdatePage() {
     }
 
     result.sort((a, b) => {
-      if (sortBy === 'inv-no') {
-        return a.bill_id - b.bill_id;
-      } else {
-        return a.bill_no.localeCompare(b.bill_no);
-      }
+      if (sortBy === 'inv-no') return a.bill_id - b.bill_id;
+      else return a.bill_no.localeCompare(b.bill_no);
     });
 
     return result;
   }, [invoices, customerQuery, subCustomerQuery, biltyStatusFilter, sortBy]);
 
+  // Count summary helpers
+  const missingBilty = filteredInvoices.filter(b => !b.bilty_no || !b.bilty_no.trim()).length;
+  const missingAdda = filteredInvoices.filter(b => !b.adda_id).length;
+  const complete = filteredInvoices.filter(b => b.bilty_no && b.bilty_no.trim() && b.adda_id).length;
+
+  /* ─── Print Preview Document ─── */
+  const renderPrintableDocument = () => (
+    <div className="excel-print-container">
+      {/* Header */}
+      <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000', marginBottom: '14px', paddingBottom: '10px' }}>
+        <div>
+          <img src={wentoxLogo} alt="Wentox" style={{ height: '160px', width: 'auto', objectFit: 'contain' }} />
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <h2 style={{ margin: 0, fontSize: '19px', fontWeight: 'bold' }}>BILTY &amp; ADDA UPDATION REPORT</h2>
+          <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#444' }}>
+            Period: {startDate || 'All'} — {endDate || 'All'}
+          </p>
+          <p style={{ margin: '3px 0 0', fontSize: '11px', color: '#555' }}>
+            Date of Print: {new Date().toLocaleDateString()}
+          </p>
+          <p style={{ margin: '4px 0 0', fontSize: '11px', fontWeight: 'bold' }}>
+            Total Records: {filteredInvoices.length} &nbsp;|&nbsp;
+            Missing Bilty: {missingBilty} &nbsp;|&nbsp;
+            Missing Adda: {missingAdda} &nbsp;|&nbsp;
+            Complete: {complete}
+          </p>
+        </div>
+      </div>
+
+      {/* Active Filters summary */}
+      {(customerQuery || subCustomerQuery || billNoQuery || biltyStatusFilter !== 'all') && (
+        <p style={{ fontSize: '10px', color: '#555', marginBottom: '10px', fontStyle: 'italic' }}>
+          Filters applied —
+          {customerQuery ? ` Customer: "${customerQuery}"` : ''}
+          {subCustomerQuery ? ` Sub-Customer: "${subCustomerQuery}"` : ''}
+          {billNoQuery ? ` Bill No: "${billNoQuery}"` : ''}
+          {biltyStatusFilter !== 'all' ? ` Status: ${biltyStatusFilter}` : ''}
+        </p>
+      )}
+
+      {/* Table */}
+      <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10.5px' }}>
+        <thead>
+          <tr>
+            <th style={{ border: '1px solid #000', padding: '5px 7px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', whiteSpace: 'nowrap' }}>Date</th>
+            <th style={{ border: '1px solid #000', padding: '5px 7px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center', whiteSpace: 'nowrap' }}>Inv. No (Sys)</th>
+            <th style={{ border: '1px solid #000', padding: '5px 7px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center', whiteSpace: 'nowrap' }}>Manual No.</th>
+            <th style={{ border: '1px solid #000', padding: '5px 7px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Customer Name</th>
+            <th style={{ border: '1px solid #000', padding: '5px 7px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Sub Customer</th>
+            <th style={{ border: '1px solid #000', padding: '5px 7px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', whiteSpace: 'nowrap' }}>Bilty No.</th>
+            <th style={{ border: '1px solid #000', padding: '5px 7px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Transport Adda</th>
+            <th style={{ border: '1px solid #000', padding: '5px 7px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center', whiteSpace: 'nowrap' }}>Adda Code</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filteredInvoices.length === 0 ? (
+            <tr>
+              <td colSpan={8} style={{ border: '1px solid #000', padding: '12px', textAlign: 'center', fontStyle: 'italic', color: '#888' }}>
+                No records found.
+              </td>
+            </tr>
+          ) : filteredInvoices.map((bill, idx) => {
+            const missingB = !bill.bilty_no || !bill.bilty_no.trim();
+            const missingA = !bill.adda_id;
+            const rowBg = missingB || missingA ? '#fff8f0' : (idx % 2 === 0 ? '#ffffff' : '#fafafa');
+            return (
+              <tr key={bill.bill_id} style={{ backgroundColor: rowBg }}>
+                <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace' }}>{bill.bill_date}</td>
+                <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', textAlign: 'center' }}>{bill.bill_id}</td>
+                <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', textAlign: 'center', fontWeight: 'bold' }}>{bill.bill_no}</td>
+                <td style={{ border: '1px solid #000', padding: '4px 7px', fontWeight: 'bold' }}>{bill.customer_name || '-'}</td>
+                <td style={{ border: '1px solid #000', padding: '4px 7px' }}>{bill.sub_customer_name || 'SAME (Direct)'}</td>
+                <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', color: missingB ? '#cc0000' : '#000', fontStyle: missingB ? 'italic' : 'normal' }}>
+                  {bill.bilty_no || 'MISSING'}
+                </td>
+                <td style={{ border: '1px solid #000', padding: '4px 7px', color: missingA ? '#cc0000' : '#000', fontStyle: missingA ? 'italic' : 'normal' }}>
+                  {bill.adda_name || 'UNASSIGNED'}
+                </td>
+                <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', textAlign: 'center', fontSize: '10px', color: '#666' }}>
+                  {bill.adda_id || '-'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+        <tfoot>
+          <tr style={{ backgroundColor: '#e8e8e8', fontWeight: 'bold' }}>
+            <td colSpan={4} style={{ border: '1px solid #000', padding: '5px 7px', fontSize: '11px' }}>
+              TOTALS — {filteredInvoices.length} records
+            </td>
+            <td colSpan={2} style={{ border: '1px solid #000', padding: '5px 7px', fontSize: '10.5px', color: '#cc0000' }}>
+              Missing Bilty: {missingBilty}
+            </td>
+            <td colSpan={2} style={{ border: '1px solid #000', padding: '5px 7px', fontSize: '10.5px', color: '#cc0000' }}>
+              Missing Adda: {missingAdda}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+
+      {/* Signature footer */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '40px', padding: '0 10px' }}>
+        <div style={{ textAlign: 'center', width: '150px' }}>
+          <div style={{ borderBottom: '1px solid #000', height: '30px' }}></div>
+          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
+        </div>
+        <div style={{ textAlign: 'center', width: '150px' }}>
+          <div style={{ borderBottom: '1px solid #000', height: '30px' }}></div>
+          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Checked By</span>
+        </div>
+        <div style={{ textAlign: 'center', width: '150px' }}>
+          <div style={{ borderBottom: '1px solid #000', height: '30px' }}></div>
+          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <AppLayout pageTitle="Search & Bilty Adda Updation">
+
+      {/* Print Preview Modal */}
+      <ReportPrintPreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        title="Bilty & Adda Updation Report"
+        orientation="landscape"
+        onExportExcel={handleExportExcel}
+      >
+        {renderPrintableDocument()}
+      </ReportPrintPreviewModal>
+
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
 
         {/* Success/Error Alerts */}
         {successMsg && (
-          <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
+          <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
         )}
         {errorMsg && (
-          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
+          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
         )}
 
         {/* Update Form & Search Filters */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6" data-no-print>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
 
           {/* Update Bilty Box */}
           <div className="card-white p-5 bg-white border flex flex-col gap-4">
@@ -294,25 +419,37 @@ export default function BiltyUpdatePage() {
         </div>
 
         {/* Results Toolbar */}
-        <div className="flex items-center justify-between mb-4" data-no-print>
-          <span className="text-sm font-semibold text-slate-600">
-            Found {filteredInvoices.length} invoices matching filters
-          </span>
-          <div className="flex items-center gap-2">
-            <button onClick={handlePrint} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer">
-              <Printer size={14} /> Print Report
-            </button>
-            <button onClick={exportToPDF} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer">
-              <FileDown size={14} /> Export PDF
-            </button>
-            <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer">
-              <FileSpreadsheet size={14} /> Export Excel
-            </button>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-4">
+            <span className="text-sm font-semibold text-slate-600">
+              Found <span className="text-[var(--brand-navy)] font-bold">{filteredInvoices.length}</span> invoices
+            </span>
+            {missingBilty > 0 && (
+              <span className="text-xs px-2.5 py-1 rounded-full bg-red-50 text-red-600 border border-red-200 font-semibold">
+                {missingBilty} missing bilty
+              </span>
+            )}
+            {missingAdda > 0 && (
+              <span className="text-xs px-2.5 py-1 rounded-full bg-orange-50 text-orange-600 border border-orange-200 font-semibold">
+                {missingAdda} missing adda
+              </span>
+            )}
+            {complete > 0 && (
+              <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
+                {complete} complete
+              </span>
+            )}
           </div>
+          <button
+            onClick={() => setIsPreviewOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+          >
+            <Eye size={14} /> Show Print Preview
+          </button>
         </div>
 
         {/* Invoices Table */}
-        <div className="card-white bg-white border">
+        <div className="card-white bg-white border border-slate-200/80 rounded-2xl overflow-hidden">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
@@ -324,7 +461,7 @@ export default function BiltyUpdatePage() {
                 <th className="p-3">Bilty No.</th>
                 <th className="p-3">Transport Adda</th>
                 <th className="p-3 text-center" style={{ width: '80px' }}>Adda Code</th>
-                <th className="p-3 text-center" style={{ width: '70px' }} data-no-print>Action</th>
+                <th className="p-3 text-center" style={{ width: '70px' }}>Action</th>
               </tr>
             </thead>
             <tbody>
@@ -368,7 +505,7 @@ export default function BiltyUpdatePage() {
                       <td className="p-3 text-center font-mono text-xs text-slate-500">
                         {bill.adda_id || '-'}
                       </td>
-                      <td className="p-3 text-center" data-no-print>
+                      <td className="p-3 text-center">
                         <button
                           onClick={() => handleSelectBill(bill)}
                           title="Select Invoice"

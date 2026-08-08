@@ -1,18 +1,21 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Printer, MapPin, Edit2, Trash2, FileDown, ArrowLeft, Settings, Save, X, ArrowRight, UserCheck, Download } from 'lucide-react';
-import { exportToPDF } from '@/lib/export';
+import { Plus, Search, MapPin, Edit2, Trash2, ArrowLeft, Settings, X, ArrowRight, UserCheck, Eye } from 'lucide-react';
+import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { CustomerRow, RegionRow, CityRow, AccountLedgerResult } from '@/lib/api';
+import wentoxLogo from '@/assets/wentox_logo.png';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
 export default function CustomerSetupPage() {
   // Directory view state
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const [customerList, setCustomerList] = useState<CustomerRow[]>([]);
   const [regions, setRegions] = useState<RegionRow[]>([]);
@@ -176,24 +179,146 @@ export default function CustomerSetupPage() {
 
   const filteredLedgerRows = useMemo(() => ledger?.rows || [], [ledger]);
 
-  const handleExportCSV = () => {
-    const header = ['Date', 'Type', 'Ref No', 'Narration', 'Debit', 'Credit', 'Balance'];
-    const lines = filteredLedgerRows.map(r => [r.date, r.type, r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, r.narration || '', r.debit, r.credit, r.balance]);
-    const csv = [header, ...lines].map(row => row.join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${selectedCustomer?.name || 'customer'}_ledger.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+  const handleExportExcel = () => {
+    if (!selectedCustomer) return;
+    const headers = ['Date', 'Type', 'Ref No', 'Narration', 'Debit (PKR)', 'Credit (PKR)', 'Balance (PKR)'];
+    const rows = [
+      [fromDate ? `Before ${fromDate}` : '---', 'Opening Balance', '-', 'Opening Balance brought forward', '0', '0', ledger?.opening_balance || 0],
+      ...filteredLedgerRows.map(r => [r.date, r.type, r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, r.narration || '', r.debit, r.credit, r.balance]),
+      ['Total', '', '', '', ledger?.total_debit || 0, ledger?.total_credit || 0, ledger?.closing_balance || 0]
+    ];
+    exportRowsToExcel(`customer-ledger-${selectedCustomer.name.toLowerCase().replace(/\s+/g, '-')}`, headers, rows);
   };
 
   const cityName = (id: number | null) => cities.find(c => c.city_id === id)?.name || 'No City';
   const regionName = (id: number) => regions.find(r => r.region_id === id)?.name || 'No Region';
 
+  /* ─── Printable Document Render ─── */
+  const renderPrintableDocument = () => {
+    if (!selectedCustomer) return null;
+
+    return (
+      <div className="excel-print-container">
+        {/* Header */}
+        <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
+          <div>
+            <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '180px', width: 'auto', objectFit: 'contain' }} />
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>
+              CUSTOMER FINANCIAL LEDGER STATEMENT
+            </h2>
+            <p style={{ margin: '4px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>
+              Customer: {selectedCustomer.name} (Code: {selectedCustomer.customer_id})
+            </p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
+              Period: {fromDate || 'Beginning'} to {toDate || 'Present'}
+            </p>
+            <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#555555' }}>
+              Date of Print: {new Date().toLocaleDateString()}
+            </p>
+          </div>
+        </div>
+
+        {/* Table */}
+        <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+          <thead>
+            <tr>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Date</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Type</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Ref No</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Narration</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Debit (PKR)</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Credit (PKR)</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Balance (PKR)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {/* Opening Balance Row */}
+            <tr style={{ backgroundColor: '#fafafa', fontWeight: 'bold' }}>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{fromDate ? `Before ${fromDate}` : '---'}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>Opening Balance</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>-</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontStyle: 'italic' }}>Opening Balance brought forward</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>0</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>0</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold' }}>{formatCurrency(ledger?.opening_balance || 0)}</td>
+            </tr>
+
+            {/* Transaction Rows */}
+            {filteredLedgerRows.length === 0 ? (
+              <tr>
+                <td colSpan={7} style={{ border: '1px solid #000000', padding: '12px', textAlign: 'center', fontStyle: 'italic', color: '#888' }}>
+                  No transactions recorded in this date range.
+                </td>
+              </tr>
+            ) : (
+              filteredLedgerRows.map((row) => (
+                <tr key={row.entry_id}>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{row.date}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{row.type}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.narration || '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>
+                    {row.debit > 0 ? formatCurrency(row.debit) : '-'}
+                  </td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>
+                    {row.credit > 0 ? formatCurrency(row.credit) : '-'}
+                  </td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold' }}>
+                    {formatCurrency(row.balance)}
+                  </td>
+                </tr>
+              ))
+            )}
+
+            {/* Totals Row */}
+            <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
+              <td colSpan={4} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'left', textTransform: 'uppercase' }}>
+                Totals for Selected Period
+              </td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(ledger?.total_debit || 0)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(ledger?.total_credit || 0)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(ledger?.closing_balance || 0)}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* Signature footer */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '40px', padding: '0 10px' }}>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <AppLayout pageTitle="Customers Setup">
+
+      {/* Interactive Print Preview Modal */}
+      {selectedCustomer && (
+        <ReportPrintPreviewModal
+          isOpen={isPreviewOpen}
+          onClose={() => setIsPreviewOpen(false)}
+          title={`${selectedCustomer.name} — Customer Financial Ledger`}
+          orientation="portrait"
+          onExportExcel={handleExportExcel}
+        >
+          {renderPrintableDocument()}
+        </ReportPrintPreviewModal>
+      )}
+
       <div className="mx-auto" style={{ maxWidth: 1400 }}>
 
         {successMsg && (
@@ -328,17 +453,13 @@ export default function CustomerSetupPage() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
-                <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer">
-                  <Printer size={14} /> Print Ledger
-                </button>
-                <button onClick={() => exportToPDF()} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer">
-                  <FileDown size={14} /> Export PDF
-                </button>
-                <button onClick={handleExportCSV} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer">
-                  <Download size={14} /> Export CSV
-                </button>
-              </div>
+              {/* Single Gold Action Button: Show Print Preview */}
+              <button
+                onClick={() => setIsPreviewOpen(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+              >
+                <Eye size={15} /> Show Print Preview
+              </button>
             </div>
 
             {/* Date Filters */}
@@ -449,44 +570,39 @@ export default function CustomerSetupPage() {
                   </label>
                   <input
                     type="text"
+                    required
                     value={newCustomerName}
                     onChange={e => setNewCustomerName(e.target.value)}
-                    placeholder="Enter customer name..."
-                    className="soleria-input w-full font-semibold"
-                    autoFocus
+                    placeholder="e.g. Metro Distributors"
+                    className="soleria-input w-full text-xs font-semibold"
                   />
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Region Location <span className="text-rose-500">*</span>
-                    </label>
-                    <SearchableSelect
-                      options={regions.map(r => ({ value: String(r.region_id), label: r.name }))}
-                      value={newCustomerRegionId}
-                      onChange={setNewCustomerRegionId}
-                      placeholder="Select Region..."
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      City Location
-                    </label>
-                    <SearchableSelect
-                      options={[
-                        { value: '', label: 'Select City...' },
-                        ...cities.map(c => ({ value: String(c.city_id), label: c.name }))
-                      ]}
-                      value={newCustomerCityId}
-                      onChange={setNewCustomerCityId}
-                      placeholder="Select City..."
-                    />
-                  </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                    Region <span className="text-rose-500">*</span>
+                  </label>
+                  <SearchableSelect
+                    options={regions.map(r => ({ value: String(r.region_id), label: r.name }))}
+                    value={newCustomerRegionId}
+                    onChange={setNewCustomerRegionId}
+                    placeholder="Select Region..."
+                  />
                 </div>
 
-                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                    City <span className="text-slate-400 font-normal">(Optional)</span>
+                  </label>
+                  <SearchableSelect
+                    options={cities.map(c => ({ value: String(c.city_id), label: c.name }))}
+                    value={newCustomerCityId}
+                    onChange={setNewCustomerCityId}
+                    placeholder="Select City..."
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2.5 pt-4 border-t border-slate-100">
                   <button
                     type="button"
                     onClick={handleCloseModal}
@@ -496,9 +612,9 @@ export default function CustomerSetupPage() {
                   </button>
                   <button
                     type="submit"
-                    className="btn-gold px-5 py-2 text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+                    className="btn-gold px-5 py-2 text-xs font-semibold cursor-pointer"
                   >
-                    <Save size={14} /> Save Customer
+                    {editingCustomerId ? 'Update Details' : 'Save Customer'}
                   </button>
                 </div>
               </form>
@@ -506,36 +622,39 @@ export default function CustomerSetupPage() {
           </div>
         )}
 
+        {/* Duplicate Customer Warning Prompt Modal */}
         <DuplicateNamePromptModal
           isOpen={isDupModalOpen}
-          entityLabel="customer"
+          entityLabel="Customer"
           status={dupStatus}
-          matches={dupMatches.map(c => ({
-            id: String(c.customer_id),
-            name: c.name,
-            cityName: c.city_name,
-          }))}
+          matches={dupMatches.map(c => ({ id: String(c.customer_id), name: c.name, regionName: c.region_name, cityName: c.city_name }))}
           allowCreateOnActive={true}
           onActivate={handleActivateDuplicate}
           onCreateNew={handleCreateNewAnyway}
-          onCancel={() => {
-            setIsDupModalOpen(false);
-            setPendingCustomer(null);
-          }}
+          onCancel={() => { setIsDupModalOpen(false); setPendingCustomer(null); }}
         />
 
-        {/* Delete confirmation */}
+        {/* Delete Confirmation Modal */}
         {deletingCustomer && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setDeletingCustomer(null)}>
-            <div className="bg-white rounded-2xl border-2 border-rose-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
-              <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Delete Customer</h3>
-              <p className="text-xs text-slate-600 mb-4">
-                Delete <strong>{deletingCustomer.name}</strong>? This deactivates the record — past
-                sale/receipt history is kept intact.
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95 duration-200">
+              <h3 className="font-lora font-bold text-lg text-slate-900 mb-2">Delete Customer?</h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Are you sure you want to delete <span className="font-bold text-slate-800">{deletingCustomer.name}</span>? This action cannot be undone.
               </p>
-              <div className="flex items-center justify-end gap-2">
-                <button onClick={() => setDeletingCustomer(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
-                <button onClick={confirmDelete} className="px-4 py-2 text-xs font-semibold cursor-pointer rounded-lg bg-rose-600 text-white hover:bg-rose-700">Delete</button>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setDeletingCustomer(null)}
+                  className="px-4 py-2 text-xs font-semibold rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  className="px-4 py-2 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white transition-colors cursor-pointer"
+                >
+                  Delete
+                </button>
               </div>
             </div>
           </div>

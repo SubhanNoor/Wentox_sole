@@ -1,11 +1,13 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Search, Printer, FileDown, FileSpreadsheet, ArrowLeft, Users, User, Truck, HardHat, Landmark, BookOpen } from 'lucide-react';
-import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { Search, ArrowLeft, Users, User, Truck, HardHat, Landmark, BookOpen, Eye } from 'lucide-react';
+import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { OverallDirectoryRow, OverallEntityType, LedgerRow } from '@/lib/api';
+import wentoxLogo from '@/assets/wentox_logo.png';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
 type EntityType = 'customer' | 'vendor' | 'employee' | 'subcustomer' | 'account' | 'bank';
 
@@ -34,6 +36,7 @@ export default function OverallSearchPage() {
   const [entityFilter, setEntityFilter] = useState<'all' | EntityType>('all');
   const [selectedPerson, setSelectedPerson] = useState<PersonEntity | null>(null);
   const [isClosing, setIsClosing] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const handleCloseDetail = () => {
     setIsClosing(true);
@@ -73,8 +76,6 @@ export default function OverallSearchPage() {
     });
   }, [directory]);
 
-  // Search itself is server-side (reports.overallSearch already filters by name/id) — only the
-  // entity-type quick filter is applied client-side here.
   const filteredPeople = useMemo(() => {
     if (entityFilter === 'all') return allPeople;
     return allPeople.filter(p => p.type === entityFilter);
@@ -147,8 +148,132 @@ export default function OverallSearchPage() {
     }
   };
 
+  /* ─── Printable Document Render ─── */
+  const renderPrintableDocument = () => {
+    if (!selectedPerson) return null;
+
+    return (
+      <div className="excel-print-container">
+        {/* Header */}
+        <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
+          <div>
+            <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '180px', width: 'auto', objectFit: 'contain' }} />
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>
+              FINANCIAL LEDGER STATEMENT
+            </h2>
+            <p style={{ margin: '4px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>
+              Account: {selectedPerson.name} ({selectedPerson.typeLabel})
+            </p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
+              Period: {fromDate || 'Beginning'} to {toDate || 'Present'}
+            </p>
+            <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#555555' }}>
+              Date of Print: {new Date().toLocaleDateString()}
+            </p>
+          </div>
+        </div>
+
+        {/* Table */}
+        <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+          <thead>
+            <tr>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Date</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Type</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Ref / Bill #</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Description / Narration</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Debit (PKR)</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Credit (PKR)</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Balance (PKR)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {/* Opening Balance Row */}
+            <tr style={{ backgroundColor: '#fafafa', fontWeight: 'bold' }}>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{fromDate ? `Before ${fromDate}` : '---'}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>Opening Balance</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>-</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontStyle: 'italic' }}>Opening Balance brought forward</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>0</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>0</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold' }}>{formatCurrency(openingBalance)}</td>
+            </tr>
+
+            {/* Transaction Rows */}
+            {filteredRows.length === 0 ? (
+              <tr>
+                <td colSpan={7} style={{ border: '1px solid #000000', padding: '12px', textAlign: 'center', fontStyle: 'italic', color: '#888' }}>
+                  No transactions recorded in this date range.
+                </td>
+              </tr>
+            ) : (
+              filteredRows.map((row) => (
+                <tr key={row.entry_id}>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{row.date}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{row.type}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.narration || '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>
+                    {row.debit > 0 ? formatCurrency(row.debit) : '-'}
+                  </td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>
+                    {row.credit > 0 ? formatCurrency(row.credit) : '-'}
+                  </td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold' }}>
+                    {formatCurrency(row.balance)}
+                  </td>
+                </tr>
+              ))
+            )}
+
+            {/* Totals Row */}
+            <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
+              <td colSpan={4} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'left', textTransform: 'uppercase' }}>
+                Totals for Selected Period
+              </td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totalDebit)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totalCredit)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(endingBalance)}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* Signature footer */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '40px', padding: '0 10px' }}>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <AppLayout pageTitle="Overall Searching & Person Ledger">
+
+      {/* Interactive Print Preview Modal */}
+      {selectedPerson && (
+        <ReportPrintPreviewModal
+          isOpen={isPreviewOpen}
+          onClose={() => setIsPreviewOpen(false)}
+          title={`${selectedPerson.name} — Financial Ledger Statement`}
+          orientation="portrait"
+          onExportExcel={handleExportExcel}
+        >
+          {renderPrintableDocument()}
+        </ReportPrintPreviewModal>
+      )}
+
       <div className="mx-auto" style={{ maxWidth: 1400 }}>
 
         {/* VIEW 1: Directory & Person Search */}
@@ -198,55 +323,39 @@ export default function OverallSearchPage() {
 
             {/* Entity Directory Cards Grid */}
             {loading ? (
-              <div className="card-white p-12 text-center text-slate-400">Loading…</div>
+              <div className="text-center p-12 text-slate-400">Loading directory…</div>
             ) : filteredPeople.length === 0 ? (
-              <div className="card-white p-12 text-center text-slate-400">
-                <Users size={36} className="mx-auto mb-3 text-slate-300" />
-                <p className="font-semibold text-slate-600">No person or account matches your search query.</p>
-                <p className="text-xs text-slate-400 mt-1">Try typing a different name or clearing your filter criteria.</p>
+              <div className="text-center p-12 text-slate-400 bg-white rounded-2xl border border-slate-200">
+                No matching accounts found.
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredPeople.map(person => {
-                  const initialLetter = person.name.trim().charAt(0).toUpperCase();
+                {filteredPeople.map((person) => {
+                  const badgeStyle = getTypeBadgeStyle(person.type);
+                  const icon = getTypeIcon(person.type);
 
                   return (
                     <div
-                      key={`${person.type}-${person.id}`}
+                      key={`${person.entityType}-${person.id}`}
                       onClick={() => setSelectedPerson(person)}
                       className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
                     >
                       <div>
-                        {/* Top: Code badge & Type badge */}
-                        <div className="flex items-center justify-between mb-3.5">
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
-                            ID: {person.id}
-                          </span>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase tracking-wider flex items-center gap-1 ${getTypeBadgeStyle(person.type)}`}>
-                            {getTypeIcon(person.type)}
+                        <div className="flex items-start justify-between gap-3 mb-2">
+                          <h3 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors leading-snug">
+                            {person.name}
+                          </h3>
+                          <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded border uppercase tracking-wider shrink-0 ${badgeStyle}`}>
                             {person.typeLabel}
                           </span>
                         </div>
-
-                        {/* Middle: Avatar + Name */}
-                        <div className="flex items-start gap-3 mb-4">
-                          <div className="w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm bg-slate-50 text-slate-600 group-hover:bg-[#111c2a] group-hover:text-[#B08D57] transition-all duration-300 flex-shrink-0">
-                            {initialLetter}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors leading-tight truncate">
-                              {person.name}
-                            </h4>
-                            <p className="font-mono text-xs text-slate-400 mt-0.5 truncate">
-                              {person.subtitle}
-                            </p>
-                          </div>
-                        </div>
+                        <p className="font-mono text-xs text-slate-400">{person.subtitle}</p>
                       </div>
 
-                      {/* Card Bottom: Action */}
-                      <div className="border-t pt-3 mt-1 flex items-center justify-between text-xs font-semibold text-slate-400 group-hover:text-[var(--brand-navy)] transition-colors">
-                        <span>Financial Ledger</span>
+                      <div className="flex items-center justify-between pt-4 mt-4 border-t border-slate-100 text-slate-500">
+                        <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                          {icon} View Detailed Ledger
+                        </span>
                         <span className="text-sm font-bold group-hover:translate-x-1 transition-transform">&rarr;</span>
                       </div>
                     </div>
@@ -278,18 +387,13 @@ export default function OverallSearchPage() {
                 </div>
               </div>
 
-              {/* Action Buttons */}
-              <div className="flex items-center gap-2">
-                <button onClick={() => window.print()} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer">
-                  <Printer size={14} /> Print Ledger
-                </button>
-                <button onClick={() => exportToPDF()} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer">
-                  <FileDown size={14} /> Export PDF
-                </button>
-                <button onClick={handleExportExcel} className="btn-outline flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold cursor-pointer">
-                  <FileSpreadsheet size={14} /> Export Excel
-                </button>
-              </div>
+              {/* Action Button: Single Gold Show Print Preview */}
+              <button
+                onClick={() => setIsPreviewOpen(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+              >
+                <Eye size={15} /> Show Print Preview
+              </button>
             </div>
 
             {/* Date Filters Card */}
@@ -345,75 +449,75 @@ export default function OverallSearchPage() {
                   {ledger.message || 'This party has no financial account.'}
                 </div>
               ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-slate-100 border-b text-slate-700 font-bold uppercase tracking-wider" style={{ borderColor: 'var(--border-color)' }}>
-                      <th className="p-3">Date</th>
-                      <th className="p-3">Transaction Type</th>
-                      <th className="p-3">Reference / Bill #</th>
-                      <th className="p-3">Description / Narration</th>
-                      <th className="p-3 text-right">Debit (PKR)</th>
-                      <th className="p-3 text-right">Credit (PKR)</th>
-                      <th className="p-3 text-right">Balance (PKR)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {/* Opening Balance Row */}
-                    <tr className="border-b bg-amber-50/40 font-semibold text-slate-700" style={{ borderColor: 'var(--border-table)' }}>
-                      <td className="p-3 text-slate-500">{fromDate ? `Before ${fromDate}` : '---'}</td>
-                      <td className="p-3 font-bold text-amber-800">Opening Balance</td>
-                      <td className="p-3">-</td>
-                      <td className="p-3 italic text-slate-500">Opening Balance brought forward</td>
-                      <td className="p-3 text-right">0</td>
-                      <td className="p-3 text-right">0</td>
-                      <td className="p-3 text-right font-bold text-amber-900">{formatCurrency(openingBalance)}</td>
-                    </tr>
-
-                    {/* Transaction Rows */}
-                    {filteredRows.length === 0 ? (
-                      <tr>
-                        <td colSpan={7} className="text-center p-6 text-slate-400 italic">
-                          No transactions recorded for {selectedPerson.name} in this date range.
-                        </td>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-100 border-b text-slate-700 font-bold uppercase tracking-wider" style={{ borderColor: 'var(--border-color)' }}>
+                        <th className="p-3">Date</th>
+                        <th className="p-3">Transaction Type</th>
+                        <th className="p-3">Reference / Bill #</th>
+                        <th className="p-3">Description / Narration</th>
+                        <th className="p-3 text-right">Debit (PKR)</th>
+                        <th className="p-3 text-right">Credit (PKR)</th>
+                        <th className="p-3 text-right">Balance (PKR)</th>
                       </tr>
-                    ) : (
-                      filteredRows.map((row) => (
-                        <tr
-                          key={row.entry_id}
-                          className="border-b hover:bg-slate-50/60 transition-colors"
-                          style={{ borderColor: 'var(--border-table)' }}
-                        >
-                          <td className="p-3 font-medium text-slate-600">{row.date}</td>
-                          <td className="p-3 font-semibold text-slate-800">{row.type}</td>
-                          <td className="p-3 text-slate-500 font-mono">{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
-                          <td className="p-3 text-slate-700">{row.narration}</td>
-                          <td className="p-3 text-right font-semibold text-slate-900">
-                            {row.debit > 0 ? formatCurrency(row.debit) : '-'}
-                          </td>
-                          <td className="p-3 text-right font-semibold text-slate-900">
-                            {row.credit > 0 ? formatCurrency(row.credit) : '-'}
-                          </td>
-                          <td className="p-3 text-right font-bold text-amber-900">
-                            {formatCurrency(row.balance)}
+                    </thead>
+                    <tbody>
+                      {/* Opening Balance Row */}
+                      <tr className="border-b bg-amber-50/40 font-semibold text-slate-700" style={{ borderColor: 'var(--border-table)' }}>
+                        <td className="p-3 text-slate-500">{fromDate ? `Before ${fromDate}` : '---'}</td>
+                        <td className="p-3 font-bold text-amber-800">Opening Balance</td>
+                        <td className="p-3">-</td>
+                        <td className="p-3 italic text-slate-500">Opening Balance brought forward</td>
+                        <td className="p-3 text-right">0</td>
+                        <td className="p-3 text-right">0</td>
+                        <td className="p-3 text-right font-bold text-amber-900">{formatCurrency(openingBalance)}</td>
+                      </tr>
+
+                      {/* Transaction Rows */}
+                      {filteredRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="text-center p-6 text-slate-400 italic">
+                            No transactions recorded for {selectedPerson.name} in this date range.
                           </td>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
-                  {/* Footer Totals */}
-                  <tfoot>
-                    <tr className="bg-slate-900 text-white font-bold text-xs">
-                      <td colSpan={4} className="p-3 text-right uppercase tracking-wider text-[#B08D57]">
-                        Totals for Selected Period
-                      </td>
-                      <td className="p-3 text-right">{formatCurrency(totalDebit)}</td>
-                      <td className="p-3 text-right">{formatCurrency(totalCredit)}</td>
-                      <td className="p-3 text-right text-[#B08D57]">{formatCurrency(endingBalance)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
+                      ) : (
+                        filteredRows.map((row) => (
+                          <tr
+                            key={row.entry_id}
+                            className="border-b hover:bg-slate-50/60 transition-colors"
+                            style={{ borderColor: 'var(--border-table)' }}
+                          >
+                            <td className="p-3 font-medium text-slate-600">{row.date}</td>
+                            <td className="p-3 font-semibold text-slate-800">{row.type}</td>
+                            <td className="p-3 text-slate-500 font-mono">{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
+                            <td className="p-3 text-slate-700">{row.narration}</td>
+                            <td className="p-3 text-right font-semibold text-slate-900">
+                              {row.debit > 0 ? formatCurrency(row.debit) : '-'}
+                            </td>
+                            <td className="p-3 text-right font-semibold text-slate-900">
+                              {row.credit > 0 ? formatCurrency(row.credit) : '-'}
+                            </td>
+                            <td className="p-3 text-right font-bold text-amber-900">
+                              {formatCurrency(row.balance)}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                    {/* Footer Totals */}
+                    <tfoot>
+                      <tr className="bg-slate-900 text-white font-bold text-xs">
+                        <td colSpan={4} className="p-3 text-right uppercase tracking-wider text-[#B08D57]">
+                          Totals for Selected Period
+                        </td>
+                        <td className="p-3 text-right">{formatCurrency(totalDebit)}</td>
+                        <td className="p-3 text-right">{formatCurrency(totalCredit)}</td>
+                        <td className="p-3 text-right text-[#B08D57]">{formatCurrency(endingBalance)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
               )}
             </div>
           </div>

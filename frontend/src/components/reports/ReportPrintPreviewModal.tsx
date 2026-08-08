@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Printer, ZoomIn, ZoomOut, RotateCcw, FileDown, FileSpreadsheet } from 'lucide-react';
 import type { ReportOrientation } from '@/lib/reportConfig';
 import { exportToPDF } from '@/lib/export';
@@ -34,10 +35,20 @@ export const ReportPrintPreviewModal: React.FC<ReportPrintPreviewModalProps> = (
 
   const isLandscape = orientation === 'landscape';
 
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/90 backdrop-blur-sm animate-in fade-in duration-200">
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/90 backdrop-blur-sm animate-in fade-in duration-200 report-modal-container">
+      {/* Dynamic @page orientation rule */}
+      <style>{`
+        @media print {
+          @page {
+            size: ${isLandscape ? 'landscape' : 'portrait'};
+            margin: 8mm;
+          }
+        }
+      `}</style>
+
       {/* Top Toolbar */}
-      <div className="flex items-center justify-between px-6 py-3 bg-slate-900 border-b border-slate-800 text-white shadow-lg">
+      <div className="flex items-center justify-between px-6 py-3 bg-slate-900 border-b border-slate-800 text-white shadow-lg report-modal-topbar" data-no-print>
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-[var(--brand-gold)] text-slate-950 flex items-center justify-center font-bold">
             <Printer size={18} />
@@ -114,9 +125,9 @@ export const ReportPrintPreviewModal: React.FC<ReportPrintPreviewModalProps> = (
       </div>
 
       {/* Interactive Paper Preview Container */}
-      <div className="flex-1 overflow-auto p-8 flex justify-center bg-slate-950/70">
+      <div className="flex-1 overflow-auto p-8 flex justify-center bg-slate-950/70 report-modal-scroll-wrapper">
         <div
-          className="transition-transform duration-200 origin-top shadow-2xl rounded-sm bg-white border border-slate-300 p-8 text-slate-900"
+          className="transition-transform duration-200 origin-top shadow-2xl rounded-sm bg-white border border-slate-300 p-8 text-slate-900 report-modal-paper"
           style={{
             transform: `scale(${zoomLevel / 100})`,
             width: isLandscape ? '297mm' : '210mm',
@@ -128,6 +139,7 @@ export const ReportPrintPreviewModal: React.FC<ReportPrintPreviewModalProps> = (
           {children}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
