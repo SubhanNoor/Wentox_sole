@@ -4,7 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
 import { Save, Lock, User, RefreshCw, Download, CheckCircle2, AlertTriangle, ShieldCheck, Cpu, Sparkles, Server, DatabaseBackup } from 'lucide-react';
 
-type SettingsTab = 'credentials' | 'updates';
+type SettingsTab = 'credentials' | 'backup' | 'updates';
 type UpdateStatus = 'idle' | 'checking' | 'no-internet' | 'error' | 'up-to-date' | 'update-available' | 'downloading' | 'installed';
 
 export default function SettingsPage() {
@@ -146,14 +146,14 @@ export default function SettingsPage() {
     const res = await window.api.backup.runNow();
     setBackupRunning(false);
     if (!res.ok) {
-      setBackupError(res.error?.message || 'Backup sync failed.');
+      setBackupError(res.error?.message || 'Could not update the backup.');
       return;
     }
     const statusRes = await window.api.backup.status();
     if (statusRes.ok && statusRes.data?.lastSyncAt) {
       setBackupLastSync(new Date(statusRes.data.lastSyncAt).toLocaleString());
     }
-    setBackupMessage('Backup database synced successfully.');
+    setBackupMessage('Backup updated — it now matches the live database.');
   };
 
   return (
@@ -169,6 +169,13 @@ export default function SettingsPage() {
               className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${activeTab === 'credentials' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <Lock size={14} /> Profile & Credentials
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('backup')}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${activeTab === 'backup' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <DatabaseBackup size={14} /> Backup
             </button>
             <button
               type="button"
@@ -261,13 +268,23 @@ export default function SettingsPage() {
               </form>
             </div>
 
-            <div className="card-white p-6 md:p-8 bg-white border max-w-xl mx-auto mt-6">
+          </div>
+        )}
+
+        {/* SUBPAGE 2: Backup — admin-only. Was previously a card buried at the bottom of the
+            Profile & Credentials tab, which made it effectively undiscoverable; it's a top-level
+            tab of its own now. */}
+        {isAdmin && activeTab === 'backup' && (
+          <div className="animate-in fade-in duration-200">
+            <div className="card-white p-6 md:p-8 bg-white border max-w-xl mx-auto">
               <div className="border-b pb-4 mb-6">
                 <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
                   <DatabaseBackup size={20} className="text-[#B08D57]" /> Backup Database
                 </h3>
                 <p className="text-xs text-slate-500 font-medium">
-                  Syncs automatically every 10 minutes when there's new data. Use this to force a sync right now.
+                  Wentox keeps a second copy of the database in your chosen backup folder. It updates
+                  automatically every 10 minutes whenever there's new data — press Update Backup Now to
+                  bring it fully up to date immediately.
                 </p>
               </div>
 
@@ -280,7 +297,7 @@ export default function SettingsPage() {
 
               <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
                 <div className="text-xs text-slate-600 font-medium">
-                  Last backup sync: <span className="font-semibold text-slate-800">{backupLastSync || 'Not yet run'}</span>
+                  Last backup update: <span className="font-semibold text-slate-800">{backupLastSync || 'Not yet run'}</span>
                 </div>
                 <button
                   type="button"
@@ -289,14 +306,19 @@ export default function SettingsPage() {
                   className="btn-gold flex items-center justify-center gap-2 px-6 py-2.5 text-xs font-semibold disabled:opacity-60 cursor-pointer w-full sm:w-auto"
                 >
                   <DatabaseBackup size={15} className={backupRunning ? 'animate-pulse' : ''} />
-                  {backupRunning ? 'Syncing Backup…' : 'Backup Now'}
+                  {backupRunning ? 'Updating Backup…' : 'Update Backup Now'}
                 </button>
               </div>
+
+              <p className="text-[11px] text-slate-400 font-medium mt-5 leading-relaxed">
+                Every update copies the database in full, so the backup always ends up an exact match of
+                the live one — including every new row, edit and deletion since the last update.
+              </p>
             </div>
           </div>
         )}
 
-        {/* SUBPAGE 2: Check for Updates */}
+        {/* SUBPAGE 3: Check for Updates */}
         {activeTab === 'updates' && (
           <div className="animate-in fade-in duration-200 flex flex-col gap-6">
             
