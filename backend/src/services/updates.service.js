@@ -60,7 +60,20 @@ async function check() {
       packaged: true,
     };
   } catch (err) {
-    return { updateAvailable: false, currentVersion: app.getVersion(), packaged: true };
+    // Still not thrown as an ApiError — a connection dropping mid-lookup shouldn't read as a hard
+    // failure (see the note above). But it is no longer swallowed *silently*: a permanent,
+    // actionable fault (a private repo returning 404, a release published as a draft, a missing
+    // latest.yml) is indistinguishable here from a transient drop, and reporting both as a
+    // confident "you are on the latest version" made the update check look broken with no clue
+    // why. Logged for the main-process console, and returned so the page can say it couldn't
+    // reach the update server rather than claim to be up to date.
+    console.error('Update check failed:', err);
+    return {
+      updateAvailable: false,
+      currentVersion: app.getVersion(),
+      packaged: true,
+      checkError: err?.message || String(err),
+    };
   }
 }
 

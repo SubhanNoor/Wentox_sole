@@ -71,7 +71,8 @@
     "publish": {
       "provider": "github",
       "owner": "SubhanNoor",
-      "repo": "Wentox_sole"
+      "repo": "Wentox_sole",
+      "releaseType": "release"
     }
   }
 }

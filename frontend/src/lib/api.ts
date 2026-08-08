@@ -1454,7 +1454,9 @@ declare global {
         confirm: (payload: { id: number }) => Promise<ApiResult<ExpenseRow>>;
       };
       updates: {
-        check: () => Promise<ApiResult<{ updateAvailable: boolean; currentVersion?: string; latestVersion?: string; packaged?: boolean }>>;
+        // checkError: the lookup itself failed (private repo / draft release / missing
+        // latest.yml / connection dropped mid-check) — distinct from "no update available".
+        check: () => Promise<ApiResult<{ updateAvailable: boolean; currentVersion?: string; latestVersion?: string; packaged?: boolean; checkError?: string }>>;
         install: () => Promise<ApiResult<{ ok: true }>>;
       };
       backup: {
