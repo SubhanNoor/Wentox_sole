@@ -83,10 +83,17 @@ async function migrate() {
       await transaction.commit();
       console.log(`applied ${file}`);
     } catch (err) {
-      await transaction.rollback();
+      // Log the REAL failure before attempting rollback. SQL Server usually aborts the transaction
+      // itself on a batch error, so rollback() then throws EABORT ("Transaction has been
+      // aborted") — and if that's allowed to propagate first, it replaces the only message that
+      // says which migration failed and why.
       console.error(`failed ${file}:`, err.message);
-      process.exitCode = 1;
-      break;
+      try {
+        await transaction.rollback();
+      } catch (rollbackErr) {
+        console.error(`  (rollback also failed: ${rollbackErr.message})`);
+      }
+      throw err; // surface the real cause to the caller (electron/main.js logs it at startup)
     }
   }
   await pool.close();
