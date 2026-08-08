@@ -3,7 +3,32 @@ const path = require('path');
 const sql = require('mssql');
 const config = require('../config');
 
+// A freshly installed SQL Server has no application database at all, so connecting straight to
+// config.db.database fails with "Cannot open database ... requested by the login" before any
+// migration can run. Connect to `master` first and create it if missing. Idempotent, and covers
+// every path equally — the installer's auto-install, a manually installed SQL Server, or a dev
+// machine pointing at a brand-new instance.
+async function ensureDatabaseExists() {
+  const pool = await new sql.ConnectionPool({ ...config.db, database: 'master' }).connect();
+  try {
+    const name = config.db.database;
+    const exists = await pool.request()
+      .input('name', sql.NVarChar, name)
+      .query('SELECT database_id FROM sys.databases WHERE name = @name');
+    if (exists.recordset.length === 0) {
+      // A database name can't be parameterized in DDL; it comes from config, not user input, and
+      // `]` is escaped so it can't break out of the bracketed identifier.
+      await pool.request().query(`CREATE DATABASE [${name.replace(/]/g, ']]')}]`);
+      console.log(`created database ${name}`);
+    }
+  } finally {
+    await pool.close();
+  }
+}
+
 async function migrate() {
+  await ensureDatabaseExists();
+
   const pool = await new sql.ConnectionPool(config.db).connect();
 
   await pool.request().query(`
