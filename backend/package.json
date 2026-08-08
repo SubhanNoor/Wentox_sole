@@ -55,8 +55,8 @@
         "to": "sqlserver/SQLEXPR_x64_ENU.exe"
       },
       {
-        "from": "build/configure-sqlserver.ps1",
-        "to": "configure-sqlserver.ps1"
+        "from": "build/setup-sqlserver.ps1",
+        "to": "setup-sqlserver.ps1"
       }
     ],
     "win": {
