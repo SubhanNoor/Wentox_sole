@@ -91,7 +91,6 @@ export default function SettingsPage() {
     setUpdateInfo({ currentVersion: data.currentVersion || '1.0.4', latestVersion: data.latestVersion || '1.0.4' });
     if (data.updateAvailable) {
       setUpdateStatus('update-available');
-    } else {
     } else if (data.checkError) {
       // Don't claim "you're up to date" when the lookup itself failed — that made a permanent
       // fault (private repo, draft release, missing latest.yml) look identical to genuinely
