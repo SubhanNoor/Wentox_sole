@@ -74,9 +74,18 @@ Function SetupPageCreate
   ; exactly what happened. This key is written by the install section, which runs AFTER this page,
   ; so on a fresh install it is reliably absent here even though the same run creates it later.
   ; ${UNINSTALL_APP_KEY} is a command-line define, available this early; HKLM because perMachine.
+  ;
+  ; BOTH conditions are required, and getting this wrong broke a real install: the page may only
+  ; be skipped when there are actually settings to fall back on. Keyed on the uninstall key alone,
+  ; deleting app-config.json while the app stayed installed skipped the page (nothing asked) AND
+  ; left the script with no password to reuse — it exited 1 and no database was set up. Asking
+  ; whenever the config is missing keeps the page's decision and the script's password source in
+  ; agreement, whichever way the machine got into that state.
   ReadRegStr $R0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_APP_KEY}" "UninstallString"
+  ReadEnvStr $R1 "ProgramData"
   ${If} $R0 != ""
-    Abort ; already installed -> update/repair, keep every existing setting
+  ${AndIf} ${FileExists} "$R1\Wentox\app-config.json"
+    Abort ; installed AND configured -> update/repair, keep every existing setting
   ${EndIf}
 
   !insertmacro MUI_HEADER_TEXT "Database Setup" "Choose a database password and a backup location."
