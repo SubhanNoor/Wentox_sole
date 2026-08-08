@@ -23,6 +23,231 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Dev tooling — `seed:dev` extended into a full demo dataset (and a real finding about opening balances)
+
+### 2026-08-09 — `wentox_demo` database: ~3 months of posted transactions so every report can be verified
+- **What:** Reports and flows couldn't be checked because there was nothing to look at — `wentox`
+  held 1 region, 1 store, 1 sub-customer and **zero transactions**, so every report (which all read
+  `ledger_entries`) rendered empty regardless of whether it worked. `seed:dev` already existed but
+  only created **master data**; it made no bills, receipts, expenses, purchases, cheques or payroll.
+  Extended `dev-sample-data.js` from 153 → ~640 lines with a transactions phase and deliberate edge
+  states.
+- **Target is a throwaway database, not the working one.** `DB_NAME=wentox_demo` is all that's
+  needed — `src/config/index.js` already reads `process.env.DB_NAME` and `src/db/migrate.js`
+  already creates a missing database, so **no `.env` edit is required**:
+  `DB_NAME=wentox_demo npm run migrate && … run seed && … run seed:dev && … run electron:dev`.
+  Drop the prefix to go back to `wentox`, which was confirmed untouched (row counts identical
+  before and after).
+- **How:** everything goes through the **real service layer**, never raw SQL, so linked business
+  accounts, generated codes and every validation rule fire as they do through the UI. Master data
+  keeps the existing idempotent `ensure()`; the transaction phase is guarded by a `sale_bills`
+  sentinel, since re-running would double the books. All dates are fixed offsets from today
+  (`daysAgo(n)`) — no randomness, so runs are reproducible and totals are hand-checkable.
+- **Contents:** 3 regions/cities, 3 vendors, 5 products (with the 12 stage-cost columns populated —
+  a Wage Run snapshots its rate from those, so zero-cost products would produce worthless runs),
+  6 customers, 2 banks, 4 employees, expense heads under BUSINESS RUNNING EXPENSES and DIRECTORS
+  DRAWINGS; then 14 sale bills, 3 sale returns, 6 purchases, 2 purchase returns, 9 receipts (several
+  **with commission**), 4 cheques covering all four dispositions, 10 expenses, 3 transfers, 3 wage
+  runs, 1 salary run, plus drafts, a CLOSED account and a soft-deleted customer.
+- **A real finding, not a seed bug — `business_accounts.opening_balance` has no contra entry.**
+  The first cut gave each bank a 500,000 opening balance, and Overall Trail then came out
+  **unbalanced by exactly 1,000,000** (debit 2,272,436.60 vs credit 1,272,436.60). `opening_balance`
+  is a stored INPUT that `businessAccountBalancesAsOf()` adds to the ledger sum, but nothing ever
+  writes a matching contra row — this schema has no Opening Balance Equity account. **Any non-zero
+  opening balance therefore breaks the trial balance by that amount.** PROGRESS.md's earlier claim
+  that Overall Trail "genuinely balances" was verified when no opening balances existed, so this had
+  never been exercised. Worked around in the seed by funding both banks with a real **Deposit**
+  (`Dr bank / Cr MISC ADJUSTMENTS`, code 400006) — a balanced posting, and exactly what the deposits
+  feature was built for. **The underlying gap is still open** and should be a decision: either add a
+  contra account for opening balances, or accept that Overall Trail can't balance once they're used.
+- **Second gap found the same way:** Payment Trail's **Employees** bucket read 0 even with payroll
+  posted, because a wage/salary *run* only accrues the liability — paying it out is a separate
+  Expense against the employee's own business account. Added two staff payments; the bucket now
+  reads 54,000. ("Cash at Banks" stays 0 by design — expenses are never posted *against* a bank
+  account, banks are the funding side.)
+- **Verified:** raw SQL confirms the whole ledger balances — 129 rows, **debit = credit =
+  3,684,246.60, diff 0.00**. Every report returns data through the service layer, and again through
+  the real UI over CDP: Sale Analysis 5 rows (Region grouping gives KPK/Punjab/Sindh), Sale Report
+  (Overall row arithmetic checks out: 556,423.60 − 4,100 commission − 20,280 returns = 532,043.60
+  net), Vendor Report 3, Payment Trail 5 buckets, Account Ledger 6, Business Ledger 19, Cash Book 2,
+  Product Ledger 22, Overall Trail 32 accounts and **BALANCED**. The bounce cascade was checked at
+  row level: cheque 55120744 → BOUNCED, its VENDOR_PAYMENT allocation → REVERSED, both reversal
+  ledger pairs written (30k allocation + 50k receipt), and the *other* cheque's allocations left
+  ACTIVE. All 4 cheque states present (CLEARED / BOUNCED / PENDING / PARTIALLY_ENDORSED). 3 alerts
+  generate and show on the bell. Zero console errors.
+- **One usability fix during verification:** Cash Book opens on *today*, so with nothing dated today
+  it rendered empty and looked broken. Added a same-day cash receipt and expense.
+- **Files:** `backend/src/db/seeds/dev-sample-data.js` (extended).
+
+---
+
+## Cross-cutting (frontend) — Setup directories: card grid → shared row template
+
+### 2026-08-09 — Last 4 card lists converted; no card-style list remains anywhere in the app
+- **What:** Per instruction ("do that one as well and any other left now do them also"), a
+  whole-codebase scan for card-style lists (any `.map()` rendering bordered/rounded `<div>`s, plus
+  any `lg:grid-cols-3` whose children come from a map) found four remaining, all now converted:
+  1. `ReportKhaataPage.tsx` — the Accounts Directory customer picker (avatar cards → Code · Account
+     Name · Main Account · City · *View Statement*). Its subtitle copy said "Select an account
+     **card**"; updated to "row".
+  2. `GroupAcSetupPage.tsx` — the drill-down modal's *Registered Chart Accounts* list.
+  3. `ChartAcSetupPage.tsx` — the drill-down modal's *Linked Sub-Ledgers / Business Accounts* list.
+  4. `DuplicateNamePromptModal.tsx` — the matched-records list inside the duplicate-name prompt.
+     `actionsHeader` is blanked and `actions` omitted entirely on an *active* match, since the
+     Activate button only exists for the inactive case.
+- **A re-scan now reports zero card-style lists in `pages/` and `components/`.** Three `.map()`
+  grids remain and are correctly untouched because they are **not** record lists:
+  `ReportHeader.tsx` (print metadata key/value grid), `EmployeeSetupPage` (the trades checkbox
+  picker inside the form), `ProductSetupPage` (the 12 manufacturing cost fields).
+  `BiltyUpdatePage.tsx`'s `lg:grid-cols-3` is a form layout.
+- **Verified live** over CDP: Khaata's Account Ledger tab renders the directory as a table with the
+  right headers and no card grid (0 rows — there are no customers in this DB, so it shows the
+  in-table empty state); the Group Accounts drill-down modal shows its 4 child chart accounts as
+  Code · Chart Account · Status; the Chart Accounts drill-down shows its 1 linked business account
+  (`#1000020001`) the same way. Console clean apart from the stock CSP dev warning. `npx tsc -b` clean.
+- **NOT live-verified — `DuplicateNamePromptModal`.** Triggering it needs a duplicate-name save,
+  and the Sub Customer form's required Region field is a custom `SearchableSelect` that did not
+  respond to synthetic clicks over CDP after two attempts; I stopped rather than keep forcing it.
+  Confirmed no data was written (sub-customer count unchanged at 1 throughout). The modal
+  type-checks and is structurally the same table used by 17 other call sites, but its *rendered*
+  output has not been seen. Worth a manual look the next time a duplicate name is entered.
+- **Files:** `frontend/src/pages/ReportKhaataPage.tsx`, `frontend/src/pages/GroupAcSetupPage.tsx`,
+  `frontend/src/pages/ChartAcSetupPage.tsx`, `frontend/src/components/DuplicateNamePromptModal.tsx`.
+
+### 2026-08-09 — Final 6 pages onto the template; template gained expand + footer support; a real React 19 warning found and fixed
+- **What:** Per instruction ("do those five as well and the overall search page as well"), the five
+  pages already on hand-rolled tables plus Overall Search were migrated: **Sub Customer, Category,
+  Product, Employee, User Management, Overall Search**. **16 pages now share `DataListTable`** and
+  no card grid remains in any list on any page.
+- **Two additive template capabilities, both driven by a page that genuinely needed them:**
+  - **Expandable rows** (`renderExpanded` / `isExpanded` / `onToggleExpand`) — Categories toggles a
+    row open to show that category's products in a nested table. Adding a leading chevron column
+    was the only way to keep that feature; the page still owns the expansion state. Confirmed with
+    the user before building rather than silently dropping the drill-down.
+  - **`footer`** — Employees has a `<tfoot>` "Total Outstanding" row. The page supplies the whole
+    `<tr>` so it controls its own colSpans. Rendered only when there are rows.
+  - Employees also proved the columns array can be built conditionally: it swaps a *Registered
+    Trades* column for *Fixed Monthly Salary* depending on the Workers/Salaried tab.
+- **A real bug found by live verification, not by `tsc`:** the first cut of expandable rows wrapped
+  each row in `<Fragment key={…}>`. React 19 then logged
+  `Invalid prop 'code-path' supplied to React.Fragment` **once per rendered row, on every page with
+  data** — because this project's dev-only Vite plugin `kimi-plugin-inspect-react` (`inspectAttr()`
+  in `frontend/vite.config.ts`) stamps a `code-path` attribute onto every JSX element for
+  click-to-source, and `Fragment` accepts only `key`/`children`. Fixed by dropping the Fragment
+  entirely: the row map is now a **`flatMap` returning sibling `<tr>` elements** with their own
+  keys, which needs no wrapper. Verified the warning is gone from all 16 pages. Worth knowing: this
+  is latent wherever `<Fragment>` is used — `ReportStockPage`, `ChequesTab`, `SaleReportPage`,
+  `OverallTrailContent` and `SaleAnalysisPage` all still trip it, pre-existing and untouched here.
+  It is dev-server-only and cannot reach a production build.
+- **One page deliberately left alone:** `ReportKhaataPage.tsx` still renders its customer picker as
+  a card grid (`lg:grid-cols-3`, with initial-letter avatars). It was not in scope and was not
+  mentioned — flagging it as the last remaining card list in the app.
+  (`BiltyUpdatePage.tsx`'s `lg:grid-cols-3` is a *form* layout, not a list — correctly untouched.)
+- **Verified live** over CDP after a hard reload: all 16 pages render 0 card grids and exactly 1
+  table, 29 real data rows across them, correct headers everywhere, and **zero console
+  errors/warnings**. Categories' expand was proven end-to-end by creating a throwaway category
+  through the real API, confirming the chevron cell, expanding it (nested "no products" panel
+  appeared), collapsing it again, then removing it — it is soft-deleted (`is_active=0`, this app has
+  no hard delete for categories) so it no longer appears in the UI. `npx tsc -b` clean.
+- **Files:** `frontend/src/components/DataListTable.tsx`,
+  `frontend/src/pages/{SubCustomer,Category,Product,Employee}SetupPage.tsx`,
+  `frontend/src/pages/UserManagementPage.tsx`, `frontend/src/pages/OverallSearchPage.tsx`.
+
+### 2026-08-09 — All 10 pages converted (follow-up to the entry below, same day)
+- **What:** The remaining 9 pages were converted onto the same `DataListTable` template in one pass,
+  per explicit instruction ("do the remaining pages"): **Group Ac, Business Ac, Region, City, Store,
+  Adda, Vendor, Customer, Bank**. Zero `lg:grid-cols-3` card grids remain in any `*SetupPage.tsx`.
+- **How:** Same rule everywhere — each page's columns are exactly what its card already showed, so
+  nothing was invented; row click keeps whatever that page opened before. `ArrowRight` dropped from
+  the 6 pages where it only fed the card's footer arrow.
+
+  | Page | Columns | Row click opens |
+  |---|---|---|
+  | Group Ac | Code · Name · Account Class · Sorting | child chart-accounts drill-down |
+  | Chart Ac | Code(+RESERVED) · Name · Group · Link Code · Status | sub-ledgers drill-down |
+  | Business Ac | Code · Name · Control A/C · Region · Status | edit modal |
+  | Region | Code · Name · Status | edit modal |
+  | City | Code · Name · Region · Status | edit modal |
+  | Store | Code · Name · Status | edit modal |
+  | Adda | Code · Name · Region · City · Details | edit modal |
+  | Vendor | ID · Name · Phone · Region · City · Articles | purchase history |
+  | Customer | ID · Name · Region · City · Address | product ledger |
+  | Bank | A/C Code · Bank · Account No. · Branch · Status | edit view |
+
+- **One deliberate behaviour change, flagged:** `BankSetupPage.tsx` was **already** a hand-rolled
+  table, not cards (an earlier grid-class grep matched its *form* layout, not its list). It was in
+  the approved page list, so it moved onto the shared template for consistency — same columns, same
+  look. Its rows are now **clickable → `select(b)`**, which they were not before; on an inactive
+  bank that reaches the edit view by a route the row previously did not offer (the row only exposed
+  Reactivate). Harmless and trivially revertable, but it is new behaviour rather than a like-for-like
+  port. `SubCustomer`, `Category`, `Product`, `Employee` and `UserManagement` were left alone —
+  already tables, and outside the approved list.
+- **Verified live** via the CDP-driven Electron instance, sweeping all 10 pages: every page renders
+  exactly 1 table, 0 card grids, with the correct headers listed above. Data-bearing pages showed
+  real rows (Chart 17, Group 4, Business 1, Store 1); the 6 empty tables (Region, City, Adda,
+  Vendor, Customer, Bank — all 0 rows in this DB) correctly showed the in-table empty state with
+  headers still visible. Interactions re-checked per page: Group Ac row click → the group's
+  drill-down, and its **Edit button opened the edit modal without also firing the row click**;
+  Business Ac and Store row clicks → edit modals pre-filled with the right record. **Zero console
+  errors or exceptions across the whole sweep** (Electron's stock dev-mode CSP warning filtered out).
+  `npx tsc -b` clean.
+- **Files:** `frontend/src/pages/{GroupAc,BusinessAc,Region,City,Store,Adda,Vendor,Customer,Bank}SetupPage.tsx`.
+
+### 2026-08-09 — New `DataListTable` row template; Chart of Accounts converted first, verified live
+- **What:** Every non-transactional setup screen rendered its records as a 3-across card grid
+  (`grid-cols-1 md:grid-cols-2 lg:grid-cols-3`, ~190px tiles) — 10 pages do this: Region, City,
+  Store, Adda, Group Ac, Chart Ac, Business Ac, Customer, Vendor, Bank. Cards fit only 7–9 records
+  per screen, are hard to scan/compare, and were already inconsistent with the 5 setup pages that
+  use tables (Sub Customer, Category, Product, Employee, User Management). Per client instruction
+  these become **row-wise lists, with the row itself clickable to open whatever detail that page
+  already opened**, and the row design is a **template defined once and reused**, not per-page
+  markup. This entry builds the template and converts the first page; the other 9 follow one at a
+  time.
+- **How:**
+  - New `frontend/src/components/DataListTable.tsx` — generic over the row type, no domain
+    knowledge. Page supplies `columns` (`{key, header, render, align?, width?, cellClassName?}`),
+    `rows`, `rowKey`, optional `onRowClick`, and an optional `actions(row)` render-prop.
+    Markup/classes are **lifted verbatim from the table already in `SubCustomerSetupPage.tsx`** —
+    the established house style, deliberately not a new one. Two behaviours those tables lack were
+    added: the whole row is clickable (plus `role="button"`/`tabIndex=0`/Enter-Space, and a gold
+    focus ring), and loading/empty states render as a `<td colSpan>` **inside** the table so the
+    header row stays visible instead of being replaced by a card.
+  - The actions cell is wrapped in `<div onClick={e => e.stopPropagation()}>` — the same guard the
+    cards used — so Edit/Delete never also fire the row click. This is the one genuinely new failure
+    mode the card→row move introduces, and it is the thing most worth re-checking on each page as
+    the rollout proceeds.
+  - `ChartAcSetupPage.tsx`: only the card-grid block was replaced. Columns are Chart Code (mono,
+    with the gold RESERVED marker beneath), Account Name, Group Account, Link Code, Status
+    (unchanged emerald/rose pill), Actions (unchanged Edit + the same
+    `status === 'CLOSED' ? Reactivate : Delete` branch, keeping `disabled={isReserved}`). Row click
+    → `setViewingChartId(c.ac_id)`, exactly what the card did. Data loading, filtering, search, the
+    sort toggle, the header card, and both modals are untouched — this is a presentation swap.
+    Dropped the now-unused `ArrowRight` import.
+- **Verified live** via a second Electron instance on `--remote-debugging-port=9222` (driven over
+  CDP; the already-running `electron:dev` window was left alone): logged in as `admin`, opened
+  Chart of Accounts — all 17 seeded accounts render as rows, 0 card grids remain, all 6 headers
+  correct, RESERVED marker present. Row click opened the Sub-Ledgers drill-down for the right
+  account and closed cleanly; **Edit opened the edit modal pre-filled and did NOT also open the
+  drill-down** (confirming the stopPropagation guard); Delete on a reserved account is genuinely
+  `disabled`, with the right tooltip; Sort by Name reordered alphabetically and Sort by Code
+  restored; search `WAGES` → 2 rows; a nonsense search showed the empty state **with the table
+  header still visible**; clearing search restored 17. Enter on a focused row opened the
+  drill-down. Console clean apart from Electron's stock dev-mode CSP warning (pre-existing,
+  unrelated). `npx tsc -b` clean.
+- **Not verified live, and why:** the **Delete-enabled** and **Reactivate** branches were not
+  exercised — all 17 seeded chart accounts are in `RESERVED_ACCOUNT_CODES` (17 codes, 17 rows) and
+  all are `ACTIVE`, so neither branch is reachable with current data. Proving them needs a
+  throwaway chart account, and `chartAccounts.remove()` is a soft close (no hard delete), so the
+  test row would persist. Both branches reuse the card's exact handlers/conditions inside the same
+  guarded actions cell that Edit was proven in.
+- **Still pending:** the other 9 card pages — Group Ac, Business Ac, Region, City, Store, Adda,
+  Vendor, Customer, Bank. Customer and Vendor open a detail/ledger drill-down rather than the edit
+  modal; each page keeps whatever it opens today.
+- **Files:** `frontend/src/components/DataListTable.tsx` (new),
+  `frontend/src/pages/ChartAcSetupPage.tsx`.
+
+---
+
 ## Milestone 9, Module 9.2 — Admin: Manage Users (new capability, not in the original milestone scope)
 
 ### 2026-08-08 — Admin can create, list, deactivate/reactivate additional logins, and reset any user's password
