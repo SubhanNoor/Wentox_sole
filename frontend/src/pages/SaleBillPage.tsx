@@ -753,8 +753,8 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
           </tbody>
         </table>
 
-        {/* Signatures */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '60px', fontSize: '11px' }}>
+        {/* Signatures & Print Info footer */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '45px', fontSize: '11px' }}>
           <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>
             Prepared By
           </div>
@@ -764,6 +764,11 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
           <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>
             Authorized Signature
           </div>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
+          <div>WENTOX FOOTWEAR DISTRIBUTION</div>
+          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );

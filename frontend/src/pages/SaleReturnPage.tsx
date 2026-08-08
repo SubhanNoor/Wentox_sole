@@ -430,39 +430,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setPasswordActionType(null);
   };
 
+  // handleSaveDraft removed along with Save Draft button
+  /*
   const handleSaveDraft = async () => {
-    const payload: Partial<SaleReturnCreateInput> = {
-      customer_id: customerId ? Number(customerId) : undefined,
-      sub_customer_id: subCustomerId ? Number(subCustomerId) : null,
-      store_id: storeId ? Number(storeId) : undefined,
-      return_date: date || undefined,
-      bill_no: billNo,
-      gp_no: gpNo,
-      bilty_no: biltyNo,
-      adda_id: addaId ? Number(addaId) : undefined,
-      remarks: remarks || undefined,
-      invoice_discount: invoiceDiscount,
-      items: items.filter(it => it.variantId).map(it => ({
-        variant_id: it.variantId!,
-        cartons: it.cartons,
-        rate: it.rate,
-        discount_percent: it.discountPercent
-      }))
-    };
-
-    if (selectedDraftId != null) {
-      await api.draftSaleReturns.remove(selectedDraftId);
-    }
-    const res = await api.draftSaleReturns.create(payload);
-    if (!res.ok) {
-      setErrorMsg('Failed to save draft: ' + res.error.message);
-      return;
-    }
-    setSelectedDraftId(res.data.return_id);
-    setSuccessMsg('Return saved to drafts.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-    refreshDrafts();
+    ...
   };
+  */
 
   const handleConfirmDraft = async () => {
     if (selectedDraftId == null) {
@@ -717,8 +690,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           </tbody>
         </table>
 
-        {/* Signatures */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '60px', fontSize: '11px' }}>
+        {/* Signatures & Print Info footer */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '45px', fontSize: '11px' }}>
           <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>
             Prepared By
           </div>
@@ -728,6 +701,11 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>
             Authorized Signature
           </div>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
+          <div>WENTOX FOOTWEAR DISTRIBUTION</div>
+          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );
@@ -936,9 +914,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                     Save &amp; Post
                   </button>
                 )}
-                <button onClick={handleSaveDraft} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg flex items-center gap-1.5">
-                  Save Draft
-                </button>
                 {mode === 'edit' ? (
                   <button onClick={() => setMode('view')} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
                     Cancel Edit

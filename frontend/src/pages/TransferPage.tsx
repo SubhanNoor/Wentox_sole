@@ -16,15 +16,33 @@ export default function TransferPage() {
   const [mode, setMode] = useState<'transfer' | 'deposit'>('transfer');
 
   const [banks, setBanks] = useState<BankAccountRow[]>([]);
+  // Cash is a business_accounts row, NOT a bank_accounts row, so bankAccounts.list() never returns
+  // it. Without this the From/To dropdowns only ever contained banks, which made a cash transfer
+  // impossible to select — the whole point of the page. transfers.from_ba_id/to_ba_id reference
+  // business_accounts, so cash and banks are equally valid there.
+  const [cashAccount, setCashAccount] = useState<{ ba_id: number; name: string } | null>(null);
   const [transfers, setTransfers] = useState<TransferRow[]>([]);
   const [deposits, setDeposits] = useState<DepositRow[]>([]);
   const [lookupError, setLookupError] = useState('');
 
+  // Banks only — a DEPOSIT always lands in a bank, so cash is not a valid destination there.
   const bankOptions = useMemo(
     () => banks.filter(b => b.ba_id != null).map(b => ({ value: String(b.ba_id), label: b.name })),
     [banks]
   );
-  const bankName = useCallback((baId: number) => banks.find(b => b.ba_id === baId)?.name || 'Unknown Account', [banks]);
+  // Cash + banks, for TRANSFERS, which move money between any two business accounts.
+  // Cash first — it's the most common side of a transfer on the shop floor.
+  const accountOptions = useMemo(
+    () => [
+      ...(cashAccount ? [{ value: String(cashAccount.ba_id), label: cashAccount.name }] : []),
+      ...bankOptions,
+    ],
+    [bankOptions, cashAccount]
+  );
+  const bankName = useCallback((baId: number) => {
+    if (cashAccount && cashAccount.ba_id === baId) return cashAccount.name;
+    return banks.find(b => b.ba_id === baId)?.name || 'Unknown Account';
+  }, [banks, cashAccount]);
 
   const refreshTransfers = useCallback(async () => {
     const res = await api.transfers.list({});
@@ -43,6 +61,11 @@ export default function TransferPage() {
       const res = await api.bankAccounts.list();
       if (res.ok) setBanks(res.data);
       else setLookupError('Failed to load bank accounts: ' + res.error.message);
+    })();
+    (async () => {
+      const res = await api.businessAccounts.getCashAccount();
+      if (res.ok) setCashAccount(res.data);
+      else setLookupError('Failed to load the cash account: ' + res.error.message);
     })();
     refreshTransfers();
     refreshDeposits();
@@ -292,34 +315,43 @@ export default function TransferPage() {
 
   return (
     <AppLayout pageTitle="Bank Transactions">
-      <div className="mx-auto" style={{ maxWidth: 1000 }}>
+      <div className="mx-auto" style={{ maxWidth: 1400 }}>
 
         {lookupError && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{lookupError}</div>}
         {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>}
         {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>}
 
-        {/* Mode switcher */}
-        <div className="flex border-b mb-6 text-sm font-semibold" style={{ borderColor: 'var(--border-color)' }}>
-          <button
-            onClick={() => { setMode('transfer'); setErrorMsg(''); }}
-            className={`px-4 py-2 border-b-2 transition-colors flex items-center gap-1.5 ${
-              mode === 'transfer' ? 'border-[#B08D57] text-[#111c2a]' : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            <ArrowLeftRight size={15} /> Transfer Between Accounts
-          </button>
-          <button
-            onClick={() => { setMode('deposit'); setErrorMsg(''); }}
-            className={`px-4 py-2 border-b-2 transition-colors flex items-center gap-1.5 ${
-              mode === 'deposit' ? 'border-[#B08D57] text-[#111c2a]' : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            <PiggyBank size={15} /> Add Amount to Bank
-          </button>
+        {/* Mode switcher boxed toolbar */}
+        <div className="p-4 rounded-xl border mb-6 bg-white shadow-2xs flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }}>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => { setMode('transfer'); setErrorMsg(''); }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-all ${
+                mode === 'transfer'
+                  ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold'
+                  : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
+              }`}
+            >
+              <ArrowLeftRight size={15} /> Transfer Between Accounts
+            </button>
+            <button
+              type="button"
+              onClick={() => { setMode('deposit'); setErrorMsg(''); }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-all ${
+                mode === 'deposit'
+                  ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold'
+                  : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
+              }`}
+            >
+              <PiggyBank size={15} /> Add Amount to Bank
+            </button>
+          </div>
         </div>
 
-        {mode === 'transfer' ? (
-          <>
+        <div key={mode} className="animate-in fade-in slide-in-from-bottom-3 duration-300">
+          {mode === 'transfer' ? (
+            <>
             <div className="card-white p-6 md:p-8 bg-white border overflow-visible mb-6" style={{ borderColor: 'var(--border-color)' }}>
               <div className="flex items-center justify-between border-b pb-3 mb-5">
                 <div className="flex items-center gap-2">
@@ -384,10 +416,10 @@ export default function TransferPage() {
                 )}
               </div>
 
-              {bankOptions.length < 2 ? (
+              {accountOptions.length < 2 ? (
                 <div className="flex items-start gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-4">
                   <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-                  <span>At least two bank accounts are needed to transfer between. Add a bank account first.</span>
+                  <span>At least two accounts are needed to transfer between. Add an account first.</span>
                 </div>
               ) : (
                 <form onSubmit={saveTransfer} className="flex flex-col gap-5">
@@ -420,7 +452,7 @@ export default function TransferPage() {
                         From <span className="text-red-500 font-bold">*</span>
                       </label>
                       <SearchableSelect
-                        options={bankOptions}
+                        options={accountOptions}
                         value={fromBaId}
                         onChange={setFromBaId}
                         placeholder="Money leaves..."
@@ -432,7 +464,7 @@ export default function TransferPage() {
                         To <span className="text-red-500 font-bold">*</span>
                       </label>
                       <SearchableSelect
-                        options={bankOptions.filter(o => o.value !== fromBaId)}
+                        options={accountOptions.filter((o: { value: string; label: string }) => o.value !== fromBaId)}
                         value={toBaId}
                         onChange={setToBaId}
                         placeholder="Money arrives..."
@@ -756,6 +788,7 @@ export default function TransferPage() {
             </div>
           </div>
         )}
+        </div>
 
       </div>
     </AppLayout>

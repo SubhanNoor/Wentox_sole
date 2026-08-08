@@ -13,6 +13,8 @@ export const ReportFooter: React.FC<ReportFooterProps> = ({
   showSignatures = true,
   className = '',
 }) => {
+  const printTimeStr = `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+
   return (
     <div className={`report-footer-container mt-6 pt-4 border-t border-slate-200 ${className}`}>
       {notes && (
@@ -40,8 +42,8 @@ export const ReportFooter: React.FC<ReportFooterProps> = ({
 
       <div className="flex items-center justify-between text-[10px] text-slate-600 font-mono pt-2 border-t border-slate-100">
         <div>WENTOX SOLE ERP System Report</div>
+        <div>Printed: {printTimeStr}</div>
         <div>User: {printedBy}</div>
-        <div>Page 1 of 1</div>
       </div>
     </div>
   );

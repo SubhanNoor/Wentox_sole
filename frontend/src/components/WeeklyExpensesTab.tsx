@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { ExpenseRow, BusinessAccountRow } from '@/lib/api';
-import { Calendar, Search, ArrowRight, ArrowLeft, FileText, DollarSign, Landmark, CreditCard } from 'lucide-react';
+import { Calendar, Search, ArrowRight, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check } from 'lucide-react';
 
 function isChequeMode(mode: ExpenseRow['payment_mode']): boolean {
   return mode === 'CHEQUE_ENDORSED' || mode === 'CHEQUE_ISSUED';
@@ -34,7 +34,9 @@ export default function WeeklyExpensesTab() {
 
   // Filters
   const [nameQuery, setNameQuery] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState<string>('all'); // '0' to '11' or 'all'
+  const [selectedMonth, setSelectedMonth] = useState<string>('all');
+  const [isMonthDropdownOpen, setIsMonthDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Selected business account for viewing details
   const [selectedBizId, setSelectedBizId] = useState<number | null>(null);
@@ -54,7 +56,22 @@ export default function WeeklyExpensesTab() {
     { value: '11', label: 'December' },
   ];
 
-  // Client-side post-filter over the fetched (already weekly-scoped) expenses
+  const selectedMonthLabel = useMemo(() => {
+    if (selectedMonth === 'all') return 'All Months';
+    return monthsList.find(m => m.value === selectedMonth)?.label || 'All Months';
+  }, [selectedMonth]);
+
+  // Click outside listener for custom dropdown
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsMonthDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const weeklyExpenses = useMemo(() => {
     return rows.filter(e => {
       if (selectedMonth !== 'all') {
@@ -74,7 +91,6 @@ export default function WeeklyExpensesTab() {
     });
   }, [rows, businessAccounts, selectedMonth, nameQuery]);
 
-  // Group expenses by business account for the card layout
   const bizCardsData = useMemo(() => {
     const groups: { [bizId: number]: { businessAccount: BusinessAccountRow; expenses: ExpenseRow[]; totalAmount: number } } = {};
 
@@ -99,47 +115,46 @@ export default function WeeklyExpensesTab() {
 
   const activeBizDetails = useMemo(() => {
     if (selectedBizId == null) return null;
-    return bizCardsData.find(b => b.businessAccount.ba_id === selectedBizId);
+    return bizCardsData.find(c => c.businessAccount.ba_id === selectedBizId);
   }, [selectedBizId, bizCardsData]);
 
   if (selectedBizId != null && activeBizDetails) {
     return (
-      <div className="card-white p-6 bg-white border border-slate-200 shadow-sm rounded-xl animate-fadeIn">
+      <div className="card-white p-6 bg-white border border-slate-200 shadow-sm rounded-xl animate-in fade-in slide-in-from-bottom-3 duration-300">
         <div className="flex items-center justify-between border-b pb-4 mb-4" style={{ borderColor: 'var(--border-color)' }}>
           <div className="flex items-center gap-3">
             <button
               onClick={() => setSelectedBizId(null)}
-              className="w-10 h-10 rounded-full border border-slate-200 hover:bg-slate-50 text-slate-600 flex items-center justify-center transition-all shadow-sm hover:scale-105"
+              className="bg-amber-50/80 hover:bg-amber-100/90 text-amber-900 border border-amber-200/80 rounded-xl px-4 py-2 text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs hover:shadow-xs"
             >
-              <ArrowLeft size={16} />
+              <ArrowLeft size={16} /> Back to Expenses
             </button>
             <div>
               <h3 className="font-lora font-bold text-lg text-slate-800">
-                Expenses for {activeBizDetails.businessAccount.name}
+                {activeBizDetails.businessAccount.name} — Weekly Expenses
               </h3>
-              <p className="text-xs text-slate-500 mt-0.5 font-inter">
-                Weekly Summary: {activeBizDetails.expenses.length} Expense Record(s) - Total: {formatCurrency(activeBizDetails.totalAmount)}
+              <p className="text-xs text-slate-500 font-medium">
+                Code: {activeBizDetails.businessAccount.code}
               </p>
             </div>
           </div>
-          <button
-            onClick={() => setSelectedBizId(null)}
-            className="text-xs text-amber-600 hover:text-amber-700 font-semibold uppercase tracking-wider transition-colors"
-          >
-            Back to Accounts
-          </button>
+
+          <div className="text-right">
+            <span className="text-xs font-semibold text-slate-500 block uppercase">Total Weekly Expense:</span>
+            <span className="font-mono font-bold text-rose-800 text-lg">{formatCurrency(activeBizDetails.totalAmount)}</span>
+          </div>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-slate-200 shadow-sm">
-          <table className="w-full text-left border-collapse text-sm font-inter">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500 border-slate-200">
+              <tr className="bg-slate-100 border-b text-slate-700 font-bold uppercase tracking-wider" style={{ borderColor: 'var(--border-color)' }}>
                 <th className="p-3.5 pl-4">Date</th>
-                <th className="p-3.5 text-center">Sys ID</th>
-                <th className="p-3.5 text-center">Mode</th>
-                <th className="p-3.5">Reference/Details</th>
+                <th className="p-3.5 text-center">Entry ID</th>
+                <th className="p-3.5 text-center">Payment Mode</th>
+                <th className="p-3.5">Details</th>
                 <th className="p-3.5">Remarks</th>
-                <th className="p-3.5 text-right pr-6">Amount Spent</th>
+                <th className="p-3.5 text-right pr-6">Amount (PKR)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
@@ -148,12 +163,18 @@ export default function WeeklyExpensesTab() {
                   <td className="p-3.5 pl-4 font-mono text-slate-600">{e.expense_date.slice(0, 10)}</td>
                   <td className="p-3.5 text-center">
                     <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
-                      {e.expense_id}
+                      #{e.expense_id}
                     </span>
                   </td>
                   <td className="p-3.5 text-center">
-                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${e.payment_mode === 'CASH' ? 'bg-green-50 text-green-700 border border-green-200' : isChequeMode(e.payment_mode) ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-indigo-50 text-indigo-700 border border-indigo-200'}`}>
-                      {e.payment_mode === 'CASH' && <DollarSign size={10} />}
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                      isChequeMode(e.payment_mode)
+                        ? 'bg-amber-50 text-amber-900 border border-amber-200/80'
+                        : e.payment_mode === 'ONLINE'
+                        ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                        : 'bg-green-50 text-green-700 border border-green-200'
+                    }`}>
+                      {!isChequeMode(e.payment_mode) && e.payment_mode === 'CASH' && <DollarSign size={10} />}
                       {isChequeMode(e.payment_mode) && <Landmark size={10} />}
                       {e.payment_mode === 'ONLINE' && <CreditCard size={10} />}
                       {expenseModeLabel(e.payment_mode)}
@@ -172,53 +193,80 @@ export default function WeeklyExpensesTab() {
   }
 
   return (
-    <div className="mx-auto" style={{ maxWidth: 1200 }}>
-      {/* Premium Big and Readable Filter Toolbar */}
-      <div className="flex flex-col gap-4 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-          <div className="col-span-1 md:col-span-2">
-            <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Search Ledger Title or Code</label>
-            <div className="relative">
-              <Search className="absolute left-3.5 top-3.5 text-slate-400" size={16} />
-              <input
-                type="text"
-                placeholder="Search by business account name or code..."
-                value={nameQuery}
-                onChange={e => setNameQuery(e.target.value)}
-                className="soleria-input pl-10 py-2.5 w-full text-sm font-semibold bg-slate-50/50 hover:bg-white focus:bg-white transition-all shadow-inner"
-              />
-            </div>
+    <div className="mx-auto" style={{ maxWidth: 1400 }}>
+      {/* Filter Toolbar Standard */}
+      <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white shadow-2xs" style={{ borderColor: 'var(--border-color)' }}>
+        <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3.5 top-2.5 text-slate-400" size={16} />
+            <input
+              type="text"
+              placeholder="Search by account name or code..."
+              value={nameQuery}
+              onChange={e => setNameQuery(e.target.value)}
+              className="soleria-input pl-10 py-2 w-full text-sm font-semibold"
+            />
           </div>
 
-          <div className="col-span-1">
-            <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Filter by Month</label>
-            <select
-              value={selectedMonth}
-              onChange={e => setSelectedMonth(e.target.value)}
-              className="soleria-input py-2.5 px-3.5 w-full cursor-pointer text-sm font-semibold bg-white hover:border-[#B08D57] transition-all shadow-sm"
+          {/* Custom Popover Dropdown Standard */}
+          <div className="relative min-w-[170px]" ref={dropdownRef}>
+            <button
+              type="button"
+              onClick={() => setIsMonthDropdownOpen(!isMonthDropdownOpen)}
+              className="flex items-center justify-between w-full pl-10 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs"
             >
-              <option value="all">All Months</option>
-              {monthsList.map(m => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </select>
+              <Calendar className="absolute left-3.5 top-2.5 text-slate-400" size={17} />
+              <span className="truncate text-slate-800 font-semibold">{selectedMonthLabel}</span>
+              <ChevronDown className={`text-slate-400 transition-transform duration-200 ${isMonthDropdownOpen ? 'rotate-180 text-[var(--brand-gold)]' : ''}`} size={16} />
+            </button>
+
+            {isMonthDropdownOpen && (
+              <div className="absolute right-0 w-48 top-[calc(100%+6px)] z-50 py-1.5 bg-white border border-slate-200/90 rounded-xl shadow-xl max-h-60 overflow-y-auto scrollbar-thin">
+                <button
+                  type="button"
+                  onClick={() => { setSelectedMonth('all'); setIsMonthDropdownOpen(false); }}
+                  className={`w-full text-left px-3.5 py-2 text-xs font-semibold transition-colors flex items-center justify-between cursor-pointer ${
+                    selectedMonth === 'all'
+                      ? 'bg-[var(--brand-gold)] text-white'
+                      : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'
+                  }`}
+                >
+                  <span>All Months</span>
+                  {selectedMonth === 'all' && <Check size={14} className="text-white" />}
+                </button>
+                <div className="my-1 border-t border-slate-100" />
+                {monthsList.map(m => {
+                  const isSelected = selectedMonth === m.value;
+                  return (
+                    <button
+                      key={m.value}
+                      type="button"
+                      onClick={() => { setSelectedMonth(m.value); setIsMonthDropdownOpen(false); }}
+                      className={`w-full text-left px-3.5 py-2 text-xs font-semibold transition-colors flex items-center justify-between cursor-pointer ${
+                        isSelected
+                          ? 'bg-[var(--brand-gold)] text-white'
+                          : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'
+                      }`}
+                    >
+                      <span>{m.label}</span>
+                      {isSelected && <Check size={14} className="text-white" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="flex justify-between items-center pt-2 border-t border-slate-100">
-          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-            Weekly Records
-          </div>
-          <div className="text-xs font-bold text-[#B08D57] font-mono">
-            {weeklyExpenses.length} Expense Entry(s)
-          </div>
+        <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-2 rounded-xl border border-slate-200">
+          {weeklyExpenses.length} Expense Records
         </div>
       </div>
 
-      {/* Business Account Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      {/* Business Account Cards Grid Standard */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {bizCardsData.length === 0 ? (
-          <div className="col-span-full card-white p-12 bg-slate-50/50 border text-center flex flex-col items-center justify-center text-slate-400">
+          <div className="col-span-full card-white p-12 bg-white border border-slate-200 text-center flex flex-col items-center justify-center text-slate-400 rounded-2xl">
             <Calendar size={48} className="text-slate-300 mb-3" />
             <p className="font-lora text-lg font-semibold text-slate-500 mb-1">No Weekly Expenses Found</p>
             <p className="text-sm max-w-sm">No expenses were logged for this week matching your filters.</p>
@@ -229,36 +277,35 @@ export default function WeeklyExpensesTab() {
               <div
                 key={data.businessAccount.ba_id}
                 onClick={() => setSelectedBizId(data.businessAccount.ba_id)}
-                className="card-white p-5 bg-white border border-slate-200 cursor-pointer transition-all flex flex-col justify-between hover:shadow-md hover:border-[#B08D57] hover:ring-1 hover:ring-gold-200 rounded-xl"
+                className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
               >
                 <div>
-                  <div className="flex items-start justify-between mb-1">
-                    <h4 className="font-lora font-bold text-base text-slate-800 line-clamp-1">
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
                       {data.businessAccount.name}
                     </h4>
+                    {data.businessAccount.ac_code === '210001' && (
+                      <span className="text-[10px] font-semibold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-300 uppercase tracking-wider shrink-0">
+                        Vendor Payment
+                      </span>
+                    )}
                   </div>
 
-                  {data.businessAccount.ac_code === '210001' && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-300 mb-2">
-                      Vendor Payment
-                    </span>
-                  )}
+                  <div className="font-mono text-xs text-slate-400 mb-3">Code: {data.businessAccount.code}</div>
 
-                  <div className="font-mono text-xs text-slate-400 mb-4">Code: {data.businessAccount.code}</div>
-
-                  <div className="text-xs font-semibold text-slate-700 flex justify-between bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                  <div className="text-xs font-semibold text-slate-700 flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-100 mt-2">
                     <span>Total Expense:</span>
-                    <span className="font-mono text-rose-700">{formatCurrency(data.totalAmount)}</span>
+                    <span className="font-mono font-bold text-rose-700">{formatCurrency(data.totalAmount)}</span>
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-4">
-                  <div className="flex items-center gap-1.5 bg-rose-50 text-rose-800 px-2.5 py-1 rounded-full text-xs font-semibold border border-rose-200">
+                <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
+                  <div className="flex items-center gap-1.5 bg-rose-50 text-rose-900 px-2.5 py-1 rounded-full text-xs font-semibold border border-rose-200/80">
                     <FileText size={13} className="text-rose-600" />
                     <span>{data.expenses.length} {data.expenses.length === 1 ? 'Record' : 'Records'}</span>
                   </div>
-                  <span className="text-[#B08D57] font-semibold text-xs flex items-center gap-1 hover:text-amber-700 transition-colors">
-                    View Records <ArrowRight size={14} />
+                  <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
+                    View Records <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
                   </span>
                 </div>
               </div>

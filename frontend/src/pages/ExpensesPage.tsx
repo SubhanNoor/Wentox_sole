@@ -7,7 +7,7 @@ import type {
   VendorRow, BankAccountRow, BusinessAccountRow, ChequeRow, ChequeAllocationRow,
   ExpenseRow, ExpenseCreateInput, DraftExpenseRow, ExpensePaymentMode
 } from '@/lib/api';
-import { Save, Wallet, FileText, Edit, Trash2, AlertTriangle } from 'lucide-react';
+import { Save, Wallet, Edit, Trash2, AlertTriangle } from 'lucide-react';
 import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
 import MonthlyExpensesTab from '@/components/MonthlyExpensesTab';
 import OverallExpensesTab from '@/components/OverallExpensesTab';
@@ -329,37 +329,11 @@ export default function ExpensesPage() {
   };
 
   // ── draftExpenses (server-side, all 4 payment modes draftable) ──
+  /*
   const handleSaveDraft = async () => {
-    if (!baId) { fail('Please select an account to pay.'); return; }
-
-    const vendor = vendors.find(v => v.ba_id === Number(baId));
-    const payload: Partial<ExpenseCreateInput> = {
-      expense_date: date,
-      amount: amount || undefined,
-      payment_mode: paymentMode,
-      vendor_id: vendor ? vendor.vendor_id : undefined,
-      ba_id: vendor ? undefined : Number(baId),
-      details: details.trim() || undefined,
-      remarks: remarks.trim() || undefined,
-      bank_id: (paymentMode === 'ONLINE' || paymentMode === 'CHEQUE_ISSUED') && bankId ? Number(bankId) : undefined,
-      cheque_id: paymentMode === 'CHEQUE_ENDORSED' && chequeId ? Number(chequeId) : undefined,
-      issued_cheque_no: paymentMode === 'CHEQUE_ISSUED' ? (issuedChequeNo.trim() || undefined) : undefined,
-      issued_cheque_date: paymentMode === 'CHEQUE_ISSUED' ? (issuedChequeDate || undefined) : undefined
-    };
-
-    // draftExpenses has no update() — replace the old draft in place.
-    if (loadedDraftId != null) {
-      await api.draftExpenses.remove(loadedDraftId);
-    }
-
-    const res = await api.draftExpenses.create(payload);
-    if (!res.ok) { fail('Failed to save draft: ' + res.error.message); return; }
-
-    setLoadedDraftId(res.data.draft_id);
-    setSelectedDraftPick(String(res.data.draft_id));
-    flash('Expense saved to drafts.');
-    refreshDrafts();
+    ...
   };
+  */
 
   const loadDraft = (row: DraftExpenseRow) => {
     setMode('new');
@@ -776,15 +750,8 @@ export default function ExpensesPage() {
                 {!isViewMode && (
                   <div className="flex gap-3 mt-2">
                     <button
-                      type="button"
-                      onClick={handleSaveDraft}
-                      className="btn-outline flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
-                    >
-                      <FileText size={16} /> Save in Draft
-                    </button>
-                    <button
                       type="submit"
-                      className="btn-gold flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
+                      className="btn-gold w-full flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
                     >
                       <Save size={16} /> {mode === 'edit' ? 'Update Expense' : 'Save Expense'}
                     </button>

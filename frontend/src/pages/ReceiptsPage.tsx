@@ -4,7 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { CustomerRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow } from '@/lib/api';
-import { Save, DollarSign, Search, FileText, Edit, Trash2, AlertTriangle } from 'lucide-react';
+import { Save, DollarSign, Search, Edit, Trash2, AlertTriangle } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
@@ -271,37 +271,11 @@ export default function ReceiptsPage() {
   };
 
   // ── draftReceipts (server-side, CASH/ONLINE only) ──
+  /*
   const handleSaveDraft = async () => {
-    if (paymentMode === 'CHEQUE') {
-      fail('Cheque receipts cannot be saved as drafts — save the receipt directly instead.');
-      return;
-    }
-    if (!customerId) { fail('Please select a customer.'); return; }
-
-    const payload: Partial<ReceiptCreateInput> = {
-      customer_id: Number(customerId),
-      receipt_date: date,
-      amount: amount || undefined,
-      commission: commission || undefined,
-      payment_mode: paymentMode,
-      details: details.trim() || undefined,
-      bank_id: paymentMode === 'ONLINE' && bankId ? Number(bankId) : undefined,
-      remarks: remarks.trim() || undefined
-    };
-
-    // draftReceipts has no update() — replace the old draft in place.
-    if (loadedDraftId != null) {
-      await api.draftReceipts.remove(loadedDraftId);
-    }
-
-    const res = await api.draftReceipts.create(payload);
-    if (!res.ok) { fail('Failed to save draft: ' + res.error.message); return; }
-
-    setLoadedDraftId(res.data.draft_id);
-    setSelectedDraftPick(String(res.data.draft_id));
-    flash('Receipt saved to drafts.');
-    refreshDrafts();
+    ...
   };
+  */
 
   const loadDraft = (row: DraftReceiptRow) => {
     setMode('new');
@@ -800,17 +774,8 @@ export default function ReceiptsPage() {
                 {!isViewMode && (
                   <div className="flex gap-3 mt-2">
                     <button
-                      type="button"
-                      onClick={handleSaveDraft}
-                      disabled={paymentMode === 'CHEQUE'}
-                      title={paymentMode === 'CHEQUE' ? 'Cheque receipts cannot be saved as drafts' : undefined}
-                      className="btn-outline flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      <FileText size={16} /> Save in Draft
-                    </button>
-                    <button
                       type="submit"
-                      className="btn-gold flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
+                      className="btn-gold w-full flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
                     >
                       <Save size={16} /> {mode === 'edit' ? 'Update Receipt' : 'Save Receipt'}
                     </button>
