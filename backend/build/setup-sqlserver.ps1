@@ -233,10 +233,68 @@ try {
     $cmd.ExecuteNonQuery() | Out-Null
     Write-Log 'sa login enabled and password set'
 
+    # --- Create / attach the application database ---
+    # A bare CREATE DATABASE is not enough. Uninstalling SQL Server leaves its .mdf/.ldf files on
+    # disk, so a machine that had Wentox before ends up with a fresh instance that has no
+    # Wentox_db registered while the old files are still sitting in the default data folder. In
+    # that state CREATE DATABASE fails outright: "Cannot create file ... because it already
+    # exists." Attaching those files instead both fixes the install AND keeps the previous data,
+    # which is the outcome anyone would actually want. Only if the attach fails (files from an
+    # incompatible version, corrupt, or unreadable by the new service account) are they moved
+    # aside — renamed, never deleted — and a clean database created.
+    $escapedDbLiteral = $DatabaseName.Replace("'", "''")
     $cmd = $conn.CreateCommand()
-    $cmd.CommandText = "IF DB_ID(N'$($DatabaseName.Replace("'", "''"))') IS NULL CREATE DATABASE [$escapedDb];"
-    $cmd.ExecuteNonQuery() | Out-Null
-    Write-Log "database '$DatabaseName' present"
+    $cmd.CommandText = "SELECT DB_ID(N'$escapedDbLiteral')"
+    $alreadyRegistered = $cmd.ExecuteScalar()
+
+    if ($alreadyRegistered -isnot [DBNull] -and $null -ne $alreadyRegistered) {
+      Write-Log "database '$DatabaseName' already present"
+    } else {
+      $cmd = $conn.CreateCommand()
+      $cmd.CommandText = "SELECT CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS nvarchar(4000)), CAST(SERVERPROPERTY('InstanceDefaultLogPath') AS nvarchar(4000))"
+      $reader = $cmd.ExecuteReader()
+      $reader.Read() | Out-Null
+      $dataDir = $reader.GetString(0); $logDir = $reader.GetString(1)
+      $reader.Close()
+
+      $mdf = Join-Path $dataDir "$DatabaseName.mdf"
+      $ldf = Join-Path $logDir  "${DatabaseName}_log.ldf"
+      $attached = $false
+
+      if (Test-Path -LiteralPath $mdf) {
+        Write-Log "found existing data file at $mdf - attaching it to keep the previous data"
+        try {
+          $cmd = $conn.CreateCommand()
+          if (Test-Path -LiteralPath $ldf) {
+            $cmd.CommandText = "CREATE DATABASE [$escapedDb] ON (FILENAME = N'$($mdf.Replace("'","''"))'), (FILENAME = N'$($ldf.Replace("'","''"))') FOR ATTACH;"
+          } else {
+            # Log file gone — SQL Server can rebuild it from the data file alone.
+            Write-Log '  log file missing, rebuilding it from the data file'
+            $cmd.CommandText = "CREATE DATABASE [$escapedDb] ON (FILENAME = N'$($mdf.Replace("'","''"))') FOR ATTACH_REBUILD_LOG;"
+          }
+          $cmd.ExecuteNonQuery() | Out-Null
+          $attached = $true
+          Write-Log "  attached successfully - existing data preserved"
+        } catch {
+          Write-Log "  attach failed ($($_.Exception.Message.Split([Environment]::NewLine)[0]))"
+          $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+          foreach ($old in @($mdf, $ldf)) {
+            if (Test-Path -LiteralPath $old) {
+              $moved = "$old.orphaned-$stamp"
+              Move-Item -LiteralPath $old -Destination $moved -Force
+              Write-Log "  moved aside: $moved"
+            }
+          }
+        }
+      }
+
+      if (-not $attached) {
+        $cmd = $conn.CreateCommand()
+        $cmd.CommandText = "CREATE DATABASE [$escapedDb];"
+        $cmd.ExecuteNonQuery() | Out-Null
+        Write-Log "created database '$DatabaseName'"
+      }
+    }
   } finally {
     $conn.Dispose()
   }
