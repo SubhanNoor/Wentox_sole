@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { EmployeeRow, ProductRow, StageRow, WageRunRow, ExpenseRow } from '@/lib/api';
@@ -54,10 +55,28 @@ export default function WageRunPage() {
   const [successMsg, setSuccessMsg] = useState('');
 
   const [isStageOpen, setIsStageOpen] = useState(false);
+  const [stagePos, setStagePos] = useState<{ top: number; left: number; width: number } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const stagePanelRef = useRef<HTMLDivElement>(null);
+
+  // The panel is portaled onto document.body (see SearchableSelect for why:
+  // .card-white sets overflow:hidden, which clips an absolutely-positioned
+  // dropdown instead of letting it float over the page).
+  const openStageDropdown = () => {
+    const el = stageRef.current;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      setStagePos({ top: r.bottom + 4, left: r.left, width: r.width });
+    }
+    setIsStageOpen(v => !v);
+  };
+
   useEffect(() => {
     const h = (e: MouseEvent) => {
-      if (stageRef.current && !stageRef.current.contains(e.target as Node)) setIsStageOpen(false);
+      const target = e.target as Node;
+      if (stageRef.current?.contains(target)) return;
+      if (stagePanelRef.current?.contains(target)) return;
+      setIsStageOpen(false);
     };
     document.addEventListener('mousedown', h);
     return () => document.removeEventListener('mousedown', h);
@@ -326,14 +345,18 @@ export default function WageRunPage() {
                       <div className="relative" ref={stageRef}>
                         <button
                           type="button"
-                          onClick={() => setIsStageOpen(!isStageOpen)}
+                          onClick={openStageDropdown}
                           className="flex items-center justify-between w-full pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer shadow-2xs focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30"
                         >
                           <span className={`truncate font-semibold ${stage ? 'text-slate-800' : 'text-slate-400'}`}>{selLabel}</span>
                           <ChevronDown className={`ml-2 flex-shrink-0 text-slate-400 transition-transform duration-200 ${isStageOpen ? 'rotate-180 text-[var(--brand-gold)]' : ''}`} size={16} />
                         </button>
-                        {isStageOpen && (
-                          <div className="absolute right-0 left-0 top-[calc(100%+6px)] z-50 py-1.5 bg-white border border-slate-200/90 rounded-xl shadow-xl" style={{ boxShadow: '0 14px 34px rgba(27,42,65,0.14)' }}>
+                        {isStageOpen && stagePos && createPortal(
+                          <div
+                            ref={stagePanelRef}
+                            style={{ position: 'fixed', top: stagePos.top, left: stagePos.left, width: stagePos.width, zIndex: 9999, boxShadow: '0 14px 34px rgba(27,42,65,0.14)' }}
+                            className="py-1.5 bg-white border border-slate-200/90 rounded-xl shadow-xl"
+                          >
                             <button type="button" onClick={() => { setStage(''); setItems([emptyItem()]); setIsStageOpen(false); }}
                               className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between cursor-pointer transition-colors ${!stage ? 'bg-[var(--brand-gold)] text-white font-semibold' : 'text-slate-600 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'}`}>
                               <span>Select stage...</span>
@@ -351,7 +374,8 @@ export default function WageRunPage() {
                                 </button>
                               );
                             })}
-                          </div>
+                          </div>,
+                          document.body
                         )}
                       </div>
                     );

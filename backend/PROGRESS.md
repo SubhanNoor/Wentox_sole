@@ -1,7 +1,16 @@
 # Wentox Backend — Progress Log
 
-**Current milestone:** Milestone 5 is now FULLY BUILT — Module 5.2 (Reports) is code-complete: all 9 originally-deferred report channels plus 2 new user-requested reports (Overall Trail / Overall Searching), live-verified against `wentox_db`. Milestone 4 (all 7 modules) and Milestone 5 (5.1–5.3) are now both complete. The only backend gap left across Milestones 4–8 is Milestones 8.2/8.3 (accounting hierarchy setup) plus, everywhere, the frontend integration pass (Milestone 9.2) — no page in the app is wired to real `window.api` calls yet.
-**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10, later given a required `region_id` for Sale Bill/Return dropdown filtering); **Module 7.1 moved to Milestone 4 Module 4.5** (see 2026-08-19 entry below — it was never actually "blocked," `payroll.md` fully designs it). Milestone 8: **Module 8.1 complete and verified end-to-end** (Regions, Cities, Stores, Addas — including Addas' UC-14 delete-guard and its new required `region_id` — see below); Modules 8.2/8.3 (accounting hierarchy) not started. **Milestone 4 was expanded 2026-08-19** from Receipts/Expenses-only into also covering Bank Accounts, Transfer, and Payroll (Employees/Wage Run/Salary Run) — none of that is built yet, all newly planned. The Milestone 2/3 frontend wiring is also still pending. Milestones 6/7/8 (system setup) were deliberately pulled forward because Sale Bill/Return/Purchase/Return all depend on real customer/vendor/adda/city/region data to be testable end-to-end through the actual UI, not hardcoded fixtures. "Reactivate an inactive duplicate-named row instead of rejecting on create()" — no longer parked: implemented across every built entity — vendors (name+phone key), customers/sub-customers (name-only, never blocks on active match), regions/cities/stores/categories/addas (name-only, blocks on active match, matching their existing DB-level `UNIQUE(name)`), and products (name+vendor_id key, didn't have ANY duplicate check before this). Employees still has no CRUD built. See `System_architecture/soft_delete_and_duplicate_check.md`. **Module 4.3 (Bank Accounts) now built** — see the dated entry below; it now also uses the reactivate-instead-of-reject pattern (name+account_no key) from day one, rather than needing a later retrofit.
+**Current milestone:** All of Milestones 1–8 are backend-complete, and Milestone 9.2 (frontend
+integration) is now genuinely complete — every page in `frontend/src/pages/`/`components/` calls the
+real backend (`ReportsHubPage.tsx` is the one non-data tab-router shell, not a gap). Milestone 8.2/8.3
+(accounting hierarchy — Group/Chart/Business Accounts) backend was already complete; its frontend
+wiring plus Module 8.1's (Cities/Regions/Stores/Addas) were the last pages still on demo data and are
+now connected too (see dated entries below). Milestone 9.3's packaging/installer/auto-SQL-Server-setup
+work is extensive and already fully checked off in `milestone9.md` — only three end-to-end
+verification checkboxes remain open there (full continuous flow test, unpost/bounce reversal
+double-check, A4 print against real data), each already partially exercised piecemeal across many
+individual session entries in this log, just never done as one single continuous pass.
+**Status:** SQL Server is up and `wentox_db` migrated + seeded. Milestone 1 code-complete and its migrate/seed scripts verified working end-to-end (including live `auth:login`/`requireSession` checks). Milestone 2: **Modules 2.1 and 2.2 both complete and verified end-to-end** (create/post/unpost, ledger + stock direction, drafts, password re-verification guard, and the `status`-column removal / `due_date` addition). Milestone 3: **Modules 3.1 and 3.2 both complete and verified end-to-end** (create with material auto-registration, post/unpost, drafts with zero vendor-stock effect until confirmed, no password guard). Milestone 6: **Modules 6.1, 6.2, and 6.3 all complete and verified end-to-end** (Product Details/`articles`, Categories, Vendors with auto-linked business account). Milestone 7: **Modules 7.2 and 7.3 complete and verified end-to-end** (Customers mirroring Vendors' auto-linked-account pattern, Sub-Customers as a flat independent CRUD per UC-10, later given a required `region_id` for Sale Bill/Return dropdown filtering); **Module 7.1 moved to Milestone 4 Module 4.5** (it was never actually "blocked," `payroll.md` fully designs it). Milestone 8: **all of 8.1/8.2/8.3 complete, backend AND frontend, verified end-to-end** (see dated entries below for the frontend wiring pass — Regions/Cities/Stores/Addas, Group/Chart/Business Accounts, including the reserved-account delete guard and role-based restricted-account hiding). "Reactivate an inactive duplicate-named row instead of rejecting on create()" — implemented across every built entity — vendors (name+phone key), customers/sub-customers (name-only, never blocks on active match), regions/cities/stores/categories/addas (name-only, blocks on active match, matching their existing DB-level `UNIQUE(name)`), and products (name+vendor_id key). See `System_architecture/soft_delete_and_duplicate_check.md`. A real, first-of-its-kind **admin user-management feature** (create additional `USER`-role logins, deactivate/reactivate, admin password reset) was added on top of the original milestone scope — see dated entry below, since UC-03's role-based access had no way to actually create a second login before this.
 
 Log every completed task here (newest first within its milestone). Format:
 
@@ -13,6 +22,158 @@ Log every completed task here (newest first within its milestone). Format:
 ```
 
 ---
+
+## Milestone 9, Module 9.2 — Admin: Manage Users (new capability, not in the original milestone scope)
+
+### 2026-08-08 — Admin can create, list, deactivate/reactivate additional logins, and reset any user's password
+- **What:** UC-03's role-based access control was fully built (`chart_of_accounts.is_restricted`
+  hides Cash at Banks/Directors Drawings from `USER`-role sessions) but there was no way to actually
+  *create* a second, limited-access login — only the single seeded `admin` account ever existed, and
+  `auth.service.js` only supported `login`/`updateCredentials` (self-service, requires the caller's
+  own current password)/`verifyPassword`. Added: `auth:createUser` (admin-only, always creates
+  `role: 'USER'` — the frontend can never create another admin), `auth:listUsers`,
+  `auth:setUserActive` (deactivate/reactivate — this app's only "delete" for a user, matching the
+  soft-delete convention used everywhere else), and `auth:resetPassword` (admin sets ANOTHER user's
+  password directly, unlike `updateCredentials` which needs the target's own current password).
+  `session.js#requireRole('ADMIN')` existed but had zero real call-sites anywhere in the codebase
+  before this — these four channels are its first actual use.
+- **How:** Two footguns guarded against in `setUserActive()`: an admin can't deactivate their own
+  account (`session.userId === targetUserId` check), and can't deactivate the last active admin
+  (`repository.countActiveAdmins()` check) — both would otherwise lock everyone out with no way to
+  undo it. New frontend page `UserManagementPage.tsx` (`setup-users` NavPage, admin-only sidebar
+  entry under System Setup) — create-user form, live account list with role/active badges, per-row
+  deactivate/reactivate and a "Reset Password" modal. Also found and fixed while wiring this:
+  `ipcBridge.ts`'s `FEATURES` array was missing `'alerts'` and `'updates'` entirely — same class of
+  bug as an earlier missing `'accountClasses'` entry — both channels would have silently resolved
+  `window.api.alerts`/`window.api.updates` as `undefined`.
+- **Follow-up, same session:** per explicit request, `SettingsPage.tsx` is now role-gated —
+  non-admins only ever see the "Check for Updates" tab (the footer popup link itself now reads
+  "Check for Updates" instead of "Settings & Updates" for a `USER` session); the credentials/password
+  tab and its pill-tab selector are hidden outright, not just defaulted away, so there's no path to
+  them for a non-admin.
+- **Verified live** via a real Electron instance (CDP): created a `worker1` USER account, confirmed a
+  real bcrypt-hashed row in `dbo.users`; duplicate username correctly blocked (`USERNAME_TAKEN`);
+  logged in as `worker1` and confirmed `createUser`/`listUsers` are both rejected
+  ("Requires ADMIN role"), confirmed the sidebar hides every `adminOnly` item for that role, and
+  confirmed `SettingsPage.tsx` shows only "Check for Updates" with no way to reach the credentials
+  form; deactivated `worker1` → login correctly rejected → reactivated → login works again → admin
+  reset `worker1`'s password → confirmed the new password actually logs in; confirmed the
+  self-deactivate button is genuinely disabled (not just hidden) on the admin's own row.
+- **Files:** `backend/src/repositories/auth.repository.js`, `backend/src/services/auth.service.js`,
+  `backend/src/ipc/auth.ipc.js`, `frontend/src/lib/ipcBridge.ts`, `frontend/src/lib/api.ts`,
+  `frontend/src/types/index.ts`, `frontend/src/components/AppLayout.tsx`,
+  `frontend/src/pages/UserManagementPage.tsx` (new), `frontend/src/pages/SettingsPage.tsx`,
+  `frontend/src/App.tsx`.
+
+## Milestone 8, Modules 8.1/8.2/8.3 — System Setup + Accounting Setup frontend wiring
+
+### 2026-08-07 — Connected Cities/Regions/Stores/Addas and Group/Chart/Business Accounts to real `window.api` — verified live
+- **What:** The last System Setup pages still on demo `AppContext` data — `CitySetupPage.tsx`,
+  `RegionSetupPage.tsx`, `StoreSetupPage.tsx`, `AddaSetupPage.tsx`, `GroupAcSetupPage.tsx`,
+  `ChartAcSetupPage.tsx`, `BusinessAcSetupPage.tsx` — rewired onto the real backend (all of which was
+  already built and complete per Module 8.1/8.2/8.3's backend entries above). Cities/Regions/
+  Stores/Addas follow the blocking-duplicate pattern (case-insensitive name match, active blocks,
+  inactive offers reactivate) already used by vendors/categories/products. Addas' region/city
+  required-vs-optional was inverted in the old demo page (region optional, city required) —
+  corrected to match the real backend (`region_id` NOT NULL, `city_id` nullable). Group/Chart/
+  Business Accounts' manual code-entry fields were dropped — codes are server-generated
+  (`<classDigit><serial>` → `<groupCode><serial>` → `<chartCode><serial>`) and now shown read-only.
+  `ChartAcSetupPage.tsx` disables the delete action outright for any of the 16 reserved codes
+  (`reservedAccounts.js`), rather than only surfacing the backend's `RESERVED_ACCOUNT` error after
+  the fact. `BusinessAcSetupPage.tsx`'s stale `controlId === '110001'` → demo `ADD_CUSTOMER` side
+  effect was dropped (real customer creation already links its own account server-side).
+  `ipcBridge.ts`'s `FEATURES` array was missing `'accountClasses'` — fixed.
+- **Verified live:** created a City/Region/Store/Adda (region required, city optional now); active
+  duplicate blocked inline; inactive duplicate → reactivate-offer modal worked; deleting an
+  Adda referenced by a real sale bill correctly blocked with `ADDA_IN_USE`. Created a Group Account
+  under a class (code `1001`), a Chart Account under it (`100101`), a Business Account under that
+  (`1001010001`) — full code-generation chain confirmed; creating a business account under the real
+  `CUSTOMERS_ACCOUNTS` code did NOT also create a demo customer (confirms the dropped side effect);
+  deleting a reserved chart account blocked both in the UI (disabled) and by the backend
+  (`RESERVED_ACCOUNT`); deleting a Group Account with chart-account children blocked
+  (`GROUP_IN_USE`). Logged in as a `USER`-role session and confirmed Bank Accounts/Directors
+  Drawings are absent from Business/Chart Accounts lists — the real, pre-existing `is_restricted`
+  hiding, exercised end-to-end for the first time with an actual second account (see the Manage
+  Users entry above).
+- **Files:** `frontend/src/lib/api.ts`, `frontend/src/lib/ipcBridge.ts`,
+  `frontend/src/pages/{City,Region,Store,Adda}SetupPage.tsx`,
+  `frontend/src/pages/{GroupAc,ChartAc,BusinessAc}SetupPage.tsx`.
+
+## Milestone 9, Module 9.1 — Alerts: real-backend Home card, manual + timed refresh (follow-up)
+
+### 2026-08-08 — Alerts moved off demo data onto the real backend; auto-popup sidebar replaced with an inline Home card
+- **What:** The alerts panel (right-side auto-popup on Home) and bell dropdown were computing alerts
+  client-side from frozen `AppContext` demo arrays — never actually wired to the real, already-built
+  `alerts:list`/`alerts:dismiss` backend (Module 9.1, above). Per explicit request: removed the
+  auto-popup sidebar entirely (deleted `NotificationSidePanel.tsx`); new `HomeAlertsCard.tsx` renders
+  inline on the Home page (bottom half, centered) instead, using real `alerts:list`/`alerts:dismiss`.
+  Card-level "Close" is a new session-scoped `homeAlertsCardClosed` flag in `AppContext` (resets on
+  every `LOGIN_SUCCESS`) — deliberately NOT the real backend dismiss, which is permanent and would
+  never satisfy "shown again next login"; per-row dismiss (the small X) IS the real, permanent
+  `alerts:dismiss` call, matching what that endpoint was actually built for. Bell dropdown
+  (`NotificationBell.tsx`) also switched to the same real data source, and no longer special-cases
+  Home (previously toggled the now-deleted side panel there; now behaves identically everywhere).
+- **Follow-up in the same session — refresh was stale and then slow:** `refreshAlerts()` (the job
+  that populates `dbo.generated_alerts`, which `alerts:list` just reads) ran once at Electron
+  startup only — a cheque/bill newly entering the 7-day window mid-session wouldn't show until an app
+  restart. Widened to also re-run every 15 minutes (`electron/main.js`), plus a new on-demand
+  `alerts:refresh` channel and a manual refresh button (bell dropdown — always reachable even with
+  zero current alerts — and the Home card). Found the refresh itself was doing a SELECT-then-INSERT/
+  UPDATE per alert, sequentially, one at a time (2 DB round trips × N alerts, never parallelized) —
+  replaced with a single `MERGE` per alert (`alerts.repository.js#mergeGeneratedAlert`, one round
+  trip) run in parallel via `Promise.all` instead of a `for await` loop; `alerts:refresh` now also
+  returns the fresh list directly rather than making the renderer do a second round trip after.
+  Measured: a real refresh went from what was effectively N sequential round trips down to ~90ms.
+- **Verified live:** confirmed no auto-popup on Home; card shows real alert data (cross-checked
+  against a raw `alerts:list()` call); clicking a row navigates correctly using the backend's own
+  `target_page`/`target_tab`; card stays hidden across navigation once closed, reappears after
+  logout→login; per-row dismiss is permanent (confirmed gone from a fresh `alerts:list()` call);
+  simulated the exact "just added a cheque, not showing yet" scenario by clearing
+  `generated_alerts` mid-session — bell dropdown correctly said "Nothing needs attention," clicking
+  Refresh made the cheque appear instantly, no restart needed.
+- **Files:** `backend/electron/main.js`, `backend/src/ipc/alerts.ipc.js`,
+  `backend/src/repositories/alerts.repository.js`, `backend/src/services/alerts.service.js`,
+  `frontend/src/lib/ipcBridge.ts`, `frontend/src/lib/api.ts`, `frontend/src/context/AppContext.tsx`,
+  `frontend/src/components/AppLayout.tsx`, `frontend/src/components/NotificationBell.tsx`,
+  `frontend/src/components/HomeAlertsCard.tsx` (new), `frontend/src/pages/HomePage.tsx`; deleted
+  `frontend/src/components/NotificationSidePanel.tsx`.
+
+## Milestone 5, Module 5.2 — Reports: two bug fixes found via a full click-through sweep
+
+### 2026-08-08 — `sale-bills:biltySearch`/`updateBilty` channel-name mismatch; Add Quantity input UX
+- **What:** A systematic click-through of every sidebar page (checking for console errors/blank
+  renders, since this app has no React error boundaries) found the "Search & Bilty Adda Updation"
+  page completely broken — `sale-bills:bilty-search`/`sale-bills:update-bilty` were registered
+  kebab-case on the backend, but the frontend calls them via `window.api.saleBills.biltySearch(...)`/
+  `.updateBilty(...)` (camelCase — the IPC bridge Proxy passes the action segment through with no
+  case conversion, confirmed against `auth.ipc.js`'s own documented convention). Renamed both
+  channels to camelCase. Separately, in `ReportStockPage.tsx`'s "Add Stock / Log Production" modal,
+  the "Add Quantity" field defaulted to `1` with no `onFocus` select and an `onChange` that forced
+  the value back to a minimum of 1 on every keystroke — typing "20" over the default produced "120"
+  since the "1" was never selectable/clearable. Fixed with `onFocus={e => e.target.select()}`, an
+  `onChange` that allows the field to go genuinely empty while typing, and an `onBlur` that clamps
+  back to 1 only if left empty.
+- **Verified live:** direct `window.api.saleBills.biltySearch({})` call returns real bill rows post-fix
+  (previously threw "No handler registered"); simulated the exact select-then-type interaction for
+  the quantity field and confirmed the result is `20`, not `120`.
+- **Files:** `backend/src/ipc/saleBills.ipc.js`, `frontend/src/pages/ReportStockPage.tsx`.
+
+## Milestone 5, Module 5.2 — Reports: Overall Trail per-account print preview (all 6 categories)
+
+### 2026-08-08 — "Show Print Preview" added to the account drill-down, previously only on the summary view
+- **What:** `OverallTrailContent.tsx` has two views — a trial-balance summary (which already had a
+  working print preview) and a per-account drill-down ledger (Customer/Vendor/Bank/Employee/Chart
+  Account/Business Account — reached by clicking any account row). The drill-down had no print
+  preview at all, for any category. Since the drill-down view has zero per-category branching
+  (`loadLedger()` makes one identical `accountLedger({ba_id, ac_id, ...})` call regardless of which
+  category the account came from — the backend resolves whichever id applies), one shared addition
+  covers all six categories at once: new `renderPrintableLedger()` (ported from
+  `ReportKhaataPage.tsx`'s already-working "select account → print its ledger" pattern), a second
+  `ReportPrintPreviewModal` instance, and a new Excel-export handler.
+- **Verified live:** drilled into a Customer, a Vendor, and a Chart Account (the latter using `ac_id`
+  instead of `ba_id`, confirming the shared renderer handles both id types) — each showed the correct
+  account header, real ledger rows, opening/closing balance, and Excel export worked.
+- **Files:** `frontend/src/pages/OverallTrailContent.tsx`.
 
 ## Milestone 7 — System Setup frontend wiring (Customers, Sub-Customers)
 
@@ -2006,7 +2167,8 @@ _Not started._
   `System_architecture/soft_delete_and_duplicate_check.md`.
 
 ## Milestone 8 — System Setup: Cities & Accounts Hierarchy
-_Not started._
+_Stale note — this was true when first written; superseded by the entries near the top of this log
+(backend and frontend both complete for all of 8.1/8.2/8.3, verified live)._
 
 ## Milestone 9 — Alerts, Frontend Integration & Electron
 - Module 9.1 (Alerts) and most of 9.3 (Electron main/preload, dev script, update-check page) were
