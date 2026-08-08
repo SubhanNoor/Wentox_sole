@@ -41,6 +41,7 @@ export default function OverallTrailContent() {
   const [trailBalances, setTrailBalances] = useState<OverallTrailRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [isLedgerPreviewOpen, setIsLedgerPreviewOpen] = useState(false);
 
   const loadTrail = useCallback(async () => {
     setLoading(true);
@@ -117,6 +118,19 @@ export default function OverallTrailContent() {
     exportRowsToExcel(`overall-trail-balances-${asOfDate}`, headers, rows);
   };
 
+  const handleExportExcelLedger = () => {
+    if (!selectedAccount || !ledger) return;
+    const headers = ['Date', 'Type', 'Reference', 'Narration', 'Debit (PKR)', 'Credit (PKR)', 'Balance (PKR)'];
+    const rows = [
+      [ledgerFromDate ? `Before ${ledgerFromDate}` : '---', 'Opening Balance', '-', 'Opening Balance brought forward', 0, 0, ledger.opening_balance],
+      ...ledger.rows.map(r => [
+        r.date, r.type, r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, r.narration ?? '',
+        r.debit > 0 ? r.debit : '-', r.credit > 0 ? r.credit : '-', r.balance
+      ]),
+    ];
+    exportRowsToExcel(`${selectedAccount.description}-ledger-${ledgerFromDate || 'start'}-to-${ledgerToDate || 'end'}`, headers, rows);
+  };
+
   const renderPrintableDocument = () => {
     return (
       <div className="excel-print-container">
@@ -186,6 +200,88 @@ export default function OverallTrailContent() {
               <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Grand Total</td>
               <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(filteredTotals.totalDebit)}</td>
               <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>({formatCurrency(filteredTotals.totalCredit)})</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* Signature & Print Info footer */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '35px', padding: '0 10px' }}>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
+          </div>
+          <div style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
+          <div>WENTOX FOOTWEAR DISTRIBUTION</div>
+          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderPrintableLedger = () => {
+    if (!selectedAccount || !ledger) return null;
+    return (
+      <div className="excel-print-container">
+        {/* Header */}
+        <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
+          <div>
+            <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '180px', width: 'auto', objectFit: 'contain' }} />
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>ACCOUNT LEDGER STATEMENT</h2>
+            <p style={{ margin: '4px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>{selectedAccount.description}</p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Code: {selectedAccount.code} | Category: {selectedAccount.type_label}</p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Period: {ledgerFromDate || 'Start'} to {ledgerToDate || 'End'}</p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Date of Print: {new Date().toLocaleDateString()}</p>
+          </div>
+        </div>
+
+        <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+          <thead>
+            <tr>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Date</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Type</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Reference / Bill #</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Narration</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Debit (PKR)</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Credit (PKR)</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Balance (PKR)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style={{ backgroundColor: '#fdf6ec', fontWeight: 'bold' }}>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{ledgerFromDate ? `Before ${ledgerFromDate}` : '---'}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>Opening Balance</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>-</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontStyle: 'italic' }}>Opening Balance brought forward</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right' }}>-</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right' }}>-</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(ledger.opening_balance)}</td>
+            </tr>
+            {ledger.rows.map(row => (
+              <tr key={row.entry_id}>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.date}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.type}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.narration}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(row.balance)}</td>
+              </tr>
+            ))}
+            <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#e8e8e8' }}>
+              <td colSpan={6} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Closing Balance</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(ledger.closing_balance)}</td>
             </tr>
           </tbody>
         </table>
@@ -441,6 +537,12 @@ export default function OverallTrailContent() {
                 </p>
               </div>
             </div>
+            <button
+              onClick={() => setIsLedgerPreviewOpen(true)}
+              className="flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+            >
+              <Eye size={14} /> Show Print Preview
+            </button>
           </div>
           {/* Date Filter Bar */}
           <div className="p-3 rounded-lg border mb-6 bg-white shadow-sm flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }}>
@@ -544,6 +646,16 @@ export default function OverallTrailContent() {
         onExportExcel={handleExportExcel}
       >
         {renderPrintableDocument()}
+      </ReportPrintPreviewModal>
+
+      <ReportPrintPreviewModal
+        isOpen={isLedgerPreviewOpen}
+        onClose={() => setIsLedgerPreviewOpen(false)}
+        title={selectedAccount ? `${selectedAccount.description} — Account Ledger` : 'Account Ledger'}
+        orientation="portrait"
+        onExportExcel={handleExportExcelLedger}
+      >
+        {renderPrintableLedger()}
       </ReportPrintPreviewModal>
     </div>
   );

@@ -77,4 +77,22 @@ async function updateCredentials(userId, updates) {
   await query(`UPDATE dbo.users SET ${sets.join(', ')} WHERE user_id = @userId`, params);
 }
 
-module.exports = { findByUsername, findById, usernameTaken, updateCredentials, insertUser, listUsers };
+async function setActive(userId, isActive) {
+  await query(
+    'UPDATE dbo.users SET is_active = @isActive WHERE user_id = @userId',
+    { userId: { type: sql.Int, value: userId }, isActive: { type: sql.Bit, value: isActive } },
+  );
+}
+
+async function countActiveAdmins() {
+  const result = await query(
+    "SELECT COUNT(*) AS c FROM dbo.users WHERE role = 'ADMIN' AND is_active = 1",
+    {},
+  );
+  return result.recordset[0].c;
+}
+
+module.exports = {
+  findByUsername, findById, usernameTaken, updateCredentials, insertUser, listUsers,
+  setActive, countActiveAdmins,
+};

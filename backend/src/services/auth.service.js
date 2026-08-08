@@ -85,4 +85,42 @@ async function listUsers() {
   return repository.listUsers();
 }
 
-module.exports = { login, updateCredentials, verifyPassword, createUser, listUsers };
+// Admin-only. Deactivating is this app's only "delete" (matches the soft-delete convention used
+// everywhere else — vendors, customers, products, etc. — never a hard DELETE). Two footguns guarded
+// against: an admin locking themselves out, and deactivating the last active admin, which would
+// leave nobody able to log in and undo it.
+async function setUserActive(targetUserId, isActive, currentUserId) {
+  const user = await repository.findById(targetUserId);
+  if (!user) throw ApiError.notFound('User not found');
+
+  if (!isActive) {
+    if (targetUserId === currentUserId) {
+      throw ApiError.badRequest('You cannot deactivate your own account');
+    }
+    if (user.role === 'ADMIN') {
+      const activeAdmins = await repository.countActiveAdmins();
+      if (activeAdmins <= 1) {
+        throw ApiError.badRequest('Cannot deactivate the last active admin account');
+      }
+    }
+  }
+
+  await repository.setActive(targetUserId, isActive);
+  return { ok: true };
+}
+
+// Admin-only, resets ANOTHER user's password directly — unlike updateCredentials(), this never
+// checks the target's current password (the admin isn't the one who'd know it).
+async function resetPassword(targetUserId, newPassword) {
+  if (!newPassword) throw ApiError.badRequest('New password is required');
+  const user = await repository.findById(targetUserId);
+  if (!user) throw ApiError.notFound('User not found');
+
+  const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+  await repository.updateCredentials(targetUserId, { passwordHash });
+  return { ok: true };
+}
+
+module.exports = {
+  login, updateCredentials, verifyPassword, createUser, listUsers, setUserActive, resetPassword,
+};

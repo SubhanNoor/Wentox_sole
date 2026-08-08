@@ -56,4 +56,20 @@ module.exports = function register() {
       return service.listUsers();
     }),
   );
+
+  ipcMain.handle(
+    'auth:setUserActive',
+    wrap(async (payload) => {
+      const current = session.requireRole('ADMIN');
+      return service.setUserActive(payload.id, payload.is_active, current.userId);
+    }),
+  );
+
+  ipcMain.handle(
+    'auth:resetPassword',
+    wrap(async (payload) => {
+      session.requireRole('ADMIN');
+      return service.resetPassword(payload.id, payload.newPassword);
+    }),
+  );
 };

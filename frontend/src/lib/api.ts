@@ -1206,6 +1206,8 @@ declare global {
         verifyPassword: (payload: { password: string }) => Promise<ApiResult<{ ok: true }>>;
         createUser: (payload: { username: string; password: string; fullName?: string }) => Promise<ApiResult<UserAccountRowFromApi>>;
         listUsers: () => Promise<ApiResult<UserAccountRowFromApi[]>>;
+        setUserActive: (payload: { id: number; is_active: boolean }) => Promise<ApiResult<{ ok: true }>>;
+        resetPassword: (payload: { id: number; newPassword: string }) => Promise<ApiResult<{ ok: true }>>;
       };
       saleBills: {
         create: (payload: SaleBillCreateInput) => Promise<ApiResult<SaleBillRow>>;
@@ -1591,6 +1593,16 @@ export async function listUsers(): Promise<ApiResult<UserAccountRow[]>> {
   if (!window.api) return NO_BRIDGE;
   const result = await window.api.auth.listUsers();
   return mapResult(result, rows => rows.map(mapUserAccountRow));
+}
+
+export async function setUserActive(id: number, isActive: boolean): Promise<ApiResult<{ ok: true }>> {
+  if (!window.api) return NO_BRIDGE;
+  return window.api.auth.setUserActive({ id, is_active: isActive });
+}
+
+export async function resetUserPassword(id: number, newPassword: string): Promise<ApiResult<{ ok: true }>> {
+  if (!window.api) return NO_BRIDGE;
+  return window.api.auth.resetPassword({ id, newPassword });
 }
 
 export async function login(username: string, password: string): Promise<ApiResult<{ username: string; role: UserRole }>> {
