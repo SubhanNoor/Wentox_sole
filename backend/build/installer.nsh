@@ -336,10 +336,22 @@ FunctionEnd
       FileOpen $4 "$PLUGINSDIR\sapwd.txt" w
       FileWrite $4 "$DbPasswordValue"
       FileClose $4
-      ExecWait 'powershell.exe -ExecutionPolicy Bypass -NoProfile -File "$INSTDIR\resources\configure-sqlserver.ps1" -PasswordFile "$PLUGINSDIR\sapwd.txt"' $0
+
+      ; NSIS is a 32-bit process, so a bare "powershell.exe" is WOW64-redirected to the 32-bit
+      ; PowerShell in SysWOW64 — which sees the WOW6432Node registry view, where SQL Server is not
+      ; registered at all. $WINDIR\Sysnative is the alias that lets a 32-bit process reach the real
+      ; 64-bit System32, so this runs 64-bit PowerShell. (The script also opens the registry with
+      ; an explicit Registry64 view, so it stays correct even if this falls back.)
+      StrCpy $3 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+      ${IfNot} ${FileExists} "$3"
+        StrCpy $3 "powershell.exe" ; genuinely 32-bit Windows, or Sysnative unavailable
+      ${EndIf}
+      ; Explicit -LogPath (rather than the script's own ProgramData default) so this message can
+      ; point at the exact file — NSIS has no $PROGRAMDATA constant to reconstruct it with.
+      ExecWait '"$3" -ExecutionPolicy Bypass -NoProfile -File "$INSTDIR\resources\configure-sqlserver.ps1" -PasswordFile "$PLUGINSDIR\sapwd.txt" -LogPath "$INSTDIR\sqlserver-setup.log"' $0
       Delete "$PLUGINSDIR\sapwd.txt"
       ${If} $0 != 0
-        MessageBox MB_ICONEXCLAMATION "Could not finish configuring SQL Server (exit code $0). If Wentox cannot log in, the sa account may need to be enabled manually in SQL Server Management Studio."
+        MessageBox MB_ICONEXCLAMATION "Could not finish configuring SQL Server (exit code $0).$\r$\n$\r$\nThe full error was written to:$\r$\n$INSTDIR\sqlserver-setup.log$\r$\n$\r$\nWentox may still work if SQL Server was already set up correctly."
       ${Else}
         DetailPrint "SQL Server configured successfully."
       ${EndIf}
