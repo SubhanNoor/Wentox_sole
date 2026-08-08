@@ -67,9 +67,12 @@ module.exports = function register() {
     }),
   );
 
-  // UC-20: Search & Bilty/Adda Updation.
+  // UC-20: Search & Bilty/Adda Updation. Action names stay camelCase (not kebab-case) — the
+  // preload Proxy passes the JS property access straight through as the action segment with no
+  // case conversion, so this must match window.api.saleBills.biltySearch(...)/.updateBilty(...)
+  // exactly (same convention documented in auth.ipc.js).
   ipcMain.handle(
-    'sale-bills:bilty-search',
+    'sale-bills:biltySearch',
     wrap((payload) => {
       requireSession();
       return service.biltySearch(payload);
@@ -78,7 +81,7 @@ module.exports = function register() {
 
   // bilty_no + adda_id only, non-financial — no password guard, works regardless of posted status.
   ipcMain.handle(
-    'sale-bills:update-bilty',
+    'sale-bills:updateBilty',
     wrap((payload) => {
       requireSession();
       return service.updateBiltyInfo(payload.id, payload);
