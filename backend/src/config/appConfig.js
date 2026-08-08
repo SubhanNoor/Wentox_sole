@@ -1,33 +1,52 @@
-// Local, machine-specific settings that aren't known until install time — the backup DB folder
-// AND (for a packaged install, which never ships a `.env`) the main SQL Server connection details
-// — both asked by the NSIS installer's custom pages, see build/installer.nsh. Lives in Electron's
-// per-user `userData` dir so it survives app updates and isn't bundled into the installer itself.
+// Local, machine-specific settings that aren't known until install time — the backup DB folder AND
+// (for a packaged install, which never ships a `.env`) the main SQL Server connection details,
+// written by the installer's setup-sqlserver.ps1.
+//
+// These live MACHINE-WIDE in %ProgramData%\Wentox, not in Electron's per-user `userData`. Wentox
+// installs perMachine and talks to one local SQL Server, so the connection belongs to the machine,
+// not to whoever happens to be logged in — and critically, the installer runs elevated, so a
+// per-user path would be written into the *elevating admin's* profile and be invisible to the
+// person actually running the app. That mismatch presented as "Login failed for user 'sa'": the
+// app found no config at all and silently fell back to empty `.env` defaults.
 const fs = require('fs');
 const path = require('path');
 
 const CONFIG_FILENAME = 'app-config.json';
 
-// `app` is only available inside the Electron main process; falls back to cwd for scripts/tests
-// run standalone (e.g. `npm run migrate`) where this file is irrelevant anyway.
 function getConfigPath() {
-  let userDataDir;
+  // ProgramData is machine-wide and identical for every user and for the elevated installer.
+  const programData = process.env.ProgramData || process.env.ALLUSERSPROFILE;
+  if (programData) return path.join(programData, 'Wentox', CONFIG_FILENAME);
+
+  // Not Windows (dev on Linux/macOS) — `app` is only available inside the Electron main process,
+  // and falls back to cwd for standalone scripts (e.g. `npm run migrate`) where this is irrelevant.
   try {
-    userDataDir = require('electron').app.getPath('userData');
+    return path.join(require('electron').app.getPath('userData'), CONFIG_FILENAME);
   } catch {
-    userDataDir = process.cwd();
+    return path.join(process.cwd(), CONFIG_FILENAME);
   }
-  return path.join(userDataDir, CONFIG_FILENAME);
+}
+
+// Older builds wrote to the per-user userData dir; keep reading that if the machine-wide file
+// isn't there yet, so an existing install doesn't lose its settings on upgrade.
+function getLegacyConfigPath() {
+  try {
+    return path.join(require('electron').app.getPath('userData'), CONFIG_FILENAME);
+  } catch {
+    return null;
+  }
 }
 
 function readAppConfig() {
-  const configPath = getConfigPath();
-  if (!fs.existsSync(configPath)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  } catch (err) {
-    console.error('Failed to read app config, ignoring:', err);
-    return {};
+  for (const configPath of [getConfigPath(), getLegacyConfigPath()]) {
+    if (!configPath || !fs.existsSync(configPath)) continue;
+    try {
+      return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    } catch (err) {
+      console.error(`Failed to read app config at ${configPath}, ignoring:`, err);
+    }
   }
+  return {};
 }
 
 function writeAppConfig(partial) {

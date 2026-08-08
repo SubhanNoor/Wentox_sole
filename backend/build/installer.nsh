@@ -170,10 +170,13 @@ FunctionEnd
       StrCpy $3 "powershell.exe" ; genuinely 32-bit Windows, or Sysnative unavailable
     ${EndIf}
 
-    ; The script also writes %APPDATA%\Wentox\app-config.json (see the note above customInstall) —
-    ; it does so up-front, before any install work, so the app has a valid config even if SQL
-    ; Server setup itself fails.
-    ExecWait '"$3" -ExecutionPolicy Bypass -NoProfile -File "$INSTDIR\resources\setup-sqlserver.ps1" -PasswordFile "$PLUGINSDIR\sapwd.txt" -InstallerPath "$INSTDIR\resources\sqlserver\SQLEXPR_x64_ENU.exe" -BackupFolder "$BackupPathValue" -ConfigPath "$APPDATA\Wentox\app-config.json" -LogPath "$INSTDIR\sqlserver-setup.log"' $9
+    ; The script also writes the app config (see the note above customInstall), up-front before any
+    ; install work, so the app has valid settings even if SQL Server setup itself fails.
+    ; -ConfigPath is deliberately NOT passed: the script defaults to %ProgramData%\Wentox, and
+    ; NSIS's own $APPDATA is unreliable here — electron-builder sets the all-users shell context for
+    ; a perMachine install, so $APPDATA silently means C:\ProgramData in some places and the user's
+    ; roaming folder in others. Letting the script resolve it from $env:ProgramData is unambiguous.
+    ExecWait '"$3" -ExecutionPolicy Bypass -NoProfile -File "$INSTDIR\resources\setup-sqlserver.ps1" -PasswordFile "$PLUGINSDIR\sapwd.txt" -InstallerPath "$INSTDIR\resources\sqlserver\SQLEXPR_x64_ENU.exe" -BackupFolder "$BackupPathValue" -LogPath "$INSTDIR\sqlserver-setup.log"' $9
     Delete "$PLUGINSDIR\sapwd.txt"
 
     ${If} $9 != 0

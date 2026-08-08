@@ -27,7 +27,11 @@ param(
   # whereas hand-rolled escaping in NSIS silently produced a config whose password did not match
   # the one actually set on sa — the script reported success and the app still got ELOGIN.
   [string]$BackupFolder = "$env:USERPROFILE\Documents\Wentox Backup",
-  [string]$ConfigPath = "$env:APPDATA\Wentox\app-config.json"
+  # MACHINE-WIDE on purpose. This runs elevated, so a per-user %APPDATA% path would land in the
+  # elevating admin's profile and be invisible to whoever actually runs the app — which is exactly
+  # what made the app fall back to empty defaults and fail with "Login failed for user 'sa'".
+  # src/config/appConfig.js reads this same location.
+  [string]$ConfigPath = "$env:ProgramData\Wentox\app-config.json"
 )
 
 $ErrorActionPreference = 'Stop'
