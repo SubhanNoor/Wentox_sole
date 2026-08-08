@@ -55,19 +55,28 @@ Var DbPasswordValue
 Var BackupPathText
 Var BackupPathValue
 
+; "1" once the setup page has actually been shown and filled in. customInstall uses this to tell a
+; FRESH install (use what the user just typed) from an UPDATE (reuse the saved config silently).
+Var AskedUser
+
 !macro customPageAfterChangeDir
   Page custom SetupPageCreate SetupPageLeave
 !macroend
 
 Function SetupPageCreate
-  ; An UPDATE (electron-updater runs this same installer over the existing one) must not ask for
-  ; the password and backup folder all over again — the database is already set up and the answers
-  ; are already on disk. Presence of the config file is the signal: skip the page entirely and
-  ; leave every existing setting alone. customInstall makes the same check independently, so this
-  ; holds even in a silent install where pages never run at all.
-  ReadEnvStr $R0 "ProgramData"
-  ${If} ${FileExists} "$R0\Wentox\app-config.json"
-    Abort
+  ; An UPDATE (electron-updater re-runs this installer over the existing one) must not ask for the
+  ; password and backup folder again — they're already set and already work.
+  ;
+  ; The signal is whether the app is CURRENTLY INSTALLED, i.e. its uninstall registry key exists.
+  ; Not the config file: uninstalling Wentox deliberately leaves %ProgramData%\Wentox\app-config.json
+  ; behind (so settings survive a reinstall), so keying off that made a genuine
+  ; uninstall-then-reinstall silently skip setup with no way to change the password — which is
+  ; exactly what happened. This key is written by the install section, which runs AFTER this page,
+  ; so on a fresh install it is reliably absent here even though the same run creates it later.
+  ; ${UNINSTALL_APP_KEY} is a command-line define, available this early; HKLM because perMachine.
+  ReadRegStr $R0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_APP_KEY}" "UninstallString"
+  ${If} $R0 != ""
+    Abort ; already installed -> update/repair, keep every existing setting
   ${EndIf}
 
   !insertmacro MUI_HEADER_TEXT "Database Setup" "Choose a database password and a backup location."
@@ -144,6 +153,7 @@ Function SetupPageLeave
     MessageBox MB_ICONEXCLAMATION "Please choose a backup database folder."
     Abort
   ${EndIf}
+  StrCpy $AskedUser "1" ; reached only on a fresh install, once the page validates
 FunctionEnd
 
 !endif ; BUILD_UNINSTALLER
@@ -162,22 +172,33 @@ FunctionEnd
   Push $3
   Push $4
   Push $9
-  Push $R0
+  Push $R1
 
-  ; Checked here as well as in SetupPageCreate, not just there: in a SILENT install (electron-
-  ; updater can run this installer with /S) pages never execute at all, so the page's own guard
-  ; would be bypassed and this would re-run setup with an empty password, overwriting a working
-  ; config. An existing config means the database is already set up — leave everything alone.
-  ReadEnvStr $R0 "ProgramData"
-  ${If} ${FileExists} "$R0\Wentox\app-config.json"
-    DetailPrint "Existing Wentox configuration found - keeping current database settings."
-  ${ElseIf} ${FileExists} "$INSTDIR\resources\setup-sqlserver.ps1"
-    DetailPrint "Setting up the database - this can take several minutes, please wait..."
-    ; Password goes via a file in $PLUGINSDIR (auto-wiped when the installer exits) rather than the
-    ; command line, so it never lands in the process list and NSIS doesn't have to escape quotes.
-    FileOpen $4 "$PLUGINSDIR\sapwd.txt" w
-    FileWrite $4 "$DbPasswordValue"
-    FileClose $4
+  ${If} ${FileExists} "$INSTDIR\resources\setup-sqlserver.ps1"
+    ; The script runs on EVERY install, update included — it is idempotent, and this is what makes
+    ; an update also verify/repair the database rather than assume it's fine. Skipping it entirely
+    ; on update meant a machine whose SQL Server was missing or misconfigured could never be fixed
+    ; by reinstalling, which is a state this project has actually been in.
+    ;
+    ; The difference is only WHERE the answers come from. $AskedUser is set by the setup page,
+    ; which runs only on a fresh install:
+    ;   fresh  -> pass the password/backup folder the user just entered
+    ;   update -> pass neither; the script reads both back out of the existing config
+    ; A silent install (pages never run) therefore takes the update path, which is correct: it has
+    ; no answers to use and must not overwrite a working config with empty ones.
+    StrCpy $R1 "" ; extra args
+    ${If} $AskedUser == "1"
+      DetailPrint "Setting up the database - this can take several minutes, please wait..."
+      ; Password goes via a file in $PLUGINSDIR (auto-wiped when the installer exits) rather than
+      ; the command line, so it never lands in the process list and NSIS doesn't have to escape
+      ; quotes into a command string.
+      FileOpen $4 "$PLUGINSDIR\sapwd.txt" w
+      FileWrite $4 "$DbPasswordValue"
+      FileClose $4
+      StrCpy $R1 '-PasswordFile "$PLUGINSDIR\sapwd.txt" -BackupFolder "$BackupPathValue"'
+    ${Else}
+      DetailPrint "Verifying the database using your existing settings..."
+    ${EndIf}
 
     ; NSIS is a 32-bit process, so a bare "powershell.exe" is WOW64-redirected to the 32-bit
     ; PowerShell in SysWOW64 — which sees the WOW6432Node registry view, where SQL Server is not
@@ -194,7 +215,7 @@ FunctionEnd
     ; NSIS's own $APPDATA is unreliable here — electron-builder sets the all-users shell context for
     ; a perMachine install, so $APPDATA silently means C:\ProgramData in some places and the user's
     ; roaming folder in others. Letting the script resolve it from $env:ProgramData is unambiguous.
-    ExecWait '"$3" -ExecutionPolicy Bypass -NoProfile -File "$INSTDIR\resources\setup-sqlserver.ps1" -PasswordFile "$PLUGINSDIR\sapwd.txt" -InstallerPath "$INSTDIR\resources\sqlserver\SQLEXPR_x64_ENU.exe" -BackupFolder "$BackupPathValue" -LogPath "$INSTDIR\sqlserver-setup.log"' $9
+    ExecWait '"$3" -ExecutionPolicy Bypass -NoProfile -File "$INSTDIR\resources\setup-sqlserver.ps1" $R1 -InstallerPath "$INSTDIR\resources\sqlserver\SQLEXPR_x64_ENU.exe" -LogPath "$INSTDIR\sqlserver-setup.log"' $9
     Delete "$PLUGINSDIR\sapwd.txt"
 
     ${If} $9 != 0
@@ -204,7 +225,7 @@ FunctionEnd
     ${EndIf}
   ${EndIf}
 
-  Pop $R0
+  Pop $R1
   Pop $9
   Pop $4
   Pop $3

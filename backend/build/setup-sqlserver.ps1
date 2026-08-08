@@ -16,7 +16,12 @@
 param(
   # File holding the sa password, rather than an argument, so it never appears in the process
   # command line and NSIS doesn't have to escape quotes into a command string.
-  [Parameter(Mandatory = $true)][string]$PasswordFile,
+  #
+  # OPTIONAL on purpose: on an UPDATE the installer asks the user nothing, so there's no password
+  # to hand over — the existing config already holds one that works. Omit this and the password
+  # (and backup folder) are read back out of $ConfigPath instead, which is what lets an update
+  # silently verify and repair the database rather than skip it.
+  [string]$PasswordFile,
   # Bundled SQLEXPR_x64_ENU.exe. Optional: if absent, an existing SQL Server is still configured.
   [string]$InstallerPath,
   [string]$DatabaseName = 'Wentox_db',
@@ -26,7 +31,8 @@ param(
   # exact password it is about to verify, and ConvertTo-Json escapes backslashes/quotes correctly,
   # whereas hand-rolled escaping in NSIS silently produced a config whose password did not match
   # the one actually set on sa — the script reported success and the app still got ELOGIN.
-  [string]$BackupFolder = "$env:USERPROFILE\Documents\Wentox Backup",
+  # Empty means "keep whatever the existing config already has" (the update path).
+  [string]$BackupFolder = '',
   # MACHINE-WIDE on purpose. This runs elevated, so a per-user %APPDATA% path would land in the
   # elevating admin's profile and be invisible to whoever actually runs the app — which is exactly
   # what made the app fall back to empty defaults and fail with "Login failed for user 'sa'".
@@ -78,11 +84,33 @@ try {
   $bits = [IntPtr]::Size * 8
   Write-Log "=== Wentox SQL Server setup started (PowerShell $($PSVersionTable.PSVersion), $bits-bit) ==="
 
-  if (-not (Test-Path -LiteralPath $PasswordFile)) { throw "Password file not found: $PasswordFile" }
-  # NSIS's FileWrite emits ANSI (FileWriteUTF16LE exists separately for UTF-16), so read it back
-  # the same way rather than letting .NET guess an encoding.
-  $saPassword = [IO.File]::ReadAllText($PasswordFile, [Text.Encoding]::Default).TrimEnd("`r", "`n")
-  if ([string]::IsNullOrEmpty($saPassword)) { throw 'Password file was empty.' }
+  # Existing settings, if this machine has been set up before (i.e. this is an update/repair).
+  $existing = $null
+  if (Test-Path -LiteralPath $ConfigPath) {
+    try { $existing = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json }
+    catch { Write-Log "WARNING: existing config at $ConfigPath is unreadable, treating as absent: $($_.Exception.Message)" }
+  }
+
+  if ($PasswordFile -and (Test-Path -LiteralPath $PasswordFile)) {
+    # Fresh install: the installer collected a password and wrote it here. NSIS's FileWrite emits
+    # ANSI (FileWriteUTF16LE exists separately for UTF-16), so read it back the same way rather
+    # than letting .NET guess an encoding.
+    $saPassword = [IO.File]::ReadAllText($PasswordFile, [Text.Encoding]::Default).TrimEnd("`r", "`n")
+    Write-Log 'using the password supplied by the installer'
+  } elseif ($existing -and $existing.dbPassword) {
+    # Update/repair: nothing was asked, so reuse the password already known to work.
+    $saPassword = [string]$existing.dbPassword
+    Write-Log 'reusing the password from the existing configuration'
+  } else {
+    throw 'No password available: none supplied by the installer and no usable existing configuration.'
+  }
+  if ([string]::IsNullOrEmpty($saPassword)) { throw 'Password was empty.' }
+
+  if ([string]::IsNullOrEmpty($BackupFolder)) {
+    $BackupFolder = if ($existing -and $existing.backupDbFolder) { [string]$existing.backupDbFolder }
+                    else { "$env:USERPROFILE\Documents\Wentox Backup" }
+  }
+  if ($existing -and $existing.dbName) { $DatabaseName = [string]$existing.dbName }
   # The password is embedded in setup.exe's command line below, which has no way to escape a
   # double quote — reject it clearly here rather than let setup fail with an opaque code.
   if ($saPassword.Contains('"')) { throw 'Password cannot contain a double-quote character.' }
