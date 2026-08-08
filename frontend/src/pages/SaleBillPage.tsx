@@ -458,42 +458,9 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setPasswordActionType(null);
   };
 
-  const handleSaveDraft = async () => {
-    const payload: Partial<SaleBillCreateInput> = {
-      customer_id: customerId ? Number(customerId) : undefined,
-      sub_customer_id: isCustomDelivery && subCustomerId ? Number(subCustomerId) : null,
-      store_id: storeId ? Number(storeId) : undefined,
-      bill_date: date || undefined,
-      delivery_type: isCustomDelivery ? 'CUSTOM' : 'SAME',
-      delivery_address: isCustomDelivery ? customAddress : undefined,
-      bill_no: billNo,
-      gp_no: gpNo,
-      bilty_no: biltyNo,
-      adda_id: addaId ? Number(addaId) : undefined,
-      remarks: remarks || undefined,
-      invoice_discount: invoiceDiscount,
-      due_date: dueDate || undefined,
-      items: items.filter(it => it.variantId).map(it => ({
-        variant_id: it.variantId!,
-        cartons: it.cartons,
-        rate: it.rate,
-        discount_percent: it.discountPercent
-      }))
-    };
-
-    if (selectedDraftId != null) {
-      await api.draftSaleBills.remove(selectedDraftId);
-    }
-    const res = await api.draftSaleBills.create(payload);
-    if (!res.ok) {
-      setErrorMsg('Failed to save draft: ' + res.error.message);
-      return;
-    }
-    setSelectedDraftId(res.data.bill_id);
-    setSuccessMsg('Bill saved to drafts.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-    refreshDrafts();
-  };
+  // handleSaveDraft removed along with the "Save Draft" button. Loading, confirming and deleting
+  // existing drafts all still work — only creating a new one from this form is gone. The backend
+  // draftSaleBills.create channel is untouched, so restoring the button is just re-adding this.
 
   const handleConfirmDraft = async () => {
     if (selectedDraftId == null) {
@@ -1015,9 +982,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                     Save &amp; Post
                   </button>
                 )}
-                <button onClick={handleSaveDraft} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg flex items-center gap-1.5">
-                  Save Draft
-                </button>
                 {mode === 'edit' ? (
                   <button onClick={() => setMode('view')} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
                     Cancel Edit
