@@ -141,23 +141,17 @@ FunctionEnd
 ; Macros below emit no code unless inserted, so they're safe to define in both passes.
 ; customInstall is only inserted by installSection.nsh, which is itself installer-pass-only.
 ;
-; Escapes a value for safe embedding in a JSON string: backslash first (so the escaping backslash
-; itself doesn't get re-escaped), then double-quote.
-!macro JsonEscape Input Output
-  ${WordReplace} "${Input}" "\" "\\" "+" ${Output}
-  ${WordReplace} "${Output}" '"' '\"' "+" ${Output}
-!macroend
-
+; NOTE: app-config.json is deliberately NOT written here any more. It used to be, using a
+; hand-rolled JSON escape built on ${WordReplace} — which produced a config whose password did not
+; match the one actually set on sa, so setup verified successfully and the app still failed with
+; ELOGIN. setup-sqlserver.ps1 writes it instead: it holds the exact password it verifies, and
+; ConvertTo-Json escapes correctly by construction.
 !macro customInstall
   ; This runs inside electron-builder's own install Section (installSection.nsh), so the scratch
   ; registers we use here are not ours to trash — save and restore them.
   Push $3
   Push $4
-  Push $5
   Push $9
-
-  CreateDirectory "$APPDATA\Wentox"
-  CreateDirectory "$BackupPathValue"
 
   ${If} ${FileExists} "$INSTDIR\resources\setup-sqlserver.ps1"
     DetailPrint "Setting up the database - this can take several minutes, please wait..."
@@ -176,7 +170,10 @@ FunctionEnd
       StrCpy $3 "powershell.exe" ; genuinely 32-bit Windows, or Sysnative unavailable
     ${EndIf}
 
-    ExecWait '"$3" -ExecutionPolicy Bypass -NoProfile -File "$INSTDIR\resources\setup-sqlserver.ps1" -PasswordFile "$PLUGINSDIR\sapwd.txt" -InstallerPath "$INSTDIR\resources\sqlserver\SQLEXPR_x64_ENU.exe" -LogPath "$INSTDIR\sqlserver-setup.log"' $9
+    ; The script also writes %APPDATA%\Wentox\app-config.json (see the note above customInstall) —
+    ; it does so up-front, before any install work, so the app has a valid config even if SQL
+    ; Server setup itself fails.
+    ExecWait '"$3" -ExecutionPolicy Bypass -NoProfile -File "$INSTDIR\resources\setup-sqlserver.ps1" -PasswordFile "$PLUGINSDIR\sapwd.txt" -InstallerPath "$INSTDIR\resources\sqlserver\SQLEXPR_x64_ENU.exe" -BackupFolder "$BackupPathValue" -ConfigPath "$APPDATA\Wentox\app-config.json" -LogPath "$INSTDIR\sqlserver-setup.log"' $9
     Delete "$PLUGINSDIR\sapwd.txt"
 
     ${If} $9 != 0
@@ -186,19 +183,7 @@ FunctionEnd
     ${EndIf}
   ${EndIf}
 
-  ; Fixed values on purpose — setup-sqlserver.ps1 guarantees exactly this combination works, so
-  ; there is nothing here the user needed to be asked for beyond the password itself.
-  !insertmacro JsonEscape "$DbPasswordValue" $5
-  ; JSON needs forward slashes (or doubled backslashes) — Node's fs/path accept forward slashes on
-  ; Windows fine, so converting is simpler than escaping for the folder path.
-  ${WordReplace} "$BackupPathValue" "\" "/" "+" $4
-
-  FileOpen $3 "$APPDATA\Wentox\app-config.json" w
-  FileWrite $3 '{"dbServer": "localhost", "dbPort": "1433", "dbName": "Wentox_db", "dbUser": "sa", "dbPassword": "$5", "backupDbFolder": "$4"}'
-  FileClose $3
-
   Pop $9
-  Pop $5
   Pop $4
   Pop $3
 !macroend

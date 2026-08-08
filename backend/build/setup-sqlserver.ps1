@@ -20,7 +20,14 @@ param(
   # Bundled SQLEXPR_x64_ENU.exe. Optional: if absent, an existing SQL Server is still configured.
   [string]$InstallerPath,
   [string]$DatabaseName = 'Wentox_db',
-  [string]$LogPath = "$env:ProgramData\Wentox\sqlserver-setup.log"
+  [string]$LogPath = "$env:ProgramData\Wentox\sqlserver-setup.log",
+  # Where the live backup database's files go, and where the app reads its settings from. This
+  # script writes app-config.json itself rather than letting NSIS do it: it already holds the
+  # exact password it is about to verify, and ConvertTo-Json escapes backslashes/quotes correctly,
+  # whereas hand-rolled escaping in NSIS silently produced a config whose password did not match
+  # the one actually set on sa — the script reported success and the app still got ELOGIN.
+  [string]$BackupFolder = "$env:USERPROFILE\Documents\Wentox Backup",
+  [string]$ConfigPath = "$env:APPDATA\Wentox\app-config.json"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,6 +82,24 @@ try {
   # The password is embedded in setup.exe's command line below, which has no way to escape a
   # double quote — reject it clearly here rather than let setup fail with an opaque code.
   if ($saPassword.Contains('"')) { throw 'Password cannot contain a double-quote character.' }
+
+  # Written up-front, before any install work, so that even if SQL Server setup fails the app still
+  # has a valid config — the user can fix SQL Server by hand afterwards and Wentox will just work,
+  # rather than also needing the config repaired. ConvertTo-Json handles all escaping, so a
+  # backslash-laden Windows path and any password character survive intact.
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ConfigPath) | Out-Null
+  New-Item -ItemType Directory -Force -Path $BackupFolder | Out-Null
+  $config = [ordered]@{
+    dbServer       = 'localhost'
+    dbPort         = '1433'
+    dbName         = $DatabaseName
+    dbUser         = 'sa'
+    dbPassword     = $saPassword
+    backupDbFolder = $BackupFolder
+  }
+  # UTF-8 without a BOM — Node's JSON.parse chokes on a leading BOM.
+  [IO.File]::WriteAllText($ConfigPath, ($config | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false)))
+  Write-Log "wrote $ConfigPath (password length $($saPassword.Length), backup folder '$BackupFolder')"
 
   # ---------------------------------------------------------------------------------------------
   # 1/2. Install SQL Server Express if there is no instance at all
