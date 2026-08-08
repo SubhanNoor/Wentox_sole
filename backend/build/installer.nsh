@@ -60,6 +60,16 @@ Var BackupPathValue
 !macroend
 
 Function SetupPageCreate
+  ; An UPDATE (electron-updater runs this same installer over the existing one) must not ask for
+  ; the password and backup folder all over again — the database is already set up and the answers
+  ; are already on disk. Presence of the config file is the signal: skip the page entirely and
+  ; leave every existing setting alone. customInstall makes the same check independently, so this
+  ; holds even in a silent install where pages never run at all.
+  ReadEnvStr $R0 "ProgramData"
+  ${If} ${FileExists} "$R0\Wentox\app-config.json"
+    Abort
+  ${EndIf}
+
   !insertmacro MUI_HEADER_TEXT "Database Setup" "Choose a database password and a backup location."
 
   nsDialogs::Create 1018
@@ -152,8 +162,16 @@ FunctionEnd
   Push $3
   Push $4
   Push $9
+  Push $R0
 
-  ${If} ${FileExists} "$INSTDIR\resources\setup-sqlserver.ps1"
+  ; Checked here as well as in SetupPageCreate, not just there: in a SILENT install (electron-
+  ; updater can run this installer with /S) pages never execute at all, so the page's own guard
+  ; would be bypassed and this would re-run setup with an empty password, overwriting a working
+  ; config. An existing config means the database is already set up — leave everything alone.
+  ReadEnvStr $R0 "ProgramData"
+  ${If} ${FileExists} "$R0\Wentox\app-config.json"
+    DetailPrint "Existing Wentox configuration found - keeping current database settings."
+  ${ElseIf} ${FileExists} "$INSTDIR\resources\setup-sqlserver.ps1"
     DetailPrint "Setting up the database - this can take several minutes, please wait..."
     ; Password goes via a file in $PLUGINSDIR (auto-wiped when the installer exits) rather than the
     ; command line, so it never lands in the process list and NSIS doesn't have to escape quotes.
@@ -186,6 +204,7 @@ FunctionEnd
     ${EndIf}
   ${EndIf}
 
+  Pop $R0
   Pop $9
   Pop $4
   Pop $3

@@ -71,9 +71,14 @@ app.whenReady().then(async () => {
     alertsService.refreshAlerts().catch((err) => console.error('Alerts refresh failed:', err));
   }, ALERTS_REFRESH_INTERVAL_MS);
 
+  // Creates the backup database on first ever launch so the folder the user picked at install
+  // isn't just empty (it only ever appeared on the first dirty timer tick before, i.e. often
+  // never). No-ops once it exists. Not awaited — the window shouldn't wait on a full
+  // BACKUP/RESTORE, and it swallows its own errors.
+  backupService.ensureInitialBackup();
+
   // Best-effort: syncIfDirty() itself swallows sync errors so a backup-DB problem never affects
-  // the main app. Not run on startup like alerts — no writes have happened yet, so nothing would
-  // be dirty.
+  // the main app.
   setInterval(() => {
     backupService.syncIfDirty();
   }, BACKUP_SYNC_INTERVAL_MS);

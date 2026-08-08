@@ -131,8 +131,36 @@ async function syncIfDirty() {
   }
 }
 
+// Called once at startup. Without this the chosen backup folder just sits EMPTY after install,
+// which reads as "the backup feature is broken": the backup database was only ever created
+// lazily by the first sync, and syncIfDirty() no-ops until something is actually written, so on a
+// fresh install nothing appeared there for at least the first 10-minute tick — often never, if
+// the app was closed before then.
+//
+// Only does the full BACKUP/RESTORE when the backup database doesn't exist yet, so this costs
+// nothing on every subsequent launch; from then on the timer keeps it current.
+async function ensureInitialBackup() {
+  const folder = getBackupDbFolder();
+  if (!folder) return; // not configured (dev machine, or a hand-edited config) — nothing to do
+
+  try {
+    const pool = await getPool();
+    const exists = await pool.request()
+      .input('name', sql.NVarChar, config.backupDbName)
+      .query('SELECT database_id FROM sys.databases WHERE name = @name');
+    if (exists.recordset.length > 0) return;
+
+    console.log('Backup database not present yet — creating and taking a first backup...');
+    await sync();
+    console.log(`Backup database created at ${folder}`);
+  } catch (err) {
+    // Best-effort, exactly like the periodic sync: a backup problem must never block startup.
+    console.error('Initial backup setup failed:', err);
+  }
+}
+
 function status() {
   return { lastSyncAt, lastSyncError, configured: Boolean(getBackupDbFolder()) };
 }
 
-module.exports = { sync, syncIfDirty, status };
+module.exports = { sync, syncIfDirty, ensureInitialBackup, status };
