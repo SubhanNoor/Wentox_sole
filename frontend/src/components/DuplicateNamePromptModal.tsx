@@ -1,4 +1,5 @@
 import { AlertTriangle, Check, Plus, RotateCcw, X } from 'lucide-react';
+import DataListTable from '@/components/DataListTable';
 
 // Mirrors the backend's checkName() result shape (customers/subCustomers/vendors services):
 //   { status: 'none' | 'active' | 'inactive', matches: [...] }
@@ -80,19 +81,30 @@ export default function DuplicateNamePromptModal({
                 }`}
           </p>
 
-          <div className="mb-5 flex flex-col gap-2 max-h-48 overflow-y-auto">
-            {matches.map(m => (
-              <div
-                key={m.id}
-                className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-200"
-              >
-                <div>
-                  <div className="text-xs font-bold text-slate-800">{m.name}</div>
-                  <div className="text-[11px] text-slate-500 font-medium mt-0.5">
-                    {[m.regionName, m.cityName, m.phone].filter(Boolean).join(' · ') || `Code: ${m.id}`}
-                  </div>
-                </div>
-                {isInactive && (
+          <div className="mb-5 max-h-48 overflow-y-auto border rounded-lg" style={{ borderColor: 'var(--border-color)' }}>
+            <DataListTable<DuplicateNameMatch>
+              rows={matches}
+              rowKey={m => m.id}
+              emptyMessage="No matching records."
+              columns={[
+                {
+                  key: 'name',
+                  header: 'Name',
+                  render: m => <span className="text-xs font-bold text-slate-800">{m.name}</span>,
+                },
+                {
+                  key: 'details',
+                  header: 'Details',
+                  render: m => (
+                    <span className="text-[11px] text-slate-500 font-medium">
+                      {[m.regionName, m.cityName, m.phone].filter(Boolean).join(' · ') || `Code: ${m.id}`}
+                    </span>
+                  ),
+                },
+              ]}
+              actionsWidth="110px"
+              actionsHeader={isInactive ? 'Actions' : ''}
+              actions={isInactive ? (m => (
                   <button
                     type="button"
                     onClick={() => onActivate(m.id)}
@@ -100,9 +112,8 @@ export default function DuplicateNamePromptModal({
                   >
                     <RotateCcw size={12} /> Activate
                   </button>
-                )}
-              </div>
-            ))}
+              )) : undefined}
+            />
           </div>
 
           <div className="flex items-center justify-end gap-2.5">

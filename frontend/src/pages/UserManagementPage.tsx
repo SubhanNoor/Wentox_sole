@@ -4,6 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
 import type { UserAccountRow } from '@/lib/api';
 import { UserPlus, Lock, User, ShieldCheck, UsersRound, UserX, UserCheck, KeyRound, X, Save } from 'lucide-react';
+import DataListTable from '@/components/DataListTable';
 
 export default function UserManagementPage() {
   const { state } = useApp();
@@ -194,68 +195,94 @@ export default function UserManagementPage() {
           </form>
         </div>
 
-        <div className="card-white p-6 md:p-8 bg-white border max-w-xl mx-auto">
+        <div className="card-white p-6 md:p-8 bg-white border max-w-3xl mx-auto">
           <div className="border-b pb-4 mb-5">
             <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
               <UsersRound size={20} className="text-[#B08D57]" /> Existing Accounts
             </h3>
           </div>
 
-          <div className="flex flex-col gap-2">
-            {users.map(u => {
+          <DataListTable<UserAccountRow>
+            rows={users}
+            rowKey={u => u.user_id}
+            emptyMessage="No user accounts found."
+            columns={[
+              {
+                key: 'username',
+                header: 'Username',
+                render: u => (
+                  <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                    {u.role === 'Admin' && <ShieldCheck size={13} className="text-[#B08D57]" />}
+                    {u.username}
+                    {u.username === state.currentUsername && (
+                      <span className="text-[10px] font-semibold text-slate-400 uppercase">(You)</span>
+                    )}
+                  </span>
+                ),
+              },
+              {
+                key: 'full_name',
+                header: 'Full Name',
+                render: u => (
+                  <span className="text-slate-500 font-medium text-xs">{u.full_name || '—'}</span>
+                ),
+              },
+              {
+                key: 'role',
+                header: 'Role',
+                width: '110px',
+                align: 'center',
+                render: u => (
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${
+                    u.role === 'Admin'
+                      ? 'bg-amber-50 text-amber-700 border-amber-200'
+                      : 'bg-slate-100 text-slate-600 border-slate-200'
+                  }`}>
+                    {u.role}
+                  </span>
+                ),
+              },
+              {
+                key: 'status',
+                header: 'Status',
+                width: '110px',
+                align: 'center',
+                render: u => (
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${
+                    u.is_active
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-rose-50 text-rose-700 border-rose-200'
+                  }`}>
+                    {u.is_active ? 'Active' : 'Inactive'}
+                  </span>
+                ),
+              },
+            ]}
+            actions={u => {
               const isSelf = u.username === state.currentUsername;
               return (
-                <div
-                  key={u.user_id}
-                  className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200/80"
-                >
-                  <div>
-                    <div className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                      {u.role === 'Admin' && <ShieldCheck size={13} className="text-[#B08D57]" />}
-                      {u.username}
-                      {isSelf && <span className="text-[10px] font-semibold text-slate-400 uppercase">(You)</span>}
-                    </div>
-                    {u.full_name && (
-                      <div className="text-[11px] text-slate-500 font-medium">{u.full_name}</div>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${
-                      u.role === 'Admin'
-                        ? 'bg-amber-50 text-amber-700 border-amber-200'
-                        : 'bg-slate-100 text-slate-600 border-slate-200'
-                    }`}>
-                      {u.role}
-                    </span>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${
-                      u.is_active
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : 'bg-rose-50 text-rose-700 border-rose-200'
-                    }`}>
-                      {u.is_active ? 'Active' : 'Inactive'}
-                    </span>
-                    <button
-                      onClick={() => openResetPassword(u)}
-                      title="Reset Password"
-                      className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                    >
-                      <KeyRound size={15} />
-                    </button>
-                    <button
-                      onClick={() => handleToggleActive(u)}
-                      disabled={isSelf}
-                      title={isSelf ? 'You cannot deactivate your own account' : u.is_active ? 'Deactivate' : 'Reactivate'}
-                      className={`p-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
-                        u.is_active ? 'hover:bg-rose-50 text-slate-400 hover:text-rose-600' : 'hover:bg-emerald-50 text-slate-400 hover:text-emerald-600'
-                      }`}
-                    >
-                      {u.is_active ? <UserX size={15} /> : <UserCheck size={15} />}
-                    </button>
-                  </div>
-                </div>
+                <>
+                  <button
+                    onClick={() => openResetPassword(u)}
+                    title="Reset Password"
+                    className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                  >
+                    <KeyRound size={15} />
+                  </button>
+                  <button
+                    onClick={() => handleToggleActive(u)}
+                    disabled={isSelf}
+                    title={isSelf ? 'You cannot deactivate your own account' : u.is_active ? 'Deactivate' : 'Reactivate'}
+                    className={`p-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
+                      u.is_active ? 'hover:bg-rose-50 text-slate-400 hover:text-rose-600' : 'hover:bg-emerald-50 text-slate-400 hover:text-emerald-600'
+                    }`}
+                  >
+                    {u.is_active ? <UserX size={15} /> : <UserCheck size={15} />}
+                  </button>
+                </>
               );
-            })}
-          </div>
+            }}
+          />
         </div>
 
         {resetTarget && (

@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, MapPin, Edit2, Trash2, ArrowLeft, Settings, X, ArrowRight, UserCheck, Eye } from 'lucide-react';
+import { Plus, Search, MapPin, Edit2, Trash2, ArrowLeft, Settings, X, UserCheck, Eye } from 'lucide-react';
+import DataListTable from '@/components/DataListTable';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
@@ -373,71 +374,74 @@ export default function CustomerSetupPage() {
               </div>
             </div>
 
-            {/* Customer Cards Grid */}
-            {loading ? (
-              <div className="card-white p-12 text-center text-slate-400">Loading…</div>
-            ) : filteredCustomers.length === 0 ? (
-              <div className="card-white p-12 text-center text-slate-400">
-                <UserCheck size={36} className="mx-auto mb-3 text-slate-300" />
-                <p className="font-semibold text-slate-600">No registered customers found matching your search.</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredCustomers.map(c => (
-                  <div
-                    key={c.customer_id}
-                    onClick={() => setSelectedCustomerId(c.customer_id)}
-                    className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
-                  >
-                    <div>
-                      {/* Header: Title + City Badge */}
-                      <div className="flex items-start justify-between gap-2 mb-1">
-                        <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
-                          {c.name}
-                        </h4>
-                        <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider flex-shrink-0 flex items-center gap-1">
-                          <MapPin size={10} className="text-slate-400" />
-                          {c.city_name || cityName(c.city_id)}
-                        </span>
-                      </div>
-
-                      {/* Subtitle: Code in mono */}
-                      <div className="font-mono text-xs text-slate-400 mb-3">
-                        Customer ID: <span className="font-semibold text-slate-600">#{c.customer_id}</span>
-                      </div>
-
-                      <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5">
-                        Region: <span className="font-semibold text-slate-700">{c.region_name || regionName(c.region_id)}</span>
-                      </div>
-                    </div>
-
-                    {/* Footer Bar */}
-                    <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
-                      <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-                        <button
-                          onClick={() => handleOpenEdit(c)}
-                          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                          title="Edit Customer"
-                        >
-                          <Edit2 size={15} />
-                        </button>
-                        <button
-                          onClick={() => setDeletingCustomer(c)}
-                          className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                          title="Delete Customer"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-
-                      <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
-                        Product Ledger <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
+            {/* Customer Row List (shared DataListTable template) */}
+            <div className="card-white overflow-hidden">
+              <DataListTable<CustomerRow>
+                rows={filteredCustomers}
+                rowKey={c => c.customer_id}
+                onRowClick={c => setSelectedCustomerId(c.customer_id)}
+                loading={loading}
+                emptyIcon={<UserCheck size={36} />}
+                emptyMessage="No registered customers found matching your search."
+                columns={[
+                  {
+                    key: 'code',
+                    header: 'Customer ID',
+                    width: '140px',
+                    render: c => (
+                      <span className="font-mono font-semibold text-slate-600 text-xs">#{c.customer_id}</span>
+                    ),
+                  },
+                  {
+                    key: 'name',
+                    header: 'Customer Name',
+                    render: c => <span className="font-semibold text-slate-900">{c.name}</span>,
+                  },
+                  {
+                    key: 'region',
+                    header: 'Region',
+                    render: c => (
+                      <span className="text-slate-600 font-medium">
+                        {c.region_name || regionName(c.region_id)}
                       </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                    ),
+                  },
+                  {
+                    key: 'city',
+                    header: 'City',
+                    render: c => (
+                      <span className="text-slate-600 font-medium flex items-center gap-1">
+                        <MapPin size={12} className="text-slate-400" />
+                        {c.city_name || cityName(c.city_id)}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'address',
+                    header: 'Address',
+                    render: c => <span className="text-slate-500 text-xs">{c.address || '—'}</span>,
+                  },
+                ]}
+                actions={c => (
+                  <>
+                    <button
+                      onClick={() => handleOpenEdit(c)}
+                      className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                      title="Edit Customer"
+                    >
+                      <Edit2 size={15} />
+                    </button>
+                    <button
+                      onClick={() => setDeletingCustomer(c)}
+                      className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                      title="Delete Customer"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </>
+                )}
+              />
+            </div>
           </div>
         ) : (
           /* Detailed Ledger View */

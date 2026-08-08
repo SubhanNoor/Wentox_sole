@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, X, Globe, ArrowRight } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Trash2, X, Globe } from 'lucide-react';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
+import DataListTable from '@/components/DataListTable';
 import { regions as regionsApi, type RegionRow } from '@/lib/api';
 
 export default function RegionSetupPage() {
@@ -164,64 +165,60 @@ export default function RegionSetupPage() {
           </div>
         </div>
 
-        {/* Regions Cards Grid (§1 Standard) */}
-        {filteredRegions.length === 0 ? (
-          <div className="card-white p-12 text-center text-slate-400">
-            <Globe size={36} className="mx-auto mb-3 text-slate-300" />
-            <p className="font-semibold text-slate-600">No registered regions found matching your search.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredRegions.map(region => (
-                <div
-                  key={region.region_id}
+        {/* Regions Row List (shared DataListTable template) */}
+        <div className="card-white overflow-hidden">
+          <DataListTable<RegionRow>
+            rows={filteredRegions}
+            rowKey={region => region.region_id}
+            onRowClick={region => handleOpenEditModal(region)}
+            emptyIcon={<Globe size={36} />}
+            emptyMessage="No registered regions found matching your search."
+            columns={[
+              {
+                key: 'code',
+                header: 'Region Code',
+                width: '150px',
+                render: region => (
+                  <span className="font-mono font-semibold text-slate-600 text-xs">#{region.region_id}</span>
+                ),
+              },
+              {
+                key: 'name',
+                header: 'Region Name',
+                render: region => <span className="font-semibold text-slate-900">{region.name}</span>,
+              },
+              {
+                key: 'status',
+                header: 'Status',
+                width: '110px',
+                align: 'center',
+                render: () => (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border bg-emerald-50 text-emerald-700 border-emerald-200">
+                    Active
+                  </span>
+                ),
+              },
+            ]}
+            actions={region => (
+              <>
+                <button
                   onClick={() => handleOpenEditModal(region)}
-                  className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                  title="Edit Region"
                 >
-                  <div>
-                    {/* Header: Title */}
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
-                        {region.name}
-                      </h4>
-                      <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 uppercase tracking-wider flex-shrink-0">
-                        ACTIVE
-                      </span>
-                    </div>
-
-                    {/* Subtitle: Code in mono */}
-                    <div className="font-mono text-xs text-slate-400 mb-3">
-                      Region Code: <span className="font-semibold text-slate-600">#{region.region_id}</span>
-                    </div>
-                  </div>
-
-                  {/* Footer Bar */}
-                  <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
-                    <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-                      <button
-                        onClick={() => handleOpenEditModal(region)}
-                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                        title="Edit Region"
-                      >
-                        <Edit2 size={15} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteRegion(region.region_id)}
-                        className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                        title="Delete Region"
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </div>
-
-                    <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
-                      Edit Region <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
-                    </span>
-                  </div>
-                </div>
-            ))}
-          </div>
-        )}
+                  <Edit2 size={15} />
+                </button>
+                <button
+                  onClick={() => handleDeleteRegion(region.region_id)}
+                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                  title="Delete Region"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </>
+            )}
+          />
+        </div>
 
         {/* Modal Dialogue Box Pop-up */}
         {isModalOpen && (

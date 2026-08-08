@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, RotateCcw, X, Landmark, ArrowRight } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Trash2, RotateCcw, X, Landmark } from 'lucide-react';
+import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
 import {
   businessAccounts as businessAccountsApi,
@@ -274,91 +275,88 @@ export default function BusinessAcSetupPage() {
           </div>
         </div>
 
-        {/* Business Accounts Cards Grid (§1 Standard) */}
-        {filteredAndSortedAccounts.length === 0 ? (
-          <div className="card-white p-12 text-center text-slate-400">
-            <Landmark size={36} className="mx-auto mb-3 text-slate-300" />
-            <p className="font-semibold text-slate-600">No registered business accounts found matching your search.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredAndSortedAccounts.map(biz => {
-              const chartName = biz.ac_name || 'UNKNOWN A/C';
-
-              return (
-                <div
-                  key={biz.ba_id}
+        {/* Business Accounts Row List (shared DataListTable template) */}
+        <div className="card-white overflow-hidden">
+          <DataListTable<BusinessAccountRow>
+            rows={filteredAndSortedAccounts}
+            rowKey={biz => biz.ba_id}
+            onRowClick={biz => handleOpenEditModal(biz)}
+            emptyIcon={<Landmark size={36} />}
+            emptyMessage="No registered business accounts found matching your search."
+            columns={[
+              {
+                key: 'code',
+                header: 'A/C Code',
+                width: '150px',
+                render: biz => (
+                  <span className="font-mono font-semibold text-slate-600 text-xs">#{biz.code}</span>
+                ),
+              },
+              {
+                key: 'name',
+                header: 'Account Name',
+                render: biz => <span className="font-semibold text-slate-900">{biz.name}</span>,
+              },
+              {
+                key: 'control',
+                header: 'Control A/C',
+                render: biz => (
+                  <span className="font-semibold text-[#B08D57]">{biz.ac_name || 'UNKNOWN A/C'}</span>
+                ),
+              },
+              {
+                key: 'region',
+                header: 'Region',
+                render: biz => (
+                  <span className="text-slate-600 font-medium">{biz.region_name || 'N/A'}</span>
+                ),
+              },
+              {
+                key: 'status',
+                header: 'Status',
+                width: '110px',
+                align: 'center',
+                render: biz => (
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${
+                    biz.status === 'ACTIVE'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-rose-50 text-rose-700 border-rose-200'
+                  }`}>
+                    {biz.status === 'ACTIVE' ? 'Active' : 'Closed'}
+                  </span>
+                ),
+              },
+            ]}
+            actions={biz => (
+              <>
+                <button
                   onClick={() => handleOpenEditModal(biz)}
-                  className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                  title="Edit Business Account"
                 >
-                  <div>
-                    {/* Header: Title + Status Badge */}
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
-                        {biz.name}
-                      </h4>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border flex-shrink-0 ${
-                        biz.status === 'ACTIVE'
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : 'bg-rose-50 text-rose-700 border-rose-200'
-                      }`}>
-                        {biz.status === 'ACTIVE' ? 'Active' : 'Closed'}
-                      </span>
-                    </div>
-
-                    {/* Subtitle: Code in mono */}
-                    <div className="font-mono text-xs text-slate-400 mb-3">
-                      A/C Code: <span className="font-semibold text-slate-600">#{biz.code}</span>
-                    </div>
-
-                    <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5 flex flex-col gap-1">
-                      <div className="font-semibold text-[#B08D57] truncate" title={chartName}>
-                        Control A/C: {chartName}
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        Region: <span className="font-semibold text-slate-600">{biz.region_name || 'N/A'}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Footer Bar */}
-                  <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
-                    <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-                      <button
-                        onClick={() => handleOpenEditModal(biz)}
-                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                        title="Edit Business Account"
-                      >
-                        <Edit2 size={15} />
-                      </button>
-                      {biz.status === 'CLOSED' ? (
-                        <button
-                          onClick={() => handleReactivateBusinessAc(biz)}
-                          className="p-1.5 rounded-lg hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer"
-                          title="Reactivate Business Account"
-                        >
-                          <RotateCcw size={15} />
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleDeleteBusinessAc(biz)}
-                          className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                          title="Delete Business Account"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      )}
-                    </div>
-
-                    <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
-                      Edit Account <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                  <Edit2 size={15} />
+                </button>
+                {biz.status === 'CLOSED' ? (
+                  <button
+                    onClick={() => handleReactivateBusinessAc(biz)}
+                    className="p-1.5 rounded-lg hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer"
+                    title="Reactivate Business Account"
+                  >
+                    <RotateCcw size={15} />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleDeleteBusinessAc(biz)}
+                    className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                    title="Delete Business Account"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                )}
+              </>
+            )}
+          />
+        </div>
 
         {/* Modal Dialogue Box Pop-up */}
         {isModalOpen && (

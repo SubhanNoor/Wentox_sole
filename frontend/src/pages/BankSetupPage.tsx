@@ -4,6 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
 import type { BankAccountRow } from '@/lib/api';
 import { Plus, ArrowLeft, Save, Edit2, Ban, RotateCcw, Landmark, Search, AlertTriangle } from 'lucide-react';
+import DataListTable from '@/components/DataListTable';
 
 export default function BankSetupPage() {
   const { state } = useApp();
@@ -205,67 +206,71 @@ export default function BankSetupPage() {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-sm">
-                <thead>
-                  <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                    <th className="p-3 pl-4">A/C Code</th>
-                    <th className="p-3">Bank</th>
-                    <th className="p-3">Account No.</th>
-                    <th className="p-3">Branch</th>
-                    <th className="p-3 text-center">Status</th>
-                    <th className="p-3 text-center" style={{ width: 90 }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {loading ? (
-                    <tr>
-                      <td colSpan={6} className="text-center p-8 text-slate-400">Loading...</td>
-                    </tr>
-                  ) : filtered.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="text-center p-8 text-slate-400">
-                        {banks.length === 0
-                          ? 'No bank accounts yet. Add one so payments and receipts can name where the money moved.'
-                          : 'No accounts match this search.'}
-                      </td>
-                    </tr>
-                  ) : filtered.map(b => (
-                    <tr key={b.bank_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                      <td className="p-3 pl-4 font-mono font-semibold text-slate-600">{b.ba_id ?? '—'}</td>
-                      <td className="p-3 font-semibold text-slate-900">{b.name}</td>
-                      <td className="p-3 font-mono text-slate-600">{b.account_no || <span className="text-slate-300">—</span>}</td>
-                      <td className="p-3 text-slate-600">{b.branch || <span className="text-slate-300">—</span>}</td>
-                      <td className="p-3 text-center">
-                        {b.is_active ? (
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">Active</span>
-                        ) : (
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">Inactive</span>
-                        )}
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="flex items-center justify-center gap-2">
-                          {b.is_active ? (
-                            <>
-                              <button onClick={() => select(b)} title="Edit" className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-800">
-                                <Edit2 size={15} />
-                              </button>
-                              <button onClick={() => setDeactivatingBank(b)} title="Deactivate" className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600">
-                                <Ban size={15} />
-                              </button>
-                            </>
-                          ) : (
-                            <button onClick={() => reactivate(b.bank_id)} title="Reactivate" className="p-1.5 rounded hover:bg-emerald-50 text-slate-400 hover:text-emerald-600">
-                              <RotateCcw size={15} />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <DataListTable<BankAccountRow>
+              rows={filtered}
+              rowKey={b => b.bank_id}
+              onRowClick={b => select(b)}
+              loading={loading}
+              loadingMessage="Loading..."
+              emptyMessage={banks.length === 0
+                ? 'No bank accounts yet. Add one so payments and receipts can name where the money moved.'
+                : 'No accounts match this search.'}
+              columns={[
+                {
+                  key: 'code',
+                  header: 'A/C Code',
+                  width: '130px',
+                  render: b => (
+                    <span className="font-mono font-semibold text-slate-600 text-xs">{b.ba_id ?? '—'}</span>
+                  ),
+                },
+                {
+                  key: 'name',
+                  header: 'Bank',
+                  render: b => <span className="font-semibold text-slate-900">{b.name}</span>,
+                },
+                {
+                  key: 'account_no',
+                  header: 'Account No.',
+                  render: b => b.account_no
+                    ? <span className="font-mono text-slate-600 text-xs">{b.account_no}</span>
+                    : <span className="text-slate-300">—</span>,
+                },
+                {
+                  key: 'branch',
+                  header: 'Branch',
+                  render: b => b.branch
+                    ? <span className="text-slate-600">{b.branch}</span>
+                    : <span className="text-slate-300">—</span>,
+                },
+                {
+                  key: 'status',
+                  header: 'Status',
+                  width: '110px',
+                  align: 'center',
+                  render: b => b.is_active
+                    ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">Active</span>
+                    : <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">Inactive</span>,
+                },
+              ]}
+              actionsWidth="90px"
+              actions={b => (
+                b.is_active ? (
+                  <>
+                    <button onClick={() => select(b)} title="Edit" className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-800">
+                      <Edit2 size={15} />
+                    </button>
+                    <button onClick={() => setDeactivatingBank(b)} title="Deactivate" className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600">
+                      <Ban size={15} />
+                    </button>
+                  </>
+                ) : (
+                  <button onClick={() => reactivate(b.bank_id)} title="Reactivate" className="p-1.5 rounded hover:bg-emerald-50 text-slate-400 hover:text-emerald-600">
+                    <RotateCcw size={15} />
+                  </button>
+                )
+              )}
+            />
           </div>
         ) : (
           <div className="card-white p-6 md:p-8 bg-white border overflow-visible" style={{ borderColor: 'var(--border-color)' }}>

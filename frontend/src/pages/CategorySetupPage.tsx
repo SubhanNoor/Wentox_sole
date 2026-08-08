@@ -1,6 +1,7 @@
-import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Trash2, Edit2, Search, Settings, Save, ChevronDown, ChevronRight, X, RotateCcw } from 'lucide-react';
+import { Plus, Trash2, Edit2, Search, Settings, Save, X, RotateCcw } from 'lucide-react';
+import DataListTable from '@/components/DataListTable';
 import * as api from '@/lib/api';
 import type { CategoryRow, ProductRow } from '@/lib/api';
 
@@ -157,101 +158,86 @@ export default function CategorySetupPage() {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="p-3 pl-4" style={{ width: '30px' }}></th>
-                  <th className="p-3">Category ID</th>
-                  <th className="p-3">Category Name</th>
-                  <th className="p-3 text-center">Associated Products</th>
-                  <th className="p-3 text-center" style={{ width: '80px' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr><td colSpan={5} className="text-center p-8 text-slate-400">Loading…</td></tr>
-                ) : filteredCategories.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="text-center p-8 text-slate-400">
-                      No registered categories found.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredCategories.map(cat => {
-                    const associatedProducts = productList.filter(p => p.category_id === cat.category_id);
-                    const isExpanded = expandedCatId === cat.category_id;
-
-                    return (
-                      <Fragment key={cat.category_id}>
-                        <tr
-                          className="border-b hover:bg-slate-50/50 transition-colors cursor-pointer"
-                          style={{ borderColor: 'var(--border-table)' }}
-                          onClick={() => setExpandedCatId(isExpanded ? null : cat.category_id)}
-                        >
-                          <td className="p-3 pl-4 text-slate-400">
-                            {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                          </td>
-                          <td className="p-3 font-semibold text-slate-500 font-mono text-xs">{cat.category_id}</td>
-                          <td className="p-3 font-semibold text-slate-900">{cat.name}</td>
-                          <td className="p-3 text-center font-bold text-slate-700">{associatedProducts.length}</td>
-                          <td className="p-3 text-center">
-                            <div className="flex items-center justify-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                onClick={() => handleOpenEditModal(cat)}
-                                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                                title="Edit Category"
-                              >
-                                <Edit2 size={15} />
-                              </button>
-                              <button
-                                onClick={() => setDeletingCategory(cat)}
-                                className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                                title="Delete Category"
-                              >
-                                <Trash2 size={15} />
-                              </button>
-                            </div>
-                          </td>
+          <DataListTable<CategoryRow>
+            rows={filteredCategories}
+            rowKey={cat => cat.category_id}
+            loading={loading}
+            emptyMessage="No registered categories found."
+            isExpanded={cat => expandedCatId === cat.category_id}
+            onToggleExpand={cat => setExpandedCatId(expandedCatId === cat.category_id ? null : cat.category_id)}
+            renderExpanded={cat => {
+              const associatedProducts = productList.filter(p => p.category_id === cat.category_id);
+              if (associatedProducts.length === 0) {
+                return <p className="text-xs text-slate-400 text-center py-2">No products registered under this category yet.</p>;
+              }
+              return (
+                <div className="bg-white border rounded-lg overflow-hidden" style={{ borderColor: 'var(--border-color)' }}>
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-400 uppercase tracking-wider">
+                        <th className="p-2 pl-3">Code</th>
+                        <th className="p-2">Product Name</th>
+                        <th className="p-2">Vendor</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {associatedProducts.map(p => (
+                        <tr key={p.article_id} className="border-t" style={{ borderColor: 'var(--border-table)' }}>
+                          <td className="p-2 pl-3 font-mono text-slate-600">{p.code}</td>
+                          <td className="p-2 font-semibold text-slate-700">{p.name}</td>
+                          <td className="p-2 text-slate-500">{p.vendor_name || 'General'}</td>
                         </tr>
-                        {isExpanded && (
-                          <tr className="bg-slate-50/70 border-b" style={{ borderColor: 'var(--border-table)' }}>
-                            <td></td>
-                            <td colSpan={4} className="p-4">
-                              {associatedProducts.length === 0 ? (
-                                <p className="text-xs text-slate-400 text-center py-2">No products registered under this category yet.</p>
-                              ) : (
-                                <div className="bg-white border rounded-lg overflow-hidden" style={{ borderColor: 'var(--border-color)' }}>
-                                  <table className="w-full text-left border-collapse text-xs">
-                                    <thead>
-                                      <tr className="bg-slate-50 text-slate-400 uppercase tracking-wider">
-                                        <th className="p-2 pl-3">Code</th>
-                                        <th className="p-2">Product Name</th>
-                                        <th className="p-2">Vendor</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {associatedProducts.map(p => (
-                                        <tr key={p.article_id} className="border-t" style={{ borderColor: 'var(--border-table)' }}>
-                                          <td className="p-2 pl-3 font-mono text-slate-600">{p.code}</td>
-                                          <td className="p-2 font-semibold text-slate-700">{p.name}</td>
-                                          <td className="p-2 text-slate-500">{p.vendor_name || 'General'}</td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              )}
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            }}
+            columns={[
+              {
+                key: 'code',
+                header: 'Category ID',
+                width: '140px',
+                render: cat => (
+                  <span className="font-mono font-semibold text-slate-500 text-xs">{cat.category_id}</span>
+                ),
+              },
+              {
+                key: 'name',
+                header: 'Category Name',
+                render: cat => <span className="font-semibold text-slate-900">{cat.name}</span>,
+              },
+              {
+                key: 'products',
+                header: 'Associated Products',
+                align: 'center',
+                render: cat => (
+                  <span className="font-bold text-slate-700">
+                    {productList.filter(p => p.category_id === cat.category_id).length}
+                  </span>
+                ),
+              },
+            ]}
+            actionsWidth="80px"
+            actions={cat => (
+              <>
+                <button
+                  onClick={() => handleOpenEditModal(cat)}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                  title="Edit Category"
+                >
+                  <Edit2 size={15} />
+                </button>
+                <button
+                  onClick={() => setDeletingCategory(cat)}
+                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                  title="Delete Category"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </>
+            )}
+          />
         </div>
 
         {/* Modal Dialogue Box Pop-up */}

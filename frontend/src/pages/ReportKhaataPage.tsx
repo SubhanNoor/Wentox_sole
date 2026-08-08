@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Search, Eye } from 'lucide-react';
+import DataListTable from '@/components/DataListTable';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import * as api from '@/lib/api';
@@ -231,65 +232,66 @@ export function ReportKhaataContent() {
               <div className="flex justify-between items-center mb-4">
                 <div>
                   <h3 className="font-lora font-semibold text-lg text-slate-800">Accounts Directory</h3>
-                  <p className="text-xs text-slate-500 font-medium">Select an account card below to view its detailed statement ledger.</p>
+                  <p className="text-xs text-slate-500 font-medium">Select an account row below to view its detailed statement ledger.</p>
                 </div>
                 <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-1 rounded-full border border-slate-200">
                   Total: {filteredCustomers.length} Accounts
                 </div>
               </div>
 
-              {filteredCustomers.length === 0 ? (
-                <div className="card-white p-12 text-center text-slate-400 border bg-white">
-                  No accounts found matching your search.
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {filteredCustomers.map(c => {
-                    const initialLetter = c.name.charAt(0).toUpperCase();
-
-                    return (
-                      <div
-                        key={c.ba_id}
-                        onClick={() => setCustomerBaId(c.ba_id)}
-                        className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
-                      >
-                        <div>
-                          {/* Card Top: Code & City badge */}
-                          <div className="flex items-center justify-between mb-3.5">
-                            <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
-                              Code: {c.code}
-                            </span>
-                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200/50 uppercase tracking-wider">
-                              {c.city_name || 'General'}
-                            </span>
-                          </div>
-
-                          {/* Card Middle: Avatar circle + Name */}
-                          <div className="flex items-start gap-3 mb-4">
-                            <div className="w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm bg-slate-50 text-slate-600 group-hover:bg-[#111c2a] group-hover:text-[#B08D57] transition-all duration-300 flex-shrink-0">
-                              {initialLetter}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <h4 className="font-semibold text-slate-900 group-hover:text-[#B08D57] transition-colors leading-tight text-[15px] truncate">
-                                {c.name}
-                              </h4>
-                              <p className="text-[11px] text-slate-400 font-medium mt-0.5 uppercase tracking-wider truncate">
-                                {c.main_account}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Card Bottom: Action indicator */}
-                        <div className="border-t pt-3 mt-1 flex items-center justify-between text-xs font-semibold text-slate-400 group-hover:text-[#B08D57] transition-colors">
-                          <span>View Statement</span>
-                          <span className="text-sm font-bold group-hover:translate-x-1 transition-transform">&rarr;</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              <div className="card-white overflow-hidden border bg-white">
+                <DataListTable<typeof filteredCustomers[number]>
+                  rows={filteredCustomers}
+                  rowKey={c => c.ba_id}
+                  onRowClick={c => setCustomerBaId(c.ba_id)}
+                  emptyMessage="No accounts found matching your search."
+                  columns={[
+                    {
+                      key: 'code',
+                      header: 'Code',
+                      width: '130px',
+                      render: c => (
+                        <span className="font-mono font-semibold text-slate-600 text-xs">{c.code}</span>
+                      ),
+                    },
+                    {
+                      key: 'name',
+                      header: 'Account Name',
+                      render: c => <span className="font-semibold text-slate-900">{c.name}</span>,
+                    },
+                    {
+                      key: 'main_account',
+                      header: 'Main Account',
+                      render: c => (
+                        <span className="text-[11px] text-slate-500 font-medium uppercase tracking-wider">
+                          {c.main_account}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: 'city',
+                      header: 'City',
+                      width: '150px',
+                      render: c => (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200/50 uppercase tracking-wider">
+                          {c.city_name || 'General'}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: 'statement',
+                      header: '',
+                      width: '140px',
+                      align: 'right',
+                      render: () => (
+                        <span className="text-xs font-semibold text-[var(--brand-gold)]">
+                          View Statement &rarr;
+                        </span>
+                      ),
+                    },
+                  ]}
+                />
+              </div>
             </div>
           </>
         ) : (

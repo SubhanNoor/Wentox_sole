@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, X, ListCollapse, ArrowRight } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Trash2, X, ListCollapse } from 'lucide-react';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
+import DataListTable from '@/components/DataListTable';
 import {
   groupAccounts as groupAccountsApi,
   chartAccounts as chartAccountsApi,
@@ -225,64 +226,67 @@ export default function GroupAcSetupPage() {
           </div>
         </div>
 
-        {/* Group Accounts Cards Grid (§1 Standard) */}
-        {filteredAndSortedGroups.length === 0 ? (
-          <div className="card-white p-12 text-center text-slate-400">
-            <ListCollapse size={36} className="mx-auto mb-3 text-slate-300" />
-            <p className="font-semibold text-slate-600">No registered group accounts found matching your search.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredAndSortedGroups.map(grp => (
-                <div
-                  key={grp.group_id}
-                  onClick={() => setViewingGroupId(grp.group_id)}
-                  className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
+        {/* Group Accounts Row List (shared DataListTable template) */}
+        <div className="card-white overflow-hidden">
+          <DataListTable<GroupAccountRow>
+            rows={filteredAndSortedGroups}
+            rowKey={grp => grp.group_id}
+            onRowClick={grp => setViewingGroupId(grp.group_id)}
+            emptyIcon={<ListCollapse size={36} />}
+            emptyMessage="No registered group accounts found matching your search."
+            columns={[
+              {
+                key: 'code',
+                header: 'Group Code',
+                width: '140px',
+                render: grp => (
+                  <span className="font-mono font-semibold text-slate-600 text-xs">#{grp.code}</span>
+                ),
+              },
+              {
+                key: 'name',
+                header: 'Group Name',
+                render: grp => <span className="font-semibold text-slate-900">{grp.name}</span>,
+              },
+              {
+                key: 'class',
+                header: 'Account Class',
+                render: grp => (
+                  <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider">
+                    {grp.class_name || '—'}
+                  </span>
+                ),
+              },
+              {
+                key: 'sorting',
+                header: 'Sorting',
+                width: '100px',
+                align: 'center',
+                render: grp => (
+                  <span className="font-mono text-xs text-slate-500">{grp.sorting ?? '—'}</span>
+                ),
+              },
+            ]}
+            actions={grp => (
+              <>
+                <button
+                  onClick={() => handleOpenEditModal(grp)}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                  title="Edit Group Account"
                 >
-                  <div>
-                    {/* Header: Title + Class Badge */}
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
-                        {grp.name}
-                      </h4>
-                      <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider flex-shrink-0">
-                        {grp.class_name || ''}
-                      </span>
-                    </div>
-
-                    {/* Subtitle: Code in mono */}
-                    <div className="font-mono text-xs text-slate-400 mb-3">
-                      Group Code: <span className="font-semibold text-slate-600">#{grp.code}</span>
-                    </div>
-                  </div>
-
-                  {/* Footer Bar */}
-                  <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
-                    <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-                      <button
-                        onClick={() => handleOpenEditModal(grp)}
-                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                        title="Edit Group Account"
-                      >
-                        <Edit2 size={15} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteGroup(grp.group_id)}
-                        className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                        title="Delete Group Account"
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </div>
-
-                    <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
-                      View Accounts <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
-                    </span>
-                  </div>
-                </div>
-            ))}
-          </div>
-        )}
+                  <Edit2 size={15} />
+                </button>
+                <button
+                  onClick={() => handleDeleteGroup(grp.group_id)}
+                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                  title="Delete Group Account"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </>
+            )}
+          />
+        </div>
 
         {/* Drill-down Modal showing child chart accounts */}
         {viewingGroupId && viewingGroup && (
@@ -308,25 +312,37 @@ export default function GroupAcSetupPage() {
                   Registered Chart Accounts ({viewingChildCharts.length})
                 </div>
 
-                {viewingChildCharts.length === 0 ? (
-                  <div className="text-center p-6 text-slate-400 italic text-xs">
-                    No chart of accounts registered under this group head.
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-2">
-                    {viewingChildCharts.map(c => (
-                      <div key={c.ac_id} className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
-                        <div>
-                          <div className="font-semibold text-xs text-slate-900">{c.name}</div>
-                          <div className="font-mono text-[11px] text-slate-400">Code: #{c.code}</div>
-                        </div>
+                <DataListTable<ChartOfAccountRow>
+                  rows={viewingChildCharts}
+                  rowKey={c => c.ac_id}
+                  emptyMessage="No chart of accounts registered under this group head."
+                  columns={[
+                    {
+                      key: 'code',
+                      header: 'Code',
+                      width: '110px',
+                      render: c => (
+                        <span className="font-mono text-[11px] text-slate-500">#{c.code}</span>
+                      ),
+                    },
+                    {
+                      key: 'name',
+                      header: 'Chart Account',
+                      render: c => <span className="font-semibold text-xs text-slate-900">{c.name}</span>,
+                    },
+                    {
+                      key: 'status',
+                      header: 'Status',
+                      width: '100px',
+                      align: 'center',
+                      render: c => (
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase border ${c.status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
                           {c.status}
                         </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                      ),
+                    },
+                  ]}
+                />
               </div>
 
               <div className="p-4 border-t border-slate-100 flex justify-end">

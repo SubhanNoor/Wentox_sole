@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, RotateCcw, X, BookOpen, ArrowRight } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Trash2, RotateCcw, X, BookOpen } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
+import DataListTable from '@/components/DataListTable';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import {
   chartAccounts as chartAccountsApi,
@@ -275,91 +276,100 @@ export default function ChartAcSetupPage() {
           </div>
         </div>
 
-        {/* Chart Accounts Cards Grid (§1 Standard) */}
-        {filteredAndSortedCharts.length === 0 ? (
-          <div className="card-white p-12 text-center text-slate-400">
-            <BookOpen size={36} className="mx-auto mb-3 text-slate-300" />
-            <p className="font-semibold text-slate-600">No registered chart accounts found matching your search.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredAndSortedCharts.map(c => {
-              const groupName = c.group_name || 'UNKNOWN GROUP';
-              const isReserved = RESERVED_ACCOUNT_CODES.includes(c.code);
-
-              return (
-                <div
-                  key={c.ac_id}
-                  onClick={() => setViewingChartId(c.ac_id)}
-                  className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
-                >
-                  <div>
-                    {/* Header: Title + Status Badge */}
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
-                        {c.name}
-                      </h4>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border flex-shrink-0 ${
-                        c.status === 'ACTIVE'
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : 'bg-rose-50 text-rose-700 border-rose-200'
-                      }`}>
-                        {c.status === 'ACTIVE' ? 'Active' : 'Closed'}
+        {/* Chart Accounts Row List (shared DataListTable template) */}
+        <div className="card-white overflow-hidden">
+          <DataListTable<ChartOfAccountRow>
+            rows={filteredAndSortedCharts}
+            rowKey={c => c.ac_id}
+            onRowClick={c => setViewingChartId(c.ac_id)}
+            emptyIcon={<BookOpen size={36} />}
+            emptyMessage="No registered chart accounts found matching your search."
+            columns={[
+              {
+                key: 'code',
+                header: 'Chart Code',
+                width: '150px',
+                render: c => (
+                  <div className="flex flex-col">
+                    <span className="font-mono font-semibold text-slate-600 text-xs">#{c.code}</span>
+                    {RESERVED_ACCOUNT_CODES.includes(c.code) && (
+                      <span className="text-[10px] text-[#B08D57] font-semibold uppercase tracking-wider">
+                        Reserved
                       </span>
-                    </div>
-
-                    {/* Subtitle: Code in mono */}
-                    <div className="font-mono text-xs text-slate-400 mb-3">
-                      Chart Code: <span className="font-semibold text-slate-600">#{c.code}</span>
-                      {isReserved && <span className="ml-1.5 text-[10px] text-[#B08D57] font-semibold uppercase">Reserved</span>}
-                    </div>
-
-                    <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5 flex flex-col gap-1">
-                      <div className="font-semibold text-[#B08D57] truncate" title={groupName}>
-                        Group: {groupName}
-                      </div>
-                    </div>
+                    )}
                   </div>
-
-                  {/* Footer Bar */}
-                  <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
-                    <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-                      <button
-                        onClick={() => handleOpenEditModal(c)}
-                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                        title="Edit Chart Account"
-                      >
-                        <Edit2 size={15} />
-                      </button>
-                      {c.status === 'CLOSED' ? (
-                        <button
-                          onClick={() => handleReactivateChart(c)}
-                          className="p-1.5 rounded-lg hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer"
-                          title="Reactivate Account"
-                        >
-                          <RotateCcw size={15} />
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleDeleteChart(c)}
-                          disabled={isReserved}
-                          className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                          title={isReserved ? 'Reserved account — cannot be closed' : 'Close Account'}
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      )}
-                    </div>
-
-                    <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
-                      View Sub-Ledgers <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
-                    </span>
-                  </div>
-                </div>
+                ),
+              },
+              {
+                key: 'name',
+                header: 'Account Name',
+                render: c => <span className="font-semibold text-slate-900">{c.name}</span>,
+              },
+              {
+                key: 'group',
+                header: 'Group Account',
+                render: c => (
+                  <span className="font-semibold text-[#B08D57]">{c.group_name || 'UNKNOWN GROUP'}</span>
+                ),
+              },
+              {
+                key: 'link_code',
+                header: 'Link Code',
+                width: '120px',
+                render: c => (
+                  <span className="font-mono text-xs text-slate-500">{c.link_code || '—'}</span>
+                ),
+              },
+              {
+                key: 'status',
+                header: 'Status',
+                width: '110px',
+                align: 'center',
+                render: c => (
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${
+                    c.status === 'ACTIVE'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-rose-50 text-rose-700 border-rose-200'
+                  }`}>
+                    {c.status === 'ACTIVE' ? 'Active' : 'Closed'}
+                  </span>
+                ),
+              },
+            ]}
+            actions={c => {
+              const isReserved = RESERVED_ACCOUNT_CODES.includes(c.code);
+              return (
+                <>
+                  <button
+                    onClick={() => handleOpenEditModal(c)}
+                    className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                    title="Edit Chart Account"
+                  >
+                    <Edit2 size={15} />
+                  </button>
+                  {c.status === 'CLOSED' ? (
+                    <button
+                      onClick={() => handleReactivateChart(c)}
+                      className="p-1.5 rounded-lg hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer"
+                      title="Reactivate Account"
+                    >
+                      <RotateCcw size={15} />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleDeleteChart(c)}
+                      disabled={isReserved}
+                      className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                      title={isReserved ? 'Reserved account — cannot be closed' : 'Close Account'}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  )}
+                </>
               );
-            })}
-          </div>
-        )}
+            }}
+          />
+        </div>
 
         {/* Drill-down Modal showing child business accounts */}
         {viewingChartId && viewingChart && (
@@ -385,25 +395,37 @@ export default function ChartAcSetupPage() {
                   Linked Sub-Ledgers / Business Accounts ({viewingChildBizAccounts.length})
                 </div>
 
-                {viewingChildBizAccounts.length === 0 ? (
-                  <div className="text-center p-6 text-slate-400 italic text-xs">
-                    No business accounts registered under this chart head.
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-2">
-                    {viewingChildBizAccounts.map(b => (
-                      <div key={b.ba_id} className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between">
-                        <div>
-                          <div className="font-semibold text-xs text-slate-900">{b.name}</div>
-                          <div className="font-mono text-[11px] text-slate-400">Code: #{b.code}</div>
-                        </div>
+                <DataListTable<BusinessAccountRow>
+                  rows={viewingChildBizAccounts}
+                  rowKey={b => b.ba_id}
+                  emptyMessage="No business accounts registered under this chart head."
+                  columns={[
+                    {
+                      key: 'code',
+                      header: 'Code',
+                      width: '130px',
+                      render: b => (
+                        <span className="font-mono text-[11px] text-slate-500">#{b.code}</span>
+                      ),
+                    },
+                    {
+                      key: 'name',
+                      header: 'Business Account',
+                      render: b => <span className="font-semibold text-xs text-slate-900">{b.name}</span>,
+                    },
+                    {
+                      key: 'status',
+                      header: 'Status',
+                      width: '100px',
+                      align: 'center',
+                      render: b => (
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase border ${b.status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
                           {b.status}
                         </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                      ),
+                    },
+                  ]}
+                />
               </div>
 
               <div className="p-4 border-t border-slate-100 flex justify-end">

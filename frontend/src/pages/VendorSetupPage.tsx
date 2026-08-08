@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, Phone, MapPin, X, ArrowRight, Truck, RotateCcw } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Trash2, Phone, MapPin, X, Truck, RotateCcw } from 'lucide-react';
+import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { VendorRow, RegionRow, CityRow, ProductRow, PurchaseRow } from '@/lib/api';
@@ -236,82 +237,91 @@ export default function VendorSetupPage() {
           </div>
         </div>
 
-        {/* Vendors Cards Grid */}
-        {loading ? (
-          <div className="card-white p-12 text-center text-slate-400">Loading…</div>
-        ) : filteredVendors.length === 0 ? (
-          <div className="card-white p-12 text-center text-slate-400">
-            <Truck size={36} className="mx-auto mb-3 text-slate-300" />
-            <p className="font-semibold text-slate-600">No registered vendors found matching your filters.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredVendors.map(vendor => {
-              const productCount = productList.filter(p => p.vendor_id === vendor.vendor_id).length;
-
-              return (
-                <div
-                  key={vendor.vendor_id}
-                  onClick={() => openPurchaseHistory(vendor.vendor_id)}
-                  className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
-                >
-                  <div>
-                    {/* Header: Name + City Badge */}
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
-                        {vendor.name}
-                      </h4>
-                      <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider flex-shrink-0 flex items-center gap-1">
-                        <MapPin size={10} className="text-slate-400" />
-                        {cityName(vendor.city_id)}
-                      </span>
-                    </div>
-
-                    {/* Subtitle: Code in mono */}
-                    <div className="font-mono text-xs text-slate-400 mb-3">
-                      Vendor ID: <span className="font-semibold text-slate-600">#{vendor.vendor_id}</span>
-                    </div>
-
-                    {/* Contact & Articles Meta */}
-                    <div className="flex flex-col gap-1.5 text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5">
-                      <div className="flex items-center gap-1.5 text-slate-600">
-                        <Phone size={12} className="text-slate-400" />
-                        <span>{vendor.phone || 'No Phone Number'}</span>
-                      </div>
-                      <div className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider mt-0.5">
-                        {productCount} {productCount === 1 ? 'Article' : 'Articles'}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Footer Bar */}
-                  <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
-                    <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-                      <button
-                        onClick={() => handleOpenEditModal(vendor)}
-                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                        title="Edit Vendor"
-                      >
-                        <Edit2 size={15} />
-                      </button>
-                      <button
-                        onClick={() => setDeletingVendor(vendor)}
-                        className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                        title="Delete Vendor"
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </div>
-
-                    <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
-                      Purchase History <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
+        {/* Vendors Row List (shared DataListTable template) */}
+        <div className="card-white overflow-hidden">
+          <DataListTable<VendorRow>
+            rows={filteredVendors}
+            rowKey={vendor => vendor.vendor_id}
+            onRowClick={vendor => openPurchaseHistory(vendor.vendor_id)}
+            loading={loading}
+            emptyIcon={<Truck size={36} />}
+            emptyMessage="No registered vendors found matching your filters."
+            columns={[
+              {
+                key: 'code',
+                header: 'Vendor ID',
+                width: '130px',
+                render: vendor => (
+                  <span className="font-mono font-semibold text-slate-600 text-xs">#{vendor.vendor_id}</span>
+                ),
+              },
+              {
+                key: 'name',
+                header: 'Vendor Name',
+                render: vendor => <span className="font-semibold text-slate-900">{vendor.name}</span>,
+              },
+              {
+                key: 'phone',
+                header: 'Phone',
+                render: vendor => (
+                  <span className="text-slate-600 font-medium flex items-center gap-1.5">
+                    <Phone size={12} className="text-slate-400" />
+                    {vendor.phone || 'No Phone Number'}
+                  </span>
+                ),
+              },
+              {
+                key: 'region',
+                header: 'Region',
+                render: vendor => (
+                  <span className="text-slate-600 font-medium">{vendor.region_name || 'N/A'}</span>
+                ),
+              },
+              {
+                key: 'city',
+                header: 'City',
+                render: vendor => (
+                  <span className="text-slate-600 font-medium flex items-center gap-1">
+                    <MapPin size={12} className="text-slate-400" />
+                    {cityName(vendor.city_id)}
+                  </span>
+                ),
+              },
+              {
+                key: 'articles',
+                header: 'Articles',
+                width: '100px',
+                align: 'center',
+                render: vendor => {
+                  const productCount = productList.filter(p => p.vendor_id === vendor.vendor_id).length;
+                  return (
+                    <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">
+                      {productCount} {productCount === 1 ? 'Article' : 'Articles'}
                     </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                  );
+                },
+              },
+            ]}
+            actions={vendor => (
+              <>
+                <button
+                  onClick={() => handleOpenEditModal(vendor)}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                  title="Edit Vendor"
+                >
+                  <Edit2 size={15} />
+                </button>
+                <button
+                  onClick={() => setDeletingVendor(vendor)}
+                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                  title="Delete Vendor"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </>
+            )}
+          />
+        </div>
 
         {/* Modal Dialogue Box Pop-up */}
         {isModalOpen && (

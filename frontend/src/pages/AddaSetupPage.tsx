@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, Trash2, X, Truck, MapPin } from 'lucide-react';
+import DataListTable from '@/components/DataListTable';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import SearchableSelect from '@/components/SearchableSelect';
 import { addas as addasApi, listRegions, listCities, type AddaRow, type RegionRow, type CityRow } from '@/lib/api';
@@ -193,74 +194,73 @@ export default function AddaSetupPage() {
           </div>
         </div>
 
-        {/* Addas Cards Grid (§1 Standard) */}
-        {filteredAddas.length === 0 ? (
-          <div className="card-white p-12 text-center text-slate-400">
-            <Truck size={36} className="mx-auto mb-3 text-slate-300" />
-            <p className="font-semibold text-slate-600">No registered transport addas found matching your search.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredAddas.map(adda => {
-              const cityName = adda.city_name || 'N/A';
-              const regionName = adda.region_name || 'N/A';
-
-              return (
-                <div
-                  key={adda.adda_id}
+        {/* Addas Row List (shared DataListTable template) */}
+        <div className="card-white overflow-hidden">
+          <DataListTable<AddaRow>
+            rows={filteredAddas}
+            rowKey={adda => adda.adda_id}
+            onRowClick={adda => handleOpenEditModal(adda)}
+            emptyIcon={<Truck size={36} />}
+            emptyMessage="No registered transport addas found matching your search."
+            columns={[
+              {
+                key: 'code',
+                header: 'Adda Code',
+                width: '140px',
+                render: adda => (
+                  <span className="font-mono font-semibold text-slate-600 text-xs">#{adda.adda_id}</span>
+                ),
+              },
+              {
+                key: 'name',
+                header: 'Adda Name',
+                render: adda => <span className="font-semibold text-slate-900">{adda.name}</span>,
+              },
+              {
+                key: 'region',
+                header: 'Region',
+                render: adda => (
+                  <span className="text-slate-600 font-medium">{adda.region_name || 'N/A'}</span>
+                ),
+              },
+              {
+                key: 'city',
+                header: 'City',
+                render: adda => (
+                  <span className="text-slate-600 font-medium flex items-center gap-1">
+                    <MapPin size={12} className="text-slate-400" />
+                    {adda.city_name || 'N/A'}
+                  </span>
+                ),
+              },
+              {
+                key: 'details',
+                header: 'Details',
+                render: adda => (
+                  <span className="text-slate-500 text-xs">{adda.details || '—'}</span>
+                ),
+              },
+            ]}
+            actions={adda => (
+              <>
+                <button
                   onClick={() => handleOpenEditModal(adda)}
-                  className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                  title="Edit Adda"
                 >
-                  <div>
-                    {/* Header: Title + City Badge */}
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
-                        {adda.name}
-                      </h4>
-                      <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider flex-shrink-0 flex items-center gap-1">
-                        <MapPin size={10} className="text-slate-400" />
-                        {cityName}
-                      </span>
-                    </div>
-
-                    {/* Subtitle: Code in mono */}
-                    <div className="font-mono text-xs text-slate-400 mb-3">
-                      Adda Code: <span className="font-semibold text-slate-600">#{adda.adda_id}</span>
-                    </div>
-
-                    <div className="text-xs text-slate-500 font-medium border-t border-slate-100 pt-2.5">
-                      Region: <span className="font-semibold text-slate-700">{regionName}</span>
-                    </div>
-                  </div>
-
-                  {/* Footer Bar */}
-                  <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
-                    <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-                      <button
-                        onClick={() => handleOpenEditModal(adda)}
-                        className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                        title="Edit Adda"
-                      >
-                        <Edit2 size={15} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteAdda(adda.adda_id)}
-                        className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                        title="Delete Adda"
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </div>
-
-                    <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
-                      Edit Adda &rarr;
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                  <Edit2 size={15} />
+                </button>
+                <button
+                  onClick={() => handleDeleteAdda(adda.adda_id)}
+                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                  title="Delete Adda"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </>
+            )}
+          />
+        </div>
 
         {/* Modal Dialogue Box Pop-up */}
         {isModalOpen && (

@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Search, ArrowLeft, Users, User, Truck, HardHat, Landmark, BookOpen, Eye } from 'lucide-react';
+import DataListTable from '@/components/DataListTable';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import * as api from '@/lib/api';
@@ -326,48 +327,52 @@ export default function OverallSearchPage() {
               </div>
             </div>
 
-            {/* Entity Directory Cards Grid */}
-            {loading ? (
-              <div className="text-center p-12 text-slate-400">Loading directory…</div>
-            ) : filteredPeople.length === 0 ? (
-              <div className="text-center p-12 text-slate-400 bg-white rounded-2xl border border-slate-200">
-                No matching accounts found.
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredPeople.map((person) => {
-                  const badgeStyle = getTypeBadgeStyle(person.type);
-                  const icon = getTypeIcon(person.type);
-
-                  return (
-                    <div
-                      key={`${person.entityType}-${person.id}`}
-                      onClick={() => setSelectedPerson(person)}
-                      className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
-                    >
-                      <div>
-                        <div className="flex items-start justify-between gap-3 mb-2">
-                          <h3 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors leading-snug">
-                            {person.name}
-                          </h3>
-                          <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded border uppercase tracking-wider shrink-0 ${badgeStyle}`}>
-                            {person.typeLabel}
-                          </span>
-                        </div>
-                        <p className="font-mono text-xs text-slate-400">{person.subtitle}</p>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-4 mt-4 border-t border-slate-100 text-slate-500">
-                        <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                          {icon} View Detailed Ledger
-                        </span>
-                        <span className="text-sm font-bold group-hover:translate-x-1 transition-transform">&rarr;</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            {/* Entity Directory Row List (shared DataListTable template) */}
+            <div className="card-white overflow-hidden">
+              <DataListTable<PersonEntity>
+                rows={filteredPeople}
+                rowKey={person => `${person.entityType}-${person.id}`}
+                onRowClick={person => setSelectedPerson(person)}
+                loading={loading}
+                loadingMessage="Loading directory…"
+                emptyMessage="No matching accounts found."
+                columns={[
+                  {
+                    key: 'type',
+                    header: 'Type',
+                    width: '150px',
+                    render: person => (
+                      <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded border uppercase tracking-wider inline-flex items-center gap-1.5 ${getTypeBadgeStyle(person.type)}`}>
+                        {getTypeIcon(person.type)} {person.typeLabel}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'name',
+                    header: 'Account Name',
+                    render: person => <span className="font-semibold text-slate-900">{person.name}</span>,
+                  },
+                  {
+                    key: 'subtitle',
+                    header: 'Code / City',
+                    render: person => (
+                      <span className="font-mono text-xs text-slate-500">{person.subtitle}</span>
+                    ),
+                  },
+                  {
+                    key: 'ledger',
+                    header: '',
+                    width: '160px',
+                    align: 'right',
+                    render: () => (
+                      <span className="text-xs font-semibold text-[var(--brand-gold)]">
+                        View Detailed Ledger &rarr;
+                      </span>
+                    ),
+                  },
+                ]}
+              />
+            </div>
           </div>
         ) : (
           /* VIEW 2: Selected Person Detailed Financial Ledger */

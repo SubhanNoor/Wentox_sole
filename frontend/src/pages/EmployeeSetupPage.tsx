@@ -5,6 +5,7 @@ import type { EmployeeRow, EmployeeType, StageRow, CityRow, WageRunRow, ExpenseR
 import { getEmployeeBalance, type FlatSalaryItem } from '@/lib/payroll';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, Trash2, Phone, MapPin, HardHat, BadgeDollarSign, X, RotateCcw } from 'lucide-react';
+import DataListTable from '@/components/DataListTable';
 
 type ListTab = 'workers' | 'salaried';
 
@@ -306,89 +307,99 @@ export default function EmployeeSetupPage() {
             </div>
 
             {/* Table */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                    <th className="p-3 pl-4">A/C Code</th>
-                    <th className="p-3">Name</th>
-                    <th className="p-3">Phone</th>
-                    <th className="p-3">City</th>
-                    {activeTab === 'workers' ? (
-                      <th className="p-3">Registered Trades</th>
-                    ) : (
-                      <th className="p-3 text-right">Fixed Monthly Salary</th>
-                    )}
-                    <th className="p-3 text-right">Current Balance</th>
-                    <th className="p-3 text-center" style={{ width: 90 }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {loading ? (
-                    <tr><td colSpan={7} className="text-center p-8 text-slate-400">Loading…</td></tr>
-                  ) : filtered.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="text-center p-8 text-slate-400">
-                        {activeEmployees.length === 0
-                          ? `No registered ${activeTab === 'workers' ? 'workers' : 'salaried staff'} yet.`
-                          : 'No employees match this search.'}
-                      </td>
-                    </tr>
-                  ) : filtered.map(emp => {
-                    const bal = getEmployeeBalance(emp, wageRuns, salaryItems, expenses);
-                    return (
-                      <tr key={emp.employee_id} className="border-b hover:bg-slate-50/50 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-3 pl-4 font-mono font-semibold text-slate-500">{emp.ba_id}</td>
-                        <td className="p-3 font-semibold text-slate-900">{emp.name}</td>
-                        <td className="p-3 text-slate-600">
-                          {emp.phone ? <span className="flex items-center gap-1"><Phone size={12} className="text-slate-400" /> {emp.phone}</span> : <span className="text-slate-300">—</span>}
-                        </td>
-                        <td className="p-3 text-slate-600">
-                          {emp.city_id ? <span className="flex items-center gap-1"><MapPin size={12} className="text-slate-400" /> {cityName(emp.city_id)}</span> : <span className="text-slate-300">—</span>}
-                        </td>
-                        {activeTab === 'workers' ? (
-                          <td className="p-3 text-slate-700 font-medium">{formatStageLabels(emp.stage_keys)}</td>
-                        ) : (
-                          <td className="p-3 text-right font-semibold text-slate-900">
-                            {emp.monthly_salary != null ? formatCurrency(emp.monthly_salary) : '—'}
-                          </td>
-                        )}
-                        <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(bal)}</td>
-                        <td className="p-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              onClick={() => handleOpenEditModal(emp)}
-                              title="Edit Employee"
-                              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                            >
-                              <Edit2 size={15} />
-                            </button>
-                            <button
-                              onClick={() => setDeletingEmployee(emp)}
-                              title="Delete Employee"
-                              className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                            >
-                              <Trash2 size={15} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                {activeEmployees.length > 0 && (
-                  <tfoot>
-                    <tr className="bg-slate-900 text-white font-bold text-xs">
-                      <td colSpan={5} className="p-3 pl-4 uppercase tracking-wider text-[#B08D57]">
-                        Total Outstanding ({activeTab === 'workers' ? 'Workers' : 'Salaried Staff'})
-                      </td>
-                      <td className="p-3 text-right text-sm text-[#B08D57] font-mono">{formatCurrency(totalOutstanding)}</td>
-                      <td />
-                    </tr>
-                  </tfoot>
-                )}
-              </table>
-            </div>
+            <DataListTable<EmployeeRow>
+              rows={filtered}
+              rowKey={emp => emp.employee_id}
+              onRowClick={emp => handleOpenEditModal(emp)}
+              loading={loading}
+              emptyMessage={activeEmployees.length === 0
+                ? `No registered ${activeTab === 'workers' ? 'workers' : 'salaried staff'} yet.`
+                : 'No employees match this search.'}
+              columns={[
+                {
+                  key: 'code',
+                  header: 'A/C Code',
+                  width: '120px',
+                  render: emp => <span className="font-mono font-semibold text-slate-500">{emp.ba_id}</span>,
+                },
+                {
+                  key: 'name',
+                  header: 'Name',
+                  render: emp => <span className="font-semibold text-slate-900">{emp.name}</span>,
+                },
+                {
+                  key: 'phone',
+                  header: 'Phone',
+                  render: emp => emp.phone
+                    ? <span className="text-slate-600 flex items-center gap-1"><Phone size={12} className="text-slate-400" /> {emp.phone}</span>
+                    : <span className="text-slate-300">—</span>,
+                },
+                {
+                  key: 'city',
+                  header: 'City',
+                  render: emp => emp.city_id
+                    ? <span className="text-slate-600 flex items-center gap-1"><MapPin size={12} className="text-slate-400" /> {cityName(emp.city_id)}</span>
+                    : <span className="text-slate-300">—</span>,
+                },
+                // Workers show their trades; salaried staff show their fixed salary instead.
+                activeTab === 'workers'
+                  ? {
+                      key: 'trades',
+                      header: 'Registered Trades',
+                      render: emp => (
+                        <span className="text-slate-700 font-medium">{formatStageLabels(emp.stage_keys)}</span>
+                      ),
+                    }
+                  : {
+                      key: 'salary',
+                      header: 'Fixed Monthly Salary',
+                      align: 'right',
+                      render: emp => (
+                        <span className="font-semibold text-slate-900">
+                          {emp.monthly_salary != null ? formatCurrency(emp.monthly_salary) : '—'}
+                        </span>
+                      ),
+                    },
+                {
+                  key: 'balance',
+                  header: 'Current Balance',
+                  align: 'right',
+                  render: emp => (
+                    <span className="font-bold text-slate-800">
+                      {formatCurrency(getEmployeeBalance(emp, wageRuns, salaryItems, expenses))}
+                    </span>
+                  ),
+                },
+              ]}
+              actionsWidth="90px"
+              actions={emp => (
+                <>
+                  <button
+                    onClick={() => handleOpenEditModal(emp)}
+                    title="Edit Employee"
+                    className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                  >
+                    <Edit2 size={15} />
+                  </button>
+                  <button
+                    onClick={() => setDeletingEmployee(emp)}
+                    title="Delete Employee"
+                    className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </>
+              )}
+              footer={activeEmployees.length > 0 ? (
+                <tr className="bg-slate-900 text-white font-bold text-xs">
+                  <td colSpan={5} className="p-3 pl-4 uppercase tracking-wider text-[#B08D57]">
+                    Total Outstanding ({activeTab === 'workers' ? 'Workers' : 'Salaried Staff'})
+                  </td>
+                  <td className="p-3 text-right text-sm text-[#B08D57] font-mono">{formatCurrency(totalOutstanding)}</td>
+                  <td />
+                </tr>
+              ) : undefined}
+            />
           </div>
         </div>
 

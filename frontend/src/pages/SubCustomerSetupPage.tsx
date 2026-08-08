@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, Trash2, X, Users, MapPin } from 'lucide-react';
+import DataListTable from '@/components/DataListTable';
 import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
@@ -198,60 +199,64 @@ export default function SubCustomerSetupPage() {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="p-3 pl-4">ID Code</th>
-                  <th className="p-3">Sub Customer Name</th>
-                  <th className="p-3">Region</th>
-                  <th className="p-3">City</th>
-                  <th className="p-3 text-center" style={{ width: '90px' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr><td colSpan={5} className="text-center p-8 text-slate-400">Loading…</td></tr>
-                ) : filteredSubCustomers.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="text-center p-8 text-slate-400">
-                      No registered sub customers found.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredSubCustomers.map(sc => (
-                    <tr key={sc.sub_customer_id} className="border-b hover:bg-slate-50/50 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
-                      <td className="p-3 pl-4 font-mono font-semibold text-slate-500 text-xs">{sc.sub_customer_id}</td>
-                      <td className="p-3 font-semibold text-slate-900">{sc.name}</td>
-                      <td className="p-3 text-slate-600 font-medium">{sc.region_name || 'N/A'}</td>
-                      <td className="p-3 text-slate-600 font-medium flex items-center gap-1">
-                        <MapPin size={12} className="text-slate-400" />
-                        {sc.city_name || 'N/A'}
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button
-                            onClick={() => handleOpenEditModal(sc)}
-                            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                            title="Edit Sub Customer"
-                          >
-                            <Edit2 size={15} />
-                          </button>
-                          <button
-                            onClick={() => setDeletingSub(sc)}
-                            className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                            title="Delete Sub Customer"
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+          <DataListTable<SubCustomerRow>
+            rows={filteredSubCustomers}
+            rowKey={sc => sc.sub_customer_id}
+            onRowClick={sc => handleOpenEditModal(sc)}
+            loading={loading}
+            emptyMessage="No registered sub customers found."
+            columns={[
+              {
+                key: 'code',
+                header: 'ID Code',
+                width: '130px',
+                render: sc => (
+                  <span className="font-mono font-semibold text-slate-500 text-xs">{sc.sub_customer_id}</span>
+                ),
+              },
+              {
+                key: 'name',
+                header: 'Sub Customer Name',
+                render: sc => <span className="font-semibold text-slate-900">{sc.name}</span>,
+              },
+              {
+                key: 'region',
+                header: 'Region',
+                render: sc => (
+                  <span className="text-slate-600 font-medium">{sc.region_name || 'N/A'}</span>
+                ),
+              },
+              {
+                key: 'city',
+                header: 'City',
+                render: sc => (
+                  <span className="text-slate-600 font-medium flex items-center gap-1">
+                    <MapPin size={12} className="text-slate-400" />
+                    {sc.city_name || 'N/A'}
+                  </span>
+                ),
+              },
+            ]}
+            actionsWidth="90px"
+            actions={sc => (
+              <>
+                <button
+                  onClick={() => handleOpenEditModal(sc)}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                  title="Edit Sub Customer"
+                >
+                  <Edit2 size={15} />
+                </button>
+                <button
+                  onClick={() => setDeletingSub(sc)}
+                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                  title="Delete Sub Customer"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </>
+            )}
+          />
         </div>
 
         {/* Modal Dialogue Box Pop-up */}

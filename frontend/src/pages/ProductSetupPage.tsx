@@ -4,6 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import type { ProductCosts, CostFieldKey } from '@/types';
 import { COST_FIELDS } from '@/types';
 import { Plus, Trash2, Edit2, Hammer, Settings, Search, ArrowLeft, RotateCcw } from 'lucide-react';
+import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { ProductRow, CategoryRow, VendorRow } from '@/lib/api';
@@ -266,65 +267,73 @@ export default function ProductSetupPage() {
                 </div>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                      <th className="p-3 pl-4">Code</th>
-                      <th className="p-3">Article Name</th>
-                      <th className="p-3">Category</th>
-                      <th className="p-3">Vendor</th>
-                      <th className="p-3 text-center">Packing (Pairs)</th>
-                      <th className="p-3 text-right">Sale Price</th>
-                      <th className="p-3 text-center" style={{ width: '80px' }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {loading ? (
-                      <tr><td colSpan={7} className="text-center p-8 text-slate-400">Loading…</td></tr>
-                    ) : filteredProducts.length === 0 ? (
-                      <tr>
-                        <td colSpan={7} className="text-center p-8 text-slate-400">
-                          No registered products found.
-                        </td>
-                      </tr>
-                    ) : (
-                      filteredProducts.map(prod => (
-                        <tr
-                          key={prod.article_id}
-                          className="border-b hover:bg-slate-50/50 transition-colors"
-                          style={{ borderColor: 'var(--border-table)' }}
-                        >
-                          <td className="p-3 pl-4 font-semibold text-slate-700">{prod.code}</td>
-                          <td className="p-3 font-semibold text-slate-900">{prod.name}</td>
-                          <td className="p-3 text-slate-500 font-medium">{prod.category_name || 'General'}</td>
-                          <td className="p-3 text-slate-600 font-semibold">{prod.vendor_name || 'N/A'}</td>
-                          <td className="p-3 text-center font-semibold text-slate-700">{prod.packing}</td>
-                          <td className="p-3 text-right font-bold text-amber-800">{formatCurrency(prod.sale_price)}</td>
-                          <td className="p-3 text-center">
-                            <div className="flex items-center justify-center gap-1.5">
-                              <button
-                                onClick={() => handleSelectProduct(prod)}
-                                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
-                                title="Edit Product"
-                              >
-                                <Edit2 size={15} />
-                              </button>
-                              <button
-                                onClick={() => setDeletingProduct(prod)}
-                                className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                                title="Delete Product"
-                              >
-                                <Trash2 size={15} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+              <DataListTable<ProductRow>
+                rows={filteredProducts}
+                rowKey={prod => prod.article_id}
+                onRowClick={prod => handleSelectProduct(prod)}
+                loading={loading}
+                emptyMessage="No registered products found."
+                columns={[
+                  {
+                    key: 'code',
+                    header: 'Code',
+                    width: '120px',
+                    render: prod => <span className="font-semibold text-slate-700">{prod.code}</span>,
+                  },
+                  {
+                    key: 'name',
+                    header: 'Article Name',
+                    render: prod => <span className="font-semibold text-slate-900">{prod.name}</span>,
+                  },
+                  {
+                    key: 'category',
+                    header: 'Category',
+                    render: prod => (
+                      <span className="text-slate-500 font-medium">{prod.category_name || 'General'}</span>
+                    ),
+                  },
+                  {
+                    key: 'vendor',
+                    header: 'Vendor',
+                    render: prod => (
+                      <span className="text-slate-600 font-semibold">{prod.vendor_name || 'N/A'}</span>
+                    ),
+                  },
+                  {
+                    key: 'packing',
+                    header: 'Packing (Pairs)',
+                    align: 'center',
+                    render: prod => <span className="font-semibold text-slate-700">{prod.packing}</span>,
+                  },
+                  {
+                    key: 'sale_price',
+                    header: 'Sale Price',
+                    align: 'right',
+                    render: prod => (
+                      <span className="font-bold text-amber-800">{formatCurrency(prod.sale_price)}</span>
+                    ),
+                  },
+                ]}
+                actionsWidth="80px"
+                actions={prod => (
+                  <>
+                    <button
+                      onClick={() => handleSelectProduct(prod)}
+                      className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
+                      title="Edit Product"
+                    >
+                      <Edit2 size={15} />
+                    </button>
+                    <button
+                      onClick={() => setDeletingProduct(prod)}
+                      className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                      title="Delete Product"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </>
+                )}
+              />
             </div>
           ) : (
             /* View 2: Add New / Edit Product Form */
