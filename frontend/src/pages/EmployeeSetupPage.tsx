@@ -6,6 +6,7 @@ import { getEmployeeBalance, type FlatSalaryItem } from '@/lib/payroll';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, Phone, MapPin, HardHat, BadgeDollarSign, X, RotateCcw } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
+import SearchableSelect from '@/components/SearchableSelect';
 
 type ListTab = 'workers' | 'salaried';
 
@@ -275,14 +276,17 @@ export default function EmployeeSetupPage() {
 
               {/* Filters */}
               <div className="flex flex-wrap items-center gap-3">
-                <select
-                  value={cityFilter}
-                  onChange={e => setCityFilter(e.target.value)}
-                  className="soleria-input w-48 py-1.5 text-xs font-semibold"
-                >
-                  <option value="all">All Cities</option>
-                  {cities.map(c => <option key={c.city_id} value={String(c.city_id)}>{c.name}</option>)}
-                </select>
+                <div className="w-48">
+                  <SearchableSelect
+                    options={[
+                      { value: 'all', label: 'All Cities' },
+                      ...cities.map(c => ({ value: String(c.city_id), label: c.name }))
+                    ]}
+                    value={cityFilter}
+                    onChange={setCityFilter}
+                    placeholder="Filter City..."
+                  />
+                </div>
 
                 <div className="relative min-w-[200px]">
                   <input
@@ -469,14 +473,12 @@ export default function EmployeeSetupPage() {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">City Location</label>
-                    <select
+                    <SearchableSelect
+                      options={cities.map(c => ({ value: String(c.city_id), label: c.name }))}
                       value={cityId}
-                      onChange={e => setCityId(e.target.value)}
-                      className="soleria-input w-full font-semibold"
-                    >
-                      <option value="">Select city...</option>
-                      {cities.map(c => <option key={c.city_id} value={String(c.city_id)}>{c.name}</option>)}
-                    </select>
+                      onChange={setCityId}
+                      placeholder="Select city..."
+                    />
                   </div>
                 </div>
 

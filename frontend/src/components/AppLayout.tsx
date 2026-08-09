@@ -5,7 +5,7 @@ import {
   Settings, LogOut, Menu, X, ChevronDown, MapPin, Home,
   Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search, HardHat,
   BadgeDollarSign, ArrowLeftRight, Landmark, Pin, BookmarkPlus, Trash2, GripHorizontal, ArrowDownToLine, Warehouse, RotateCcw,
-  UserCog
+  UserCog, UserSearch
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
@@ -53,6 +53,7 @@ const navSections: NavSection[] = [
       { page: 'reports', label: 'Reports Hub & Ledger', icon: FileText },
       { page: 'bilty-update', label: 'Search & Bilty Adda Updation', icon: Search },
       { page: 'overall-search', label: 'Overall Searching', icon: Users },
+      { page: 'search-customer', label: 'Search Customer', icon: UserSearch },
     ]
   },
   {
@@ -82,6 +83,21 @@ const navSections: NavSection[] = [
   }
 ];
 
+// Pre-seeded Quick Menu shortcuts for a first-ever launch (empty localStorage) — the pages/tabs
+// used often enough day-to-day to be worth one click from anywhere. Cash Book and Business Ledger
+// live as sub-tabs of the Reports Hub page, so they're pinned via `tab`, same as clicking their
+// own "+ Pin Page to Bar" would produce.
+const DEFAULT_SHORTCUTS: QuickShortcut[] = [
+  { id: 'default_sale-bill', label: 'Sale Bill', page: 'sale-bill' },
+  { id: 'default_purchase-entry', label: 'Purchase', page: 'purchase-entry' },
+  { id: 'default_receipts-jamma', label: 'Receipts (Jamma)', page: 'receipts-jamma' },
+  { id: 'default_expenses-entry', label: 'Expenses (Kharch)', page: 'expenses-entry' },
+  { id: 'default_cash-book', label: 'Cash Book', page: 'reports', tab: 'cash-book' },
+  { id: 'default_business-ledger', label: 'Business Ledger', page: 'reports', tab: 'business-ledger' },
+  { id: 'default_report-stock', label: 'Current Stock', page: 'report-stock' },
+  { id: 'default_search-customer', label: 'Search Customer', page: 'search-customer' },
+];
+
 let savedSidebarScrollTop = 0;
 
 interface AppLayoutProps {
@@ -102,16 +118,18 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     return localStorage.getItem('wento_sidebar_hidden') !== 'false';
   });
 
-  // Top Menu Bar Shortcuts State - Default is completely empty (none)
+  // Top Menu Bar Shortcuts State — pre-seeded with the everyday-use pages on first-ever launch
+  // (nothing in localStorage yet); once the user has saved anything of their own (including
+  // clearing it down to zero), that always wins from then on.
   const SHORTCUTS_STORAGE_KEY = 'wento_quick_shortcuts_clean_v3';
 
   const [shortcuts, setShortcuts] = useState<QuickShortcut[]>(() => {
     const saved = localStorage.getItem(SHORTCUTS_STORAGE_KEY);
-    if (!saved) return [];
+    if (!saved) return DEFAULT_SHORTCUTS;
     try {
       return JSON.parse(saved);
     } catch {
-      return [];
+      return DEFAULT_SHORTCUTS;
     }
   });
 
@@ -489,13 +507,16 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
             setIsDragging(false);
             handleDropShortcut(e);
           }}
-          className={`py-1.5 px-6 flex items-center justify-between flex-wrap gap-2 text-xs font-inter transition-all duration-200 ${
+          className={`py-1.5 px-6 flex items-center justify-between flex-nowrap gap-2 text-xs font-inter transition-all duration-200 ${
             isDragOver || isDragging
               ? 'bg-amber-100/90 border-2 border-dashed border-[#B08D57] shadow-md ring-2 ring-amber-400/40 animate-pulse'
               : 'bg-slate-100/90 border-b border-slate-200 shadow-2xs'
           }`}
         >
-          <div className="flex items-center gap-2 overflow-x-auto max-w-full py-0.5 scrollbar-none">
+          {/* flex-1 + min-w-0 is required for overflow-x-auto to actually scroll instead of just
+              growing forever — a flex child's default min-width is `auto`, which blocks shrinking
+              below its content's width no matter how much content (pinned shortcuts) it holds. */}
+          <div className="flex items-center gap-2 overflow-x-auto flex-1 min-w-0 py-0.5">
             <span className="font-bold text-[#111c2a] uppercase tracking-wider text-[11px] shrink-0 flex items-center gap-1">
               <Pin size={12} className="text-[#B08D57]" /> Quick Menu:
             </span>
@@ -552,7 +573,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
             onClick={handlePinCurrentPage}
             disabled={isCurrentPagePinned}
             title={isCurrentPagePinned ? 'Already pinned' : 'Pin current page/subpage to Quick Menu Bar'}
-            className={`px-3 py-1 text-[11px] font-bold rounded-full transition-all flex items-center gap-1 border ${
+            className={`px-3 py-1 text-[11px] font-bold rounded-full transition-all flex items-center gap-1 border shrink-0 ${
               isCurrentPagePinned
                 ? 'bg-slate-200 text-slate-400 border-slate-300 cursor-default'
                 : 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-[#111c2a] hover:text-[#B08D57] cursor-pointer shadow-2xs'

@@ -571,5 +571,6 @@ export type NavPage =
   | 'reports'
   | 'bilty-update'
   | 'overall-search'
+  | 'search-customer'
   | 'settings'
   | 'check-updates';

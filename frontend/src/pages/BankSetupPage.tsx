@@ -3,13 +3,13 @@ import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
 import type { BankAccountRow } from '@/lib/api';
-import { Plus, ArrowLeft, Save, Edit2, Ban, RotateCcw, Landmark, Search, AlertTriangle } from 'lucide-react';
+import { Plus, Save, Edit2, Ban, RotateCcw, Landmark, Search, AlertTriangle, X } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 
 export default function BankSetupPage() {
   const { state } = useApp();
 
-  const [tab, setTab] = useState<'list' | 'form'>('list');
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const [showInactive, setShowInactive] = useState(false);
@@ -42,21 +42,26 @@ export default function BankSetupPage() {
 
   useEffect(() => { loadBanks(showInactive); }, [loadBanks, showInactive]);
 
-  const addNew = () => {
+  const handleOpenAddModal = () => {
     setSelectedId(null);
     setName(''); setAccountNo(''); setBranch('');
     setOpeningBalance(''); setOpeningDate(new Date().toISOString().split('T')[0]);
     setErrorMsg('');
-    setTab('form');
+    setIsModalOpen(true);
   };
 
-  const select = (bank: BankAccountRow) => {
+  const handleOpenEditModal = (bank: BankAccountRow) => {
     setSelectedId(bank.bank_id);
     setName(bank.name);
     setAccountNo(bank.account_no || '');
     setBranch(bank.branch || '');
     setErrorMsg('');
-    setTab('form');
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedId(null);
   };
 
   const save = async (e: React.FormEvent) => {
@@ -75,8 +80,7 @@ export default function BankSetupPage() {
       });
       if (!res.ok) return setErrorMsg(res.error.message);
       flash('Bank account updated.');
-      setSelectedId(null);
-      setTab('list');
+      handleCloseModal();
       loadBanks(showInactive);
     } else {
       const payload: Parameters<typeof api.bankAccounts.create>[0] = {
@@ -97,8 +101,7 @@ export default function BankSetupPage() {
         return setErrorMsg(res.error.message);
       }
       flash('Bank account added. It can now be selected on payments and receipts.');
-      setSelectedId(null);
-      setTab('list');
+      handleCloseModal();
       loadBanks(showInactive);
     }
   };
@@ -125,8 +128,7 @@ export default function BankSetupPage() {
     setReactivatePrompt(null);
     if (!res.ok) return fail('Failed to reactivate: ' + res.error.message);
     flash('Existing bank account reactivated.');
-    setSelectedId(null);
-    setTab('list');
+    handleCloseModal();
     setShowInactive(false);
     loadBanks(false);
   };
@@ -158,198 +160,207 @@ export default function BankSetupPage() {
       <div className="mx-auto" style={{ maxWidth: 1100 }}>
 
         {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>}
-        {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>}
+        {errorMsg && !isModalOpen && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>}
 
         <div className="flex justify-between items-center mb-6">
           <div className="flex gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
-            <button
-              onClick={() => { setTab('list'); setSelectedId(null); }}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'list' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-            >
+            <div className="px-4 py-2 text-sm font-semibold rounded-lg flex items-center gap-1.5 bg-[#111c2a] text-[#B08D57] shadow-sm">
               <Landmark size={15} /> Bank Accounts ({banks.length})
-            </button>
+            </div>
           </div>
-          {tab === 'list' && (
-            <button onClick={addNew} className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm">
-              <Plus size={16} /> Add Bank Account
-            </button>
-          )}
+          <button onClick={handleOpenAddModal} className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm cursor-pointer">
+            <Plus size={16} /> Add Bank Account
+          </button>
         </div>
 
-        {tab === 'list' ? (
-          <div className="card-white p-6 md:p-8 bg-white border overflow-visible" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">Our Bank Accounts</h3>
-                <p className="text-xs text-slate-500">
-                  Each sits under the <strong>Bank Accounts</strong> chart head, so adding one is data — not a schema change.
-                </p>
-              </div>
-              <div className="flex items-end gap-4">
-                <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 pb-2 cursor-pointer">
-                  <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
-                  Show inactive
-                </label>
+        <div className="card-white p-6 md:p-8 bg-white border overflow-visible" style={{ borderColor: 'var(--border-color)' }}>
+          <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+              <h3 className="font-lora font-semibold text-lg text-slate-800">Our Bank Accounts</h3>
+              <p className="text-xs text-slate-500">
+                Each sits under the <strong>Bank Accounts</strong> chart head, so adding one is data — not a schema change.
+              </p>
+            </div>
+            <div className="flex items-end gap-4">
+              <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 pb-2 cursor-pointer">
+                <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
+                Show inactive
+              </label>
+              <div className="relative">
+                <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search:</span>
                 <div className="relative">
-                  <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search:</span>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      placeholder="Name, account no, branch..."
-                      value={search}
-                      onChange={e => setSearch(e.target.value)}
-                      className="soleria-input py-2 text-sm pr-9 font-semibold min-w-[220px]"
-                    />
-                    <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
-                  </div>
+                  <input
+                    type="text"
+                    placeholder="Name, account no, branch..."
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    className="soleria-input py-2 text-sm pr-9 font-semibold min-w-[220px]"
+                  />
+                  <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
                 </div>
               </div>
             </div>
-
-            <DataListTable<BankAccountRow>
-              rows={filtered}
-              rowKey={b => b.bank_id}
-              onRowClick={b => select(b)}
-              loading={loading}
-              loadingMessage="Loading..."
-              emptyMessage={banks.length === 0
-                ? 'No bank accounts yet. Add one so payments and receipts can name where the money moved.'
-                : 'No accounts match this search.'}
-              columns={[
-                {
-                  key: 'code',
-                  header: 'A/C Code',
-                  width: '130px',
-                  render: b => (
-                    <span className="font-mono font-semibold text-slate-600 text-xs">{b.ba_id ?? '—'}</span>
-                  ),
-                },
-                {
-                  key: 'name',
-                  header: 'Bank',
-                  render: b => <span className="font-semibold text-slate-900">{b.name}</span>,
-                },
-                {
-                  key: 'account_no',
-                  header: 'Account No.',
-                  render: b => b.account_no
-                    ? <span className="font-mono text-slate-600 text-xs">{b.account_no}</span>
-                    : <span className="text-slate-300">—</span>,
-                },
-                {
-                  key: 'branch',
-                  header: 'Branch',
-                  render: b => b.branch
-                    ? <span className="text-slate-600">{b.branch}</span>
-                    : <span className="text-slate-300">—</span>,
-                },
-                {
-                  key: 'status',
-                  header: 'Status',
-                  width: '110px',
-                  align: 'center',
-                  render: b => b.is_active
-                    ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">Active</span>
-                    : <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">Inactive</span>,
-                },
-              ]}
-              actionsWidth="90px"
-              actions={b => (
-                b.is_active ? (
-                  <>
-                    <button onClick={() => select(b)} title="Edit" className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-800">
-                      <Edit2 size={15} />
-                    </button>
-                    <button onClick={() => setDeactivatingBank(b)} title="Deactivate" className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600">
-                      <Ban size={15} />
-                    </button>
-                  </>
-                ) : (
-                  <button onClick={() => reactivate(b.bank_id)} title="Reactivate" className="p-1.5 rounded hover:bg-emerald-50 text-slate-400 hover:text-emerald-600">
-                    <RotateCcw size={15} />
-                  </button>
-                )
-              )}
-            />
           </div>
-        ) : (
-          <div className="card-white p-6 md:p-8 bg-white border overflow-visible" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="flex items-start gap-3 border-b pb-4 mb-6">
-              <button onClick={() => { setTab('list'); setSelectedId(null); }} className="p-1.5 rounded hover:bg-slate-100 text-slate-500 mt-0.5">
-                <ArrowLeft size={18} />
-              </button>
-              <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">
+
+          <DataListTable<BankAccountRow>
+            rows={filtered}
+            rowKey={b => b.bank_id}
+            onRowClick={b => handleOpenEditModal(b)}
+            loading={loading}
+            loadingMessage="Loading..."
+            emptyMessage={banks.length === 0
+              ? 'No bank accounts yet. Add one so payments and receipts can name where the money moved.'
+              : 'No accounts match this search.'}
+            columns={[
+              {
+                key: 'code',
+                header: 'A/C Code',
+                width: '130px',
+                render: b => (
+                  <span className="font-mono font-semibold text-slate-600 text-xs">{b.ba_id ?? '—'}</span>
+                ),
+              },
+              {
+                key: 'name',
+                header: 'Bank',
+                render: b => <span className="font-semibold text-slate-900">{b.name}</span>,
+              },
+              {
+                key: 'account_no',
+                header: 'Account No.',
+                render: b => b.account_no
+                  ? <span className="font-mono text-slate-600 text-xs">{b.account_no}</span>
+                  : <span className="text-slate-300">—</span>,
+              },
+              {
+                key: 'branch',
+                header: 'Branch',
+                render: b => b.branch
+                  ? <span className="text-slate-600">{b.branch}</span>
+                  : <span className="text-slate-300">—</span>,
+              },
+              {
+                key: 'status',
+                header: 'Status',
+                width: '110px',
+                align: 'center',
+                render: b => b.is_active
+                  ? <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">Active</span>
+                  : <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200">Inactive</span>,
+              },
+            ]}
+            actionsWidth="90px"
+            actions={b => (
+              b.is_active ? (
+                <>
+                  <button onClick={() => handleOpenEditModal(b)} title="Edit" className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-800">
+                    <Edit2 size={15} />
+                  </button>
+                  <button onClick={() => setDeactivatingBank(b)} title="Deactivate" className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600">
+                    <Ban size={15} />
+                  </button>
+                </>
+              ) : (
+                <button onClick={() => reactivate(b.bank_id)} title="Reactivate" className="p-1.5 rounded hover:bg-emerald-50 text-slate-400 hover:text-emerald-600">
+                  <RotateCcw size={15} />
+                </button>
+              )
+            )}
+          />
+        </div>
+
+        {/* Add/Edit Bank Account — Modal Dialogue Box Pop-up */}
+        {isModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}>
+            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
+                <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
+                  <Landmark size={18} className="text-[#B08D57]" />
                   {selectedId ? `Edit: ${name}` : 'Add Bank Account'}
                 </h3>
-                <p className="text-xs text-slate-500">
+                <button
+                  onClick={handleCloseModal}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form onSubmit={save} className="p-5 flex flex-col gap-4">
+                {errorMsg && (
+                  <div className="banner-error rounded-lg px-3 py-2 text-xs">{errorMsg}</div>
+                )}
+
+                <p className="text-xs text-slate-500 -mt-1">
                   A ledger account is created automatically under Bank Accounts — no separate setup needed.
                 </p>
-              </div>
-            </div>
 
-            <form onSubmit={save} className="flex flex-col gap-6 max-w-2xl">
-              <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-4" style={{ borderColor: 'var(--border-color)' }}>
-                <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
-                  <Landmark size={15} className="text-[#B08D57]" /> Bank Details
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="md:col-span-2">
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      Account Name <span className="text-red-500 font-bold">*</span>
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                      Account Name <span className="text-rose-500">*</span>
                     </label>
                     <input type="text" value={name} onChange={e => setName(e.target.value)}
-                      placeholder="e.g. Bank Alfalah A/C - 0124" className="soleria-input font-semibold" />
+                      placeholder="e.g. Bank Alfalah A/C - 0124" className="soleria-input w-full font-semibold" autoFocus />
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Account Number</label>
-                    <input type="text" value={accountNo} onChange={e => setAccountNo(e.target.value)}
-                      placeholder="e.g. 0124-7901-33" className="soleria-input font-mono" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Branch</label>
-                    <input type="text" value={branch} onChange={e => setBranch(e.target.value)}
-                      placeholder="e.g. Gulberg, Lahore" className="soleria-input" />
-                  </div>
-                </div>
-              </div>
 
-              {!selectedId && (
-                <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-3" style={{ borderColor: 'var(--border-color)' }}>
-                  <div className="text-xs font-bold text-slate-700 uppercase tracking-wider border-b pb-2">
-                    Opening Balance
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Amount already in the account</label>
-                      <input type="number" value={openingBalance} onChange={e => setOpeningBalance(e.target.value)}
-                        placeholder="0" className="soleria-input text-right font-semibold" />
+                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">Account Number</label>
+                      <input type="text" value={accountNo} onChange={e => setAccountNo(e.target.value)}
+                        placeholder="e.g. 0124-7901-33" className="soleria-input w-full font-mono" />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">As at</label>
-                      <input type="date"
-            value={openingDate} onChange={e => setOpeningDate(e.target.value)}
-                        className="soleria-input" />
+                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">Branch</label>
+                      <input type="text" value={branch} onChange={e => setBranch(e.target.value)}
+                        placeholder="e.g. Gulberg, Lahore" className="soleria-input w-full" />
                     </div>
                   </div>
-                  <p className="text-[11px] text-slate-500">
-                    An account opened mid-life already holds money. This is where the running balance
-                    starts — leave it blank for a genuinely new account. Set only when the account is
-                    created; it cannot be changed afterward.
-                  </p>
                 </div>
-              )}
 
-              <div className="flex gap-3 justify-end border-t pt-4">
-                <button type="button" onClick={() => { setTab('list'); setSelectedId(null); }}
-                  className="px-5 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
-                  Cancel
-                </button>
-                <button type="submit" className="btn-gold flex items-center gap-1.5 px-5 py-2 text-sm">
-                  <Save size={16} /> {selectedId ? 'Save Changes' : 'Add Bank Account'}
-                </button>
-              </div>
-            </form>
+                {!selectedId && (
+                  <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-3" style={{ borderColor: 'var(--border-color)' }}>
+                    <div className="text-xs font-bold text-slate-700 uppercase tracking-wider border-b pb-2">
+                      Opening Balance
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Amount already in the account</label>
+                        <input type="number" value={openingBalance} onChange={e => setOpeningBalance(e.target.value)}
+                          placeholder="0" className="soleria-input w-full text-right font-semibold" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">As at</label>
+                        <input type="date"
+                          value={openingDate} onChange={e => setOpeningDate(e.target.value)}
+                          className="soleria-input w-full" />
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      An account opened mid-life already holds money. This is where the running balance
+                      starts — leave it blank for a genuinely new account. Set only when the account is
+                      created; it cannot be changed afterward.
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={handleCloseModal}
+                    className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn-gold px-5 py-2 text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Save size={14} /> {selectedId ? 'Save Changes' : 'Add Bank Account'}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
 

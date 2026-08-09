@@ -420,6 +420,29 @@ body {
   display: none;
 }
 
+/* Laptop tier — between the desktop default and the ≤900px mobile/tablet drawer
+   breakpoint below. The sidebar stays a fixed 256px and never auto-collapses up here (that's
+   the ≤900px block's job), so a 1280–1366px laptop window was getting the exact same 32px
+   .app-main padding and full page-level max-width caps as a 1920px+ desktop, leaving
+   noticeably less real content width than on desktop. Trims padding/gaps back in two steps
+   instead of jumping straight from "desktop" to "mobile drawer" at 900px. */
+@media (max-width: 1440px) {
+  .app-main {
+    padding: 24px !important;
+  }
+}
+
+@media (max-width: 1280px) {
+  .app-main {
+    padding: 20px !important;
+  }
+
+  .app-header {
+    padding-left: 20px !important;
+    padding-right: 20px !important;
+  }
+}
+
 @media (max-width: 900px) {
   .hamburger-btn {
     display: flex;

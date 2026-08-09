@@ -286,7 +286,7 @@ async function biltySearch(filters = {}) {
      FROM dbo.sale_bills sb
      JOIN dbo.customers c ON c.customer_id = sb.customer_id
      LEFT JOIN dbo.sub_customers sc ON sc.sub_customer_id = sb.sub_customer_id
-     JOIN dbo.addas ad ON ad.adda_id = sb.adda_id
+     LEFT JOIN dbo.addas ad ON ad.adda_id = sb.adda_id
      ${where}
      ORDER BY sb.bill_date DESC, sb.bill_id DESC`,
     params,

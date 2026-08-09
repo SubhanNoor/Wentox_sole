@@ -6,7 +6,6 @@ import { SaleReportContent } from '@/pages/SaleReportPage';
 import { VendorReportContent } from '@/pages/VendorReportPage';
 import { PaymentTrailContent } from '@/pages/PaymentTrailPage';
 import { ReportKhaataContent } from '@/pages/ReportKhaataPage';
-import BusinessLedgerContent from '@/pages/BusinessLedgerContent';
 import { ReportCashBookContent } from '@/pages/ReportCashBookPage';
 import ProductLedgerContent from '@/pages/ProductLedgerContent';
 import OverallTrailContent from '@/pages/OverallTrailContent';
@@ -84,7 +83,7 @@ export default function ReportsHubPage() {
           {activeTab === 'vendor' && <VendorReportContent />}
           {activeTab === 'payment-trail' && <PaymentTrailContent />}
           {activeTab === 'account-ledger' && <ReportKhaataContent />}
-          {activeTab === 'business-ledger' && <BusinessLedgerContent />}
+          {activeTab === 'business-ledger' && <ReportKhaataContent scope="all" />}
           {activeTab === 'cash-book' && <ReportCashBookContent />}
           {activeTab === 'product-ledger' && <ProductLedgerContent />}
           {activeTab === 'overall-trail' && <OverallTrailContent />}

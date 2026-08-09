@@ -24,8 +24,27 @@ interface KhaataRow {
   balance: number;
 }
 
-export function ReportKhaataContent() {
-  const [customerBaId, setCustomerBaId] = useState<number | null>(null);
+// Category badge — one constant style regardless of which category it is (matches the
+// no-per-item-color rule applied elsewhere, e.g. Overall Search's Type column).
+const CATEGORY_LABELS: Record<string, string> = {
+  CUSTOMER: 'Customer',
+  VENDOR: 'Vendor',
+  EMPLOYEE: 'Employee',
+  BANK: 'Bank',
+  BUSINESS_ACCOUNT: 'Business Account',
+};
+
+interface ReportKhaataContentProps {
+  /** 'customer' (default) scopes the directory to CUSTOMER accounts only — unchanged behaviour
+   * for the existing Account Ledger tab. 'all' shows every business account regardless of
+   * category (Business Ledger tab). */
+  scope?: 'customer' | 'all';
+}
+
+export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentProps) {
+  const isAllScope = scope === 'all';
+
+  const [accountBaId, setAccountBaId] = useState<number | null>(null);
   const [isClosing, setIsClosing] = useState(false);
   const [accountSearch, setAccountSearch] = useState('');
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -33,7 +52,7 @@ export function ReportKhaataContent() {
   const handleCloseDetail = () => {
     setIsClosing(true);
     setTimeout(() => {
-      setCustomerBaId(null);
+      setAccountBaId(null);
       setIsClosing(false);
     }, 200);
   };
@@ -47,33 +66,34 @@ export function ReportKhaataContent() {
   useEffect(() => {
     api.reports.businessLedger({ view: 'summary' }).then(res => {
       if (res.ok && Array.isArray(res.data)) {
-        setDirectory(res.data.filter(a => a.category === 'CUSTOMER'));
+        setDirectory(isAllScope ? res.data : res.data.filter(a => a.category === 'CUSTOMER'));
       }
     });
-  }, []);
+  }, [isAllScope]);
 
-  const selectedCustomer = useMemo(() => directory.find(c => c.ba_id === customerBaId), [customerBaId, directory]);
+  const selectedAccount = useMemo(() => directory.find(c => c.ba_id === accountBaId), [accountBaId, directory]);
 
   const loadLedger = useCallback(async () => {
-    if (!customerBaId) return;
+    if (!accountBaId) return;
     setLoading(true);
-    const res = await api.reports.accountLedger({ ba_id: customerBaId, date_from: fromDate || undefined, date_to: toDate || undefined });
+    const res = await api.reports.accountLedger({ ba_id: accountBaId, date_from: fromDate || undefined, date_to: toDate || undefined });
     if (res.ok) setLedger(res.data); else setLedger(null);
     setLoading(false);
-  }, [customerBaId, fromDate, toDate]);
+  }, [accountBaId, fromDate, toDate]);
 
-  useEffect(() => { if (customerBaId) loadLedger(); }, [customerBaId, loadLedger]);
+  useEffect(() => { if (accountBaId) loadLedger(); }, [accountBaId, loadLedger]);
 
-  const filteredCustomers = useMemo(() => {
+  const filteredAccounts = useMemo(() => {
     if (!accountSearch.trim()) return directory;
     const q = accountSearch.toLowerCase();
     return directory.filter(c =>
       c.code.toLowerCase().includes(q) ||
       c.name.toLowerCase().includes(q) ||
       c.main_account.toLowerCase().includes(q) ||
-      (c.city_name || '').toLowerCase().includes(q)
+      (c.city_name || '').toLowerCase().includes(q) ||
+      (isAllScope && (CATEGORY_LABELS[c.category] || c.category).toLowerCase().includes(q))
     );
-  }, [directory, accountSearch]);
+  }, [directory, accountSearch, isAllScope]);
 
   // Opening Balance synthetic row + running balance — the backend already computes both.
   const runningKhaata = useMemo<KhaataRow[]>(() => {
@@ -89,14 +109,15 @@ export function ReportKhaataContent() {
   }, [ledger, fromDate]);
 
   const handleExportExcel = () => {
-    if (!selectedCustomer) return;
+    if (!selectedAccount) return;
     const headers = ['Date', 'Type', 'Inv #', 'Bill #', 'Narration', 'Pairs', 'Debit (Rs.)', 'Credit (Rs.)', 'Balance (Rs.)'];
     const rows = runningKhaata.map(r => [
       r.date, r.type, r.invNo, r.billNo, r.narration, r.pairs, r.debit, r.credit, r.balance
     ]);
-    exportRowsToExcel(`khaata-ledger-${selectedCustomer.name}`, headers, rows);
+    exportRowsToExcel(`${isAllScope ? 'business' : 'khaata'}-ledger-${selectedAccount.name}`, headers, rows);
   };
 
+  const printTitle = isAllScope ? 'BUSINESS LEDGER STATEMENT' : 'CUSTOMER KHAATA LEDGER STATEMENT';
 
   const renderPrintableReport = () => (
     <div className="excel-print-container">
@@ -105,9 +126,13 @@ export function ReportKhaataContent() {
           <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '180px', width: 'auto', objectFit: 'contain' }} />
         </div>
         <div style={{ textAlign: 'right' }}>
-          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>CUSTOMER KHAATA LEDGER STATEMENT</h2>
-          <p style={{ margin: '4px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>{selectedCustomer?.name || 'All Customers'}</p>
-          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Code: {selectedCustomer?.code} | City: {selectedCustomer?.city_name || 'General'}</p>
+          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>{printTitle}</h2>
+          <p style={{ margin: '4px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>{selectedAccount?.name || (isAllScope ? 'All Accounts' : 'All Customers')}</p>
+          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
+            Code: {selectedAccount?.code}
+            {isAllScope && selectedAccount ? ` | Category: ${CATEGORY_LABELS[selectedAccount.category] || selectedAccount.category}` : ''}
+            {' '}| City: {selectedAccount?.city_name || 'General'}
+          </p>
           <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}</p>
           <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Date of Print: {formatDate(new Date())}</p>
         </div>
@@ -183,8 +208,8 @@ export function ReportKhaataContent() {
     <>
       <div className="mx-auto" style={{ maxWidth: 1000 }}>
 
-        {/* 1. Accounts Directory View (When no customer is selected) */}
-        {!customerBaId ? (
+        {/* 1. Accounts Directory View (When no account is selected) */}
+        {!accountBaId ? (
           <>
             {/* Selection Bar / Search & Date filters */}
             <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }}>
@@ -193,7 +218,7 @@ export function ReportKhaataContent() {
                 <div className="relative">
                   <input
                     type="text"
-                    placeholder="Search by Code, Description, Main Account or City..."
+                    placeholder={`Search by Code, Description, Main Account${isAllScope ? ', Category' : ''} or City...`}
                     value={accountSearch}
                     onChange={e => setAccountSearch(e.target.value)}
                     className="soleria-input w-full py-2 text-sm pr-10 font-semibold"
@@ -233,15 +258,15 @@ export function ReportKhaataContent() {
                   <p className="text-xs text-slate-500 font-medium">Select an account row below to view its detailed statement ledger.</p>
                 </div>
                 <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-1 rounded-full border border-slate-200">
-                  Total: {filteredCustomers.length} Accounts
+                  Total: {filteredAccounts.length} Accounts
                 </div>
               </div>
 
               <div className="card-white overflow-hidden border bg-white">
-                <DataListTable<typeof filteredCustomers[number]>
-                  rows={filteredCustomers}
+                <DataListTable<typeof filteredAccounts[number]>
+                  rows={filteredAccounts}
                   rowKey={c => c.ba_id}
-                  onRowClick={c => setCustomerBaId(c.ba_id)}
+                  onRowClick={c => setAccountBaId(c.ba_id)}
                   emptyMessage="No accounts found matching your search."
                   columns={[
                     {
@@ -266,6 +291,16 @@ export function ReportKhaataContent() {
                         </span>
                       ),
                     },
+                    ...(isAllScope ? [{
+                      key: 'category',
+                      header: 'Category',
+                      width: '140px',
+                      render: (c: typeof filteredAccounts[number]) => (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase tracking-wider bg-slate-100 text-slate-700 border-slate-300">
+                          {CATEGORY_LABELS[c.category] || c.category}
+                        </span>
+                      ),
+                    }] : []),
                     {
                       key: 'city',
                       header: 'City',
@@ -297,7 +332,7 @@ export function ReportKhaataContent() {
           <div className={`transition-all duration-200 ${isClosing ? 'opacity-0 translate-y-2 scale-98' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
             {/* Navigation & Action Card */}
             <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-6 shadow-2xs">
-              {/* ROW 1: Back Button & Customer Name (Left), Opening Balance (Right) */}
+              {/* ROW 1: Back Button & Account Name (Left), Opening Balance (Right) */}
               <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-3 mb-4">
                 <div className="flex flex-wrap items-center gap-3">
                   <button
@@ -307,7 +342,12 @@ export function ReportKhaataContent() {
                     &larr; Back to Accounts Directory
                   </button>
                   <div className="text-sm font-semibold text-slate-700">
-                    Viewing Ledger: <span className="font-lora font-bold text-slate-900 text-base ml-1">{selectedCustomer?.name}</span>
+                    Viewing Ledger: <span className="font-lora font-bold text-slate-900 text-base ml-1">{selectedAccount?.name}</span>
+                    {isAllScope && selectedAccount && (
+                      <span className="ml-2 text-[10px] font-bold px-2 py-0.5 rounded border uppercase tracking-wider bg-slate-100 text-slate-700 border-slate-300 align-middle">
+                        {CATEGORY_LABELS[selectedAccount.category] || selectedAccount.category}
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -364,9 +404,9 @@ export function ReportKhaataContent() {
                 </div>
                 <div className="text-right">
                   <h2 className="font-lora font-semibold text-lg uppercase">Account Statement (Khaata)</h2>
-                  <div className="text-sm font-semibold text-slate-700 mt-1">{selectedCustomer?.name}</div>
+                  <div className="text-sm font-semibold text-slate-700 mt-1">{selectedAccount?.name}</div>
                   <div className="text-xs text-slate-500 font-medium">
-                    Account ID: {selectedCustomer?.code} | City: {selectedCustomer?.city_name || 'General'}
+                    Account ID: {selectedAccount?.code} | City: {selectedAccount?.city_name || 'General'}
                   </div>
                   {(fromDate || toDate) && (
                     <div className="text-xs text-amber-700 font-semibold mt-0.5">
@@ -466,7 +506,7 @@ export function ReportKhaataContent() {
       <ReportPrintPreviewModal
         isOpen={isPreviewOpen}
         onClose={() => setIsPreviewOpen(false)}
-        title={`Customer Khaata Ledger - ${selectedCustomer?.name || ''}`}
+        title={`${isAllScope ? 'Business Ledger' : 'Customer Khaata Ledger'} - ${selectedAccount?.name || ''}`}
         orientation="landscape"
         onExportExcel={handleExportExcel}
       >

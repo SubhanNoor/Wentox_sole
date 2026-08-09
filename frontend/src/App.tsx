@@ -36,6 +36,7 @@ import ReportStockPage from '@/pages/ReportStockPage';
 import ReportsHubPage from '@/pages/ReportsHubPage';
 import BiltyUpdatePage from '@/pages/BiltyUpdatePage';
 import OverallSearchPage from '@/pages/OverallSearchPage';
+import SearchCustomerPage from '@/pages/SearchCustomerPage';
 
 // Settings
 import SettingsPage from '@/pages/SettingsPage';
@@ -126,6 +127,8 @@ export default function App() {
       return <BiltyUpdatePage />;
     case 'overall-search':
       return <OverallSearchPage />;
+    case 'search-customer':
+      return <SearchCustomerPage />;
 
     case 'settings':
       return <SettingsPage />;
