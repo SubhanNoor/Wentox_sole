@@ -23,6 +23,42 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Cash Book — cheque endorsements were missing from the outflow columns
+
+### 2026-08-09 — `cheque_allocations` added as a third Cash Book source; stale doc note corrected
+- **Cause was a bad assumption, not a bad design.** `use_cases.md` UC-37 carried a note saying
+  cheque allocations "do not exist yet"; that was taken at face value while building the Cash Book,
+  so `cashBookNonCashRows()` read only `receipts` and `expenses`. Cheque endorsement has in fact
+  been built for some time — eleven `cheques:` IPC channels (`endorse-to-vendor`,
+  `endorse-to-expense`, `reverse-allocation`, …), UC-27 marked ✅, and live `cheque_allocations`
+  rows in the demo data. **Lesson already on record and not applied: design docs are historical
+  intent, not current state — check the code.**
+- **Symptom:** a VENDOR_PAYMENT endorsement never appeared anywhere on the Cash Book. Verified
+  before the fix — allocation #3 (20,000, dated 2026-08-01) produced a completely empty report for
+  that date, despite UC-37 explicitly requiring "an endorsed cheque posts as an outflow on its
+  allocation date". EXPENSE_PAYMENT endorsements were fine by accident: they carry an `expense_id`,
+  so their `expenses` row (`payment_mode='CHEQUE_ENDORSED'`) was already being picked up.
+- **Fix:** third UNION branch over `cheque_allocations`, filling Payments Cheq./Online and naming
+  the target vendor. **VENDOR_PAYMENT + ACTIVE only** — the other two dispositions are excluded
+  because including them would double-count, which is the whole reason this needed care rather than
+  a blanket join:
+  - `EXPENSE_PAYMENT` → already present via its `expenses` row (see above).
+  - `DEPOSIT` → an internal asset move (Dr bank / Cr CHEQUES IN HAND), not new money; the receipt
+    that brought the cheque in already appears as a Receipts Cheq./Online row on its own date.
+  - `REVERSED` → the bounce/return cascade already put the money back.
+- **Verified** on `wentox_demo` across all three allocation rows: 01-Aug now shows
+  `Al-Madina Rubber | CHEQUE 91002233 | Payments Cheq./Online 20,000` with `cash_in_hand` unchanged
+  at 42,500 (view-only, as required); 08-Jul (allocation #2, REVERSED) and 23-Jun (allocation #1,
+  DEPOSIT) both correctly still show nothing; the August month view shows the endorsement exactly
+  once, no duplication.
+- **Docs:** UC-37's note rewritten to describe what actually runs, including why the two
+  dispositions are excluded, with an explicit dated correction of the false "does not exist yet"
+  claim so the next reader does not repeat it.
+- **Files:** `backend/src/repositories/reports.repository.js`,
+  `backend/src/services/reports.service.js`, `System_architecture/use_cases.md`
+
+---
+
 ## Receipts (Jamma) — Post/Unpost buttons were missing entirely
 
 ### 2026-08-09 — Every receipt entered through the UI was stranded as an invisible DRAFT

@@ -812,10 +812,20 @@ customer or, on a transfer, the bank on the other side.
 **Sources:** receipts (inflows), expenses (outflows), cash⇄bank transfers, **and cheque
 allocations** — an endorsed cheque posts as an outflow on its allocation date (UC-27).
 
-**Data:** reads `receipts`, `expenses`, `cheque_allocations`, `ledger_entries`, `business_accounts`.
-**Note:** built — receipts and expenses both feed it, the cheque/online columns are populated, and
-opening cash / Jamma / Naam / Cash In Hand are all computed. Cheque allocations (UC-27) are the one
-outflow source still missing, since that feature does not exist yet.
+**Data:** reads `receipts`, `expenses`, `cheque_allocations`, `vendors`, `ledger_entries`,
+`business_accounts`.
+**Note:** built — all three sources feed it and opening cash / Jamma / Naam / Cash In Hand are all
+computed. Cheque allocations come in as **VENDOR_PAYMENT only, while ACTIVE**; the other two
+dispositions are excluded because they would double-count. An `EXPENSE_PAYMENT` allocation carries
+an `expense_id`, so its `expenses` row (`payment_mode = 'CHEQUE_ENDORSED'`) already appears; a
+`DEPOSIT` is an internal asset move (Dr bank / Cr CHEQUES IN HAND), and the receipt that brought the
+cheque in already appears on its own date. A `REVERSED` allocation is excluded outright — the
+bounce/return cascade already put the money back.
+
+> **Correction (2026-08-09):** an earlier version of this note claimed cheque allocations "do not
+> exist yet". They have existed for some time — see UC-27, which is marked ✅, plus the eleven
+> `cheques:` IPC channels and live `cheque_allocations` rows. Treat status notes in this file as
+> historical intent and check the code.
 
 ---
 

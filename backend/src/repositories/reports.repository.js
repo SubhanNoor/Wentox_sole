@@ -482,6 +482,17 @@ function cashBookRows(cashAcId, filters) {
 // Receipts: CHEQUE (cheque_no via cheques) and ONLINE. Expenses: CHEQUE_ISSUED (our own cheque,
 // number on the expense row itself), CHEQUE_ENDORSED (a customer's cheque handed on, number via
 // cheques) and ONLINE. DRAFT documents are excluded — nothing unconfirmed belongs on a day book.
+//
+// Third source: cheque_allocations, which UC-37 requires ("an endorsed cheque posts as an outflow
+// on its allocation date"). Only VENDOR_PAYMENT, and only while ACTIVE. The other two dispositions
+// are deliberately excluded because they would DOUBLE-COUNT:
+//   EXPENSE_PAYMENT — carries an expense_id, so its dbo.expenses row (payment_mode
+//                     'CHEQUE_ENDORSED') is already picked up by the UNION above.
+//   DEPOSIT         — banking a cheque is an internal asset move (Dr bank / Cr CHEQUES IN HAND),
+//                     not new money; the receipt that brought the cheque in already appears as a
+//                     Receipts Cheq./Online row on its own date.
+// A REVERSED allocation (bounce/return cascade, §6.1 reverse-never-delete) is excluded for the
+// same reason a reversed anything is: the money went back.
 async function cashBookNonCashRows({ date_from, date_to }) {
   const result = await query(
     `SELECT 'RECEIPT' AS kind, rc.receipt_id AS source_id, rc.receipt_date AS entry_date,
@@ -501,6 +512,16 @@ async function cashBookNonCashRows({ date_from, date_to }) {
      LEFT JOIN dbo.cheques ch ON ch.cheque_id = ex.cheque_id
      WHERE ex.status = 'CONFIRMED' AND ex.payment_mode <> 'CASH'
        AND ex.expense_date >= @dateFrom AND ex.expense_date <= @dateTo
+     UNION ALL
+     SELECT 'ALLOCATION' AS kind, ca.allocation_id, ca.allocation_date,
+            v.name, COALESCE(ca.remarks, 'Cheque endorsed to vendor'),
+            'CHEQUE', ch.cheque_no, ca.amount
+     FROM dbo.cheque_allocations ca
+     JOIN dbo.vendors v   ON v.vendor_id   = ca.target_vendor_id
+     JOIN dbo.receipts rc2 ON rc2.receipt_id = ca.receipt_id
+     LEFT JOIN dbo.cheques ch ON ch.cheque_id = rc2.cheque_id
+     WHERE ca.status = 'ACTIVE' AND ca.disposition_type = 'VENDOR_PAYMENT'
+       AND ca.allocation_date >= @dateFrom AND ca.allocation_date <= @dateTo
      ORDER BY entry_date, kind, source_id`,
     {
       dateFrom: { type: sql.Date, value: date_from },

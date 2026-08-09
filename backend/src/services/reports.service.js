@@ -450,6 +450,8 @@ async function cashBook(filters = {}) {
 
   const nonCashRows = nonCashRaw.map((r) => {
     const amount = Number(r.amount);
+    // Only 'RECEIPT' is money in. 'EXPENSE' and 'ALLOCATION' (a cheque endorsed to a vendor) are
+    // both outflows and land in Payments Cheq./Online.
     const isReceipt = r.kind === 'RECEIPT';
     return {
       date: r.entry_date,
