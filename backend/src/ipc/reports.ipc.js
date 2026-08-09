@@ -60,6 +60,11 @@ module.exports = function register() {
     return service.businessLedger(payload);
   }));
 
+  ipcMain.handle('reports:account-balance', wrap((payload) => {
+    requireSession();
+    return service.accountBalance(payload);
+  }));
+
   ipcMain.handle('reports:cash-book', wrap((payload) => {
     requireSession();
     return service.cashBook(payload);

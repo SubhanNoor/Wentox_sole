@@ -327,6 +327,22 @@ async function businessLedger(filters = {}) {
   }));
 }
 
+// One account's current balance, for the Receipts/Expenses screens' "balance before → after" panel
+// (UC-25 step 4: "the screen shows BOTH figures explicitly — the original amount owed and the
+// amount owed after commission"). Deliberately NOT accountLedger(): that fetches every ledger row
+// to derive a closing balance, which is a lot of work to show one number next to a dropdown.
+// netBalance() sums in SQL and includes business_accounts.opening_balance, which a pure
+// ledger_entries sum would miss for an account whose history predates WentoX.
+//
+// Sign follows the ledger's own convention: positive = debit = the account owes us (receivable),
+// negative = credit = we owe the account (payable).
+async function accountBalance({ ba_id, as_of }) {
+  if (!ba_id) throw ApiError.badRequest('ba_id is required');
+  const asOf = as_of || todayISO();
+  const balance = await repository.netBalance({ ba_id, up_to_date: asOf });
+  return { ba_id, as_of: asOf, balance };
+}
+
 // UC-37 Cash Book — the "Account Name" column. A cash-book line names the OTHER side of the
 // movement, never "Cash" itself: money came from a customer or a bank, and went to an expense head,
 // a worker, a director or a bank. Which table holds that name depends on what produced the entry,
@@ -560,6 +576,7 @@ module.exports = {
   vendorReport,
   paymentTrail,
   businessLedger,
+  accountBalance,
   cashBook,
   overallTrail,
   overallSearch,

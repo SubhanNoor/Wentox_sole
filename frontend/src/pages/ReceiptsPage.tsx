@@ -10,6 +10,7 @@ import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
 import ChequesTab from '@/components/ChequesTab';
+import AccountBalancePanel from '@/components/AccountBalancePanel';
 
 type ReceiptTab = 'entry' | 'weekly' | 'monthly' | 'overall' | 'cheques';
 
@@ -103,6 +104,8 @@ export default function ReceiptsPage() {
   // fills the form; since draftReceipts has no update(), re-saving replaces it.
   const [loadedDraftId, setLoadedDraftId] = useState<number | null>(null);
   const [selectedDraftPick, setSelectedDraftPick] = useState('');
+  // Bumped after anything that posts, so the balance panel re-reads instead of showing a stale figure.
+  const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
 
   // Dropdown search state
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -229,6 +232,35 @@ export default function ReceiptsPage() {
     flash(mode === 'edit' ? 'Receipt updated successfully.' : 'Receipt recorded successfully.');
     setMode('view');
     refreshReceipts();
+    setBalanceRefreshKey(k => k + 1);
+  };
+
+  // Receipts are created DRAFT; only post() writes ledger_entries, so until this runs the receipt
+  // has no effect on any balance or report. This page had no way to call it at all — receipts:post
+  // and receipts:unpost existed on the backend and in lib/api.ts but nothing on screen invoked them,
+  // so every receipt entered here stayed an invisible DRAFT forever (the seeded ones are CONFIRMED
+  // only because dev-sample-data.js calls the service directly).
+  const handlePost = async () => {
+    if (receiptId == null) return;
+    const res = await api.receipts.post(receiptId);
+    if (!res.ok) { fail('Failed to post receipt: ' + res.error.message); return; }
+    setReceiptStatus(res.data.status);
+    flash('Receipt posted successfully.');
+    refreshReceipts();
+    setBalanceRefreshKey(k => k + 1);
+  };
+
+  // unpost() can reject with CHEQUE_IN_USE when the receipt's cheque has already been endorsed or
+  // deposited; that error surfaces as-is in the banner rather than hiding the button, same as the
+  // equivalent on ExpensesPage.
+  const handleUnpost = async () => {
+    if (receiptId == null) return;
+    const res = await api.receipts.unpost(receiptId);
+    if (!res.ok) { fail('Failed to unpost receipt: ' + res.error.message); return; }
+    setReceiptStatus(res.data.status);
+    flash('Receipt unposted successfully.');
+    refreshReceipts();
+    setBalanceRefreshKey(k => k + 1);
   };
 
   const loadReceiptRow = async (rowIn: ReceiptRow) => {
@@ -302,6 +334,7 @@ export default function ReceiptsPage() {
     flash('Draft confirmed and posted as a receipt.');
     refreshDrafts();
     refreshReceipts();
+    setBalanceRefreshKey(k => k + 1);
   };
 
   const sortedReceipts = useMemo(
@@ -464,14 +497,23 @@ export default function ReceiptsPage() {
                   <span className="font-lora font-bold text-lg text-slate-900">
                     {mode === 'edit' ? `Editing Receipt #${receiptId}` : mode === 'view' ? `Receipt #${receiptId}` : 'New Receipt Voucher'}
                   </span>
-                  {isPosted && (
-                    <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">
-                      Posted
-                    </span>
+                  {receiptId != null && (
+                    isPosted ? (
+                      <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">
+                        Posted
+                      </span>
+                    ) : (
+                      <span
+                        className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-900"
+                        title="Saved but not yet in the ledger — Post it to affect any balance or report."
+                      >
+                        Not Posted
+                      </span>
+                    )
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  {mode === 'view' && (
+                  {mode === 'view' && !isPosted && (
                     <button
                       type="button"
                       onClick={() => setMode('edit')}
@@ -479,6 +521,25 @@ export default function ReceiptsPage() {
                     >
                       <Edit size={14} /> Edit
                     </button>
+                  )}
+                  {mode === 'view' && receiptId != null && (
+                    isPosted ? (
+                      <button
+                        type="button"
+                        onClick={handleUnpost}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
+                      >
+                        Unpost
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handlePost}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
+                      >
+                        Post
+                      </button>
+                    )
                   )}
                   <button
                     type="button"
@@ -567,6 +628,17 @@ export default function ReceiptsPage() {
                     </div>
                   )}
                 </div>
+
+                {/* A receipt CREDITS the selected account, so both lines push the balance down.
+                    Commission only exists for a customer account (§7), hence the guard. */}
+                <AccountBalancePanel
+                  baId={baId ? Number(baId) : null}
+                  refreshKey={balanceRefreshKey}
+                  lines={[
+                    { label: 'This receipt', delta: -amount },
+                    { label: 'Commission', delta: selectedCustomer ? -commission : 0 },
+                  ]}
+                />
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Amount Received (PKR)</label>
@@ -757,7 +829,7 @@ export default function ReceiptsPage() {
                     <thead>
                       <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                         <th className="p-3 pl-4">Date</th>
-                        <th className="p-3">Customer</th>
+                        <th className="p-3">Account</th>
                         <th className="p-3 text-center">Mode</th>
                         <th className="p-3 text-right">Amount</th>
                         <th className="p-3 text-center">Status</th>

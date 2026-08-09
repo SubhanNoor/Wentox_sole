@@ -12,6 +12,7 @@ import { Save, Wallet, Edit } from 'lucide-react';
 import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
 import MonthlyExpensesTab from '@/components/MonthlyExpensesTab';
 import OverallExpensesTab from '@/components/OverallExpensesTab';
+import AccountBalancePanel from '@/components/AccountBalancePanel';
 
 const today = () => new Date().toISOString().split('T')[0];
 
@@ -83,6 +84,8 @@ export default function ExpensesPage() {
   const [expenseStatus, setExpenseStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
   const [date, setDate] = useState(today());
   const [baId, setBaId] = useState('');
+  // Bumped after anything that posts, so the balance panel re-reads instead of showing a stale figure.
+  const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
   const [amount, setAmount] = useState<number>(0);
   const [paymentMode, setPaymentMode] = useState<ExpensePaymentMode>('CASH');
   const [bankId, setBankId] = useState('');
@@ -303,6 +306,7 @@ export default function ExpensesPage() {
     setExpenseStatus(res.data.status);
     flash('Expense posted successfully.');
     refreshExpenses();
+    setBalanceRefreshKey(k => k + 1);
     refreshCheques();
   };
 
@@ -316,6 +320,7 @@ export default function ExpensesPage() {
     setExpenseStatus(res.data.status);
     flash('Expense unposted successfully.');
     refreshExpenses();
+    setBalanceRefreshKey(k => k + 1);
     refreshCheques();
   };
 
@@ -565,6 +570,14 @@ export default function ExpensesPage() {
                     </span>
                   </div>
                 )}
+
+                {/* An expense DEBITS the selected account, the opposite direction to a receipt —
+                    paying a vendor moves a payable balance back toward zero. */}
+                <AccountBalancePanel
+                  baId={baId ? Number(baId) : null}
+                  refreshKey={balanceRefreshKey}
+                  lines={[{ label: 'This payment', delta: amount }]}
+                />
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Amount Paid (PKR)</label>

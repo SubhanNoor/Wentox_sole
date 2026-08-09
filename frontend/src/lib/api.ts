@@ -1232,6 +1232,14 @@ export interface CashBookResult {
   rows: CashBookRow[];
 }
 
+// One account's balance right now, for the Receipts/Expenses balance panel. Positive = debit =
+// the account owes us (receivable); negative = credit = we owe the account (payable).
+export interface AccountBalanceResult {
+  ba_id: number;
+  as_of: string;
+  balance: number;
+}
+
 export interface CashBookFilters {
   date?: string;
   month?: string;
@@ -1601,6 +1609,7 @@ declare global {
         'payment-trail': (payload?: DateRangeFilters) => Promise<ApiResult<PaymentTrailResult>>;
         'account-ledger': (payload: AccountLedgerFilters) => Promise<ApiResult<AccountLedgerResult>>;
         'business-ledger': (payload?: BusinessLedgerFilters) => Promise<ApiResult<BusinessLedgerResult>>;
+        'account-balance': (payload: { ba_id: number; as_of?: string }) => Promise<ApiResult<AccountBalanceResult>>;
         'cash-book': (payload?: CashBookFilters) => Promise<ApiResult<CashBookResult>>;
         'overall-trail': (payload?: { as_of_date?: string }) => Promise<ApiResult<OverallTrailResult>>;
         'overall-search': (payload?: { search?: string; entity_type?: OverallEntityType }) => Promise<ApiResult<OverallDirectoryRow[]>>;
@@ -2485,6 +2494,8 @@ export const reports = {
     window.api ? window.api.reports['account-ledger'](payload).then(r => mapResult(r, normalizeAccountLedgerResult)) : Promise.resolve(NO_BRIDGE),
   businessLedger: (payload?: BusinessLedgerFilters) =>
     window.api ? window.api.reports['business-ledger'](payload).then(r => mapResult(r, normalizeBusinessLedgerResult)) : Promise.resolve(NO_BRIDGE),
+  accountBalance: (payload: { ba_id: number; as_of?: string }) =>
+    window.api ? window.api.reports['account-balance'](payload) : Promise.resolve(NO_BRIDGE),
   cashBook: (payload?: CashBookFilters) =>
     window.api ? window.api.reports['cash-book'](payload).then(r => mapResult(r, normalizeCashBookResult)) : Promise.resolve(NO_BRIDGE),
   overallTrail: (payload?: { as_of_date?: string }) =>

@@ -23,6 +23,74 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Receipts (Jamma) — Post/Unpost buttons were missing entirely
+
+### 2026-08-09 — Every receipt entered through the UI was stranded as an invisible DRAFT
+- **Found via a user report** ("I paid Aslam Cutter 2000 but its balance doesn't update"). The
+  entry turned out to be on the wrong screen — recorded as Jamma (money received) rather than Naam —
+  but chasing it exposed a much bigger, pre-existing bug behind it.
+- **The bug:** `receipts.service.create()` always inserts `status='DRAFT'` and only `post()` writes
+  `ledger_entries`. `receipts:post` / `receipts:unpost` exist on the backend **and** are declared in
+  `frontend/src/lib/api.ts` — but `ReceiptsPage.tsx` never called either one. Confirmed pre-existing
+  with `git show HEAD:...ReceiptsPage.tsx` → zero `receipts.post`/`unpost` calls. So **every receipt
+  ever entered through that screen sat as a DRAFT forever and never reached the ledger, any balance,
+  or any report.** The 13 receipts in the demo dataset look fine only because
+  `dev-sample-data.js` calls `receiptsService.post()` directly in code, bypassing the UI.
+  The page's one "Confirm" button belongs to the separate `draft_receipts` table — a different
+  feature that happens to share the word.
+- **Fix:** Post / Unpost buttons mirroring `ExpensesPage#handlePost/handleUnpost` (the user chose
+  this over auto-posting on save, keeping the two money screens consistent). Edit is now hidden once
+  posted, matching Expenses. `CHEQUE_IN_USE` from unpost surfaces in the banner rather than the
+  button being hidden — same choice ExpensesPage already made for its own reversal guard.
+- **Also made the state visible**, since an unposted receipt looked identical to a posted one: the
+  form header now shows an amber "Not Posted" badge (tooltip: "Saved but not yet in the ledger")
+  instead of showing nothing at all when unposted. Fixed the receipts list's stale "Customer" column
+  header → "Account", left over from migration 014.
+- **Data cleanup:** deleted the user's two duplicate 2,000 DRAFT receipts (#1004, #1005) against
+  Aslam Cutter at their request. Neither had posted, so nothing needed reversing; his balance is
+  unchanged at 1,032 (9,000 Dr from expense #9 less 7,968 Cr from wage run #1). The real payment
+  will be entered by the user as an Expense.
+- **Files:** `frontend/src/pages/ReceiptsPage.tsx`
+
+---
+
+## Receipts / Expenses — account balance shown on selection
+
+### 2026-08-09 — "Balance before → after" panel on both money-entry screens
+- **What:** Picking an account on Receipts (Jamma) or Expenses (Naam) now shows its balance, the
+  effect of the entry being typed, and the balance that will result — live, before saving. This is
+  UC-25 steps 1 and 4 ("the current outstanding balance is shown inline" / "the screen shows BOTH
+  figures explicitly"), which were specified but never built.
+- **New `reports:account-balance`** → `reports.service.accountBalance({ ba_id })` →
+  `repository.netBalance()`. Deliberately **not** `accountLedger()`: that fetches every ledger row
+  just to derive a closing balance, which is far too much work to put behind a dropdown's onChange.
+  `netBalance()` sums in SQL **and** adds `business_accounts.opening_balance`, which a plain
+  `ledger_entries` sum would miss for an account whose history predates WentoX.
+- **Signs run opposite on the two screens**, which is the whole reason the panel takes signed
+  `lines` from its caller rather than computing them itself: a receipt **credits** the selected
+  account (`−amount`, `−commission`), an expense **debits** it (`+amount`). Commission's line is
+  suppressed for non-customer accounts, matching where the field itself is hidden.
+- **Shared `AccountBalancePanel.tsx`** so the two screens cannot drift. Labels are Receivable /
+  Payable / Settled on the absolute value rather than Dr/Cr — the ledger reports already carry the
+  accounting vocabulary; this screen is read by people thinking in who-owes-whom.
+- **Two correctness details:** an in-flight request is cancelled when the account changes, and the
+  fetched value is stored *with* its `ba_id` so switching accounts derives back to "loading" instead
+  of briefly showing the previous account's balance. The second also keeps the component free of
+  `react-hooks/set-state-in-effect`, which a synchronous reset inside the effect would have tripped.
+  A `refreshKey` bumped after every post/unpost/confirm stops the figure going stale.
+- **Verified** against `wentox_demo`: `accountBalance()` matched `accountLedger().closing_balance`
+  plus `opening_balance` for four accounts across both signs (customers positive/Receivable,
+  vendors negative/Payable). Then posted a 5,000 + 500 commission receipt against a vendor account —
+  actual post-save balance `-162,650` equalled the panel's predicted `before − amount − commission`
+  exactly; unpost + delete restored `-157,150`. `tsc -b` clean, new component lints clean, and the
+  two pages' pre-existing lint counts are unchanged.
+- **Files:** `frontend/src/components/AccountBalancePanel.tsx` (new),
+  `backend/src/services/reports.service.js`, `backend/src/ipc/reports.ipc.js`,
+  `frontend/src/lib/api.ts`, `frontend/src/pages/ReceiptsPage.tsx`,
+  `frontend/src/pages/ExpensesPage.tsx`, `System_architecture/use_cases.md`
+
+---
+
 ## Receipts (Jamma) — any business account, not just customers
 
 ### 2026-08-09 — `receipts.customer_id` → `receipts.ba_id` (migration 014)
