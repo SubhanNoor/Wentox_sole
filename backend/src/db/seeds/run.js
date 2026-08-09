@@ -5,6 +5,7 @@ const sql = require('mssql');
 const config = require('../../config');
 const CODES = require('../../constants/reservedAccounts');
 const STAGES = require('../../constants/stages');
+const { seedLegacyAccounts } = require('./legacy-accounts');
 
 async function ensureGroupAccount(pool, { code, name, classCode }) {
   const existing = await pool.request()
@@ -170,6 +171,10 @@ async function seed() {
                 VALUES (@stageKey, @formLabel, @workerLabel, @costColumn, @sortOrder)`);
     }
   }
+
+  // --- Legacy business accounts imported from the client's old KHAATA ledger ---
+  // Runs last of the account seeding: it hangs rows off the reserved chart accounts created above.
+  await seedLegacyAccounts(pool);
 
   // --- Default store ---
   const storeExists = await pool.request()
