@@ -3,7 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
-import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow } from '@/lib/api';
+import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow, SettlementRow, SettlementCreateInput } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { Save, Search, Edit } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
@@ -59,6 +59,12 @@ export default function ReceiptsPage() {
     else setLookupError('Failed to load receipts: ' + res.error.message);
   }, []);
 
+  const refreshSettlements = useCallback(async () => {
+    const res = await api.settlements.list({});
+    if (res.ok) setSettlements(res.data);
+    else setLookupError('Failed to load endorsed settlements: ' + res.error.message);
+  }, []);
+
   const refreshDrafts = useCallback(async () => {
     const res = await api.draftReceipts.list({});
     if (res.ok) setDrafts(res.data);
@@ -81,7 +87,8 @@ export default function ReceiptsPage() {
     })();
     refreshReceipts();
     refreshDrafts();
-  }, [refreshReceipts, refreshDrafts]);
+    refreshSettlements();
+  }, [refreshReceipts, refreshDrafts, refreshSettlements]);
 
   // ── Real-receipt form (mirrors PurchasePage.tsx's mode structure) ──
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
@@ -106,6 +113,16 @@ export default function ReceiptsPage() {
   const [selectedDraftPick, setSelectedDraftPick] = useState('');
   // Bumped after anything that posts, so the balance panel re-reads instead of showing a stale figure.
   const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
+
+  // Endorse: the payer settles their debt by paying one of OUR creditors directly instead of paying
+  // us. The money never reaches our cash, bank or cheque drawer, so this is NOT a receipt at all —
+  // saving writes a `settlements` row (Dr the endorsed account / Cr the payer, both ba_id) instead.
+  // docKind tracks which document the form is currently holding, because Post/Unpost/Edit have to
+  // dispatch to the right service.
+  const [isEndorsed, setIsEndorsed] = useState(false);
+  const [endorseToBaId, setEndorseToBaId] = useState('');
+  const [docKind, setDocKind] = useState<'RECEIPT' | 'SETTLEMENT'>('RECEIPT');
+  const [settlements, setSettlements] = useState<SettlementRow[]>([]);
 
   // Dropdown search state
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -171,6 +188,9 @@ export default function ReceiptsPage() {
     setDate(today());
     setBaId('');
     setAccountSearchQuery('');
+    setIsEndorsed(false);
+    setEndorseToBaId('');
+    setDocKind('RECEIPT');
     setAmount(0);
     setCommission(0);
     setPaymentMode('CASH');
@@ -208,8 +228,50 @@ export default function ReceiptsPage() {
     };
   };
 
+  // Endorsed entries are settlements, not receipts — a different table, a different posting, and
+  // deliberately no cash/bank/cheque leg. payment_mode and the cheque number ride along as
+  // information about how the OTHER two parties transacted; they select nothing here.
+  const buildSettlementPayload = (): SettlementCreateInput | null => {
+    if (!date) { setErrorMsg('Please pick a date.'); return null; }
+    if (!baId) { setErrorMsg('Please select an account.'); return null; }
+    if (!endorseToBaId) { setErrorMsg('Select who the payment should go to.'); return null; }
+    if (baId === endorseToBaId) { setErrorMsg('The two accounts must be different.'); return null; }
+    if (amount <= 0) { setErrorMsg('Amount must be greater than 0.'); return null; }
+    if (paymentMode === 'CHEQUE' && !chequeNo.trim()) { setErrorMsg('Cheque No. is required for cheque payments.'); return null; }
+
+    return {
+      settlement_date: date,
+      from_ba_id: Number(baId),
+      to_ba_id: Number(endorseToBaId),
+      amount,
+      payment_mode: paymentMode,
+      cheque_no: paymentMode === 'CHEQUE' ? chequeNo.trim() : undefined,
+      cheque_date: paymentMode === 'CHEQUE' ? (chequeDate || undefined) : undefined,
+      remarks: remarks.trim() || undefined,
+    };
+  };
+
+  const handleSaveSettlement = async () => {
+    const payload = buildSettlementPayload();
+    if (!payload) return;
+    const result = mode === 'edit' && receiptId != null && docKind === 'SETTLEMENT'
+      ? await api.settlements.update(receiptId, payload)
+      : await api.settlements.create(payload);
+    if (!result.ok) { fail('Failed to save endorsement: ' + result.error.message); return; }
+
+    setDocKind('SETTLEMENT');
+    setReceiptId(result.data.settlement_id);
+    setReceiptStatus(result.data.status);
+    setErrorMsg('');
+    flash('Endorsement saved — Post it to update both ledgers.');
+    setMode('view');
+    refreshSettlements();
+    setBalanceRefreshKey(k => k + 1);
+  };
+
   const handleSaveReceipt = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isEndorsed) { await handleSaveSettlement(); return; }
     const payload = buildPayload();
     if (!payload) return;
 
@@ -225,6 +287,7 @@ export default function ReceiptsPage() {
       refreshDrafts();
     }
 
+    setDocKind('RECEIPT');
     setReceiptId(result.data.receipt_id);
     setReceiptStatus(result.data.status);
     setLoadedDraftId(null);
@@ -242,11 +305,13 @@ export default function ReceiptsPage() {
   // only because dev-sample-data.js calls the service directly).
   const handlePost = async () => {
     if (receiptId == null) return;
-    const res = await api.receipts.post(receiptId);
-    if (!res.ok) { fail('Failed to post receipt: ' + res.error.message); return; }
+    const res = docKind === 'SETTLEMENT'
+      ? await api.settlements.post(receiptId)
+      : await api.receipts.post(receiptId);
+    if (!res.ok) { fail('Failed to post: ' + res.error.message); return; }
     setReceiptStatus(res.data.status);
-    flash('Receipt posted successfully.');
-    refreshReceipts();
+    flash(docKind === 'SETTLEMENT' ? 'Endorsement posted — both ledgers updated.' : 'Receipt posted successfully.');
+    if (docKind === 'SETTLEMENT') refreshSettlements(); else refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
   };
 
@@ -255,11 +320,13 @@ export default function ReceiptsPage() {
   // equivalent on ExpensesPage.
   const handleUnpost = async () => {
     if (receiptId == null) return;
-    const res = await api.receipts.unpost(receiptId);
-    if (!res.ok) { fail('Failed to unpost receipt: ' + res.error.message); return; }
+    const res = docKind === 'SETTLEMENT'
+      ? await api.settlements.unpost(receiptId)
+      : await api.receipts.unpost(receiptId);
+    if (!res.ok) { fail('Failed to unpost: ' + res.error.message); return; }
     setReceiptStatus(res.data.status);
-    flash('Receipt unposted successfully.');
-    refreshReceipts();
+    flash(docKind === 'SETTLEMENT' ? 'Endorsement unposted.' : 'Receipt unposted successfully.');
+    if (docKind === 'SETTLEMENT') refreshSettlements(); else refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
   };
 
@@ -273,6 +340,9 @@ export default function ReceiptsPage() {
       row = res.data;
     }
 
+    setDocKind('RECEIPT');
+    setIsEndorsed(false);
+    setEndorseToBaId('');
     setReceiptId(row.receipt_id);
     setReceiptStatus(row.status);
     setDate(row.receipt_date.slice(0, 10));
@@ -295,6 +365,29 @@ export default function ReceiptsPage() {
 
 
 
+
+  const loadSettlementRow = (row: SettlementRow) => {
+    setDocKind('SETTLEMENT');
+    setIsEndorsed(true);
+    setReceiptId(row.settlement_id);
+    setReceiptStatus(row.status);
+    setDate(row.settlement_date.slice(0, 10));
+    setBaId(String(row.from_ba_id));
+    setEndorseToBaId(String(row.to_ba_id));
+    setAmount(row.amount);
+    setCommission(0);
+    setPaymentMode(row.payment_mode || 'CASH');
+    setBankId('');
+    setDetails('');
+    setChequeNo(row.cheque_no || '');
+    setChequeDate(row.cheque_date ? row.cheque_date.slice(0, 10) : '');
+    setChequeReceivedDate('');
+    setRemarks(row.remarks || '');
+    setLoadedDraftId(null);
+    setSelectedDraftPick('');
+    setErrorMsg('');
+    setMode('view');
+  };
 
   // ── draftReceipts (server-side, CASH/ONLINE only) ──
   /*
@@ -635,10 +728,18 @@ export default function ReceiptsPage() {
                   baId={baId ? Number(baId) : null}
                   refreshKey={balanceRefreshKey}
                   lines={[
-                    { label: 'This receipt', delta: -amount },
-                    { label: 'Commission', delta: selectedCustomer ? -commission : 0 },
+                    { label: isEndorsed ? 'Settled by them' : 'This receipt', delta: -amount },
+                    { label: 'Commission', delta: !isEndorsed && selectedCustomer ? -commission : 0 },
                   ]}
                 />
+                {/* An endorsement DEBITS the account being paid — opposite direction to the payer. */}
+                {isEndorsed && endorseToBaId && (
+                  <AccountBalancePanel
+                    baId={Number(endorseToBaId)}
+                    refreshKey={balanceRefreshKey}
+                    lines={[{ label: 'Settled to them', delta: amount }]}
+                  />
+                )}
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Amount Received (PKR)</label>
@@ -655,7 +756,7 @@ export default function ReceiptsPage() {
 
                 {/* Commission is customer-only (§7) — hidden for a director, employee, vendor or
                     bank account, where a trade discount has no meaning. */}
-                {selectedCustomer && (
+                {selectedCustomer && !isEndorsed && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
                       Commission (PKR) <span className="text-slate-400 font-normal normal-case">— optional, reduces payable only</span>
@@ -702,7 +803,50 @@ export default function ReceiptsPage() {
                   </div>
                 </div>
 
-                {paymentMode === 'ONLINE' && (
+                {/* Endorse — the payer settles by paying one of OUR creditors instead of paying us.
+                    Available on every payment mode; the mode itself becomes information about how
+                    those two transacted, since none of it reaches our accounts. */}
+                <div className="rounded-xl border p-3" style={{ borderColor: isEndorsed ? 'var(--brand-gold)' : 'var(--border-color)' }}>
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isEndorsed}
+                      disabled={isViewMode || (mode === 'edit' && docKind === 'RECEIPT')}
+                      onChange={e => { setIsEndorsed(e.target.checked); if (!e.target.checked) setEndorseToBaId(''); }}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="block text-xs font-bold text-slate-800">
+                        Endorse this payment to another account
+                      </span>
+                      <span className="block text-[11px] text-slate-500 mt-0.5 leading-relaxed">
+                        They pay someone you owe, instead of paying you. Both ledgers update and each
+                        one says where the money went. <strong>Nothing enters your cash, bank or
+                        cheque drawer</strong>, so this never reaches the Cash Book.
+                      </span>
+                    </span>
+                  </label>
+
+                  {isEndorsed && (
+                    <div className="mt-3">
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        Pay To <span className="text-red-500 font-bold">*</span>
+                        <span className="text-slate-400 font-normal normal-case ml-1">— whoever you owe</span>
+                      </label>
+                      <SearchableSelect
+                        options={businessAccounts.filter(a => String(a.ba_id) !== baId)
+                          .map(a => ({ value: String(a.ba_id), label: `${a.name} (${a.code})` }))}
+                        value={endorseToBaId}
+                        onChange={setEndorseToBaId}
+                        placeholder="Search account to pay..."
+                        disabled={isViewMode}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Endorsed money never lands in one of our banks, so there is nothing to pick. */}
+                {paymentMode === 'ONLINE' && !isEndorsed && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
                       Received Into <span className="text-red-500 font-bold">*</span>
@@ -832,6 +976,7 @@ export default function ReceiptsPage() {
                         <th className="p-3">Account</th>
                         <th className="p-3 text-center">Mode</th>
                         <th className="p-3 text-right">Amount</th>
+                        <th className="p-3 text-center">Type</th>
                         <th className="p-3 text-center">Status</th>
                       </tr>
                     </thead>
@@ -847,11 +992,39 @@ export default function ReceiptsPage() {
                           <td className="p-3 font-semibold text-slate-900">{r.account_name || accountName(r.ba_id)}</td>
                           <td className="p-3 text-center text-xs text-slate-500">{r.payment_mode}</td>
                           <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
+                          <td className="p-3 text-center text-[10px] font-bold uppercase text-slate-500">Receipt</td>
                           <td className="p-3 text-center">
                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
                               r.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
                             }`}>
                               {r.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                      {/* Endorsed entries live in `settlements`, not `receipts`, but they were
+                          entered here so they belong in the same list — the Type column is what
+                          tells them apart. */}
+                      {settlements.map(st => (
+                        <tr
+                          key={`st-${st.settlement_id}`}
+                          onClick={() => loadSettlementRow(st)}
+                          className="border-b hover:bg-slate-50/50 cursor-pointer"
+                          style={{ borderColor: 'var(--border-table)' }}
+                        >
+                          <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(st.settlement_date)}</td>
+                          <td className="p-3 font-semibold text-slate-900">
+                            {st.from_name || accountName(st.from_ba_id)}
+                            <span className="text-slate-400 font-normal"> → {st.to_name || accountName(st.to_ba_id)}</span>
+                          </td>
+                          <td className="p-3 text-center text-xs text-slate-500">{st.payment_mode || '-'}</td>
+                          <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(st.amount)}</td>
+                          <td className="p-3 text-center text-[10px] font-bold uppercase text-amber-700">Endorsed</td>
+                          <td className="p-3 text-center">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                              st.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                            }`}>
+                              {st.status}
                             </span>
                           </td>
                         </tr>

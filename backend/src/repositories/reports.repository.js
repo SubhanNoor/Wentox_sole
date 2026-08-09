@@ -243,22 +243,29 @@ async function saleAggregateByCustomer(filters = {}) {
   const billDate = [];
   const returnDate = [];
   const receiptDate = [];
+  const settleDate = [];
 
   if (filters.date_from) {
     billDate.push('bill_date >= @dateFrom');
     returnDate.push('return_date >= @dateFrom');
     receiptDate.push('receipt_date >= @dateFrom');
+    settleDate.push('settlement_date >= @dateFrom');
     params.dateFrom = { type: sql.Date, value: filters.date_from };
   }
   if (filters.date_to) {
     billDate.push('bill_date <= @dateTo');
     returnDate.push('return_date <= @dateTo');
     receiptDate.push('receipt_date <= @dateTo');
+    settleDate.push('settlement_date <= @dateTo');
     params.dateTo = { type: sql.Date, value: filters.date_to };
   }
   const billWhere = billDate.length ? `WHERE ${billDate.join(' AND ')}` : '';
   const returnWhere = returnDate.length ? `WHERE ${returnDate.join(' AND ')}` : '';
   const receiptWhere = receiptDate.length ? `WHERE ${receiptDate.join(' AND ')}` : '';
+  // Built from its own column name rather than string-replacing receiptWhere — that would only
+  // swap the FIRST 'receipt_date' and leave the date_to half pointing at a column settlements
+  // does not have.
+  const settleWhere = `WHERE ${[...settleDate, "status = 'CONFIRMED'"].join(' AND ')}`;
 
   const result = await query(
     `SELECT
@@ -266,7 +273,8 @@ async function saleAggregateByCustomer(filters = {}) {
        c.city_id, ci.name AS city_name,
        ISNULL(sb.total_sales, 0) AS total_sales, ISNULL(sb.total_cartons, 0) AS total_cartons,
        ISNULL(sr.total_returns, 0) AS total_returns,
-       ISNULL(rc.total_payment, 0) AS total_payment, ISNULL(rc.total_commission, 0) AS total_commission
+       ISNULL(rc.total_payment, 0) + ISNULL(st.total_settled, 0) AS total_payment,
+       ISNULL(rc.total_commission, 0) AS total_commission
      FROM dbo.customers c
      JOIN dbo.regions r ON r.region_id = c.region_id
      LEFT JOIN dbo.cities ci ON ci.city_id = c.city_id
@@ -287,7 +295,16 @@ async function saleAggregateByCustomer(filters = {}) {
        FROM dbo.receipts ${receiptWhere ? receiptWhere + " AND status = 'CONFIRMED'" : "WHERE status = 'CONFIRMED'"}
        GROUP BY ba_id
      ) rc ON rc.ba_id = c.ba_id
-     WHERE sb.total_sales IS NOT NULL OR sr.total_returns IS NOT NULL OR rc.total_payment IS NOT NULL
+     -- Direct Settlement (migration 015): the customer discharged their debt by paying one of our
+     -- creditors instead of paying us. Real money never reached us, but the debt was settled, so it
+     -- counts as Payment Received — leaving it out would show a squared-up customer as outstanding.
+     LEFT JOIN (
+       SELECT from_ba_id, SUM(amount) AS total_settled
+       FROM dbo.settlements ${settleWhere}
+       GROUP BY from_ba_id
+     ) st ON st.from_ba_id = c.ba_id
+     WHERE sb.total_sales IS NOT NULL OR sr.total_returns IS NOT NULL
+        OR rc.total_payment IS NOT NULL OR st.total_settled IS NOT NULL
      ORDER BY r.name, ci.name, c.name`,
     params,
   );
@@ -328,6 +345,13 @@ async function vendorReportRows(filters = {}) {
   const returnWhere = returnDate.length ? `WHERE ${returnDate.join(' AND ')}` : '';
   const expenseWhere = expenseDate.length ? `WHERE ${expenseDate.join(' AND ')}` : '';
   const allocWhere = [...allocDate, "disposition_type = 'VENDOR_PAYMENT'", "status = 'ACTIVE'"].join(' AND ');
+  // Direct Settlement (migration 015): a debtor of ours paid this vendor on our behalf. No money
+  // left our cash or bank, but the vendor was paid, so it belongs in "Payment Paid" alongside
+  // expenses and cheque endorsements — otherwise a fully-settled vendor reads as never paid.
+  const settleDate = [];
+  if (filters.date_from) settleDate.push('settlement_date >= @dateFrom');
+  if (filters.date_to) settleDate.push('settlement_date <= @dateTo');
+  const settleWhere = [...settleDate, "status = 'CONFIRMED'"].join(' AND ');
 
   const vendorFilter = filters.vendor_id ? 'WHERE v.vendor_id = @vendorId' : '';
   const result = await query(
@@ -335,7 +359,8 @@ async function vendorReportRows(filters = {}) {
        v.vendor_id, v.name AS vendor_name,
        ISNULL(p.total_purchase, 0) AS total_purchase,
        ISNULL(pr.total_return, 0) AS total_return,
-       ISNULL(ex.total_expense_payment, 0) + ISNULL(al.total_alloc_payment, 0) AS total_payment
+       ISNULL(ex.total_expense_payment, 0) + ISNULL(al.total_alloc_payment, 0)
+         + ISNULL(st.total_settled, 0) AS total_payment
      FROM dbo.vendors v
      LEFT JOIN (
        SELECT vendor_id, SUM(total_value) AS total_purchase FROM dbo.purchases ${purchaseWhere} GROUP BY vendor_id
@@ -353,6 +378,10 @@ async function vendorReportRows(filters = {}) {
        SELECT target_vendor_id, SUM(amount) AS total_alloc_payment
        FROM dbo.cheque_allocations WHERE ${allocWhere} GROUP BY target_vendor_id
      ) al ON al.target_vendor_id = v.vendor_id
+     LEFT JOIN (
+       SELECT to_ba_id, SUM(amount) AS total_settled
+       FROM dbo.settlements WHERE ${settleWhere} GROUP BY to_ba_id
+     ) st ON st.to_ba_id = v.ba_id
      ${vendorFilter}
      ORDER BY v.name`,
     params,

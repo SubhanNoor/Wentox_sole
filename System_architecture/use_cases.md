@@ -829,6 +829,58 @@ bounce/return cascade already put the money back.
 
 ---
 
+## UC-39: Record a direct settlement — ✅
+
+**Actor:** Accountant · **Goal:** Record that a debtor of ours paid one of our creditors directly
+**Screen:** Receipts (Jamma) → Entry tab → **Endorse this payment to another account**
+
+> Entered from the Receipts screen rather than a page of its own: it starts exactly like taking a
+> payment — same payer, same amount, same payment mode — and only diverges in where the money ends
+> up. Ticking Endorse writes a `settlements` row instead of a `receipts` row.
+
+Someone who owes us is told to pay one of our own creditors instead of paying us. Both obligations
+shrink in a single step. **No money passes through our cash, bank or cheque drawer at any point.**
+
+> **Not the same as cheque endorsement (UC-27).** That hands on a physical cheque already sitting in
+> CHEQUES IN HAND. A settlement involves no instrument at all — only a redirection of who pays whom.
+
+**Steps:**
+1. User fills the Receipts form as usual: date, the paying account, amount, payment mode (and cheque
+   number for a cheque).
+2. User ticks **Endorse this payment to another account**.
+3. A **Pay To** picker appears — the account we owed that got paid. It cannot be the payer.
+4. A balance panel for each side shows its current balance and what it becomes.
+5. Save creates the settlement **DRAFT**; **Post** writes both ledger legs; Unpost reverses them.
+   Endorsed rows appear in the same list below the form, marked **Endorsed** in the Type column.
+
+**Payment mode is information only here.** It records how the *other two parties* transacted
+("paid by cheque #77341290") and selects no posting target, because no mode can make a settlement
+touch our accounts. The bank picker that a normal ONLINE receipt shows is hidden while Endorse is
+on — no bank of ours receives anything. Commission is hidden too: it is a customer-payment concept
+and there is no payment to us. A cheque number on a non-cheque mode is rejected rather than stored.
+
+**Posts as:** Dr `to_ba_id` (our creditor) / Cr `from_ba_id` (our debtor), `source_type='SETTLEMENT'`.
+Both legs carry `ba_id` and neither carries `ac_id`, so no chart account — and therefore no CASH IN
+HAND, bank account or CHEQUES IN HAND — can be reached. That is structural, not a rule each report
+has to remember.
+
+**Narration is explicit on both sides**, which is the point of the document: the payer's Khaata reads
+"Settled directly to «creditor»", the recipient's reads "Settled directly by «debtor»".
+
+**Deliberately NOT validated:** that the payer currently owes at least this much. Settling more than
+the present balance is legitimate — an advance, or a debt not yet billed — so blocking it would
+reject valid business.
+
+**Where it appears:** both parties' Account Ledger; Business Ledger; Overall Trail; Sale Analysis /
+Sale Report **"Payment Received"** (via `from_ba_id`) and Vendor Report **"Payment Paid"** (via
+`to_ba_id`) — the debt really was settled, so omitting it would leave a squared-up party looking
+permanently outstanding. **Not** the Cash Book: it is neither cash nor cheque/online, so it fits none
+of that report's four columns.
+
+**Data:** writes `settlements`, `ledger_entries`; reads `business_accounts`.
+
+---
+
 ## UC-38: Product Ledger (Reports tab) — ✅
 
 The same report as UC-29, reachable as the eighth Reports tab.
@@ -862,7 +914,8 @@ The same report as UC-29, reachable as the eighth Reports tab.
 | Transactions | 10 | 8 | 2 | 0 |
 | Stock | 3 | 1 | 1 | 1 |
 | Reports | 8 | 8 | 0 | 0 |
-| **Total** | **38** | **25** | **12** | **1** |
+| Transactions (added) | UC-39 Direct Settlement | | | |
+| **Total** | **39** | **26** | **12** | **1** |
 
 > **Document version:** 3.0 · **System:** WentoX ERP — Footwear Wholesale Distribution
 > **Source:** `architecture-v2.md` · **Data model:** `database_schema.md` v4.0

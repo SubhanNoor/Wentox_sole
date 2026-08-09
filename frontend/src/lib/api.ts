@@ -514,6 +514,48 @@ export interface TransferListFilters {
   date_to?: string;
 }
 
+// Direct Settlement (migration 015) — our debtor pays one of our creditors directly. Same
+// from/to shape as a Transfer, but the opposite meaning: a transfer moves money between OUR OWN
+// accounts and shows on the Cash Book, a settlement moves an obligation between two third parties
+// and deliberately touches no cash, bank or cheque account at all.
+export interface SettlementRow {
+  settlement_id: number;
+  settlement_date: string;
+  /** Our debtor — they owed us and discharged it by paying our creditor. Credited. */
+  from_ba_id: number;
+  /** Our creditor — we owed them and they were paid by our debtor. Debited. */
+  to_ba_id: number;
+  amount: number;
+  /** How the two other parties transacted. Information only — it selects no posting target here. */
+  payment_mode: 'CASH' | 'CHEQUE' | 'ONLINE' | null;
+  cheque_no: string | null;
+  cheque_date: string | null;
+  remarks: string | null;
+  status: 'CONFIRMED' | 'DRAFT';
+  from_name?: string;
+  to_name?: string;
+}
+
+export interface SettlementCreateInput {
+  settlement_date: string;
+  from_ba_id: number;
+  to_ba_id: number;
+  amount: number;
+  payment_mode?: 'CASH' | 'CHEQUE' | 'ONLINE';
+  cheque_no?: string;
+  cheque_date?: string;
+  remarks?: string;
+}
+
+export interface SettlementListFilters {
+  ba_id?: number;
+  from_ba_id?: number;
+  to_ba_id?: number;
+  status?: 'CONFIRMED' | 'DRAFT';
+  date_from?: string;
+  date_to?: string;
+}
+
 export interface DepositRow {
   deposit_id: number;
   deposit_date: string;
@@ -1443,6 +1485,15 @@ declare global {
         remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
         reactivate: (payload: { id: number }) => Promise<ApiResult<BankAccountRow>>;
       };
+      settlements: {
+        list: (payload?: SettlementListFilters) => Promise<ApiResult<SettlementRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<SettlementRow>>;
+        create: (payload: SettlementCreateInput) => Promise<ApiResult<SettlementRow>>;
+        update: (payload: { id: number } & SettlementCreateInput) => Promise<ApiResult<SettlementRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        post: (payload: { id: number }) => Promise<ApiResult<SettlementRow>>;
+        unpost: (payload: { id: number }) => Promise<ApiResult<SettlementRow>>;
+      };
       transfers: {
         list: (payload?: TransferListFilters) => Promise<ApiResult<TransferRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<TransferRow>>;
@@ -2112,6 +2163,26 @@ function normalizeTransferRow<T extends { transfer_date: string }>(row: T): T {
 function normalizeDepositRow<T extends { deposit_date: string }>(row: T): T {
   return { ...row, deposit_date: normalizeDate(row.deposit_date) };
 }
+
+function normalizeSettlementRow<T extends { settlement_date: string }>(row: T): T {
+  return { ...row, settlement_date: normalizeDate(row.settlement_date) };
+}
+
+export const settlements = {
+  list: (payload?: SettlementListFilters) =>
+    window.api ? window.api.settlements.list(payload).then(r => mapResult(r, rows => rows.map(normalizeSettlementRow))) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.settlements.get({ id }).then(r => mapResult(r, normalizeSettlementRow)) : Promise.resolve(NO_BRIDGE),
+  create: (payload: SettlementCreateInput) =>
+    window.api ? window.api.settlements.create(payload).then(r => mapResult(r, normalizeSettlementRow)) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: SettlementCreateInput) =>
+    window.api ? window.api.settlements.update({ id, ...payload }).then(r => mapResult(r, normalizeSettlementRow)) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.settlements.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  post: (id: number) =>
+    window.api ? window.api.settlements.post({ id }).then(r => mapResult(r, normalizeSettlementRow)) : Promise.resolve(NO_BRIDGE),
+  unpost: (id: number) =>
+    window.api ? window.api.settlements.unpost({ id }).then(r => mapResult(r, normalizeSettlementRow)) : Promise.resolve(NO_BRIDGE)
+};
 
 export const transfers = {
   list: (payload?: TransferListFilters) =>

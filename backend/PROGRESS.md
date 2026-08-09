@@ -23,6 +23,68 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Direct Settlement — endorse a payment from the Receipts screen (UC-39, migration 015)
+
+### 2026-08-09 — Debtor pays our creditor directly; no cash, bank or cheque involved
+- **What:** on Receipts (Jamma), ticking **"Endorse this payment to another account"** reveals a
+  *Pay To* picker. Saving writes a `settlements` row instead of a `receipts` row: the payer settles
+  their debt by paying one of OUR creditors directly. Both obligations shrink and **no money passes
+  through cash, bank or the cheque drawer**. Distinct from cheque endorsement (UC-27), which needs a
+  physical cheque already in CHEQUES IN HAND — this needs no instrument at all.
+- **Built as a standalone page first, then moved.** The user's follow-up was explicit: no new page,
+  put it on Receipts. The page was deleted (`DirectSettlementPage.tsx`, its route, its NavPage entry
+  and its sidebar item all removed); the service/repository/IPC layer survived unchanged, which is
+  the payoff for having kept the document type separate from its UI.
+- **Posts as** Dr `to_ba_id` (our creditor) / Cr `from_ba_id` (our debtor), `source_type='SETTLEMENT'`.
+  **Both legs carry `ba_id` and neither carries `ac_id`.** With no chart account on either side there
+  is nowhere for it to reach CASH IN HAND, a bank or CHEQUES IN HAND — the isolation is structural,
+  not a rule every report must remember.
+- **New table rather than reusing `dbo.transfers`,** which has the identical shape. Transfers means
+  "money between OUR OWN accounts" and its schema note says "USED BY: every cash/bank balance (both
+  sides); Cash Book"; `cash_and_bank.md` §10's balance formula includes transfers by definition.
+  Overloading it would mean auditing every consumer of `source_type='TRANSFER'`. A separate table
+  keeps "every TRANSFER is cash" true.
+- **`payment_mode`/`cheque_no`/`cheque_date` are INFORMATION only** (user's choice over hiding the
+  fields). They record how the *other two parties* transacted and select no posting target, since no
+  mode can make a settlement touch our accounts. `CK_settlements_cheque` rejects a cheque number on
+  a non-cheque mode rather than storing a contradiction. The ONLINE bank picker is hidden while
+  endorsing — no bank of ours receives anything — and so is Commission.
+- **Counts as payment in both party reports** (user's choice): Sale Analysis / Sale Report "Payment
+  Received" via `from_ba_id`, Vendor Report "Payment Paid" via `to_ba_id`. The debt really was
+  settled, so omitting it would leave a squared-up party looking permanently outstanding.
+- **Two bugs caught while building:**
+  1. The settlements subquery in `saleAggregateByCustomer()` was first written as
+     `receiptWhere.replace('receipt_date', 'settlement_date')`. `String.replace` with a string
+     argument swaps only the FIRST occurrence, so the `date_to` half kept pointing at a column
+     `settlements` does not have — fine with no date filter, broken the moment a range was picked.
+     Now built from its own column name.
+  2. **`todayISO()` returned the UTC date, not the local one.** In PKT (UTC+5) that means between
+     19:00 and midnight local, the server's "today" is still YESTERDAY. A settlement dated today
+     moved no balance at all, because `accountBalance()`'s `up_to_date` cutoff excluded it — the
+     balance panel read stale for five hours every evening, and the Cash Book opened on the previous
+     day. Every business date here is a local one (the pickers emit local dates, a business day is a
+     local day), so `reports.service.js#todayISO()` now formats from local parts with no timezone
+     conversion. **The same UTC pattern exists in seven other services'
+     `resolveDateRange` helpers** — those only affect the weekly/monthly filter convenience, not a
+     balance, so they are flagged rather than changed.
+- **Verified end to end** on `wentox_demo`: a 5,000 CHEQUE endorsement (Ahmed Footwear →
+  Al-Madina Rubber) dated **local today** moved customer **−5,000** and vendor **+5,000**, left
+  **Cash In Hand unchanged**, wrote explicit narrations on both ledgers ("Settled directly to
+  Al-Madina Rubber" / "Settled directly by Ahmed Footwear"), showed nothing on the Cash Book, and
+  unpost + delete restored both balances exactly. A cheque number on a CASH settlement was rejected.
+  Migration 015 was extended in place rather than adding a 016, since it had not been pushed —
+  the table was dropped, its `schema_migrations` row deleted, and the migration re-applied clean.
+  `tsc -b` clean; ReceiptsPage's lint count unchanged from its pre-existing baseline.
+- **Files:** `backend/src/db/migrations/015_direct_settlements.sql` (new),
+  `backend/src/repositories/settlements.repository.js` (new),
+  `backend/src/services/settlements.service.js` (new), `backend/src/ipc/settlements.ipc.js` (new),
+  `backend/src/ipc/index.js`, `backend/src/repositories/reports.repository.js`,
+  `backend/src/services/reports.service.js`, `frontend/src/pages/ReceiptsPage.tsx`,
+  `frontend/src/lib/api.ts`, `System_architecture/database_schema_v4.3.md`,
+  `System_architecture/use_cases.md`
+
+---
+
 ## Cash Book — cheque endorsements were missing from the outflow columns
 
 ### 2026-08-09 — `cheque_allocations` added as a third Cash Book source; stale doc note corrected

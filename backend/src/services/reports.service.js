@@ -8,8 +8,17 @@ const ApiError = require('../errors/ApiError');
 const CODES = require('../constants/reservedAccounts');
 const { findByCode } = require('../repositories/chartAccounts.repository');
 
+// LOCAL date, not UTC. toISOString() converts to UTC first, so in PKT (UTC+5) everything between
+// 05:00 and midnight local is already "tomorrow" in UTC — and after 19:00 local, UTC is still
+// YESTERDAY. Every business date in this system is a local one: the date pickers emit local dates
+// and a business day is a local day. Using the UTC date made "today" wrong for five hours every
+// evening, which silently excluded entries dated today from accountBalance() (the Receipts/Expenses
+// balance panel read stale) and opened the Cash Book on the previous day.
+// Caught while testing Direct Settlement: a settlement dated today moved no balance at all until
+// UTC caught up. Formatted by parts rather than toISOString() so no timezone conversion happens.
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 // Weekly/monthly/overall convenience on top of explicit date_from/date_to (explicit wins) — same
@@ -121,6 +130,12 @@ function formatLedgerRow(r) {
       break;
     case 'TRANSFER':
       type = 'Transfer'; narration = r.tr_remarks || `${r.tr_from_name || ''} → ${r.tr_to_name || ''}`;
+      break;
+    // The stored narration already names the other side ("Settled directly to/by X") — that is the
+    // whole point of the document, so it wins over the user's free-text remarks rather than the
+    // usual remarks-first order. Remarks are appended when present.
+    case 'SETTLEMENT':
+      type = 'Direct Settlement';
       break;
     case 'PURCHASE':
       type = 'Purchase';

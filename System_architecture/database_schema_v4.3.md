@@ -32,6 +32,15 @@
 > **`014_receipts_any_business_account.sql`** — `receipts.customer_id` / `draft_receipts.customer_id`
 > replaced by `ba_id`, so Jamma can name **any** business account rather than only a customer,
 > matching what Naam (`expenses.ba_id`) always allowed. See `dbo.receipts` below and UC-25.
+> **`015_direct_settlements.sql`** — new `dbo.settlements` plus `'SETTLEMENT'` added to
+> `CK_ledger_entries_src`. A debtor of ours pays one of our creditors directly; both obligations
+> shrink and no cash/bank/cheque account is involved. Posts Dr `to_ba_id` / Cr `from_ba_id`, **both
+> legs `ba_id`, no `ac_id` on either** — which is what structurally keeps it out of every cash, bank
+> and cheque balance rather than each report having to exclude it. Carries `payment_mode` /
+> `cheque_no` / `cheque_date` as INFORMATION about how the other two parties transacted; they select
+> no posting target. Entered from the Receipts screen's **Endorse** option, not a page of its own.
+> The DDL is not reproduced here — same convention as `transfers` above, which this file also does
+> not carry; the migration file is the authority. See UC-39.
 >
 > **v4.3 changes:** merged in the working-session actions/answers applied on top of the reverted
 > v4.0 copy, so this file now carries both lineages. Renames `articles` → `products` (cascaded to
@@ -1658,6 +1667,7 @@ transaction. `CUSTOMER BA` / `VENDOR BA` mean the party's `business_accounts` ro
 | Receipt — commission (§7)                         | COMMISSION ALLOWED chart account | The receipt's BA (customer accounts only — §7)            | separate ledger row,`source_type='COMMISSION'`               |
 | Expense                                             | Expense head BA                  | CASH or BANK chart account                                | —                                                           |
 | Cheque allocation — VENDOR_PAYMENT                 | VENDOR BA                        | CHEQUES IN HAND                                           | `source_type='CHEQUE_ALLOCATION'`                            |
+| **Direct Settlement** (`amount`)                    | `to_ba_id` (our creditor)        | `from_ba_id` (our debtor)                                 | `source_type='SETTLEMENT'`; **both legs `ba_id`, no `ac_id`** — structurally cannot touch cash/bank/cheques |
 | Cheque allocation — EXPENSE_PAYMENT                | Target BA                        | CHEQUES IN HAND                                           | `source_type='CHEQUE_ALLOCATION'`                            |
 | **Bounce — receipt leg** (`amount` + `commission`) | The receipt's BA                 | CASH/BANK, and COMMISSION ALLOWED for the commission part | dated`cheques.bounced_date`                                  |
 | **Bounce — each allocation leg**                   | CHEQUES IN HAND                  | VENDOR BA / Target BA                                     | one per reversed allocation, dated`cheques.bounced_date`     |
