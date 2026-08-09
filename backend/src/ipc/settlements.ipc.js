@@ -17,13 +17,13 @@ module.exports = function register() {
 
   ipcMain.handle('settlements:create', wrap((payload) => {
     const session = requireSession();
-    return service.create(payload, session.userId);
+    return service.create(payload, session.userId, session);
   }));
 
   // Blocked once posted (must unpost first) — same as transfers:update, no password guard.
   ipcMain.handle('settlements:update', wrap((payload) => {
-    requireSession();
-    return service.update(payload.id, payload);
+    const session = requireSession();
+    return service.update(payload.id, payload, session);
   }));
 
   ipcMain.handle('settlements:remove', wrap((payload) => {

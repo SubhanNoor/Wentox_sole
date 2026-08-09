@@ -57,6 +57,26 @@ function list(filters = {}, session) {
   return repository.list({ ...filters, excludeRestrictedParent: !isAdmin });
 }
 
+// UC-03 point 4: "A `USER` who requests a restricted account directly receives a 403."
+//
+// The restriction belongs to the ACCOUNT, not to any one screen or channel, so this is the guard
+// every money-writing document calls before it touches a business account — expenses, receipts and
+// settlements alike. Locking channels could never achieve the same thing: a USER blocked from
+// expenses:create would simply have reached a Directors-Drawings account through receipts:create
+// or settlements:create instead.
+//
+// `session` omitted means an internal caller with no request behind it (db/seeds/dev-sample-data.js,
+// scripts). Those run as the machine, not as a person, and are trusted — the ipc layer always has a
+// real session and always passes it, which is where untrusted input actually arrives.
+async function assertAccessible(baId, session) {
+  if (!session || session.role === 'ADMIN') return;
+  const account = await repository.findByIdWithRestriction(baId);
+  // A missing account is not this function's error to report; the caller's own lookup will 404.
+  if (account?.is_restricted) {
+    throw ApiError.unauthorized('This account is restricted to administrators');
+  }
+}
+
 async function getForSetup(baId, session) {
   const account = await repository.findByIdWithRestriction(baId);
   if (!account) throw ApiError.notFound('Business account not found');
@@ -141,5 +161,5 @@ async function reactivate(baId, session) {
 
 module.exports = {
   createUnderChartCode, renameLinked, getById, getCashAccount,
-  list, getForSetup, create, update, remove, reactivate,
+  list, getForSetup, assertAccessible, create, update, remove, reactivate,
 };

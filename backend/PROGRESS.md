@@ -23,6 +23,50 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## UC-03 — server-side role enforcement (was UI-only)
+
+### 2026-08-10 — Restricted accounts guarded on the account, not the channel
+- **The gap:** every cheque and expense IPC channel called `requireSession()` and nothing more.
+  `requireRole` existed but only `backup` and `auth` used it. So role restriction was enforced
+  *entirely by hiding things on screen* — exactly what UC-03 point 3 warns against ("hiding a nav
+  item is never the only guard").
+- **The request was "add requireRole to cheque and expense channels"; that alone would have been
+  both too much and too little,** and the user agreed to the split after it was laid out:
+  - **Too much** — 13 of those 22 channels are ordinary expense entry. Locking them stops a `USER`
+    recording any expense, contradicting UC-03's own written decision that "Receipts/Expenses entry
+    remain intentionally unrestricted for `User` — the restriction is about *visibility*".
+  - **Too little** — the actual exposure is the **account**, not the channel. A `USER` blocked from
+    `expenses:create` would simply have reached a Directors-Drawings account through
+    `receipts:create` or `settlements:create`, neither of which is a "cheque or expense" channel.
+- **Two pieces, both done:**
+  1. **`requireRole('ADMIN')` on the six cheque disposal channels** (`deposit`,
+     `endorse-to-vendor`, `endorse-to-expense`, `mark-cleared`, `bounce`, `return-to-sender`) — the
+     ones the Cheque page already treats as admin-only, so nothing that works today stops working.
+     Deliberately NOT the Returns actions (`reverse-allocation`, `bounceIssuedCheque`,
+     `returnIssuedCheque`): a `USER` can do those today and could before the Cheque page existed —
+     verified against `c8125838^` rather than assumed — so locking them would remove behaviour
+     rather than close a gap.
+  2. **`businessAccounts.service.js#assertAccessible(baId, session)`** — UC-03 point 4's 403.
+     Called by expenses (on the resolved target), receipts, and settlements (**both** sides) on
+     create and update. The guard lives on the account, so a new document type cannot forget it by
+     picking a different channel name.
+- **`session` omitted = trusted internal caller** (seeds, scripts). Those run as the machine, not a
+  person; the ipc layer always has a real session and always passes it, which is where untrusted
+  input actually arrives. Without this the demo seed would have started failing.
+- **Verified with a real USER session against `USMAN BHATTI`** (under Directors Expenses - Drawings):
+  `expenses.create`, `receipts.create` and `settlements.create` (as payee) **all blocked** with
+  "This account is restricted to administrators"; the same USER against `Aslam Cutter` **allowed**;
+  ADMIN against the restricted account **allowed**; a no-session internal call **allowed**. All
+  services still load and list (expenses 13, receipts 16), cash book and alerts unchanged.
+- **Docs:** UC-03's rework note said "server-side enforcement does not exist at all yet" — replaced
+  with what is now actually enforced, including what is deliberately still open and why.
+- **Files:** `backend/src/ipc/cheques.ipc.js`, `backend/src/ipc/{expenses,receipts,settlements}.ipc.js`,
+  `backend/src/services/businessAccounts.service.js`,
+  `backend/src/services/{expenses,receipts,settlements}.service.js`,
+  `System_architecture/use_cases.md`
+
+---
+
 ## Cross-cutting — "today" was UTC everywhere; now local, and defined once
 
 ### 2026-08-10 — `src/utils/dates.js`; eight copies of a UTC date formatter replaced

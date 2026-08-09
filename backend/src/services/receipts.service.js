@@ -8,6 +8,7 @@ const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 const CODES = require('../constants/reservedAccounts');
 const { toISODate } = require('../utils/dates');
+const businessAccountsService = require('./businessAccounts.service');
 
 function validateHeader(payload) {
   if (!payload.ba_id) throw ApiError.badRequest('ba_id is required');
@@ -103,20 +104,24 @@ async function insertReceipt(transaction, payload, userId) {
 // transfers/wage_runs/salary_runs. A CHEQUE-mode receipt also creates the linked cheques row here
 // (PENDING) — the cheque physically exists once the customer hands it over, independent of
 // whether this receipt has been posted to the ledger yet.
-async function create(payload, userId) {
+async function create(payload, userId, session) {
   validateHeader(payload);
+  // UC-03 point 4 — receiving money INTO a restricted account is the same exposure as paying out
+  // of one, and receipts:create was never covered by any role check.
+  await businessAccountsService.assertAccessible(payload.ba_id, session);
   const id = await withTransaction((transaction) => insertReceipt(transaction, payload, userId));
   return getById(id);
 }
 
 // DRAFT-only — a CONFIRMED receipt is never edited in place (unpost first). Editing a CHEQUE
 // receipt's cheque_no/cheque_date also updates the linked cheques row.
-async function update(receiptId, payload, userId) {
+async function update(receiptId, payload, userId, session) {
   const existing = await getById(receiptId);
   if (existing.status === 'CONFIRMED') {
     throw ApiError.conflict('Unpost the receipt before editing', 'POSTED_LOCK');
   }
   validateHeader(payload);
+  await businessAccountsService.assertAccessible(payload.ba_id, session);
 
   await withTransaction(async (transaction) => {
     await repository.updateHeader(transaction, receiptId, buildFields(payload));

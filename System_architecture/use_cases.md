@@ -95,9 +95,18 @@ set on the two demo accounts it actually applies to, and `BusinessAcSetupPage`,
 Receipts/Expenses entry remain intentionally unrestricted for `User` — UC-03's restriction is about
 *visibility* (ledgers, reports, account-configuration screens), not the ability to record a bank or
 director's-drawings transaction.
+**Server-side enforcement (2026-08-10):** points 3 and 4 are now real, not just cosmetic.
+`businessAccounts.service.js#assertAccessible(ba_id, session)` rejects a `USER` touching any account
+whose parent chart account has `is_restricted = 1`, and it is called by **expenses, receipts and
+settlements** on create and update — the guard sits on the ACCOUNT, so closing one channel cannot be
+side-stepped through another. Separately, the six cheque **disposal** channels (`deposit`,
+`endorse-to-vendor`, `endorse-to-expense`, `mark-cleared`, `bounce`, `return-to-sender`) now call
+`requireRole('ADMIN')`; they were admin-only on screen and unguarded underneath. The cheque
+**Returns** actions stay open to `USER` deliberately — that has always been their behaviour, and
+locking them would remove working functionality rather than close a gap. Expense/receipt entry
+itself also stays open to `USER`, per the paragraph above.
 Still outstanding: the `User` role still comes from a static `user`/`user` demo login rather than a
-real `users` row (see UC-02's own rework note), and **server-side enforcement does not exist at all
-yet** (points 3–4 above) — that lands with Milestone 8's `users`/`chart_of_accounts` backend work
+real `users` row (see UC-02's own rework note) — that lands with Milestone 8's `users`/`chart_of_accounts` backend work
 and Milestone 9's frontend↔backend wiring, not before.
 
 ---

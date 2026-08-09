@@ -17,13 +17,13 @@ module.exports = function register() {
 
   ipcMain.handle('receipts:create', wrap((payload) => {
     const session = requireSession();
-    return service.create(payload, session.userId);
+    return service.create(payload, session.userId, session);
   }));
 
   // Blocked once posted (must unpost first) — same as purchases:update, no password guard.
   ipcMain.handle('receipts:update', wrap((payload) => {
     const session = requireSession();
-    return service.update(payload.id, payload, session.userId);
+    return service.update(payload.id, payload, session.userId, session);
   }));
 
   ipcMain.handle('receipts:remove', wrap((payload) => {

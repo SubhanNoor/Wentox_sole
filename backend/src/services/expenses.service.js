@@ -16,7 +16,7 @@ const { toISODate } = require('../utils/dates');
 // Resolves who gets paid — either a vendor (pick a vendor, resolves to vendors.ba_id) or any other
 // business account directly (a generic expense head). Either way expenses.ba_id ends up holding
 // the resolved account; which path was used doesn't need to be remembered afterward.
-async function resolveTarget(payload) {
+async function resolveTarget(payload, session) {
   if (payload.vendor_id) {
     const vendor = await vendorsService.getById(payload.vendor_id);
     if (!vendor.ba_id) throw ApiError.conflict('Vendor has no linked account yet', 'NO_VENDOR_ACCOUNT');
@@ -24,6 +24,9 @@ async function resolveTarget(payload) {
   }
   if (payload.ba_id) {
     const account = await businessAccountsService.getById(payload.ba_id); // 404s if it doesn't exist
+    // UC-03 point 4 — a USER must not be able to pay a Bank Accounts or Directors-Drawings account
+    // just because the screen that lists them is hidden.
+    await businessAccountsService.assertAccessible(account.ba_id, session);
     return account.ba_id;
   }
   throw ApiError.badRequest('vendor_id or ba_id is required');
@@ -100,22 +103,22 @@ async function getById(expenseId) {
 // Always created DRAFT — post() is the only thing that moves money. CHEQUE_ENDORSED doesn't
 // reserve any of the cheque's balance at create time — that only happens on post(), matching
 // every other module's "posting is what moves money" convention.
-async function create(payload, userId) {
+async function create(payload, userId, session) {
   validateHeader(payload);
-  const baId = await resolveTarget(payload);
+  const baId = await resolveTarget(payload, session);
 
   const id = await withTransaction((transaction) => repository.insert(transaction, { ...buildFields(payload, baId), created_by: userId }));
   return getById(id);
 }
 
 // DRAFT-only — a CONFIRMED expense is never edited in place (unpost first).
-async function update(expenseId, payload, userId) {
+async function update(expenseId, payload, userId, session) {
   const existing = await getById(expenseId);
   if (existing.status === 'CONFIRMED') {
     throw ApiError.conflict('Unpost the expense before editing', 'POSTED_LOCK');
   }
   validateHeader(payload);
-  const baId = await resolveTarget(payload);
+  const baId = await resolveTarget(payload, session);
 
   await withTransaction((transaction) => repository.updateHeader(transaction, expenseId, buildFields(payload, baId)));
   return getById(expenseId);

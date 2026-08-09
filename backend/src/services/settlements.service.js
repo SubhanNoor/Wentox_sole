@@ -11,7 +11,7 @@ const businessAccountsService = require('./businessAccounts.service');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 
-async function validate(payload) {
+async function validate(payload, session) {
   if (!payload.settlement_date) throw ApiError.badRequest('settlement_date is required');
   if (!payload.from_ba_id) throw ApiError.badRequest('from_ba_id is required');
   if (!payload.to_ba_id) throw ApiError.badRequest('to_ba_id is required');
@@ -26,6 +26,10 @@ async function validate(payload) {
   // not been billed yet), and blocking it would reject valid business.
   await businessAccountsService.getById(payload.from_ba_id);
   await businessAccountsService.getById(payload.to_ba_id);
+  // UC-03 point 4 — BOTH sides. Endorsing to a Directors-Drawings account is exactly the hole a
+  // channel-level role check would have left open.
+  await businessAccountsService.assertAccessible(payload.from_ba_id, session);
+  await businessAccountsService.assertAccessible(payload.to_ba_id, session);
 
   // payment_mode is INFORMATION about how the other two parties transacted — it selects no posting
   // target here (unlike receipts.payment_mode), so it is optional. When it IS given it must be a
@@ -63,8 +67,8 @@ function buildFields(payload) {
 
 // Always created DRAFT — post() is the only thing that writes ledger_entries, same shape as
 // transfers/receipts/expenses/purchases.
-async function create(payload, userId) {
-  await validate(payload);
+async function create(payload, userId, session) {
+  await validate(payload, session);
   const id = await withTransaction((transaction) => (
     repository.insert(transaction, { ...buildFields(payload), created_by: userId })
   ));
@@ -72,12 +76,12 @@ async function create(payload, userId) {
 }
 
 // Financial edits only while DRAFT — unpost first, same rule as every other posted document.
-async function update(settlementId, payload) {
+async function update(settlementId, payload, session) {
   const existing = await getById(settlementId);
   if (existing.status === 'CONFIRMED') {
     throw ApiError.conflict('Unpost the settlement before editing', 'POSTED_LOCK');
   }
-  await validate(payload);
+  await validate(payload, session);
   await repository.update(settlementId, buildFields(payload));
   return getById(settlementId);
 }
