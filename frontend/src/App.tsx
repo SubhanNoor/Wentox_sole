@@ -10,7 +10,7 @@ import ExpensesPage from '@/pages/ExpensesPage';
 import WageRunPage from '@/pages/WageRunPage';
 import SalaryRunPage from '@/pages/SalaryRunPage';
 import TransferPage from '@/pages/TransferPage';
-import ChequeReturnPage from '@/pages/ChequeReturnPage';
+import ChequePage from '@/pages/ChequePage';
 import BankSetupPage from '@/pages/BankSetupPage';
 
 // Setups
@@ -82,7 +82,7 @@ export default function App() {
     case 'transfer':
       return <TransferPage />;
     case 'cheque-return':
-      return <ChequeReturnPage />;
+      return <ChequePage />;
 
     // System Setup
     case 'setup-product':

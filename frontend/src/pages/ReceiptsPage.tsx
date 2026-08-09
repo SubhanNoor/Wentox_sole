@@ -9,17 +9,17 @@ import { Save, Search, Edit } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
-import ChequesTab from '@/components/ChequesTab';
 import AccountBalancePanel from '@/components/AccountBalancePanel';
 
-type ReceiptTab = 'entry' | 'weekly' | 'monthly' | 'overall' | 'cheques';
+// Cheque disposal (deposit/endorse/bounce/return) moved to the consolidated Cheque page's
+// Disposal tab — see ChequePage.tsx. This page keeps only receipt entry/records.
+type ReceiptTab = 'entry' | 'weekly' | 'monthly' | 'overall';
 
 const RECEIPT_TAB_LABELS: Record<ReceiptTab, string> = {
   entry: 'Receipt Entry',
   weekly: 'Weekly Records',
   monthly: 'Monthly Records',
   overall: 'Overall Records',
-  cheques: 'Cheques Disposal'
 };
 
 const today = () => new Date().toISOString().split('T')[0];
@@ -29,19 +29,17 @@ export default function ReceiptsPage() {
 
   // Navigation / Tabs State — sync with state.currentTab
   const [activeTab, setActiveTab] = useState<ReceiptTab>(() => {
-    if (state.currentTab && ['entry', 'weekly', 'monthly', 'overall', 'cheques'].includes(state.currentTab)) {
-      if (state.currentTab === 'cheques' && state.currentUserRole === 'User') return 'entry';
+    if (state.currentTab && ['entry', 'weekly', 'monthly', 'overall'].includes(state.currentTab)) {
       return state.currentTab as ReceiptTab;
     }
     return 'entry';
   });
 
   useEffect(() => {
-    if (state.currentTab && ['entry', 'weekly', 'monthly', 'overall', 'cheques'].includes(state.currentTab)) {
-      if (state.currentTab === 'cheques' && state.currentUserRole === 'User') return;
+    if (state.currentTab && ['entry', 'weekly', 'monthly', 'overall'].includes(state.currentTab)) {
       setActiveTab(state.currentTab as ReceiptTab);
     }
-  }, [state.currentTab, state.currentUserRole]);
+  }, [state.currentTab]);
 
   // ── Real lookup / list data ──
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
@@ -506,30 +504,12 @@ export default function ReceiptsPage() {
           >
             Overall Records
           </button>
-          {state.currentUserRole !== 'User' && (
-            <button
-              draggable={true}
-              onDragStart={(e) => {
-                e.dataTransfer.setData('text/plain', JSON.stringify({ page: 'receipts-jamma', tab: 'cheques', label: 'Cheques Disposal' }));
-              }}
-              onClick={() => setActiveTab('cheques')}
-              title="Drag tab to Quick Access Menu Bar to pin"
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
-                activeTab === 'cheques'
-                  ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              Cheques Disposal
-            </button>
-          )}
         </div>
 
         {/* Tab Content */}
         {activeTab === 'weekly' && <WeeklyReceiptsTab />}
         {activeTab === 'monthly' && <MonthlyReceiptsTab />}
         {activeTab === 'overall' && <OverallReceiptsTab />}
-        {activeTab === 'cheques' && state.currentUserRole !== 'User' && <ChequesTab />}
 
         {activeTab === 'entry' && (
           <div className="max-w-2xl mx-auto animate-fadeIn">

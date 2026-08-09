@@ -43,7 +43,7 @@ const navSections: NavSection[] = [
       { page: 'wage-run', label: 'Wage Run (Piece Rate)', icon: HardHat },
       { page: 'salary-run', label: 'Salary Run (Monthly)', icon: BadgeDollarSign },
       { page: 'transfer', label: 'Transfer (Cash ↔ Bank)', icon: ArrowLeftRight, adminOnly: true },
-      { page: 'cheque-return', label: 'Cheque Return', icon: RotateCcw },
+      { page: 'cheque-return', label: 'Cheque', icon: RotateCcw },
     ]
   },
   {

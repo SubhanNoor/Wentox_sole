@@ -205,7 +205,37 @@ async function listReturnableIssuedCheques(filters = {}) {
   return result.recordset;
 }
 
+// Cheque Ledger tab — every CONFIRMED CHEQUE_ISSUED expense regardless of issued_cheque_status
+// (mirrors cheques.repository.js#list(), but for cheques WE wrote instead of ones we received).
+// Unlike listReturnableIssuedCheques() above, this is NOT restricted to PENDING — the ledger needs
+// the full history (still pending, bounced, or returned) for one comprehensive register.
+async function listIssuedCheques(filters = {}) {
+  const conditions = ["e.status = 'CONFIRMED'", "e.payment_mode = 'CHEQUE_ISSUED'"];
+  const params = {};
+
+  if (filters.date_from) {
+    conditions.push('e.expense_date >= @dateFrom');
+    params.dateFrom = { type: sql.Date, value: filters.date_from };
+  }
+  if (filters.date_to) {
+    conditions.push('e.expense_date <= @dateTo');
+    params.dateTo = { type: sql.Date, value: filters.date_to };
+  }
+
+  const where = `WHERE ${conditions.join(' AND ')}`;
+  const result = await query(
+    `SELECT e.*, ba.name AS ba_name, b.name AS bank_name
+     FROM dbo.expenses e
+     JOIN dbo.business_accounts ba ON ba.ba_id = e.ba_id
+     LEFT JOIN dbo.bank_accounts b ON b.bank_id = e.bank_id
+     ${where}
+     ORDER BY e.expense_date DESC, e.expense_id DESC`,
+    params,
+  );
+  return result.recordset;
+}
+
 module.exports = {
   insert, findById, list, updateHeader, setStatus, remove, insertLedgerEntries, deleteLedgerEntries,
-  markIssuedChequeBounced, markIssuedChequeReturned, listReturnableIssuedCheques,
+  markIssuedChequeBounced, markIssuedChequeReturned, listReturnableIssuedCheques, listIssuedCheques,
 };

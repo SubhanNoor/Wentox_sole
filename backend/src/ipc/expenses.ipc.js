@@ -60,4 +60,10 @@ module.exports = function register() {
     requireSession();
     return service.listReturnableIssuedCheques(payload);
   }));
+
+  // "Cheque" page's Ledger tab — every issued cheque regardless of status.
+  ipcMain.handle('expenses:issuedCheques', wrap((payload) => {
+    requireSession();
+    return service.listIssuedCheques(payload);
+  }));
 };

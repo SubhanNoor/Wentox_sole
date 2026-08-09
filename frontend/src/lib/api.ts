@@ -1584,6 +1584,7 @@ declare global {
         bounceIssuedCheque: (payload: { id: number; bounced_date: string }) => Promise<ApiResult<ExpenseRow>>;
         returnIssuedCheque: (payload: { id: number; returned_date: string; reason?: string }) => Promise<ApiResult<ExpenseRow>>;
         returnableIssuedCheques: (payload?: { date_from?: string; date_to?: string }) => Promise<ApiResult<IssuedChequeRow[]>>;
+        issuedCheques: (payload?: { date_from?: string; date_to?: string }) => Promise<ApiResult<IssuedChequeRow[]>>;
       };
       draftExpenses: {
         list: (payload?: ExpenseListFilters) => Promise<ApiResult<DraftExpenseRow[]>>;
@@ -2410,7 +2411,9 @@ export const expenses = {
   returnIssuedCheque: (id: number, payload: { returned_date: string; reason?: string }) =>
     window.api ? window.api.expenses.returnIssuedCheque({ id, ...payload }).then(r => mapResult(r, normalizeExpenseRow)) : Promise.resolve(NO_BRIDGE),
   returnableIssuedCheques: (payload?: { date_from?: string; date_to?: string }) =>
-    window.api ? window.api.expenses.returnableIssuedCheques(payload).then(r => mapResult(r, rows => rows.map(normalizeIssuedChequeRow))) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.expenses.returnableIssuedCheques(payload).then(r => mapResult(r, rows => rows.map(normalizeIssuedChequeRow))) : Promise.resolve(NO_BRIDGE),
+  issuedCheques: (payload?: { date_from?: string; date_to?: string }) =>
+    window.api ? window.api.expenses.issuedCheques(payload).then(r => mapResult(r, rows => rows.map(normalizeIssuedChequeRow))) : Promise.resolve(NO_BRIDGE)
 };
 
 export const draftExpenses = {

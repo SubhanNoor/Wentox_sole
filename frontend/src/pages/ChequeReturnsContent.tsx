@@ -1,6 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
-import AppLayout from '@/components/AppLayout';
 import { todayISO } from '@/lib/cheques';
 import { formatDate } from '@/lib/utils';
 import { AlertTriangle, RotateCcw, Search } from 'lucide-react';
@@ -12,7 +11,7 @@ const DISPOSITION_LABELS: Record<Exclude<ChequeDispositionType, 'DEPOSIT'>, stri
   EXPENSE_PAYMENT: 'Paid to Expense Account',
 };
 
-// Unifies the two structurally separate cheque-payment sources this page covers: a cheque we
+// Unifies the two structurally separate cheque-payment sources this tab covers: a cheque we
 // RECEIVED from a customer and endorsed onward (dbo.cheque_allocations), and a cheque WE WROTE
 // directly from our own bank account (dbo.expenses, payment_mode = CHEQUE_ISSUED) — the latter
 // never creates a cheques/cheque_allocations row at all, so it can't be represented as one of
@@ -29,7 +28,7 @@ interface UnifiedRow {
   issued?: IssuedChequeRow;
 }
 
-export default function ChequeReturnPage() {
+export function ChequeReturnsContent() {
   const [allocations, setAllocations] = useState<ChequeAllocationRow[]>([]);
   const [issuedCheques, setIssuedCheques] = useState<IssuedChequeRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -143,105 +142,103 @@ export default function ChequeReturnPage() {
   };
 
   return (
-    <AppLayout pageTitle="Cheque Return">
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
-        {successMsg && (
-          <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
-        )}
-        {errorMsg && (
-          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
-        )}
+    <div className="mx-auto" style={{ maxWidth: 1200 }}>
+      {successMsg && (
+        <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
+      )}
+      {errorMsg && (
+        <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
+      )}
 
-        <div
-          className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white"
-          style={{ borderColor: 'var(--border-color)' }}
-          data-no-print
-        >
-          <div>
-            <h3 className="font-lora font-semibold text-lg text-slate-800">Endorsed & Issued Cheques</h3>
-            <p className="text-xs text-slate-500 font-medium">
-              Every cheque payment still standing — whether endorsed onward from a customer receipt
-              or issued directly from our own bank — hand one back to reverse just that payment.
-            </p>
-          </div>
-          <div className="relative min-w-[240px]">
-            <input
-              type="text"
-              placeholder="Cheque no. or payee..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold bg-white"
-            />
-            <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
-          </div>
+      <div
+        className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white"
+        style={{ borderColor: 'var(--border-color)' }}
+        data-no-print
+      >
+        <div>
+          <h3 className="font-lora font-semibold text-lg text-slate-800">Endorsed & Issued Cheques</h3>
+          <p className="text-xs text-slate-500 font-medium">
+            Every cheque payment still standing — whether endorsed onward from a customer receipt
+            or issued directly from our own bank — hand one back to reverse just that payment.
+          </p>
         </div>
+        <div className="relative min-w-[240px]">
+          <input
+            type="text"
+            placeholder="Cheque no. or payee..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold bg-white"
+          />
+          <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
+        </div>
+      </div>
 
-        <div className="card-white p-6 md:p-8 bg-white border">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr
-                  className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500"
-                  style={{ borderColor: 'var(--border-color)' }}
-                >
-                  <th className="p-3 pl-4">Cheque No.</th>
-                  <th className="p-3">Paid To</th>
-                  <th className="p-3 text-center">Disposition</th>
-                  <th className="p-3 text-right">Amount</th>
-                  <th className="p-3 text-center">Date</th>
-                  <th className="p-3 text-center" data-no-print>Action</th>
+      <div className="card-white p-6 md:p-8 bg-white border">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr
+                className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500"
+                style={{ borderColor: 'var(--border-color)' }}
+              >
+                <th className="p-3 pl-4">Cheque No.</th>
+                <th className="p-3">Paid To</th>
+                <th className="p-3 text-center">Disposition</th>
+                <th className="p-3 text-right">Amount</th>
+                <th className="p-3 text-center">Date</th>
+                <th className="p-3 text-center" data-no-print>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {unifiedRows.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="text-center p-8 text-slate-400">
+                    {loading ? 'Loading…' : 'No cheques match this filter.'}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {unifiedRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="text-center p-8 text-slate-400">
-                      {loading ? 'Loading…' : 'No cheques match this filter.'}
+              ) : (
+                unifiedRows.map(row => (
+                  <tr key={row.key} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                    <td className="p-3 pl-4 font-mono font-semibold text-slate-800">{row.chequeNo}</td>
+                    <td className="p-3 font-semibold text-slate-700">{row.paidTo}</td>
+                    <td className="p-3 text-center">
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-violet-50 text-violet-800 border-violet-200">
+                        {row.dispositionLabel}
+                      </span>
                     </td>
-                  </tr>
-                ) : (
-                  unifiedRows.map(row => (
-                    <tr key={row.key} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                      <td className="p-3 pl-4 font-mono font-semibold text-slate-800">{row.chequeNo}</td>
-                      <td className="p-3 font-semibold text-slate-700">{row.paidTo}</td>
-                      <td className="p-3 text-center">
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-violet-50 text-violet-800 border-violet-200">
-                          {row.dispositionLabel}
-                        </span>
-                      </td>
-                      <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.amount)}</td>
-                      <td className="p-3 text-center text-xs text-slate-600">{formatDate(row.date)}</td>
-                      <td className="p-3 text-center" data-no-print>
-                        {row.source === 'endorsed' ? (
+                    <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.amount)}</td>
+                    <td className="p-3 text-center text-xs text-slate-600">{formatDate(row.date)}</td>
+                    <td className="p-3 text-center" data-no-print>
+                      {row.source === 'endorsed' ? (
+                        <button
+                          onClick={() => openReturn(row.endorsed!)}
+                          className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200 transition-colors"
+                        >
+                          <RotateCcw size={11} /> Return
+                        </button>
+                      ) : (
+                        <div className="flex items-center justify-center gap-1.5">
                           <button
-                            onClick={() => openReturn(row.endorsed!)}
+                            onClick={() => openIssuedAction(row.issued!, 'BOUNCED')}
+                            className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 transition-colors"
+                          >
+                            Mark Bounced
+                          </button>
+                          <button
+                            onClick={() => openIssuedAction(row.issued!, 'RETURNED')}
                             className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200 transition-colors"
                           >
                             <RotateCcw size={11} /> Return
                           </button>
-                        ) : (
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              onClick={() => openIssuedAction(row.issued!, 'BOUNCED')}
-                              className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 transition-colors"
-                            >
-                              Mark Bounced
-                            </button>
-                            <button
-                              onClick={() => openIssuedAction(row.issued!, 'RETURNED')}
-                              className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200 transition-colors"
-                            >
-                              <RotateCcw size={11} /> Return
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -355,6 +352,6 @@ export default function ChequeReturnPage() {
           </div>
         </div>
       )}
-    </AppLayout>
+    </div>
   );
 }

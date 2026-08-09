@@ -143,9 +143,17 @@ function formatLedgerRow(r) {
     case 'PURCHASE_RETURN':
       type = 'Purchase Return';
       break;
-    case 'CHEQUE_ALLOCATION':
-      type = 'Cheque Allocation';
+    case 'CHEQUE_ALLOCATION': {
+      // Both the original endorsement (cheques.service.js#endorseToVendor/endorseToExpense,
+      // narration "Cheque #X to vendor/expense") and its later reversal (reverseOneAllocation/
+      // reverseCheque, narration "... reversal of allocation #X") share source_type
+      // CHEQUE_ALLOCATION — same reverse-never-erase pattern as the RECEIPT case above, so the
+      // same "reversal" narration sniff distinguishes them instead of showing one generic label
+      // for both directions of money movement.
+      const isReversal = r.narration && /reversal/i.test(r.narration);
+      type = isReversal ? 'Cheque Return' : 'Cheque Endorsement';
       break;
+    }
     case 'OPENING':
       type = 'Opening Balance';
       break;

@@ -292,13 +292,20 @@ function returnIssuedCheque(expenseId, payload, userId) {
   return reverseIssuedCheque(expenseId, { date: payload.returned_date, reason: payload.reason, mode: 'RETURNED' }, userId);
 }
 
-// "Cheque Return" page's issued-cheque list — every posted CHEQUE_ISSUED expense whose cheque
+// "Cheque" page's issued-cheque list — every posted CHEQUE_ISSUED expense whose cheque
 // hasn't bounced/been returned yet, alongside the existing endorsed-allocations list.
 function listReturnableIssuedCheques(filters) {
   return repository.listReturnableIssuedCheques(filters);
 }
 
+// "Cheque" page's Ledger tab — every posted CHEQUE_ISSUED expense regardless of status (pending,
+// bounced, or returned), for the full-history register alongside listEndorsedAllocations()/
+// cheques.service.js#list() (received cheques).
+function listIssuedCheques(filters) {
+  return repository.listIssuedCheques(filters);
+}
+
 module.exports = {
   list, getById, create, update, remove, post, unpost,
-  bounceIssuedCheque, returnIssuedCheque, listReturnableIssuedCheques,
+  bounceIssuedCheque, returnIssuedCheque, listReturnableIssuedCheques, listIssuedCheques,
 };
