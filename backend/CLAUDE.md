@@ -30,6 +30,8 @@ src/services/      → business logic, validation, transactions (throw ApiError)
 src/repositories/  → SQL only (parameterized queries via db/pool)
 src/middleware/    → small shared helpers (payload validation) — not an Express chain
 src/errors/        → ApiError and error types
+src/utils/         → tiny pure helpers with no layer of their own (dates.js: the single
+                     definition of "today", local not UTC — see its header)
 src/db/            → pool, migrations, seeds
 electron/          → main.js (registers IPC, opens BrowserWindow), preload.js (contextBridge)
 ```

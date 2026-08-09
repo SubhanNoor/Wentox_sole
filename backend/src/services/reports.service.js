@@ -7,19 +7,8 @@ const businessAccountsService = require('./businessAccounts.service');
 const ApiError = require('../errors/ApiError');
 const CODES = require('../constants/reservedAccounts');
 const { findByCode } = require('../repositories/chartAccounts.repository');
+const { toISODate, todayISO } = require('../utils/dates');
 
-// LOCAL date, not UTC. toISOString() converts to UTC first, so in PKT (UTC+5) everything between
-// 05:00 and midnight local is already "tomorrow" in UTC — and after 19:00 local, UTC is still
-// YESTERDAY. Every business date in this system is a local one: the date pickers emit local dates
-// and a business day is a local day. Using the UTC date made "today" wrong for five hours every
-// evening, which silently excluded entries dated today from accountBalance() (the Receipts/Expenses
-// balance panel read stale) and opened the Cash Book on the previous day.
-// Caught while testing Direct Settlement: a settlement dated today moved no balance at all until
-// UTC caught up. Formatted by parts rather than toISOString() so no timezone conversion happens.
-function todayISO() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 
 // Weekly/monthly/overall convenience on top of explicit date_from/date_to (explicit wins) — same
 // convention as saleBills.service.js/purchases.service.js#resolveDateRange.
@@ -28,15 +17,14 @@ function resolveDateRange(filters) {
     return { date_from: filters.date_from, date_to: filters.date_to };
   }
   const today = new Date();
-  const iso = (d) => d.toISOString().slice(0, 10);
   if (filters.range === 'weekly') {
     const from = new Date(today);
     from.setDate(from.getDate() - 7);
-    return { date_from: iso(from), date_to: iso(today) };
+    return { date_from: toISODate(from), date_to: toISODate(today) };
   }
   if (filters.range === 'monthly') {
     const from = new Date(today.getFullYear(), today.getMonth(), 1);
-    return { date_from: iso(from), date_to: iso(today) };
+    return { date_from: toISODate(from), date_to: toISODate(today) };
   }
   return {}; // 'overall' or unspecified — no date filter
 }
@@ -437,7 +425,10 @@ async function cashBook(filters = {}) {
     const [y, m] = filters.month.split('-').map(Number);
     const from = new Date(y, m - 1, 1);
     const to = new Date(y, m, 0);
-    range = { date_from: from.toISOString().slice(0, 10), date_to: to.toISOString().slice(0, 10) };
+    // toISODate, not toISOString: new Date(y, m-1, 1) is LOCAL midnight, so converting to UTC
+    // shifted BOTH ends back a day in PKT — "August" was really 31-Jul to 30-Aug, silently
+    // including the previous month's last day and dropping the selected month's.
+    range = { date_from: toISODate(from), date_to: toISODate(to) };
   } else if (filters.date) {
     range = { date_from: filters.date, date_to: filters.date };
   } else {

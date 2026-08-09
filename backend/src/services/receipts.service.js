@@ -7,6 +7,7 @@ const chartAccountsRepository = require('../repositories/chartAccounts.repositor
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 const CODES = require('../constants/reservedAccounts');
+const { toISODate } = require('../utils/dates');
 
 function validateHeader(payload) {
   if (!payload.ba_id) throw ApiError.badRequest('ba_id is required');
@@ -49,15 +50,14 @@ function resolveDateRange(filters) {
     return { date_from: filters.date_from, date_to: filters.date_to };
   }
   const today = new Date();
-  const iso = (d) => d.toISOString().slice(0, 10);
   if (filters.range === 'weekly') {
     const from = new Date(today);
     from.setDate(from.getDate() - 7);
-    return { date_from: iso(from), date_to: iso(today) };
+    return { date_from: toISODate(from), date_to: toISODate(today) };
   }
   if (filters.range === 'monthly') {
     const from = new Date(today.getFullYear(), today.getMonth(), 1);
-    return { date_from: iso(from), date_to: iso(today) };
+    return { date_from: toISODate(from), date_to: toISODate(today) };
   }
   return {}; // 'overall' or unspecified — no date filter
 }

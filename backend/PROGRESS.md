@@ -23,6 +23,43 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Cross-cutting — "today" was UTC everywhere; now local, and defined once
+
+### 2026-08-10 — `src/utils/dates.js`; eight copies of a UTC date formatter replaced
+- **What:** `new Date().toISOString().slice(0, 10)` had been copy-pasted into eight files as the
+  definition of "today". `toISOString()` converts to UTC first, so in PKT (UTC+5) the server's
+  "today" is still **yesterday between 19:00 and midnight local**. Every business date in WentoX is
+  a local one — the pickers emit local dates, a business day is a local day — so this was simply
+  wrong, for five hours a day, in eight places.
+- **It was not cosmetic.** Found via Direct Settlement: a settlement dated today moved **no balance
+  at all**, because `accountBalance()`'s `up_to_date` cutoff excluded it. Same cutoff made the
+  Receipts/Expenses balance panel read stale every evening and opened the Cash Book a day behind.
+- **A second, worse instance found during this sweep:** `cashBook()`'s month range was built as
+  `new Date(y, m-1, 1).toISOString()`. That Date is LOCAL midnight, so converting to UTC shifted
+  **both ends back a day** — "August" was really **31-Jul → 30-Aug**, silently including the
+  previous month's last day and dropping the selected month's. Confirmed directly:
+  `2026-07-31 -> 2026-08-30` before, `2026-08-01 -> 2026-08-31` after.
+- **Fix:** new `src/utils/dates.js` — `toISODate()` (formats from local `getFullYear/getMonth/
+  getDate` parts, no timezone conversion at all), `todayISO()`, `daysFromNowISO()`. One definition,
+  imported everywhere, so a ninth copy cannot drift.
+- **Changed:** the six document services' `resolveDateRange` (`saleBills`, `saleReturns`,
+  `purchases`, `purchaseReturns`, `receipts`, `expenses` — Weekly/Monthly tabs), `reports.service`'s
+  own `resolveDateRange` **and** its cash-book month range, and `alerts.service`'s
+  `todayISO`/`cutoffISO`/`toISODate` — the last of which shifted **when a cheque-due alert fires**,
+  not merely which rows a list showed.
+- **Deliberately left alone: `salaryRuns.service.js`.** Its `period_month` normalisation is UTC on
+  purpose and self-consistent (`Date.UTC` in, `getUTC*` out); changing it would be churn, not a fix.
+- **`backend/CLAUDE.md` updated** — `src/utils/` is a new folder and the layer list is meant to be
+  the truth about the structure.
+- **Verified:** every changed service smoke-tested across weekly/monthly/overall
+  (saleBills 2/2/14, saleReturns 0/0/3, purchases 0/0/6, purchaseReturns 0/0/2, receipts 5/6/16,
+  expenses 4/4/13); `alerts.refreshAlerts()` returned 4 alerts; the August cash book now spans
+  01–31 Aug and its summary reconciles (42,500 + 18,500 − 26,768 = 34,232).
+- **Files:** `backend/src/utils/dates.js` (new), `backend/src/services/{saleBills,saleReturns,
+  purchases,purchaseReturns,receipts,expenses,reports,alerts}.service.js`, `backend/CLAUDE.md`
+
+---
+
 ## Direct Settlement — endorse a payment from the Receipts screen (UC-39, migration 015)
 
 ### 2026-08-09 — Debtor pays our creditor directly; no cash, bank or cheque involved

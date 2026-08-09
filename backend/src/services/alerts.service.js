@@ -2,24 +2,16 @@
 // Throw ApiError for expected failures; use withTransaction for multi-write ops.
 const repository = require('../repositories/alerts.repository');
 const ApiError = require('../errors/ApiError');
+const { toISODate, todayISO, daysFromNowISO } = require('../utils/dates');
 
 // UC-05/cash_and_bank.md §12: 7 days out turns amber ("due-soon"), the date itself passing turns
 // red ("overdue"). Both cheque-due and sale-bill-due-date alerts use the same window.
 const DAYS_AHEAD = 7;
 
-function toISODate(value) {
-  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
-}
-
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function cutoffISO() {
-  const d = new Date();
-  d.setDate(d.getDate() + DAYS_AHEAD);
-  return d.toISOString().slice(0, 10);
-}
+// Local dates, not UTC — see utils/dates.js. This job decides whether a cheque is "due" and how far
+// ahead to look, so a UTC "today" shifted WHEN an alert fires by up to a day, not merely which rows
+// a list showed.
+const cutoffISO = () => daysFromNowISO(DAYS_AHEAD);
 
 // Every cheque generates one of these unconditionally (UC-05: "these are unconditional — every
 // cheque generates them") — no balance check, just cheque_date vs today.
