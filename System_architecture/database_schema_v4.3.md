@@ -26,6 +26,13 @@
 > blocks for both tables below already reflect this — `sale_bills` carries `due_date` and no
 > `status`; `sale_returns` carries neither.
 >
+> **Post-v4.3 amendments that DID need a numbered migration** (the database was already live by
+> then, so folding them into `database/schema.sql` alone would not have reached an installed copy —
+> the CREATE TABLE blocks below reflect the post-migration state):
+> **`014_receipts_any_business_account.sql`** — `receipts.customer_id` / `draft_receipts.customer_id`
+> replaced by `ba_id`, so Jamma can name **any** business account rather than only a customer,
+> matching what Naam (`expenses.ba_id`) always allowed. See `dbo.receipts` below and UC-25.
+>
 > **v4.3 changes:** merged in the working-session actions/answers applied on top of the reverted
 > v4.0 copy, so this file now carries both lineages. Renames `articles` → `products` (cascaded to
 > `product_id` and all constraint/index names). Promotes `account_class` from a fixed `CHECK` list
@@ -1205,7 +1212,14 @@ CREATE INDEX IX_cheques_due         ON dbo.cheques(cheque_date)             -- �
 CREATE TABLE dbo.receipts (                                   -- Jamma
   receipt_id   INT IDENTITY(1,1) NOT NULL,
   receipt_date DATE          NOT NULL,
-  customer_id  INT           NOT NULL,
+  -- POST-v4.3 (migration 014): was `customer_id NOT NULL` FK to dbo.customers, which meant Jamma
+  -- could only ever name a customer -- money back from a director, an employee, a vendor or a bank
+  -- had nowhere to go. Now any business account, exactly like dbo.expenses.ba_id has always been.
+  -- Nothing is lost: customers.ba_id is UNIQUE, so "which customer paid this" is still
+  --   JOIN dbo.customers c ON c.ba_id = r.ba_id
+  -- and that join usefully EXCLUDES non-customer receipts, which is what keeps Sale Analysis /
+  -- Sale Report "Payment Received" honest (a director's repayment must not inflate a customer).
+  ba_id        INT           NOT NULL,
   amount       DECIMAL(14,2) NOT NULL,
   commission   DECIMAL(14,2) NOT NULL CONSTRAINT DF_rec_comm DEFAULT (0),  -- §7: payment-time only
   payment_mode VARCHAR(10)   NOT NULL,
@@ -1219,7 +1233,7 @@ CREATE TABLE dbo.receipts (                                   -- Jamma
   created_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_rec_created DEFAULT (SYSUTCDATETIME()),
   updated_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_rec_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_receipts        PRIMARY KEY (receipt_id),
-  CONSTRAINT FK_receipts_cust   FOREIGN KEY (customer_id) REFERENCES dbo.customers(customer_id),
+  CONSTRAINT FK_receipts_ba     FOREIGN KEY (ba_id)       REFERENCES dbo.business_accounts(ba_id),
   CONSTRAINT FK_receipts_cheque FOREIGN KEY (cheque_id)   REFERENCES dbo.cheques(cheque_id),
   CONSTRAINT FK_receipts_bank   FOREIGN KEY (bank_id)     REFERENCES dbo.bank_accounts(bank_id),
   CONSTRAINT FK_receipts_user   FOREIGN KEY (created_by)  REFERENCES dbo.users(user_id),
@@ -1243,13 +1257,13 @@ CREATE TABLE dbo.receipts (                                   -- Jamma
         (payment_mode = 'ONLINE' AND bank_id IS NOT NULL)
      OR (payment_mode <> 'ONLINE' AND bank_id IS NULL))
 );
-CREATE INDEX IX_receipts_date     ON dbo.receipts(receipt_date);
-CREATE INDEX IX_receipts_customer ON dbo.receipts(customer_id, receipt_date);
+CREATE INDEX IX_receipts_date    ON dbo.receipts(receipt_date);
+CREATE INDEX IX_receipts_account ON dbo.receipts(ba_id, receipt_date);
 
 CREATE TABLE dbo.draft_receipts (
   draft_id     INT IDENTITY(1,1) NOT NULL,
   receipt_date DATE          NOT NULL,
-  customer_id  INT           NOT NULL,
+  ba_id        INT           NOT NULL,                        -- POST-v4.3 (migration 014), as dbo.receipts above
   amount       DECIMAL(14,2) NOT NULL,
   commission   DECIMAL(14,2) NOT NULL CONSTRAINT DF_drec_comm DEFAULT (0),
   payment_mode VARCHAR(10)   NOT NULL,
@@ -1262,7 +1276,7 @@ CREATE TABLE dbo.draft_receipts (
   created_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_drec_created DEFAULT (SYSUTCDATETIME()),
   updated_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_drec_updated DEFAULT (SYSUTCDATETIME()),
   CONSTRAINT PK_draft_receipts        PRIMARY KEY (draft_id),
-  CONSTRAINT FK_draft_receipts_cust   FOREIGN KEY (customer_id) REFERENCES dbo.customers(customer_id),
+  CONSTRAINT FK_draft_receipts_ba     FOREIGN KEY (ba_id)       REFERENCES dbo.business_accounts(ba_id),
   CONSTRAINT FK_draft_receipts_cheque FOREIGN KEY (cheque_id)   REFERENCES dbo.cheques(cheque_id),
   CONSTRAINT FK_draft_receipts_bank   FOREIGN KEY (bank_id)     REFERENCES dbo.bank_accounts(bank_id),
   CONSTRAINT FK_draft_receipts_user   FOREIGN KEY (created_by)  REFERENCES dbo.users(user_id),
@@ -1271,7 +1285,7 @@ CREATE TABLE dbo.draft_receipts (
   CONSTRAINT CK_draft_receipts_mode   CHECK (payment_mode IN ('CASH','CHEQUE','ONLINE'))
 );
 CREATE INDEX IX_draft_receipts_date     ON dbo.draft_receipts(receipt_date);
-CREATE INDEX IX_draft_receipts_customer ON dbo.draft_receipts(customer_id, receipt_date);
+CREATE INDEX IX_draft_receipts_account  ON dbo.draft_receipts(ba_id, receipt_date);
 
 CREATE TABLE dbo.expenses (                                   -- Kharch; also the vendor-payment path (§10 gap 2)
   expense_id   INT IDENTITY(1,1) NOT NULL,
@@ -1640,12 +1654,12 @@ transaction. `CUSTOMER BA` / `VENDOR BA` mean the party's `business_accounts` ro
 | Sale Return (`net_value`)                           | SALES chart account              | CUSTOMER BA                                               | positive`SALE_RETURN` stock movements                        |
 | Purchase (`total_value`)                            | PURCHASES chart account          | VENDOR BA                                                 | positive`PURCHASE` vendor-stock movements                    |
 | Purchase Return (`total_value`)                     | VENDOR BA                        | PURCHASES chart account                                   | negative`PURCHASE_RETURN` vendor-stock movements             |
-| Receipt — amount                                   | CASH or BANK chart account       | CUSTOMER BA                                               | —                                                           |
-| Receipt — commission (§7)                         | COMMISSION ALLOWED chart account | CUSTOMER BA                                               | separate ledger row,`source_type='COMMISSION'`               |
+| Receipt — amount                                   | CASH or BANK chart account       | The receipt's BA (`receipts.ba_id` — any account)         | —                                                           |
+| Receipt — commission (§7)                         | COMMISSION ALLOWED chart account | The receipt's BA (customer accounts only — §7)            | separate ledger row,`source_type='COMMISSION'`               |
 | Expense                                             | Expense head BA                  | CASH or BANK chart account                                | —                                                           |
 | Cheque allocation — VENDOR_PAYMENT                 | VENDOR BA                        | CHEQUES IN HAND                                           | `source_type='CHEQUE_ALLOCATION'`                            |
 | Cheque allocation — EXPENSE_PAYMENT                | Target BA                        | CHEQUES IN HAND                                           | `source_type='CHEQUE_ALLOCATION'`                            |
-| **Bounce — receipt leg** (`amount` + `commission`) | CUSTOMER BA                      | CASH/BANK, and COMMISSION ALLOWED for the commission part | dated`cheques.bounced_date`                                  |
+| **Bounce — receipt leg** (`amount` + `commission`) | The receipt's BA                 | CASH/BANK, and COMMISSION ALLOWED for the commission part | dated`cheques.bounced_date`                                  |
 | **Bounce — each allocation leg**                   | CHEQUES IN HAND                  | VENDOR BA / Target BA                                     | one per reversed allocation, dated`cheques.bounced_date`     |
 | Production                                          | —                               | —                                                        | positive`PRODUCTION` stock movements only (no ledger effect) |
 

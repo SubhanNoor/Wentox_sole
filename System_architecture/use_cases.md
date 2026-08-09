@@ -463,14 +463,20 @@ reducing what is owed. This feeds Vendor Report's Purchase Return column.
 
 ## UC-25: Record a receipt (Jamma) — ✅
 
-**Actor:** Accountant / Sales staff · **Goal:** Record a payment received from a customer
+**Actor:** Accountant / Sales staff · **Goal:** Record money received against any account
 **Screen:** Receipts (Jamma) → Entry tab
 
+> **Not customer-only.** A receipt names **any business account** — a customer, a vendor refund, a
+> bank, an employee, a director repaying money. This mirrors Expenses (Naam), which has always
+> allowed any account. Enforced by `receipts.ba_id` (migration 014, replacing `customer_id`).
+
 **Steps:**
-1. User selects the date and the customer; the account group auto-fills and the **current
+1. User selects the date and the **account**; the account group auto-fills and the **current
    outstanding balance** is shown inline.
 2. User enters the **amount received**.
-3. User enters **Commission**, if any (see below).
+3. User enters **Commission**, if any (see below). The field appears **only for a customer's
+   account** — commission is payment-time trade discount to a customer and has no meaning on money
+   from a director, an employee or a bank.
 4. The screen shows **both figures explicitly** — the original amount owed and the amount owed
    after commission — so the before/after is visible at a glance, not just a net balance.
 5. User selects the payment mode: **Cash**, **Cheque** or **Online**.
@@ -484,8 +490,8 @@ reducing what is owed. This feeds Vendor Report's Purchase Return column.
    details field.
 8. User enters remarks — **this text becomes the narration** on the Account Ledger row
    (e.g. "CHEQUE 28423916 13-10-2025", "CASH", "PURNA DIFFERENCE").
-9. **Confirm** saves the receipt and posts a **credit** to the customer's ledger, plus a **separate
-   credit row for the commission** if one was entered.
+9. **Confirm** saves the receipt and posts a **credit** to the selected account's ledger, plus a
+   **separate credit row for the commission** if one was entered.
 
 ### Commission is not a discount
 
@@ -501,8 +507,13 @@ bill stays **1,020,000** and is never touched; a commission of **20,000** is rec
 customer pays **1,000,000**. Ledger: Debit 1,020,000 (sale), Credit 20,000 (commission), Credit
 1,000,000 (payment) → balance **0**.
 
-**Data:** writes `receipts`, `ledger_entries`; reads `customers`, `sale_bills`, `sale_returns`.
-**Rework:** Commission and all four cheque fields need adding; today only free-text details/remarks exist.
+**Data:** writes `receipts`, `ledger_entries`; reads `business_accounts`, `customers`, `sale_bills`,
+`sale_returns`.
+**Note:** Sale Analysis / Sale Report "Payment Received" joins `customers.ba_id = receipts.ba_id`
+(UNIQUE), so a receipt against a non-customer account is correctly excluded from customer totals.
+**Steps 1 and 4 are built** — picking an account shows a balance panel (current balance → the
+effect of this entry → balance after), backed by `reports:account-balance`. The same panel appears
+on Expenses (UC-26), where the entry debits rather than credits the account.
 
 ---
 
@@ -779,7 +790,16 @@ backend lands.
 
 A totals row sums all four amount columns.
 
-**Summary box (bottom left):**
+**Cheque/online rows are view-only.** They are read from the source documents (`receipts` /
+`expenses` with `payment_mode <> 'CASH'`), not from the cash ledger — a CHEQUE receipt posts to
+CHEQUES IN HAND and an ONLINE one to the receiving bank, so no query over CASH IN HAND could ever
+surface them. They fill their own two columns and the totals row, and are excluded from every
+figure in the summary box below: only cash moves the drawer.
+
+**Account Name** is the counterparty, never "Cash" — the expense head, worker, employee, director,
+customer or, on a transfer, the bank on the other side.
+
+**Summary box (bottom of the report):**
 
 | Label | Meaning |
 |---|---|
@@ -789,13 +809,13 @@ A totals row sums all four amount columns.
 | Cash Paid (Naam) | Total cash paid out that day |
 | **Cash In Hand** | Total Cash − Cash Paid |
 
-**Sources:** receipts (inflows), expenses (outflows), **and cheque allocations** — an endorsed
-cheque posts as an outflow on its allocation date (UC-27).
+**Sources:** receipts (inflows), expenses (outflows), cash⇄bank transfers, **and cheque
+allocations** — an endorsed cheque posts as an outflow on its allocation date (UC-27).
 
-**Data:** reads `receipts`, `expenses`, `cheque_allocations`, `ledger_entries`.
-**Note:** built — receipts and expenses both feed it, and opening cash / Jamma / Naam / Cash In
-Hand are all computed. Cheque allocations (UC-27) are the one outflow source still missing, since
-that feature does not exist yet.
+**Data:** reads `receipts`, `expenses`, `cheque_allocations`, `ledger_entries`, `business_accounts`.
+**Note:** built — receipts and expenses both feed it, the cheque/online columns are populated, and
+opening cash / Jamma / Naam / Cash In Hand are all computed. Cheque allocations (UC-27) are the one
+outflow source still missing, since that feature does not exist yet.
 
 ---
 
