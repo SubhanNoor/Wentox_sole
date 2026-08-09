@@ -1234,7 +1234,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           )}
 
           {/* Invoice Summary and Remarks */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4">
+          <div className="grid grid-cols-1 gap-4 sm:gap-5 md:grid-cols-2 md:gap-6 lg:gap-8 pt-4">
             {/* Remarks */}
             <div className="flex flex-col">
               <label className="block text-xs font-bold uppercase tracking-wider mb-2 text-slate-500 font-inter">
@@ -1252,7 +1252,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
 
             {/* Calculations Box */}
-            <div className="flex flex-col justify-between p-4 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md" style={{ minHeight: '160px' }}>
+            <div className="flex flex-col justify-between p-3 sm:p-4 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md min-h-[140px] sm:min-h-[160px]">
               <div className="text-xs font-semibold uppercase tracking-wider border-b pb-1.5 mb-2 text-slate-400 border-slate-800">
                 Calculations
               </div>
