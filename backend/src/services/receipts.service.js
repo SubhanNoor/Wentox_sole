@@ -2,7 +2,6 @@
 // Throw ApiError for expected failures; use withTransaction for multi-write ops.
 const repository = require('../repositories/receipts.repository');
 const chequesRepository = require('../repositories/cheques.repository');
-const customersService = require('./customers.service');
 const bankAccountsService = require('./bankAccounts.service');
 const chartAccountsRepository = require('../repositories/chartAccounts.repository');
 const ApiError = require('../errors/ApiError');
@@ -10,7 +9,7 @@ const { withTransaction } = require('../db/pool');
 const CODES = require('../constants/reservedAccounts');
 
 function validateHeader(payload) {
-  if (!payload.customer_id) throw ApiError.badRequest('customer_id is required');
+  if (!payload.ba_id) throw ApiError.badRequest('ba_id is required');
   if (!payload.receipt_date) throw ApiError.badRequest('receipt_date is required');
   if (!payload.amount || payload.amount <= 0) throw ApiError.badRequest('amount must be > 0');
   if (payload.commission !== undefined && payload.commission < 0) {
@@ -31,7 +30,7 @@ function validateHeader(payload) {
 function buildFields(payload) {
   return {
     receipt_date: payload.receipt_date,
-    customer_id: payload.customer_id,
+    ba_id: payload.ba_id,
     amount: payload.amount,
     commission: payload.commission || 0,
     payment_mode: payload.payment_mode,
@@ -65,6 +64,7 @@ function resolveDateRange(filters) {
 
 function list(filters = {}) {
   return repository.list({
+    ba_id: filters.ba_id,
     customer_id: filters.customer_id,
     payment_mode: filters.payment_mode,
     status: filters.status,
@@ -193,30 +193,31 @@ async function resolveDebitSide(paymentMode, bankId) {
 // post() for the same reason as insertReceipt() above: draftReceipts.service.js#confirm() needs
 // this in the SAME transaction as insertReceipt(), not a second one.
 async function postWithinTransaction(transaction, receiptId, receipt) {
-  const customer = await customersService.getById(receipt.customer_id);
-  if (!customer.ba_id) {
-    throw ApiError.conflict('Customer has no linked account yet — add one before posting', 'NO_CUSTOMER_ACCOUNT');
-  }
+  // The credited side is whatever business account the receipt names (migration 014) — a customer's,
+  // a director's, an employee's, a vendor's or a bank's. No customer lookup is needed any more:
+  // receipts.ba_id is a NOT NULL FK, so the account is guaranteed to exist, which is what the old
+  // NO_CUSTOMER_ACCOUNT guard was compensating for.
   const debitSide = await resolveDebitSide(receipt.payment_mode, receipt.bank_id);
 
   const rows = [
     { entry_date: receipt.receipt_date, ...debitSide, debit: receipt.amount, credit: 0, source_type: 'RECEIPT', source_id: receiptId, narration: `Receipt #${receiptId}` },
-    { entry_date: receipt.receipt_date, ba_id: customer.ba_id, debit: 0, credit: receipt.amount, source_type: 'RECEIPT', source_id: receiptId, narration: `Receipt #${receiptId}` },
+    { entry_date: receipt.receipt_date, ba_id: receipt.ba_id, debit: 0, credit: receipt.amount, source_type: 'RECEIPT', source_id: receiptId, narration: `Receipt #${receiptId}` },
   ];
   if (receipt.commission > 0) {
     const commissionAccount = await chartAccountsRepository.findByCode(CODES.COMMISSION_ALLOWED);
     if (!commissionAccount) throw new Error(`Reserved chart account COMMISSION ALLOWED (code ${CODES.COMMISSION_ALLOWED}) not found — run npm run seed`);
     rows.push(
       { entry_date: receipt.receipt_date, ac_id: commissionAccount.ac_id, debit: receipt.commission, credit: 0, source_type: 'COMMISSION', source_id: receiptId, narration: `Receipt #${receiptId} commission` },
-      { entry_date: receipt.receipt_date, ba_id: customer.ba_id, debit: 0, credit: receipt.commission, source_type: 'COMMISSION', source_id: receiptId, narration: `Receipt #${receiptId} commission` },
+      { entry_date: receipt.receipt_date, ba_id: receipt.ba_id, debit: 0, credit: receipt.commission, source_type: 'COMMISSION', source_id: receiptId, narration: `Receipt #${receiptId} commission` },
     );
   }
   await repository.insertLedgerEntries(transaction, rows);
   await repository.setStatus(transaction, receiptId, 'CONFIRMED');
 }
 
-// Post: Dr <cash/bank/cheques-in-hand> / Cr customer BA for `amount`, plus a second Dr COMMISSION
-// ALLOWED / Cr customer BA pair when commission > 0 — the sale bill itself is never touched
+// Post: Dr <cash/bank/cheques-in-hand> / Cr the receipt's business account for `amount`, plus a
+// second Dr COMMISSION ALLOWED / Cr that same account pair when commission > 0 — the sale bill
+// itself is never touched
 // (database_schema_v4.3.md §6/§7).
 async function post(receiptId) {
   const receipt = await getById(receiptId);

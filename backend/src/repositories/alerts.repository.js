@@ -9,10 +9,12 @@ const { sql, query } = require('../db/pool');
 async function chequeDueRows(cutoff) {
   const result = await query(
     `SELECT ch.cheque_id, ch.cheque_no, ch.cheque_date, ch.cheque_status,
-            r.receipt_id, r.customer_id, r.amount, c.name AS customer_name
+            r.receipt_id, r.ba_id, r.amount, ba.name AS account_name,
+            c.customer_id, c.name AS customer_name
      FROM dbo.cheques ch
      JOIN dbo.receipts r ON r.receipt_id = ch.receipt_id
-     JOIN dbo.customers c ON c.customer_id = r.customer_id
+     JOIN dbo.business_accounts ba ON ba.ba_id = r.ba_id
+     LEFT JOIN dbo.customers c ON c.ba_id = r.ba_id
      WHERE ch.cheque_status IN ('PENDING', 'PARTIALLY_ENDORSED') AND ch.cheque_date <= @cutoff
      ORDER BY ch.cheque_date`,
     { cutoff: { type: sql.Date, value: cutoff } },

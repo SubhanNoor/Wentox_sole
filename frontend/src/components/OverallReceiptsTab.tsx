@@ -1,23 +1,23 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
-import type { ReceiptRow, CustomerRow, CityRow } from '@/lib/api';
+import type { ReceiptRow, BusinessAccountRow, CityRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { Calendar, Search, ArrowRight, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check, MapPin } from 'lucide-react';
 
 export default function OverallReceiptsTab() {
   const [rows, setRows] = useState<ReceiptRow[]>([]);
-  const [customers, setCustomers] = useState<CustomerRow[]>([]);
+  const [accounts, setAccounts] = useState<BusinessAccountRow[]>([]);
   const [cities, setCities] = useState<CityRow[]>([]);
 
   useEffect(() => {
     (async () => {
       const [r, c, ct] = await Promise.all([
         api.receipts.list({ range: 'overall' }),
-        api.listCustomers(), api.listCities()
+        api.listBusinessAccounts(), api.listCities()
       ]);
       if (r.ok) setRows(r.data);
-      if (c.ok) setCustomers(c.data);
+      if (c.ok) setAccounts(c.data);
       if (ct.ok) setCities(ct.data);
     })();
   }, []);
@@ -32,7 +32,7 @@ export default function OverallReceiptsTab() {
   const yearDropdownRef = useRef<HTMLDivElement>(null);
 
   // Selected customer for viewing details
-  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
+  const [selectedAccountId, setSelectedCustomerId] = useState<number | null>(null);
 
   const monthsList = [
     { value: '0', label: 'January' },
@@ -105,42 +105,47 @@ export default function OverallReceiptsTab() {
       }
 
       if (nameQuery.trim()) {
-        const custName = customers.find(c => c.customer_id === r.customer_id)?.name.toLowerCase() || '';
-        if (!custName.includes(nameQuery.toLowerCase())) return false;
+        const label = (r.account_name || accounts.find(a => a.ba_id === r.ba_id)?.name || '').toLowerCase();
+        if (!label.includes(nameQuery.toLowerCase())) return false;
       }
 
       return true;
     });
-  }, [rows, customers, selectedYear, selectedMonth, nameQuery]);
+  }, [rows, accounts, selectedYear, selectedMonth, nameQuery]);
 
-  const customerCardsData = useMemo(() => {
-    const groups: { [customerId: number]: { customer: CustomerRow; receipts: ReceiptRow[]; totalAmount: number } } = {};
+  const accountCardsData = useMemo(() => {
+    // Keyed on ba_id: a receipt names a business account, which may belong to a customer, a
+    // director, an employee or a bank (migration 014).
+    const groups: { [baId: number]: { account: BusinessAccountRow; receipts: ReceiptRow[]; totalAmount: number } } = {};
 
     overallReceipts.forEach(r => {
-      if (!groups[r.customer_id]) {
-        const cust = customers.find(c => c.customer_id === r.customer_id) ||
-          { customer_id: r.customer_id, name: 'Walk-in Customer', ba_id: null, region_id: 0, city_id: null, address: null, is_active: true };
-        groups[r.customer_id] = {
-          customer: cust,
+      if (!groups[r.ba_id]) {
+        const account = accounts.find(a => a.ba_id === r.ba_id) || {
+          ba_id: r.ba_id, code: '', name: r.account_name || 'Unknown Account', ac_id: 0,
+          region_id: null, city_id: null, opening_balance: null, opening_date: null,
+          status: 'ACTIVE' as const,
+        };
+        groups[r.ba_id] = {
+          account,
           receipts: [],
           totalAmount: 0
         };
       }
 
-      const grp = groups[r.customer_id];
+      const grp = groups[r.ba_id];
       grp.receipts.push(r);
       grp.totalAmount += r.amount;
     });
 
     return Object.values(groups).sort((a, b) => b.totalAmount - a.totalAmount);
-  }, [overallReceipts, customers]);
+  }, [overallReceipts, accounts]);
 
-  const activeCustomerDetails = useMemo(() => {
-    if (selectedCustomerId == null) return null;
-    return customerCardsData.find(c => c.customer.customer_id === selectedCustomerId);
-  }, [selectedCustomerId, customerCardsData]);
+  const activeAccountDetails = useMemo(() => {
+    if (selectedAccountId == null) return null;
+    return accountCardsData.find(g => g.account.ba_id === selectedAccountId);
+  }, [selectedAccountId, accountCardsData]);
 
-  if (selectedCustomerId != null && activeCustomerDetails) {
+  if (selectedAccountId != null && activeAccountDetails) {
     return (
       <div className="card-white p-6 bg-white border border-slate-200 shadow-sm rounded-xl animate-in fade-in slide-in-from-bottom-3 duration-300">
         <div className="flex items-center justify-between border-b pb-4 mb-4" style={{ borderColor: 'var(--border-color)' }}>
@@ -153,17 +158,17 @@ export default function OverallReceiptsTab() {
             </button>
             <div>
               <h3 className="font-lora font-bold text-lg text-slate-800">
-                {activeCustomerDetails.customer.name} — Financial Receipts Ledger
+                {activeAccountDetails.account.name} — Financial Receipts Ledger
               </h3>
               <p className="text-xs text-slate-500 font-medium">
-                Customer ID: #{activeCustomerDetails.customer.customer_id}
+                Account: #{activeAccountDetails.account.code || activeAccountDetails.account.ba_id}
               </p>
             </div>
           </div>
 
           <div className="text-right">
             <span className="text-xs font-semibold text-slate-500 block uppercase">Total Receipts:</span>
-            <span className="font-mono font-bold text-emerald-800 text-lg">{formatCurrency(activeCustomerDetails.totalAmount)}</span>
+            <span className="font-mono font-bold text-emerald-800 text-lg">{formatCurrency(activeAccountDetails.totalAmount)}</span>
           </div>
         </div>
 
@@ -180,7 +185,7 @@ export default function OverallReceiptsTab() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
-              {activeCustomerDetails.receipts.map(r => (
+              {activeAccountDetails.receipts.map(r => (
                 <tr key={r.receipt_id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="p-3.5 pl-4 font-mono text-slate-600">{formatDate(r.receipt_date)}</td>
                   <td className="p-3.5 text-center">
@@ -330,26 +335,26 @@ export default function OverallReceiptsTab() {
 
       {/* Customer Cards Grid Standard */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {customerCardsData.length === 0 ? (
+        {accountCardsData.length === 0 ? (
           <div className="col-span-full card-white p-12 bg-white border border-slate-200 text-center flex flex-col items-center justify-center text-slate-400 rounded-2xl">
             <Calendar size={48} className="text-slate-300 mb-3" />
             <p className="font-lora text-lg font-semibold text-slate-500 mb-1">No Receipts Found</p>
             <p className="text-sm max-w-sm">No receipts were logged matching your search filters.</p>
           </div>
         ) : (
-          customerCardsData.map(data => {
-            const city = cities.find(c => c.city_id === data.customer.city_id)?.name || 'Local';
+          accountCardsData.map(data => {
+            const city = cities.find(c => c.city_id === data.account.city_id)?.name || 'Local';
 
             return (
               <div
-                key={data.customer.customer_id}
-                onClick={() => setSelectedCustomerId(data.customer.customer_id)}
+                key={data.account.ba_id}
+                onClick={() => setSelectedCustomerId(data.account.ba_id)}
                 className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
               >
                 <div>
                   <div className="flex items-start justify-between gap-2 mb-1">
                     <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
-                      {data.customer.name}
+                      {data.account.name}
                     </h4>
                     <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider shrink-0 flex items-center gap-1">
                       <MapPin size={10} className="text-slate-400" />
@@ -357,7 +362,7 @@ export default function OverallReceiptsTab() {
                     </span>
                   </div>
 
-                  <div className="font-mono text-xs text-slate-400 mb-3">Code: #{data.customer.customer_id}</div>
+                  <div className="font-mono text-xs text-slate-400 mb-3">Code: #{data.account.code || data.account.ba_id}</div>
 
                   <div className="text-xs font-semibold text-slate-700 flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-100 mt-2">
                     <span>Total Jamma:</span>

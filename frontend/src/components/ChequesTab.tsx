@@ -116,7 +116,7 @@ export default function ChequesTab() {
     return cheques
       .map(c => ({
         cheque: c,
-        customerName: c.customer_name || 'Unknown customer',
+        customerName: c.account_name || c.customer_name || 'Unknown account',
         status: c.cheque_status,
         unallocated: unallocatedFor(c),
         allocations: allocationsByReceipt[c.receipt_id] || [],
@@ -140,7 +140,7 @@ export default function ChequesTab() {
   const disposingRow = disposingCheque
     ? {
         cheque: disposingCheque,
-        customerName: disposingCheque.customer_name || 'Unknown customer',
+        customerName: disposingCheque.account_name || disposingCheque.customer_name || 'Unknown account',
         unallocated: disposeUnallocated,
       }
     : undefined;

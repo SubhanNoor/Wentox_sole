@@ -36,11 +36,12 @@ async function updateDetails(transaction, chequeId, { cheque_no, cheque_date, ch
 
 async function findById(chequeId) {
   const result = await query(
-    `SELECT ch.*, r.amount AS receipt_amount, r.customer_id, r.status AS receipt_status,
-            c.name AS customer_name, b.name AS bank_name
+    `SELECT ch.*, r.amount AS receipt_amount, r.ba_id, r.status AS receipt_status,
+            ba.name AS account_name, c.customer_id, c.name AS customer_name, b.name AS bank_name
      FROM dbo.cheques ch
      JOIN dbo.receipts r ON r.receipt_id = ch.receipt_id
-     JOIN dbo.customers c ON c.customer_id = r.customer_id
+     JOIN dbo.business_accounts ba ON ba.ba_id = r.ba_id
+     LEFT JOIN dbo.customers c ON c.ba_id = r.ba_id
      LEFT JOIN dbo.bank_accounts b ON b.bank_id = ch.bank_id
      WHERE ch.cheque_id = @chequeId`,
     { chequeId: { type: sql.Int, value: chequeId } },
@@ -89,11 +90,12 @@ async function list(filters = {}) {
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT ch.*, r.amount AS receipt_amount, r.customer_id, c.name AS customer_name,
-            b.name AS bank_name
+    `SELECT ch.*, r.amount AS receipt_amount, r.ba_id, ba.name AS account_name,
+            c.customer_id, c.name AS customer_name, b.name AS bank_name
      FROM dbo.cheques ch
      JOIN dbo.receipts r ON r.receipt_id = ch.receipt_id
-     JOIN dbo.customers c ON c.customer_id = r.customer_id
+     JOIN dbo.business_accounts ba ON ba.ba_id = r.ba_id
+     LEFT JOIN dbo.customers c ON c.ba_id = r.ba_id
      LEFT JOIN dbo.bank_accounts b ON b.bank_id = ch.bank_id
      ${where}
      ORDER BY ch.cheque_date DESC, ch.cheque_id DESC`,

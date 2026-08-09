@@ -9,7 +9,7 @@ const { sql, query, requestWithParams } = require('../db/pool');
 async function insert(transaction, receipt) {
   const request = requestWithParams(transaction, {
     receiptDate: { type: sql.Date, value: receipt.receipt_date },
-    customerId: { type: sql.Int, value: receipt.customer_id },
+    baId: { type: sql.Int, value: receipt.ba_id },
     amount: { type: sql.Decimal(14, 2), value: receipt.amount },
     commission: { type: sql.Decimal(14, 2), value: receipt.commission ?? 0 },
     paymentMode: { type: sql.VarChar(10), value: receipt.payment_mode },
@@ -20,12 +20,12 @@ async function insert(transaction, receipt) {
   });
   const result = await request.query(`
     INSERT INTO dbo.receipts (
-      receipt_date, customer_id, amount, commission, payment_mode, details, bank_id, remarks,
+      receipt_date, ba_id, amount, commission, payment_mode, details, bank_id, remarks,
       status, created_by
     )
     OUTPUT inserted.receipt_id
     VALUES (
-      @receiptDate, @customerId, @amount, @commission, @paymentMode, @details, @bankId, @remarks,
+      @receiptDate, @baId, @amount, @commission, @paymentMode, @details, @bankId, @remarks,
       'DRAFT', @createdBy
     )
   `);
@@ -48,13 +48,19 @@ async function unlinkCheque(transaction, receiptId) {
   await request.query('UPDATE dbo.receipts SET cheque_id = NULL WHERE receipt_id = @receiptId');
 }
 
+// A receipt names a business account, which may or may not belong to a customer (migration 014).
+// customers.ba_id has a UNIQUE filtered index, so this LEFT JOIN is 1:1 and yields customer_id /
+// customer_name for the customer case and NULLs for a director, employee, vendor or bank — which
+// is exactly what callers need to decide whether customer-only behaviour (commission) applies.
 async function findById(receiptId) {
   const result = await query(
-    `SELECT r.*, c.name AS customer_name, b.name AS bank_name,
+    `SELECT r.*, ba.name AS account_name, c.customer_id, c.name AS customer_name,
+            b.name AS bank_name,
             ch.cheque_no, ch.cheque_date, ch.cheque_received_date, ch.cheque_status,
             ch.bank_id AS cheque_bank_id
      FROM dbo.receipts r
-     JOIN dbo.customers c ON c.customer_id = r.customer_id
+     JOIN dbo.business_accounts ba ON ba.ba_id = r.ba_id
+     LEFT JOIN dbo.customers c ON c.ba_id = r.ba_id
      LEFT JOIN dbo.bank_accounts b ON b.bank_id = r.bank_id
      LEFT JOIN dbo.cheques ch ON ch.cheque_id = r.cheque_id
      WHERE r.receipt_id = @receiptId`,
@@ -67,8 +73,14 @@ async function list(filters = {}) {
   const conditions = [];
   const params = {};
 
+  if (filters.ba_id) {
+    conditions.push('r.ba_id = @baId');
+    params.baId = { type: sql.Int, value: filters.ba_id };
+  }
+  // Kept for callers that still think in customers (customer ledger drill-downs). Resolved through
+  // the account rather than a receipts column, since receipts no longer carries customer_id.
   if (filters.customer_id) {
-    conditions.push('r.customer_id = @customerId');
+    conditions.push('c.customer_id = @customerId');
     params.customerId = { type: sql.Int, value: filters.customer_id };
   }
   if (filters.payment_mode) {
@@ -90,9 +102,10 @@ async function list(filters = {}) {
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT r.*, c.name AS customer_name
+    `SELECT r.*, ba.name AS account_name, c.customer_id, c.name AS customer_name
      FROM dbo.receipts r
-     JOIN dbo.customers c ON c.customer_id = r.customer_id
+     JOIN dbo.business_accounts ba ON ba.ba_id = r.ba_id
+     LEFT JOIN dbo.customers c ON c.ba_id = r.ba_id
      ${where}
      ORDER BY r.receipt_date DESC, r.receipt_id DESC`,
     params,
@@ -104,7 +117,7 @@ async function updateHeader(transaction, receiptId, receipt) {
   const request = requestWithParams(transaction, {
     receiptId: { type: sql.Int, value: receiptId },
     receiptDate: { type: sql.Date, value: receipt.receipt_date },
-    customerId: { type: sql.Int, value: receipt.customer_id },
+    baId: { type: sql.Int, value: receipt.ba_id },
     amount: { type: sql.Decimal(14, 2), value: receipt.amount },
     commission: { type: sql.Decimal(14, 2), value: receipt.commission ?? 0 },
     paymentMode: { type: sql.VarChar(10), value: receipt.payment_mode },
@@ -114,7 +127,7 @@ async function updateHeader(transaction, receiptId, receipt) {
   });
   await request.query(`
     UPDATE dbo.receipts SET
-      receipt_date = @receiptDate, customer_id = @customerId, amount = @amount,
+      receipt_date = @receiptDate, ba_id = @baId, amount = @amount,
       commission = @commission, payment_mode = @paymentMode, details = @details,
       bank_id = @bankId, remarks = @remarks
     WHERE receipt_id = @receiptId

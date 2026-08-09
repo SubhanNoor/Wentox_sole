@@ -5,7 +5,6 @@ const receiptsService = require('./receipts.service');
 const bankAccountsService = require('./bankAccounts.service');
 const vendorsService = require('./vendors.service');
 const businessAccountsService = require('./businessAccounts.service');
-const customersService = require('./customers.service');
 const chartAccountsRepository = require('../repositories/chartAccounts.repository');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
@@ -228,12 +227,11 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
     // cheque should never have reached disposal in the first place (assertDisposable() requires
     // CONFIRMED), but this guards defensively regardless.
     if (receipt.status === 'CONFIRMED') {
-      const customer = await customersService.getById(receipt.customer_id);
       const debitSide = await receiptsService.resolveDebitSide(receipt.payment_mode, receipt.bank_id);
       const narration = `${mode} reversal of receipt #${receipt.receipt_id}`;
 
       const rows = [
-        { entry_date: date, ba_id: customer.ba_id, debit: receipt.amount, credit: 0, source_type: 'RECEIPT', source_id: receipt.receipt_id, narration },
+        { entry_date: date, ba_id: receipt.ba_id, debit: receipt.amount, credit: 0, source_type: 'RECEIPT', source_id: receipt.receipt_id, narration },
         { entry_date: date, ...debitSide, debit: 0, credit: receipt.amount, source_type: 'RECEIPT', source_id: receipt.receipt_id, narration },
       ];
 
@@ -241,7 +239,7 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
         const commissionAccount = await chartAccountsRepository.findByCode(CODES.COMMISSION_ALLOWED);
         if (!commissionAccount) throw new Error(`Reserved chart account COMMISSION ALLOWED (code ${CODES.COMMISSION_ALLOWED}) not found — run npm run seed`);
         rows.push(
-          { entry_date: date, ba_id: customer.ba_id, debit: receipt.commission, credit: 0, source_type: 'COMMISSION', source_id: receipt.receipt_id, narration: `${narration} commission` },
+          { entry_date: date, ba_id: receipt.ba_id, debit: receipt.commission, credit: 0, source_type: 'COMMISSION', source_id: receipt.receipt_id, narration: `${narration} commission` },
           { entry_date: date, ac_id: commissionAccount.ac_id, debit: 0, credit: receipt.commission, source_type: 'COMMISSION', source_id: receipt.receipt_id, narration: `${narration} commission` },
         );
       }

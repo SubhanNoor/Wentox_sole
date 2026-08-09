@@ -28,7 +28,7 @@ function chequeDueAlert(r) {
     key: `CHEQUE_DUE:${r.cheque_id}`,
     kind: 'CHEQUE_DUE',
     title: `Cheque ${r.cheque_no} due`,
-    detail: `${r.customer_name} — cheque #${r.cheque_no}`,
+    detail: `${r.account_name} — cheque #${r.cheque_no}`,
     date: toISODate(r.cheque_date),
     amount: Number(r.amount),
     target_page: 'receipts-jamma',

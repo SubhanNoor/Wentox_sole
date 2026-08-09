@@ -9,7 +9,7 @@ const { withTransaction } = require('../db/pool');
 // but has no cheque_no/cheque_date columns of its own, so a genuinely useful "draft cheque receipt"
 // isn't representable. A CHEQUE receipt is recorded directly via receipts:create instead.
 function validateHeader(payload) {
-  if (!payload.customer_id) throw ApiError.badRequest('customer_id is required');
+  if (!payload.ba_id) throw ApiError.badRequest('ba_id is required');
   if (!payload.receipt_date) throw ApiError.badRequest('receipt_date is required');
   if (!payload.amount || payload.amount <= 0) throw ApiError.badRequest('amount must be > 0');
   if (payload.payment_mode !== 'CASH' && payload.payment_mode !== 'ONLINE') {
@@ -24,7 +24,7 @@ async function create(payload, userId) {
   validateHeader(payload);
   const draftId = await withTransaction((transaction) => repository.insert(transaction, {
     receipt_date: payload.receipt_date,
-    customer_id: payload.customer_id,
+    ba_id: payload.ba_id,
     amount: payload.amount,
     commission: payload.commission || 0,
     payment_mode: payload.payment_mode,
@@ -55,7 +55,7 @@ async function remove(draftId) {
 // Confirm = create the real receipt + post it + delete the draft, all in ONE transaction, using
 // receipts.service.js's insertReceipt()/postWithinTransaction() building blocks. Originally this
 // ran create() and post() as two separate transactions — debugger review caught that a failure in
-// post() (e.g. a missing chart account, a customer with no linked ba_id) after create() had
+// post() (e.g. a missing chart account) after create() had
 // already committed left an orphaned DRAFT receipt AND the draft itself still present, so retrying
 // confirm() on the same draft would call create() a second time and produce a duplicate real
 // receipt. One shared transaction removes that gap entirely — either everything commits, or
@@ -64,7 +64,7 @@ async function confirm(draftId, userId) {
   const draft = await getById(draftId);
   const payload = {
     receipt_date: draft.receipt_date,
-    customer_id: draft.customer_id,
+    ba_id: draft.ba_id,
     amount: draft.amount,
     commission: draft.commission,
     payment_mode: draft.payment_mode,

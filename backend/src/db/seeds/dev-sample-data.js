@@ -492,7 +492,9 @@ async function seedTransactions(m) {
   for (const spec of receiptSpecs) {
     const receipt = await receiptsService.create({
       receipt_date: daysAgo(spec.d),
-      customer_id: cust[spec.c].customer_id,
+      // Receipts name a business account, not a customer (migration 014) — a customer's own ba_id
+      // is one, so the demo's customer receipts read exactly the same as before.
+      ba_id: cust[spec.c].ba_id,
       amount: spec.amount,
       commission: spec.commission,
       payment_mode: spec.mode,
@@ -509,7 +511,7 @@ async function seedTransactions(m) {
   const makeCheque = async (dayOffset, customerIdx, amount, chequeNo, chequeDateOffset) => {
     const receipt = await receiptsService.create({
       receipt_date: daysAgo(dayOffset),
-      customer_id: cust[customerIdx].customer_id,
+      ba_id: cust[customerIdx].ba_id,
       amount,
       commission: 0,
       payment_mode: 'CHEQUE',

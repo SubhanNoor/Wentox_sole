@@ -160,10 +160,13 @@ async function ledgerRows(filters = {}) {
        sb.bill_id AS sb_inv_no, sb.bill_no AS sb_bill_no,
        sr.return_id AS sr_inv_no, sr.bill_no AS sr_bill_no,
        rc.receipt_id AS rc_id, rc.payment_mode AS rc_payment_mode, rc.remarks AS rc_remarks,
-       rc.details AS rc_details, rc_cust.name AS rc_customer_name,
+       rc.details AS rc_details, rc_ba.name AS rc_account_name,
        ch.cheque_no, ch.cheque_date, ch.cheque_received_date,
        ex.expense_id AS ex_id, ex.remarks AS ex_remarks, ex_ba.name AS ex_ba_name,
-       wr.wage_run_id AS wr_id, wr.stage_key AS wr_stage_key,
+       -- Cash Book only (UC-37): its TYPE and CHEQUE NO columns come from the paying document, not
+       -- from the ledger row. Every other ledgerRows() caller ignores these three.
+       ex.payment_mode AS ex_payment_mode, ex.issued_cheque_no AS ex_issued_cheque_no,
+       wr.wage_run_id AS wr_id, wr.stage_key AS wr_stage_key, wr_emp.name AS wr_employee_name,
        sar.salary_run_id AS sar_id, sar.period_month AS sar_period_month,
        tr.transfer_id AS tr_id, tr.remarks AS tr_remarks,
        tr_from.name AS tr_from_name, tr_to.name AS tr_to_name
@@ -171,11 +174,13 @@ async function ledgerRows(filters = {}) {
      LEFT JOIN dbo.sale_bills sb    ON le.source_type = 'SALE_BILL'    AND sb.bill_id = le.source_id
      LEFT JOIN dbo.sale_returns sr  ON le.source_type = 'SALE_RETURN'  AND sr.return_id = le.source_id
      LEFT JOIN dbo.receipts rc      ON le.source_type IN ('RECEIPT','COMMISSION') AND rc.receipt_id = le.source_id
-     LEFT JOIN dbo.customers rc_cust ON rc_cust.customer_id = rc.customer_id
+     LEFT JOIN dbo.business_accounts rc_ba ON rc_ba.ba_id = rc.ba_id
      LEFT JOIN dbo.cheques ch       ON rc.cheque_id = ch.cheque_id
      LEFT JOIN dbo.expenses ex      ON le.source_type = 'EXPENSE'      AND ex.expense_id = le.source_id
      LEFT JOIN dbo.business_accounts ex_ba ON ex_ba.ba_id = ex.ba_id
      LEFT JOIN dbo.wage_runs wr     ON le.source_type = 'WAGE_RUN'     AND wr.wage_run_id = le.source_id
+     LEFT JOIN dbo.employees wr_emp ON wr_emp.employee_id = wr.employee_id
+                                   AND wr_emp.employee_type = wr.employee_type
      LEFT JOIN dbo.salary_runs sar  ON le.source_type = 'SALARY_RUN'   AND sar.salary_run_id = le.source_id
      LEFT JOIN dbo.transfers tr     ON le.source_type = 'TRANSFER'     AND tr.transfer_id = le.source_id
      LEFT JOIN dbo.business_accounts tr_from ON tr_from.ba_id = tr.from_ba_id
@@ -273,11 +278,15 @@ async function saleAggregateByCustomer(filters = {}) {
        SELECT customer_id, SUM(net_value) AS total_returns
        FROM dbo.sale_returns ${returnWhere} GROUP BY customer_id
      ) sr ON sr.customer_id = c.customer_id
+     -- Grouped by ba_id, not customer_id: since migration 014 a receipt names any business
+     -- account. Joining back through customers.ba_id (UNIQUE) keeps this strictly customer money —
+     -- a payment from a director or an employee has no ba_id match here and correctly never lands
+     -- in a customer's "Payment Received".
      LEFT JOIN (
-       SELECT customer_id, SUM(amount) AS total_payment, SUM(commission) AS total_commission
+       SELECT ba_id, SUM(amount) AS total_payment, SUM(commission) AS total_commission
        FROM dbo.receipts ${receiptWhere ? receiptWhere + " AND status = 'CONFIRMED'" : "WHERE status = 'CONFIRMED'"}
-       GROUP BY customer_id
-     ) rc ON rc.customer_id = c.customer_id
+       GROUP BY ba_id
+     ) rc ON rc.ba_id = c.ba_id
      WHERE sb.total_sales IS NOT NULL OR sr.total_returns IS NOT NULL OR rc.total_payment IS NOT NULL
      ORDER BY r.name, ci.name, c.name`,
     params,
@@ -461,6 +470,46 @@ function cashBookRows(cashAcId, filters) {
   return ledgerRows({ ac_id: cashAcId, date_from: filters.date_from, date_to: filters.date_to });
 }
 
+// UC-37 Cash Book, "Cheq./Online" columns — the day's NON-cash receipts and payments, listed for
+// visibility only. They are deliberately NOT read from the cash ledger, because they never touch
+// it: a CHEQUE receipt posts to CHEQUES IN HAND and an ONLINE one to the receiving bank, so no
+// query over CASH IN HAND could ever surface them. Read from the source documents instead, which
+// also means zero risk of double-counting a cash row — the two sets are disjoint by construction.
+//
+// The caller keeps these out of every cash total (they only reach the Totals strip); the summary
+// box stays strictly "what the cash drawer did", per UC-37.
+//
+// Receipts: CHEQUE (cheque_no via cheques) and ONLINE. Expenses: CHEQUE_ISSUED (our own cheque,
+// number on the expense row itself), CHEQUE_ENDORSED (a customer's cheque handed on, number via
+// cheques) and ONLINE. DRAFT documents are excluded — nothing unconfirmed belongs on a day book.
+async function cashBookNonCashRows({ date_from, date_to }) {
+  const result = await query(
+    `SELECT 'RECEIPT' AS kind, rc.receipt_id AS source_id, rc.receipt_date AS entry_date,
+            rc_ba.name AS account_name, COALESCE(rc.remarks, rc.details) AS remarks,
+            rc.payment_mode, ch.cheque_no, rc.amount
+     FROM dbo.receipts rc
+     JOIN dbo.business_accounts rc_ba ON rc_ba.ba_id = rc.ba_id
+     LEFT JOIN dbo.cheques ch ON ch.cheque_id = rc.cheque_id
+     WHERE rc.status = 'CONFIRMED' AND rc.payment_mode <> 'CASH'
+       AND rc.receipt_date >= @dateFrom AND rc.receipt_date <= @dateTo
+     UNION ALL
+     SELECT 'EXPENSE' AS kind, ex.expense_id, ex.expense_date,
+            ba.name, COALESCE(ex.remarks, ex.details),
+            ex.payment_mode, COALESCE(ex.issued_cheque_no, ch.cheque_no), ex.amount
+     FROM dbo.expenses ex
+     JOIN dbo.business_accounts ba ON ba.ba_id = ex.ba_id
+     LEFT JOIN dbo.cheques ch ON ch.cheque_id = ex.cheque_id
+     WHERE ex.status = 'CONFIRMED' AND ex.payment_mode <> 'CASH'
+       AND ex.expense_date >= @dateFrom AND ex.expense_date <= @dateTo
+     ORDER BY entry_date, kind, source_id`,
+    {
+      dateFrom: { type: sql.Date, value: date_from },
+      dateTo: { type: sql.Date, value: date_to },
+    },
+  );
+  return result.recordset;
+}
+
 // New "Overall Searching" (UC-none — user-requested) — backed by the migration 008 VIEW so it
 // stays current with customers/vendors/employees/sub_customers/business_accounts automatically,
 // no app-side UNION to keep in sync by hand.
@@ -494,5 +543,6 @@ module.exports = {
   chartAccountBalancesAsOf,
   chartAccountsWithActivity,
   cashBookRows,
+  cashBookNonCashRows,
   overallDirectory,
 };

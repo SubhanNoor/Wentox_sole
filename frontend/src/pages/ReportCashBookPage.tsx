@@ -10,6 +10,24 @@ import type { CashBookResult } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
+const MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+// The five figures the client's cash book closes with, in their order. Cash only, by design:
+// cheque/online rows are listed for visibility and never reach these (see
+// backend reports.service.js#cashBook).
+function summaryLines(result: CashBookResult): [string, number, boolean][] {
+  return [
+    ['Opening Cash', result.opening_cash, true],
+    ['Cash Received (Jamma)', result.cash_received, false],
+    ['Total Cash', result.total_cash, false],
+    ['Cash Paid (Naam)', result.cash_paid, false],
+    ['Cash In Hand', result.cash_in_hand, true],
+  ];
+}
+
 export function ReportCashBookContent() {
   const [filterBy, setFilterBy] = useState<'date' | 'month'>('date');
   const [searchQuery, setSearchQuery] = useState('');
@@ -17,16 +35,15 @@ export function ReportCashBookContent() {
   const [filterMonth, setFilterMonth] = useState<number>(new Date().getMonth());
   const [filterYear, setFilterYear] = useState<number>(new Date().getFullYear());
 
-  const [result, setResult] = useState<CashBookResult>({ opening_cash: 0, cash_received: 0, total_cash: 0, cash_paid: 0, cash_in_hand: 0, rows: [] });
+  const [result, setResult] = useState<CashBookResult>({
+    opening_cash: 0, cash_received: 0, total_cash: 0, cash_paid: 0, cash_in_hand: 0,
+    totals: { receipt_bank: 0, payment_bank: 0, receipt_cash: 0, payment_cash: 0 },
+    rows: [],
+  });
   const [loading, setLoading] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
-  const months = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
-  ];
-
-  const periodLabel = filterBy === 'date' ? specificDate : `${months[filterMonth]} ${filterYear}`;
+  const periodLabel = filterBy === 'date' ? specificDate : `${MONTHS[filterMonth]} ${filterYear}`;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -44,18 +61,41 @@ export function ReportCashBookContent() {
     if (!searchQuery.trim()) return result.rows;
     const q = searchQuery.toLowerCase();
     return result.rows.filter(r =>
-      (r.narration || '').toLowerCase().includes(q) ||
-      r.type.toLowerCase().includes(q)
+      r.account_name.toLowerCase().includes(q) ||
+      (r.remarks || '').toLowerCase().includes(q) ||
+      (r.cheque_no || '').toLowerCase().includes(q) ||
+      r.mode.toLowerCase().includes(q)
     );
   }, [result.rows, searchQuery]);
 
+  // A month view spans many days, so it gets a Date column the single-date layout has no use for.
+  const showDate = filterBy === 'month';
+
   const handleExportExcel = () => {
-    const headers = ['No.', 'Date', 'Type', 'Narration', 'Cash Received', 'Cash Paid', 'Balance'];
-    const rows = filteredRows.map((row, idx) => [idx + 1, formatDate(row.date), row.type, row.narration || '', row.debit, row.credit, row.balance]);
+    const headers = [
+      'No.', 'Account Name', 'Remarks',
+      ...(showDate ? ['Date'] : []),
+      'Type', 'Cheque No',
+      'Receipts Cheq./Online', 'Payments Cheq./Online', 'Receipts Cash', 'Payments Cash',
+    ];
+    const rows = filteredRows.map((row, idx) => [
+      idx + 1, row.account_name, row.remarks,
+      ...(showDate ? [formatDate(row.date)] : []),
+      row.mode, row.cheque_no || '',
+      row.receipt_bank, row.payment_bank, row.receipt_cash, row.payment_cash,
+    ]);
     exportRowsToExcel(`cash-book-${periodLabel}`, headers, rows);
   };
 
   const renderPrintableDocument = () => {
+    const th = (align: 'left' | 'center' | 'right', width: string) => ({
+      border: '1px solid #000000', padding: '6px', fontSize: '10px', backgroundColor: '#f2f2f2',
+      fontWeight: 'bold' as const, textAlign: align, width,
+    });
+    const td = (align: 'left' | 'center' | 'right') => ({
+      border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: align,
+    });
+
     return (
       <div className="excel-print-container">
         <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
@@ -73,55 +113,64 @@ export function ReportCashBookContent() {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', border: '1px solid #000000', marginBottom: '15px', fontSize: '11px' }}>
-          <div style={{ borderRight: '1px solid #000000', padding: '5px' }}>
-            <span style={{ fontSize: '9px', fontWeight: 'bold', display: 'block', textTransform: 'uppercase' }}>Opening Cash</span>
-            <span style={{ fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(result.opening_cash)}</span>
-          </div>
-          <div style={{ borderRight: '1px solid #000000', padding: '5px' }}>
-            <span style={{ fontSize: '9px', fontWeight: 'bold', display: 'block', textTransform: 'uppercase' }}>Total Received</span>
-            <span style={{ fontWeight: 'bold', fontFamily: 'monospace', color: '#047857' }}>{formatCurrency(result.cash_received)}</span>
-          </div>
-          <div style={{ borderRight: '1px solid #000000', padding: '5px' }}>
-            <span style={{ fontSize: '9px', fontWeight: 'bold', display: 'block', textTransform: 'uppercase' }}>Cumulative Cash</span>
-            <span style={{ fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(result.total_cash)}</span>
-          </div>
-          <div style={{ borderRight: '1px solid #000000', padding: '5px' }}>
-            <span style={{ fontSize: '9px', fontWeight: 'bold', display: 'block', textTransform: 'uppercase' }}>Total Paid</span>
-            <span style={{ fontWeight: 'bold', fontFamily: 'monospace', color: '#e11d48' }}>{formatCurrency(result.cash_paid)}</span>
-          </div>
-          <div style={{ padding: '5px' }}>
-            <span style={{ fontSize: '9px', fontWeight: 'bold', display: 'block', textTransform: 'uppercase' }}>Cash in Hand</span>
-            <span style={{ fontWeight: 'bold', fontFamily: 'monospace', color: '#B08D57' }}>{formatCurrency(result.cash_in_hand)}</span>
-          </div>
-        </div>
-
-        <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+        <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px', tableLayout: 'fixed' }}>
           <thead>
             <tr>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '12%' }}>Date</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '15%' }}>Type</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '32%' }}>Narration / Particulars</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '12%' }}>Received (IN)</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '12%' }}>Paid (OUT)</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '12%' }}>Balance</th>
+              <th style={th('center', '4%')}>S#</th>
+              <th style={th('left', showDate ? '18%' : '20%')}>Account Name</th>
+              <th style={th('left', showDate ? '14%' : '16%')}>Remarks</th>
+              {showDate && <th style={th('left', '9%')}>Date</th>}
+              <th style={th('left', '7%')}>Type</th>
+              <th style={th('left', '9%')}>Cheque No</th>
+              <th style={th('right', '11.75%')}>Receipts<br />Cheq./Online</th>
+              <th style={th('right', '11.75%')}>Payments<br />Cheq./Online</th>
+              <th style={th('right', '11.75%')}>Receipts<br />Cash</th>
+              <th style={th('right', '11.75%')}>Payments<br />Cash</th>
             </tr>
           </thead>
           <tbody>
             {filteredRows.map((row, idx) => (
               <tr key={idx}>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{idx + 1}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{formatDate(row.date)}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{row.type}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.narration || '—'}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#047857' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#e11d48' }}>{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(row.balance)}</td>
+                <td style={{ ...td('center'), fontFamily: 'monospace' }}>{idx + 1}</td>
+                <td style={{ ...td('left'), fontWeight: 'bold' }}>{row.account_name}</td>
+                <td style={td('left')}>{row.remarks || '—'}</td>
+                {showDate && <td style={{ ...td('left'), fontFamily: 'monospace' }}>{formatDate(row.date)}</td>}
+                <td style={td('left')}>{row.mode}</td>
+                <td style={{ ...td('left'), fontFamily: 'monospace' }}>{row.cheque_no || '—'}</td>
+                <td style={{ ...td('right'), fontFamily: 'monospace', color: '#047857' }}>{row.receipt_bank > 0 ? formatCurrency(row.receipt_bank) : '-'}</td>
+                <td style={{ ...td('right'), fontFamily: 'monospace', color: '#e11d48' }}>{row.payment_bank > 0 ? formatCurrency(row.payment_bank) : '-'}</td>
+                <td style={{ ...td('right'), fontFamily: 'monospace', fontWeight: 'bold', color: '#047857' }}>{row.receipt_cash > 0 ? formatCurrency(row.receipt_cash) : '-'}</td>
+                <td style={{ ...td('right'), fontFamily: 'monospace', fontWeight: 'bold', color: '#e11d48' }}>{row.payment_cash > 0 ? formatCurrency(row.payment_cash) : '-'}</td>
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr>
+              <td colSpan={showDate ? 6 : 5} style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold' }}>Totals :</td>
+              <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(result.totals.receipt_bank)}</td>
+              <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(result.totals.payment_bank)}</td>
+              <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(result.totals.receipt_cash)}</td>
+              <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(result.totals.payment_cash)}</td>
+            </tr>
+          </tfoot>
         </table>
+
+        {/* Cash summary — at the end of the report, as on the client's own cash book. */}
+        <div style={{ maxWidth: '340px', border: '1px solid #000000', marginBottom: '15px' }}>
+          {summaryLines(result).map(([label, value, emphasise], idx) => (
+            <div
+              key={label}
+              style={{
+                display: 'flex', justifyContent: 'space-between', padding: '5px 10px',
+                borderTop: idx === 0 ? 'none' : '1px solid #d4d4d4',
+                backgroundColor: emphasise ? '#f2f2f2' : 'transparent',
+              }}
+            >
+              <span style={{ fontSize: '11px', fontWeight: emphasise ? 'bold' : 'normal' }}>{label} :</span>
+              <span style={{ fontSize: '11px', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(value)}</span>
+            </div>
+          ))}
+        </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '35px', padding: '0 10px' }}>
           <div style={{ textAlign: 'center', width: '150px' }}>
@@ -146,8 +195,10 @@ export function ReportCashBookContent() {
     );
   };
 
+  const colCount = showDate ? 10 : 9;
+
   return (
-      <div className="mx-auto" style={{ maxWidth: 1100 }}>
+      <div className="mx-auto" style={{ maxWidth: 1250 }}>
 
         {/* Filter Mode Selector - data-no-print */}
         <div className="flex gap-2 p-1 bg-slate-100 rounded-xl max-w-xs mb-6 border border-slate-200" data-no-print>
@@ -173,7 +224,7 @@ export function ReportCashBookContent() {
               <div className="relative">
                 <input
                   type="text"
-                  placeholder="Search by type, narration..."
+                  placeholder="Search by account, remarks, cheque no..."
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   className="soleria-input w-full py-2 text-sm pr-10 font-semibold"
@@ -198,7 +249,7 @@ export function ReportCashBookContent() {
                   <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Month:</span>
                   <div className="w-36">
                     <SearchableSelect
-                      options={months.map((m, idx) => ({ value: String(idx), label: m }))}
+                      options={MONTHS.map((m, idx) => ({ value: String(idx), label: m }))}
                       value={String(filterMonth)}
                       onChange={(val: string) => setFilterMonth(parseInt(val, 10))}
                       placeholder="Select month..."
@@ -246,62 +297,44 @@ export function ReportCashBookContent() {
             </div>
           </div>
 
-          {/* Summary Box */}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6" data-no-print>
-            <div className="p-3 rounded-xl border bg-white" style={{ borderColor: 'var(--border-color)' }}>
-              <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">Opening Cash</span>
-              <span className="text-sm font-bold font-mono text-slate-800">{formatCurrency(result.opening_cash)}</span>
-            </div>
-            <div className="p-3 rounded-xl border bg-white" style={{ borderColor: 'var(--border-color)' }}>
-              <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">Total Cash Received</span>
-              <span className="text-sm font-bold font-mono text-emerald-600">{formatCurrency(result.cash_received)}</span>
-            </div>
-            <div className="p-3 rounded-xl border bg-white" style={{ borderColor: 'var(--border-color)' }}>
-              <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">Cumulative Total</span>
-              <span className="text-sm font-bold font-mono text-slate-800">{formatCurrency(result.total_cash)}</span>
-            </div>
-            <div className="p-3 rounded-xl border bg-white" style={{ borderColor: 'var(--border-color)' }}>
-              <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">Total Cash Paid</span>
-              <span className="text-sm font-bold font-mono text-rose-600">{formatCurrency(result.cash_paid)}</span>
-            </div>
-            <div className="p-3 rounded-xl border bg-[#111c2a] text-white">
-              <span className="block text-[10px] font-semibold uppercase tracking-wider text-amber-400 mb-1">Cash in Hand</span>
-              <span className="text-sm font-bold font-mono" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(result.cash_in_hand)}</span>
-            </div>
-          </div>
-
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
+            <table className="w-full text-left border-collapse text-sm" style={{ minWidth: 1000 }}>
               <thead>
                 <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                   <th className="p-3 pl-4 text-center w-12">S#</th>
-                  <th className="p-3">Date</th>
+                  <th className="p-3">Account Name</th>
+                  <th className="p-3">Remarks</th>
+                  {showDate && <th className="p-3">Date</th>}
                   <th className="p-3">Type</th>
-                  <th className="p-3">Narration / Particulars</th>
-                  <th className="p-3 text-right">Cash Received (IN)</th>
-                  <th className="p-3 text-right">Cash Paid (OUT)</th>
-                  <th className="p-3 text-right">Balance</th>
+                  <th className="p-3">Cheque No</th>
+                  <th className="p-3 text-right">Receipts<br />Cheq./Online</th>
+                  <th className="p-3 text-right">Payments<br />Cheq./Online</th>
+                  <th className="p-3 text-right">Receipts<br />Cash</th>
+                  <th className="p-3 text-right">Payments<br />Cash</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={7} className="text-center p-8 text-slate-400">Loading…</td></tr>
+                  <tr><td colSpan={colCount} className="text-center p-8 text-slate-400">Loading…</td></tr>
                 ) : filteredRows.length === 0 ? (
-                  <tr><td colSpan={7} className="text-center p-8 text-slate-400">No cash entries found for this period.</td></tr>
+                  <tr><td colSpan={colCount} className="text-center p-8 text-slate-400">No cash entries found for this period.</td></tr>
                 ) : (
                   filteredRows.map((row, idx) => (
                     <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                       <td className="p-3 pl-4 text-center text-xs font-mono text-slate-400">{idx + 1}</td>
-                      <td className="p-3 text-xs font-mono text-slate-600">{formatDate(row.date)}</td>
+                      <td className="p-3 font-semibold text-slate-800">{row.account_name}</td>
+                      <td className="p-3 text-xs text-slate-500">{row.remarks || '-'}</td>
+                      {showDate && <td className="p-3 text-xs font-mono text-slate-600">{formatDate(row.date)}</td>}
                       <td className="p-3">
-                        <span className={`inline-block text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${row.debit > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
-                          {row.type}
+                        <span className={`inline-block text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${row.affects_cash ? 'bg-slate-100 text-slate-700' : 'bg-sky-50 text-sky-700'}`}>
+                          {row.mode}
                         </span>
                       </td>
-                      <td className="p-3 text-xs text-slate-500">{row.narration || '-'}</td>
-                      <td className="p-3 text-right font-bold text-emerald-700">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-                      <td className="p-3 text-right font-bold text-rose-700">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
-                      <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.balance)}</td>
+                      <td className="p-3 text-xs font-mono text-slate-500">{row.cheque_no || '-'}</td>
+                      <td className="p-3 text-right text-emerald-700">{row.receipt_bank > 0 ? formatCurrency(row.receipt_bank) : '-'}</td>
+                      <td className="p-3 text-right text-rose-700">{row.payment_bank > 0 ? formatCurrency(row.payment_bank) : '-'}</td>
+                      <td className="p-3 text-right font-bold text-emerald-700">{row.receipt_cash > 0 ? formatCurrency(row.receipt_cash) : '-'}</td>
+                      <td className="p-3 text-right font-bold text-rose-700">{row.payment_cash > 0 ? formatCurrency(row.payment_cash) : '-'}</td>
                     </tr>
                   ))
                 )}
@@ -309,13 +342,36 @@ export function ReportCashBookContent() {
 
               <tfoot>
                 <tr className="bg-slate-50 font-bold border-t-2 border-b text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                  <td colSpan={4} className="p-4 text-left font-lora">TOTAL</td>
-                  <td className="p-4 text-right text-emerald-800">{formatCurrency(result.cash_received)}</td>
-                  <td className="p-4 text-right text-rose-800">{formatCurrency(result.cash_paid)}</td>
-                  <td className="p-4 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(result.cash_in_hand)}</td>
+                  <td colSpan={showDate ? 6 : 5} className="p-4 text-right font-lora">TOTALS</td>
+                  <td className="p-4 text-right text-emerald-800">{formatCurrency(result.totals.receipt_bank)}</td>
+                  <td className="p-4 text-right text-rose-800">{formatCurrency(result.totals.payment_bank)}</td>
+                  <td className="p-4 text-right text-emerald-800">{formatCurrency(result.totals.receipt_cash)}</td>
+                  <td className="p-4 text-right text-rose-800">{formatCurrency(result.totals.payment_cash)}</td>
                 </tr>
               </tfoot>
             </table>
+          </div>
+
+          {/* Cash summary — closes the report, as on the client's own cash book. Cash only: the
+              cheque/online rows above are listed for visibility and change none of these figures. */}
+          <div className="mt-8 max-w-sm rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border-color)' }}>
+            {summaryLines(result).map(([label, value, emphasise], idx) => (
+              <div
+                key={label}
+                className={`flex items-center justify-between px-4 py-2.5 ${idx > 0 ? 'border-t' : ''} ${emphasise ? 'bg-slate-50' : 'bg-white'}`}
+                style={{ borderColor: 'var(--border-table)' }}
+              >
+                <span className={`text-xs uppercase tracking-wider ${emphasise ? 'font-bold text-slate-700' : 'font-semibold text-slate-500'}`}>
+                  {label}
+                </span>
+                <span
+                  className="text-sm font-bold font-mono"
+                  style={{ color: emphasise ? 'var(--brand-navy)' : '#334155' }}
+                >
+                  {formatCurrency(value)}
+                </span>
+              </div>
+            ))}
           </div>
 
         </div>
@@ -324,7 +380,7 @@ export function ReportCashBookContent() {
           isOpen={isPreviewOpen}
           onClose={() => setIsPreviewOpen(false)}
           title="Daily Cash Book Report - Print Preview"
-          orientation="portrait"
+          orientation="landscape"
           onExportExcel={handleExportExcel}
         >
           {renderPrintableDocument()}

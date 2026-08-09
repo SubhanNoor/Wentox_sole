@@ -23,6 +23,136 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Receipts (Jamma) — any business account, not just customers
+
+### 2026-08-09 — `receipts.customer_id` → `receipts.ba_id` (migration 014)
+- **What:** Jamma could only ever name a **customer**, because `dbo.receipts.customer_id` was
+  `NOT NULL` with an FK to `dbo.customers`. Money coming back from a director, an employee, a
+  vendor or a bank had nowhere to go. Replaced `customer_id` with `ba_id` on `dbo.receipts` **and**
+  `dbo.draft_receipts`, so Jamma now works exactly like Naam has all along.
+- **The Naam side needed no change at all.** `ExpensesPage` already builds its picker from
+  `listBusinessAccounts()`, which filters nothing beyond hiding restricted-parent accounts from the
+  USER role. Only Receipts was restricted, and the restriction was in the schema, not the UI.
+- **No information lost, and one useful side effect.** `customers.ba_id` has a UNIQUE filtered
+  index, so "which customer paid this" is still answerable via `JOIN customers c ON c.ba_id =
+  r.ba_id` — and that join *automatically excludes* non-customer receipts, which is why
+  `saleAggregateByCustomer()` (Sale Analysis / Sale Report "Payment Received") stays correct after
+  being re-grouped from `customer_id` to `ba_id`. Money from a director can never inflate a
+  customer's payment total.
+- **Migration aborts rather than degrades.** `customers.ba_id` is nullable (TASK-05's "add customer
+  account first"), so the backfill can leave a row behind. 014 `THROW`s with an actionable message
+  instead of silently keeping the column nullable. Verified zero such rows before running it.
+- **Posting got simpler:** `postWithinTransaction()` no longer resolves a customer to find a ba_id —
+  it credits `receipt.ba_id` directly, and the old `NO_CUSTOMER_ACCOUNT` guard is gone, since
+  `ba_id` is a NOT NULL FK. `cheques.service.js`'s bounce/return reversal likewise credits
+  `receipt.ba_id`. Both files dropped their now-unused `customers.service` import.
+- **Wider blast radius than expected** — every query joining `receipts → customers` had to move to
+  `receipts → business_accounts` with an optional customers hop: `cheques.repository` (2 queries),
+  `alerts.repository#chequeDueRows` (the cheque-due alert detail now names the account),
+  `reports.repository#ledgerRows` (`rc_customer_name` → `rc_account_name`) and `cashBookNonCashRows`.
+  Frontend: the three Weekly/Monthly/Overall Receipts tabs grouped their cards by `customer_id` and
+  now group by `ba_id`; `ChequesTab` labels fall back to `account_name`.
+- **Commission is now customer-only.** It is payment-time trade discount to a customer (§7) and has
+  no meaning on money from a director or a bank, so the field is hidden — and stripped from the
+  payload — unless the selected account belongs to a customer.
+- **Verified end to end** against `wentox_demo`: migration applied, `customer_id` gone, all 13
+  seeded receipts backfilled and still resolving to their customers. Then created + posted a 7,500
+  CASH receipt against **USMAN BHATTI** (an imported directors account, definitively not a
+  customer): ledger wrote Dr CASH IN HAND / Cr USMAN BHATTI, it appeared in the Cash Book under its
+  own name, and Sale Analysis `total_payment` was **395,500 before and after** — unchanged, as
+  required. Unpost + delete then cleaned it back out. `tsc -b` clean; eslint problem count identical
+  to the pre-change baseline (3 pre-existing `set-state-in-effect` errors).
+- **Docs now behind:** `database_schema_v4.3.md` and `use_cases.md` still describe
+  `receipts.customer_id`. Not updated in this pass.
+- **Files:** `backend/src/db/migrations/014_receipts_any_business_account.sql` (new),
+  `backend/src/repositories/{receipts,draftReceipts,cheques,alerts,reports}.repository.js`,
+  `backend/src/services/{receipts,draftReceipts,cheques,alerts,reports}.service.js`,
+  `backend/src/db/seeds/dev-sample-data.js`, `frontend/src/lib/api.ts`,
+  `frontend/src/pages/ReceiptsPage.tsx`,
+  `frontend/src/components/{Weekly,Monthly,Overall}ReceiptsTab.tsx`,
+  `frontend/src/components/ChequesTab.tsx`
+
+---
+
+## UC-37 Cash Book — columns and summary reworked to the client's layout
+
+### 2026-08-09 — Cash Book gains cheque/online columns; summary moved to the end
+- **What:** The client supplied a photo of their old system's cash book. Adopted its *content* —
+  nine columns (S# / Account Name / Remarks / Type / Cheque No / Receipts Cheq.-Online / Payments
+  Cheq.-Online / Receipts Cash / Payments Cash), a Totals row across the four amount columns, and
+  the five-line cash summary (Opening Cash / Cash Received (Jamma) / Total Cash / Cash Paid (Naam) /
+  Cash In Hand) **moved from the top of the page to the end**, on screen and in print. The running
+  **Balance** column is gone — the reference has none.
+- **Explicitly NOT adopted: the legacy report's visual style.** A first pass rebuilt the page in the
+  old system's look (red title, blue headers, dense hairline grid, bare numbers) and the user
+  rejected it — the app's own design language stays, only the layout of the content changes. If a
+  future reference photo arrives, copy what the columns *say*, not how they look.
+- **The real problem was not styling.** `cashBook()` read *only* the CASH IN HAND ledger, so the two
+  Cheq./Online columns could never have held anything: a CHEQUE receipt posts to CHEQUES IN HAND and
+  an ONLINE one to the receiving bank. Added `repository.cashBookNonCashRows()`, which reads the
+  **source documents** (`receipts`/`expenses` with `payment_mode <> 'CASH'`, CONFIRMED only) rather
+  than the ledger. The two sets are disjoint by construction, so there is no double-count risk.
+  Per the user's requirement, those rows are **view-only**: they fill their own two columns and the
+  Totals strip and are excluded from opening/received/paid/in-hand entirely — the summary box stays
+  strictly "what the cash drawer did".
+- **Account Name is the counterparty, never "Cash".** New `cashBookAccountName()` resolves per
+  `source_type`: expense → `expenses.ba_id`'s name (covers expense heads, workers, employees, the
+  imported directors accounts), receipt → customer, transfer → whichever side isn't cash (the bank
+  rows on the reference), wage run → employee. `ledgerRows()` gained three columns for this
+  (`ex.payment_mode`, `ex.issued_cheque_no`, and a join to `employees` for the wage-run name); every
+  other caller ignores them.
+- **Gotcha found against real data:** using `formatLedgerRow()`'s narration for the Remarks column
+  printed the Account Name twice, because that helper falls back to the paying account's own name.
+  Split out `cashBookRemarks()`, which takes only the document's typed-in remarks and falls back to
+  the payment type ("CASH"), matching the reference. Bounce/return reversal narrations still win.
+- **Two deliberate departures**, both the user's call: the By Date / By Month toggle stays (month
+  view adds a Date column the single-day reference has no use for), and the print keeps its existing
+  Wentox letterhead, signature block and footer rather than the reference's old-vendor branding.
+  Print preview switched to landscape — nine columns do not fit A4 portrait.
+- **Verified:** `tsc -b` clean; ran `cashBook()` against `wentox_demo` for `2026-08-04` and
+  `2026-08` — a 35,000 cheque receipt showed in Receipts Cheq./Online with Opening and Cash In Hand
+  both unchanged at 42,500, and the month view reconciled (42,500 + 16,500 − 25,800 = 33,200).
+  Pre-existing `react-hooks/set-state-in-effect` lint error on `useEffect(() => { load(); })` left
+  alone — it predates this change and `PaymentTrailPage`/`ProductLedgerContent` share it.
+- **Files:** `backend/src/repositories/reports.repository.js`,
+  `backend/src/services/reports.service.js`, `frontend/src/lib/api.ts`,
+  `frontend/src/pages/ReportCashBookPage.tsx`
+
+---
+
+## Data import — legacy KHAATA business accounts
+
+### 2026-08-09 — First batch of the client's old business-accounts ledger imported as seed data
+- **What:** The client sent a screenshot of their previous system's "BUSINESS ACCOUNTS LEDGER
+  (KHAATA)" screen. Transcribed the 19 visible accounts into a new idempotent seed module and wired
+  it into `npm run seed`: 2 under `Employees` (`400005`) and 17 under `Directors Expenses -
+  Drawings` (`400004`), all city Lahore. Applied to `wentox_demo` only, per the user's choice —
+  `wentox` was deliberately left alone.
+- **How:** New `src/db/seeds/legacy-accounts.js` exporting `seedLegacyAccounts(pool)`, called from
+  `run.js` after the reserved chart accounts exist (it hangs rows off them, and throws loudly if a
+  parent code is missing rather than importing under the wrong head).
+  - **Idempotency key is `legacy_code`, not `name`.** `schema.sql` defines that column for exactly
+    this ("old system's number; import reconciliation only"), and keying on it means renaming an
+    imported account inside WentoX won't cause the next `seed` run to insert a duplicate.
+  - New `code` follows §3.2 like everything else — parent chart code + 4-digit serial, recomputed
+    per insert (`MAX(RIGHT(code,4)) + 1`) so a partially-completed import resumes instead of
+    colliding on `UQ_business_accounts_code`. The Directors serials therefore start at `0002`:
+    `4000040001` was already taken by `seed:dev`'s demo data.
+  - Raw parameterised SQL on `run.js`'s pool rather than `businessAccounts.repository.insert()` —
+    that repository doesn't carry `legacy_code`, and widening it for an import-only path wasn't
+    worth it.
+  - Ensures `Punjab`/`Lahore` first (`run.js` seeds no geography); spelling matches
+    `dev-sample-data.js` so the demo DB ends up with one Lahore, not two.
+- **Two things to keep in mind:** (1) the screenshot is a *partial* view — its first legacy code is
+  `...2218`, so ~2,200 accounts sit above it; later batches just append to `LEGACY_ACCOUNTS`.
+  (2) `Directors Expenses - Drawings` is seeded `is_restricted = 1`, so those 17 accounts are
+  invisible to the `USER` role by design (TASK-14) — only the 2 Employees rows show for both roles.
+- **Verified:** `npm run seed` reported 19 imported; a join back through `chart_of_accounts` +
+  `cities` confirmed every row's parent and city; a second `npm run seed` inserted nothing.
+- **Files:** `backend/src/db/seeds/legacy-accounts.js` (new), `backend/src/db/seeds/run.js`
+
+---
+
 ## Dev tooling — `seed:dev` extended into a full demo dataset (and a real finding about opening balances)
 
 ### 2026-08-09 — `wentox_demo` database: ~3 months of posted transactions so every report can be verified

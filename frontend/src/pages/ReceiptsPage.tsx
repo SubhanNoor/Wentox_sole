@@ -3,7 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
-import type { CustomerRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow } from '@/lib/api';
+import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { Save, Search, Edit } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
@@ -44,6 +44,7 @@ export default function ReceiptsPage() {
 
   // ── Real lookup / list data ──
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
+  const [businessAccounts, setBusinessAccounts] = useState<BusinessAccountRow[]>([]);
   const [regions, setRegions] = useState<RegionRow[]>([]);
   const [cities, setCities] = useState<CityRow[]>([]);
   const [banks, setBanks] = useState<BankAccountRow[]>([]);
@@ -65,11 +66,13 @@ export default function ReceiptsPage() {
 
   useEffect(() => {
     (async () => {
-      const [c, rg, ct, bk] = await Promise.all([
-        api.listCustomers(), api.listRegions(), api.listCities(), api.bankAccounts.list()
+      const [c, ba, rg, ct, bk] = await Promise.all([
+        api.listCustomers(), api.listBusinessAccounts(), api.listRegions(), api.listCities(),
+        api.bankAccounts.list()
       ]);
       const failures: string[] = [];
       if (c.ok) setCustomers(c.data); else failures.push(c.error.message);
+      if (ba.ok) setBusinessAccounts(ba.data); else failures.push(ba.error.message);
       if (rg.ok) setRegions(rg.data); else failures.push(rg.error.message);
       if (ct.ok) setCities(ct.data); else failures.push(ct.error.message);
       if (bk.ok) setBanks(bk.data); else failures.push(bk.error.message);
@@ -84,7 +87,7 @@ export default function ReceiptsPage() {
   const [receiptId, setReceiptId] = useState<number | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
   const [date, setDate] = useState(today());
-  const [customerId, setCustomerId] = useState('');
+  const [baId, setBaId] = useState('');
   const [amount, setAmount] = useState<number>(0);
   const [commission, setCommission] = useState<number>(0);
   const [paymentMode, setPaymentMode] = useState<'CASH' | 'ONLINE' | 'CHEQUE'>('CASH');
@@ -103,7 +106,7 @@ export default function ReceiptsPage() {
 
   // Dropdown search state
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [customerSearchQuery, setCustomerSearchQuery] = useState('');
+  const [accountSearchQuery, setAccountSearchQuery] = useState('');
 
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
@@ -116,28 +119,42 @@ export default function ReceiptsPage() {
   const isViewMode = mode === 'view';
   const isPosted = receiptStatus === 'CONFIRMED';
 
-  // Customer account group helpers
-  const selectedCustomer = useMemo(() => {
-    return customers.find(c => c.customer_id === Number(customerId));
-  }, [customerId, customers]);
+  // A receipt can name ANY business account, not just a customer's (migration 014) — the same
+  // freedom the Expenses/Naam side has always had.
+  const selectedAccount = useMemo(
+    () => businessAccounts.find(b => b.ba_id === Number(baId)),
+    [baId, businessAccounts]
+  );
 
-  // Dropdown list filter — Customer search: Primary = Region, Secondary = City
-  const filteredDropdownCustomers = useMemo(() => {
-    const regionName = (id: number) => regions.find(r => r.region_id === id)?.name || '';
+  // Commission is payment-time trade discount to a CUSTOMER (§7) and means nothing on money coming
+  // back from a director, an employee or a bank — so the field only appears for a customer account.
+  // customers.ba_id is UNIQUE, so this lookup is exact.
+  const selectedCustomer = useMemo(
+    () => (selectedAccount ? customers.find(c => c.ba_id === selectedAccount.ba_id) : undefined),
+    [selectedAccount, customers]
+  );
+
+  // Dropdown list filter — same Region-then-City ordering the customer picker used; business
+  // accounts carry region_id/city_id of their own, so nothing is lost by widening the list.
+  const filteredDropdownAccounts = useMemo(() => {
+    const regionName = (id: number | null) => id == null ? '' : regions.find(r => r.region_id === id)?.name || '';
     const cityName = (id: number | null) => id == null ? '' : cities.find(ct => ct.city_id === id)?.name || '';
-    const query = customerSearchQuery.trim().toLowerCase();
+    const query = accountSearchQuery.trim().toLowerCase();
     const list = query
-      ? customers.filter(c =>
-          c.name.toLowerCase().includes(query) ||
-          String(c.customer_id).includes(query)
+      ? businessAccounts.filter(b =>
+          b.name.toLowerCase().includes(query) ||
+          b.code.toLowerCase().includes(query) ||
+          (b.ac_name || '').toLowerCase().includes(query)
         )
-      : customers;
+      : businessAccounts;
     return [...list].sort((a, b) => {
       const regionCmp = regionName(a.region_id).localeCompare(regionName(b.region_id));
       if (regionCmp !== 0) return regionCmp;
-      return cityName(a.city_id).localeCompare(cityName(b.city_id));
+      const cityCmp = cityName(a.city_id).localeCompare(cityName(b.city_id));
+      if (cityCmp !== 0) return cityCmp;
+      return a.name.localeCompare(b.name);
     });
-  }, [customerSearchQuery, customers, regions, cities]);
+  }, [accountSearchQuery, businessAccounts, regions, cities]);
 
   const bankOptions = useMemo(
     () => banks.filter(b => b.is_active).map(b => ({ value: String(b.bank_id), label: b.name })),
@@ -149,8 +166,8 @@ export default function ReceiptsPage() {
     setReceiptId(null);
     setReceiptStatus('DRAFT');
     setDate(today());
-    setCustomerId('');
-    setCustomerSearchQuery('');
+    setBaId('');
+    setAccountSearchQuery('');
     setAmount(0);
     setCommission(0);
     setPaymentMode('CASH');
@@ -167,17 +184,17 @@ export default function ReceiptsPage() {
 
   const buildPayload = (): ReceiptCreateInput | null => {
     if (!date) { setErrorMsg('Please pick a date.'); return null; }
-    if (!customerId) { setErrorMsg('Please select a customer.'); return null; }
+    if (!baId) { setErrorMsg('Please select an account.'); return null; }
     if (amount <= 0) { setErrorMsg('Amount must be greater than 0.'); return null; }
     if (paymentMode === 'ONLINE' && !bankId) { setErrorMsg('Select which bank account received this money.'); return null; }
     if (paymentMode === 'CHEQUE' && !chequeNo.trim()) { setErrorMsg('Cheque No. is required for cheque payments.'); return null; }
     if (paymentMode === 'CHEQUE' && !chequeDate) { setErrorMsg('Date on Cheque is required for cheque payments.'); return null; }
 
     return {
-      customer_id: Number(customerId),
+      ba_id: Number(baId),
       receipt_date: date,
       amount,
-      commission: commission || undefined,
+      commission: selectedCustomer ? (commission || undefined) : undefined,
       payment_mode: paymentMode,
       details: details.trim() || undefined,
       bank_id: paymentMode === 'ONLINE' ? Number(bankId) : undefined,
@@ -227,7 +244,7 @@ export default function ReceiptsPage() {
     setReceiptId(row.receipt_id);
     setReceiptStatus(row.status);
     setDate(row.receipt_date.slice(0, 10));
-    setCustomerId(String(row.customer_id));
+    setBaId(String(row.ba_id));
     setAmount(row.amount);
     setCommission(row.commission || 0);
     setPaymentMode(row.payment_mode);
@@ -259,7 +276,7 @@ export default function ReceiptsPage() {
     setReceiptId(null);
     setReceiptStatus('DRAFT');
     setDate(row.receipt_date.slice(0, 10));
-    setCustomerId(String(row.customer_id));
+    setBaId(String(row.ba_id));
     setAmount(row.amount || 0);
     setCommission(row.commission || 0);
     setPaymentMode(row.payment_mode);
@@ -292,9 +309,9 @@ export default function ReceiptsPage() {
     [receipts]
   );
 
-  const customerName = useCallback(
-    (id: number) => customers.find(c => c.customer_id === id)?.name || 'Unknown Customer',
-    [customers]
+  const accountName = useCallback(
+    (id: number) => businessAccounts.find(b => b.ba_id === id)?.name || 'Unknown Account',
+    [businessAccounts]
   );
 
   return (
@@ -425,7 +442,7 @@ export default function ReceiptsPage() {
                     <option value="">Select a draft to load...</option>
                     {drafts.map(d => (
                       <option key={d.draft_id} value={d.draft_id}>
-                        {customerName(d.customer_id)} - {formatCurrency(d.amount)} ({formatDate(d.receipt_date)})
+                        {d.account_name || accountName(d.ba_id)} - {formatCurrency(d.amount)} ({formatDate(d.receipt_date)})
                       </option>
                     ))}
                   </select>
@@ -485,17 +502,17 @@ export default function ReceiptsPage() {
                   />
                 </div>
 
-                {/* Customer Dropdown */}
+                {/* Account Dropdown — any business account, not only customers */}
                 <div className="relative">
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    Select Customer Account <span className="text-red-500 font-bold">*</span>
+                    Select Account <span className="text-red-500 font-bold">*</span>
                   </label>
                   <div
                     onClick={() => !isViewMode && setIsDropdownOpen(!isDropdownOpen)}
                     className={`soleria-input flex justify-between items-center font-semibold bg-white ${isViewMode ? '' : 'cursor-pointer'}`}
                   >
-                    <span className={selectedCustomer ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
-                      {selectedCustomer ? `${selectedCustomer.name} (${selectedCustomer.customer_id})` : 'Search customer...'}
+                    <span className={selectedAccount ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
+                      {selectedAccount ? `${selectedAccount.name} (${selectedAccount.code})` : 'Search account...'}
                     </span>
                     {!isViewMode && <span className="text-xs text-slate-400">▼</span>}
                   </div>
@@ -507,8 +524,8 @@ export default function ReceiptsPage() {
                           <input
                             type="text"
                             placeholder="Type to search..."
-                            value={customerSearchQuery}
-                            onChange={e => setCustomerSearchQuery(e.target.value)}
+                            value={accountSearchQuery}
+                            onChange={e => setAccountSearchQuery(e.target.value)}
                             className="w-full py-1.5 pl-8 pr-3 text-xs border rounded-md font-semibold"
                             autoFocus
                           />
@@ -516,28 +533,31 @@ export default function ReceiptsPage() {
                         </div>
                       </div>
                       <div className="py-1">
-                        {filteredDropdownCustomers.length === 0 ? (
-                          <div className="p-3 text-xs text-slate-400 text-center font-medium">No matching customers</div>
+                        {filteredDropdownAccounts.length === 0 ? (
+                          <div className="p-3 text-xs text-slate-400 text-center font-medium">No matching accounts</div>
                         ) : (
-                          filteredDropdownCustomers.map(c => {
-                            const regName = regions.find(r => r.region_id === c.region_id)?.name || '';
-                            const ctName = c.city_id != null ? cities.find(ct => ct.city_id === c.city_id)?.name || '' : '';
+                          filteredDropdownAccounts.map(b => {
+                            const regName = b.region_id != null ? regions.find(r => r.region_id === b.region_id)?.name || '' : '';
+                            const ctName = b.city_id != null ? cities.find(ct => ct.city_id === b.city_id)?.name || '' : '';
+                            // The parent chart account is what tells a customer from a director or a
+                            // bank, so it doubles as the row's secondary label when there is no city.
+                            const place = [regName, ctName].filter(Boolean).join(' — ');
                             return (
                               <div
-                                key={c.customer_id}
+                                key={b.ba_id}
                                 onClick={() => {
-                                  setCustomerId(String(c.customer_id));
+                                  setBaId(String(b.ba_id));
                                   setIsDropdownOpen(false);
-                                  setCustomerSearchQuery('');
+                                  setAccountSearchQuery('');
                                 }}
-                                className="px-3 py-2 hover:bg-slate-50 cursor-pointer flex items-center justify-between text-xs"
+                                className="px-3 py-2 hover:bg-slate-50 cursor-pointer flex items-center justify-between text-xs gap-3"
                               >
-                                <div>
-                                  <span className="font-semibold text-slate-800">{c.name}</span>
-                                  <span className="text-slate-400 text-[10px] ml-2">({c.customer_id})</span>
+                                <div className="min-w-0">
+                                  <span className="font-semibold text-slate-800">{b.name}</span>
+                                  <span className="text-slate-400 text-[10px] ml-2">({b.code})</span>
                                 </div>
-                                <div className="text-[10px] text-slate-500 font-medium">
-                                  {regName} {ctName ? `— ${ctName}` : ''}
+                                <div className="text-[10px] text-slate-500 font-medium text-right shrink-0">
+                                  {place || b.ac_name || ''}
                                 </div>
                               </div>
                             );
@@ -561,20 +581,24 @@ export default function ReceiptsPage() {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    Commission (PKR) <span className="text-slate-400 font-normal normal-case">— optional, reduces payable only</span>
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={commission || ''}
-                    disabled={isViewMode}
-                    onChange={e => setCommission(Math.max(0, parseInt(e.target.value) || 0))}
-                    placeholder="Enter commission given, if any..."
-                    className="soleria-input font-semibold font-mono"
-                  />
-                </div>
+                {/* Commission is customer-only (§7) — hidden for a director, employee, vendor or
+                    bank account, where a trade discount has no meaning. */}
+                {selectedCustomer && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      Commission (PKR) <span className="text-slate-400 font-normal normal-case">— optional, reduces payable only</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={commission || ''}
+                      disabled={isViewMode}
+                      onChange={e => setCommission(Math.max(0, parseInt(e.target.value) || 0))}
+                      placeholder="Enter commission given, if any..."
+                      className="soleria-input font-semibold font-mono"
+                    />
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Payment Mode</label>
@@ -748,7 +772,7 @@ export default function ReceiptsPage() {
                           style={{ borderColor: 'var(--border-table)' }}
                         >
                           <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(r.receipt_date)}</td>
-                          <td className="p-3 font-semibold text-slate-900">{r.customer_name || customerName(r.customer_id)}</td>
+                          <td className="p-3 font-semibold text-slate-900">{r.account_name || accountName(r.ba_id)}</td>
                           <td className="p-3 text-center text-xs text-slate-500">{r.payment_mode}</td>
                           <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
                           <td className="p-3 text-center">

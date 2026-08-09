@@ -547,7 +547,12 @@ export interface DepositListFilters {
 export interface ReceiptRow {
   receipt_id: number;
   receipt_date: string;
-  customer_id: number;
+  // Any business account — customer, vendor, employee, director, bank (migration 014). customer_id
+  // / customer_name are resolved through customers.ba_id and are null when the account isn't a
+  // customer's; use them to decide whether customer-only behaviour (commission) applies.
+  ba_id: number;
+  account_name?: string;
+  customer_id: number | null;
   amount: number;
   commission: number;
   payment_mode: 'CASH' | 'ONLINE' | 'CHEQUE';
@@ -570,7 +575,9 @@ export interface ReceiptRow {
 export interface DraftReceiptRow {
   draft_id: number;
   receipt_date: string;
-  customer_id: number;
+  ba_id: number;
+  account_name?: string;
+  customer_id: number | null;
   amount: number;
   commission: number;
   payment_mode: 'CASH' | 'ONLINE';
@@ -582,7 +589,7 @@ export interface DraftReceiptRow {
 }
 
 export interface ReceiptCreateInput {
-  customer_id: number;
+  ba_id: number;
   receipt_date: string;
   amount: number;
   commission?: number;
@@ -596,6 +603,7 @@ export interface ReceiptCreateInput {
 }
 
 export interface ReceiptListFilters {
+  ba_id?: number;
   customer_id?: number;
   payment_mode?: 'CASH' | 'ONLINE' | 'CHEQUE';
   status?: 'CONFIRMED' | 'DRAFT';
@@ -618,8 +626,12 @@ export interface ChequeRow {
   returned_date: string | null;
   return_reason: string | null;
   receipt_amount?: number;
-  customer_id?: number;
-  customer_name?: string;
+  // The receipt's business account (migration 014). customer_id/customer_name are resolved
+  // through customers.ba_id and are absent when the cheque came from a non-customer account.
+  ba_id?: number;
+  account_name?: string;
+  customer_id?: number | null;
+  customer_name?: string | null;
   bank_name?: string;
 }
 
@@ -1188,13 +1200,36 @@ export interface BusinessLedgerFilters extends DateRangeFilters {
 
 export type BusinessLedgerResult = BusinessLedgerSummaryRow[] | ({ account: BusinessLedgerSummaryRow } & AccountLedgerResult);
 
+// UC-37 Cash Book row. The four amount columns are mutually exclusive per row: a cash movement
+// fills receipt_cash/payment_cash, a cheque or online one fills receipt_bank/payment_bank. Only
+// rows with affects_cash reach the summary figures below — cheque/online lines are shown for
+// visibility and total in `totals` alone.
+export interface CashBookRow {
+  date: string;
+  account_name: string;
+  remarks: string;
+  mode: string;
+  cheque_no: string | null;
+  receipt_bank: number;
+  payment_bank: number;
+  receipt_cash: number;
+  payment_cash: number;
+  affects_cash: boolean;
+}
+
 export interface CashBookResult {
   opening_cash: number;
   cash_received: number;
   total_cash: number;
   cash_paid: number;
   cash_in_hand: number;
-  rows: LedgerRow[];
+  totals: {
+    receipt_bank: number;
+    payment_bank: number;
+    receipt_cash: number;
+    payment_cash: number;
+  };
+  rows: CashBookRow[];
 }
 
 export interface CashBookFilters {
@@ -2411,8 +2446,11 @@ function normalizeBusinessLedgerResult(result: BusinessLedgerResult): BusinessLe
   return { ...result, rows: result.rows.map(normalizeLedgerRow) };
 }
 
+// Cash Book rows are their own shape (UC-37's nine printed columns), not LedgerRow — the only date
+// they carry is the entry date, so normalizing is a one-field job rather than normalizeLedgerRow's
+// three.
 function normalizeCashBookResult(result: CashBookResult): CashBookResult {
-  return { ...result, rows: result.rows.map(normalizeLedgerRow) };
+  return { ...result, rows: result.rows.map(row => ({ ...row, date: normalizeDate(row.date) })) };
 }
 
 function normalizeOverallTrailResult(result: OverallTrailResult): OverallTrailResult {

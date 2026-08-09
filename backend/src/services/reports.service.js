@@ -327,16 +327,67 @@ async function businessLedger(filters = {}) {
   }));
 }
 
-// UC-37 Cash Book of the Day — CASH IN HAND's own ledger for a date or month. Strictly cash money
-// (not cheque_allocations, which post against CHEQUES IN HAND, a separate account — folding those
-// in here would double an amount that already appears on that account's own ledger). Reads BOTH
-// dimensions cash posts across: the CASH_IN_HAND chart account's ac_id (every CASH receipt/expense,
-// unchanged since day one) AND the Cash business account's ba_id (a cash<->bank Transfer, which —
-// like every transfer — posts against its parties' ba_id, never a chart account directly). Without
-// both, a transfer to/from cash would silently vanish from this report (cash_and_bank.md §10's own
-// balance(cash) formula explicitly includes "+ Σ transfers TO cash − Σ transfers FROM cash").
-// Opening Cash / Jamma / Naam / Cash In Hand map directly onto accountLedger()'s opening/
-// total_debit/total_credit/closing_balance.
+// UC-37 Cash Book — the "Account Name" column. A cash-book line names the OTHER side of the
+// movement, never "Cash" itself: money came from a customer or a bank, and went to an expense head,
+// a worker, a director or a bank. Which table holds that name depends on what produced the entry,
+// so this resolves per source_type and falls back to the type label when nothing better exists.
+// A transfer names whichever party isn't cash — a debit to cash came FROM the other account.
+function cashBookAccountName(r, formatted) {
+  switch (r.source_type) {
+    case 'EXPENSE': return r.ex_ba_name || formatted.type;
+    case 'RECEIPT':
+    case 'COMMISSION': return r.rc_account_name || formatted.type;
+    case 'TRANSFER': return (Number(r.debit) > 0 ? r.tr_from_name : r.tr_to_name) || formatted.type;
+    case 'WAGE_RUN': return r.wr_employee_name || formatted.type;
+    case 'SALARY_RUN': return formatted.type;
+    default: return formatted.type;
+  }
+}
+
+// TYPE column. Cash-ledger rows are cash by definition EXCEPT an expense paid by cheque against a
+// bank — which never reaches this ledger anyway — so the mode comes from the paying document where
+// one exists. expenses.payment_mode's CHEQUE_ISSUED/CHEQUE_ENDORSED both print as CHEQUE; the
+// distinction matters to the posting engine, not to someone reading a day book.
+function cashBookMode(r) {
+  const raw = r.ex_payment_mode || r.rc_payment_mode;
+  if (!raw) return 'CASH';
+  return raw.startsWith('CHEQUE') ? 'CHEQUE' : raw;
+}
+
+// Remarks column. Deliberately NOT formatLedgerRow()'s narration, which falls back to the paying
+// account's own name — useful on an Account Ledger, but here it would print the Account Name column
+// twice on every expense that carries no remarks of its own. Only the document's typed-in remarks
+// count; with none, the reference prints the payment type ("CASH"), so that is the fallback.
+// A bounce/return reversal still wins, same reasoning as formatLedgerRow(): its narration is the
+// only thing distinguishing the reversal row from the receipt it undoes.
+function cashBookRemarks(r, mode) {
+  if (r.narration && /reversal/i.test(r.narration)) return r.narration;
+  let remarks;
+  switch (r.source_type) {
+    case 'EXPENSE': remarks = r.ex_remarks; break;
+    case 'RECEIPT':
+    case 'COMMISSION': remarks = r.rc_remarks || r.rc_details; break;
+    case 'TRANSFER': remarks = r.tr_remarks; break;
+    default: remarks = r.narration; break;
+  }
+  return remarks || mode;
+}
+
+// UC-37 Cash Book of the Day — CASH IN HAND's own ledger for a date or month, plus the same
+// period's cheque/online movements alongside it for VISIBILITY ONLY.
+//
+// The cash side reads BOTH dimensions cash posts across: the CASH_IN_HAND chart account's ac_id
+// (every CASH receipt/expense, unchanged since day one) AND the Cash business account's ba_id (a
+// cash<->bank Transfer, which — like every transfer — posts against its parties' ba_id, never a
+// chart account directly). Without both, a transfer to/from cash would silently vanish from this
+// report (cash_and_bank.md §10's own balance(cash) formula explicitly includes "+ Σ transfers TO
+// cash − Σ transfers FROM cash"). cheque_allocations stay out: they post against CHEQUES IN HAND
+// and already appear on that account's own ledger.
+//
+// The cheque/online side comes from repository.cashBookNonCashRows() — source documents, not the
+// ledger, since by definition they never post to cash. They fill their own two columns and the
+// Totals strip, and are excluded from opening/received/paid/in-hand entirely: the summary box
+// answers "what did the cash drawer do today", which a cheque cannot change.
 async function cashBook(filters = {}) {
   const cash = await findByCode(CODES.CASH_IN_HAND);
   if (!cash) throw new Error(`Reserved chart account CASH IN HAND (code ${CODES.CASH_IN_HAND}) not found — run npm run seed`);
@@ -354,14 +405,74 @@ async function cashBook(filters = {}) {
     range = { date_from: todayISO(), date_to: todayISO() };
   }
 
-  const ledger = await accountLedger({ ac_id: cash.ac_id, ba_id: cashBa.ba_id }, range);
+  const [opening, ledgerRaw, nonCashRaw] = await Promise.all([
+    repository.netBalance({
+      ba_id: cashBa.ba_id, ac_id: cash.ac_id, up_to_date: range.date_from, exclusive: true,
+    }),
+    repository.ledgerRows({ ba_id: cashBa.ba_id, ac_id: cash.ac_id, ...range }),
+    repository.cashBookNonCashRows(range),
+  ]);
+
+  const cashRows = ledgerRaw.map((r) => {
+    const formatted = formatLedgerRow(r);
+    const debit = Number(r.debit);
+    const credit = Number(r.credit);
+    const mode = cashBookMode(r);
+    return {
+      date: formatted.date,
+      account_name: cashBookAccountName(r, formatted),
+      remarks: cashBookRemarks(r, mode),
+      mode,
+      cheque_no: formatted.cheque_no || r.ex_issued_cheque_no || null,
+      receipt_bank: 0,
+      payment_bank: 0,
+      receipt_cash: debit,
+      payment_cash: credit,
+      affects_cash: true,
+    };
+  });
+
+  const nonCashRows = nonCashRaw.map((r) => {
+    const amount = Number(r.amount);
+    const isReceipt = r.kind === 'RECEIPT';
+    return {
+      date: r.entry_date,
+      account_name: r.account_name,
+      remarks: r.remarks || '',
+      mode: r.payment_mode.startsWith('CHEQUE') ? 'CHEQUE' : r.payment_mode,
+      cheque_no: r.cheque_no || null,
+      receipt_bank: isReceipt ? amount : 0,
+      payment_bank: isReceipt ? 0 : amount,
+      receipt_cash: 0,
+      payment_cash: 0,
+      affects_cash: false,
+    };
+  });
+
+  // Cash first within a day, then that day's cheque/online lines. Grouping the view-only rows after
+  // the ones that actually moved money keeps the four amount columns readable on a month view;
+  // on a single date (the reference layout) it simply puts the cheques at the bottom of the page.
+  // Array.prototype.sort is stable (ES2019), so equal dates keep the concat order above.
+  const rows = [...cashRows, ...nonCashRows]
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  const sum = (key) => rows.reduce((acc, r) => acc + r[key], 0);
+  const cashReceived = sum('receipt_cash');
+  const cashPaid = sum('payment_cash');
+
   return {
-    opening_cash: ledger.opening_balance,
-    cash_received: ledger.total_debit,
-    total_cash: ledger.opening_balance + ledger.total_debit,
-    cash_paid: ledger.total_credit,
-    cash_in_hand: ledger.closing_balance,
-    rows: ledger.rows,
+    opening_cash: opening,
+    cash_received: cashReceived,
+    total_cash: opening + cashReceived,
+    cash_paid: cashPaid,
+    cash_in_hand: opening + cashReceived - cashPaid,
+    totals: {
+      receipt_bank: sum('receipt_bank'),
+      payment_bank: sum('payment_bank'),
+      receipt_cash: cashReceived,
+      payment_cash: cashPaid,
+    },
+    rows,
   };
 }
 
