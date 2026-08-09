@@ -45,9 +45,9 @@ export interface SaleBillRow {
   delivery_type: 'SAME' | 'CUSTOM';
   delivery_address: string | null;
   bill_no: string;
-  gp_no: string;
-  bilty_no: string;
-  adda_id: number;
+  gp_no: string | null;
+  bilty_no: string | null;
+  adda_id: number | null;
   remarks: string | null;
   invoice_discount: number;
   total_cartons: number;
@@ -72,9 +72,9 @@ export interface SaleBillCreateInput {
   delivery_type?: 'SAME' | 'CUSTOM';
   delivery_address?: string;
   bill_no: string;
-  gp_no: string;
-  bilty_no: string;
-  adda_id: number;
+  gp_no?: string;
+  bilty_no?: string;
+  adda_id?: number;
   remarks?: string;
   invoice_discount?: number;
   due_date?: string;
@@ -232,6 +232,18 @@ export interface ProductCreateInput {
 // vendor_id is immutable after creation (products.service.js#update() excludes it from the SET
 // clause) — code/batch_no are always system-generated, never client-supplied on create or update.
 export type ProductUpdateInput = Omit<ProductCreateInput, 'vendor_id'>;
+
+// Multi-article entry (Product Details): one category chosen once, several articles registered
+// under it in a single save — see products:createBatch / products.service.js#createBatch.
+export type ProductBatchArticleInput = Omit<ProductCreateInput, 'category_id'>;
+export interface ProductBatchCreateInput {
+  category_id: number;
+  articles: ProductBatchArticleInput[];
+}
+export interface ProductBatchFieldError {
+  index: number;
+  message: string;
+}
 
 export interface ProductVariantRow {
   variant_id: number;
@@ -766,6 +778,29 @@ export interface ExpenseRow {
   cheque_status?: ChequeStatus;
 }
 
+// "Cheque Return" page's issued-cheque list — a cheque WE wrote from our own bank (payment_mode
+// CHEQUE_ISSUED), as opposed to ChequeAllocationRow which is a cheque we RECEIVED and endorsed
+// onward. Own type (not ExpenseRow) since it carries the issued-cheque-specific status fields
+// that a normal expense list/get() response doesn't type.
+export type IssuedChequeStatus = 'PENDING' | 'BOUNCED' | 'RETURNED';
+
+export interface IssuedChequeRow {
+  expense_id: number;
+  expense_date: string;
+  ba_id: number;
+  amount: number;
+  bank_id: number;
+  issued_cheque_no: string | null;
+  issued_cheque_date: string | null;
+  issued_cheque_status: IssuedChequeStatus;
+  issued_cheque_bounced_date: string | null;
+  issued_cheque_returned_date: string | null;
+  issued_cheque_return_reason: string | null;
+  details: string | null;
+  ba_name?: string;
+  bank_name?: string;
+}
+
 export interface ExpenseCreateInput {
   expense_date: string;
   amount: number;
@@ -1073,6 +1108,8 @@ export interface SaleAnalysisRow {
   customer_name: string;
   region_id: number | null;
   region_name: string | null;
+  city_id: number | null;
+  city_name: string | null;
   total_sales: number;
   total_returns: number;
   total_payment: number;
@@ -1090,6 +1127,8 @@ export interface SaleReportRow {
   customer_name: string;
   region_id: number | null;
   region_name: string | null;
+  city_id: number | null;
+  city_name: string | null;
   total_sales: number;
   total_cartons: number;
   commission: number;
@@ -1214,7 +1253,7 @@ declare global {
         list: (payload?: SaleBillListFilters) => Promise<ApiResult<SaleBillRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<SaleBillRow>>;
         update: (payload: { id: number; password?: string } & Partial<SaleBillCreateInput>) => Promise<ApiResult<SaleBillRow>>;
-        post: (payload: { id: number; password: string }) => Promise<ApiResult<SaleBillRow>>;
+        post: (payload: { id: number; password?: string }) => Promise<ApiResult<SaleBillRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<SaleBillRow>>;
         biltySearch: (payload?: SaleBillListFilters) => Promise<ApiResult<SaleBillRow[]>>;
         updateBilty: (payload: { id: number; bilty_no: string; adda_id: number }) => Promise<ApiResult<SaleBillRow>>;
@@ -1224,7 +1263,7 @@ declare global {
         list: (payload?: SaleReturnListFilters) => Promise<ApiResult<SaleReturnRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<SaleReturnRow>>;
         update: (payload: { id: number; password?: string } & Partial<SaleReturnCreateInput>) => Promise<ApiResult<SaleReturnRow>>;
-        post: (payload: { id: number; password: string }) => Promise<ApiResult<SaleReturnRow>>;
+        post: (payload: { id: number; password?: string }) => Promise<ApiResult<SaleReturnRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<SaleReturnRow>>;
       };
       draftSaleBills: {
@@ -1263,6 +1302,7 @@ declare global {
         list: (payload?: { includeInactive?: boolean; category_id?: number; vendor_id?: number; search?: string }) => Promise<ApiResult<ProductRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<ProductRow>>;
         create: (payload: ProductCreateInput) => Promise<ApiResult<ProductRow>>;
+        createBatch: (payload: ProductBatchCreateInput) => Promise<ApiResult<ProductRow[]>>;
         update: (payload: { id: number } & ProductUpdateInput) => Promise<ApiResult<ProductRow>>;
         remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
         reactivate: (payload: { id: number }) => Promise<ApiResult<ProductRow>>;
@@ -1447,6 +1487,9 @@ declare global {
         remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
         post: (payload: { id: number }) => Promise<ApiResult<ExpenseRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<ExpenseRow>>;
+        bounceIssuedCheque: (payload: { id: number; bounced_date: string }) => Promise<ApiResult<ExpenseRow>>;
+        returnIssuedCheque: (payload: { id: number; returned_date: string; reason?: string }) => Promise<ApiResult<ExpenseRow>>;
+        returnableIssuedCheques: (payload?: { date_from?: string; date_to?: string }) => Promise<ApiResult<IssuedChequeRow[]>>;
       };
       draftExpenses: {
         list: (payload?: ExpenseListFilters) => Promise<ApiResult<DraftExpenseRow[]>>;
@@ -1667,7 +1710,7 @@ export const saleBills = {
     window.api ? window.api.saleBills.get({ id }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: Partial<SaleBillCreateInput> & { password?: string }) =>
     window.api ? window.api.saleBills.update({ id, ...payload }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
-  post: (id: number, password: string) =>
+  post: (id: number, password?: string) =>
     window.api ? window.api.saleBills.post({ id, password }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
     window.api ? window.api.saleBills.unpost({ id }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
@@ -1686,7 +1729,7 @@ export const saleReturns = {
     window.api ? window.api.saleReturns.get({ id }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: Partial<SaleReturnCreateInput> & { password?: string }) =>
     window.api ? window.api.saleReturns.update({ id, ...payload }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE),
-  post: (id: number, password: string) =>
+  post: (id: number, password?: string) =>
     window.api ? window.api.saleReturns.post({ id, password }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
     window.api ? window.api.saleReturns.unpost({ id }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE)
@@ -1954,6 +1997,8 @@ export const products = {
     window.api ? window.api.products.get({ id }) : Promise.resolve(NO_BRIDGE),
   create: (payload: ProductCreateInput) =>
     window.api ? window.api.products.create(payload) : Promise.resolve(NO_BRIDGE),
+  createBatch: (payload: ProductBatchCreateInput) =>
+    window.api ? window.api.products.createBatch(payload) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: ProductUpdateInput) =>
     window.api ? window.api.products.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
   remove: (id: number) => window.api ? window.api.products.remove({ id }) : Promise.resolve(NO_BRIDGE),
@@ -2217,6 +2262,16 @@ function normalizeDraftExpenseRow(row: DraftExpenseRow): DraftExpenseRow {
   };
 }
 
+function normalizeIssuedChequeRow(row: IssuedChequeRow): IssuedChequeRow {
+  return {
+    ...row,
+    expense_date: normalizeDate(row.expense_date),
+    issued_cheque_date: row.issued_cheque_date != null ? normalizeDate(row.issued_cheque_date) : row.issued_cheque_date,
+    issued_cheque_bounced_date: row.issued_cheque_bounced_date != null ? normalizeDate(row.issued_cheque_bounced_date) : row.issued_cheque_bounced_date,
+    issued_cheque_returned_date: row.issued_cheque_returned_date != null ? normalizeDate(row.issued_cheque_returned_date) : row.issued_cheque_returned_date,
+  };
+}
+
 export const expenses = {
   list: (payload?: ExpenseListFilters) =>
     window.api ? window.api.expenses.list(payload).then(r => mapResult(r, rows => rows.map(normalizeExpenseRow))) : Promise.resolve(NO_BRIDGE),
@@ -2230,7 +2285,17 @@ export const expenses = {
   post: (id: number) =>
     window.api ? window.api.expenses.post({ id }).then(r => mapResult(r, normalizeExpenseRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
-    window.api ? window.api.expenses.unpost({ id }).then(r => mapResult(r, normalizeExpenseRow)) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.expenses.unpost({ id }).then(r => mapResult(r, normalizeExpenseRow)) : Promise.resolve(NO_BRIDGE),
+  // "Cheque Return" page's issued-cheque half — a cheque WE wrote from our own bank, as opposed
+  // to cheques.endorsedAllocations()/reverseAllocation() which is for a cheque we RECEIVED and
+  // endorsed onward. bounceIssuedCheque has no reason field (a bounce is just a bounce); returnIssuedCheque
+  // does, since it covers any other reason the cheque is coming back unpaid.
+  bounceIssuedCheque: (id: number, payload: { bounced_date: string }) =>
+    window.api ? window.api.expenses.bounceIssuedCheque({ id, ...payload }).then(r => mapResult(r, normalizeExpenseRow)) : Promise.resolve(NO_BRIDGE),
+  returnIssuedCheque: (id: number, payload: { returned_date: string; reason?: string }) =>
+    window.api ? window.api.expenses.returnIssuedCheque({ id, ...payload }).then(r => mapResult(r, normalizeExpenseRow)) : Promise.resolve(NO_BRIDGE),
+  returnableIssuedCheques: (payload?: { date_from?: string; date_to?: string }) =>
+    window.api ? window.api.expenses.returnableIssuedCheques(payload).then(r => mapResult(r, rows => rows.map(normalizeIssuedChequeRow))) : Promise.resolve(NO_BRIDGE)
 };
 
 export const draftExpenses = {

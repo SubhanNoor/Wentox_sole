@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatDate } from '@/lib/utils';
 
 interface ReportFooterProps {
   printedBy?: string;
@@ -13,7 +14,7 @@ export const ReportFooter: React.FC<ReportFooterProps> = ({
   showSignatures = true,
   className = '',
 }) => {
-  const printTimeStr = `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+  const printTimeStr = `${formatDate(new Date())} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
 
   return (
     <div className={`report-footer-container mt-6 pt-4 border-t border-slate-200 ${className}`}>

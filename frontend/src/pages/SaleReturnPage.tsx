@@ -7,6 +7,7 @@ import OverallReturnTab from '@/components/OverallReturnTab';
 import FindReturnTab from '@/components/FindReturnTab';
 import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { formatDate } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
@@ -234,15 +235,9 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   const pendingEditRow = useRef<SaleReturnRow | null>(null);
 
   const handleEditSpecificReturn = async (ret: SaleReturnRow) => {
-    if (ret.is_posted) {
-      setPasswordActionType('edit_return');
-      setIsPasswordModalOpen(true);
-      pendingEditRow.current = ret;
-    } else {
-      await loadReturnRow(ret);
-      setMode('edit');
-      setActiveTab('return');
-    }
+    setPasswordActionType('edit_return');
+    setIsPasswordModalOpen(true);
+    pendingEditRow.current = ret;
   };
 
   const handlePrintSpecificReturn = async (ret: SaleReturnRow) => {
@@ -351,7 +346,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   };
 
   const handleSave = () => {
-    if (mode === 'edit' && currentReturnIsPosted) {
+    if (mode === 'edit') {
       setPasswordActionType('save_return');
       setIsPasswordModalOpen(true);
     } else {
@@ -359,14 +354,31 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     }
   };
 
-  const handleSaveAndPost = () => {
-    setPasswordActionType('save_and_post');
-    setIsPasswordModalOpen(true);
+  const handleSaveAndPost = async () => {
+    const saved = await executeSave();
+    if (saved) {
+      const postRes = await api.saleReturns.post(saved.return_id);
+      if (!postRes.ok) {
+        setErrorMsg('Return was saved, but posting failed: ' + postRes.error.message);
+      } else {
+        setCurrentReturnIsPosted(true);
+        setSuccessMsg('Return saved & posted successfully.');
+        setTimeout(() => setSuccessMsg(''), 3000);
+      }
+    }
   };
 
-  const handlePostCurrentReturn = () => {
-    setPasswordActionType('post_return');
-    setIsPasswordModalOpen(true);
+  const handlePostCurrentReturn = async () => {
+    if (returnId != null) {
+      const res = await api.saleReturns.post(returnId);
+      if (!res.ok) {
+        setErrorMsg('Failed to post return: ' + res.error.message);
+      } else {
+        setCurrentReturnIsPosted(true);
+        setSuccessMsg('Return posted successfully.');
+        setTimeout(() => setSuccessMsg(''), 3000);
+      }
+    }
   };
 
   const handleUnpostCurrentReturn = async () => {
@@ -382,12 +394,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   };
 
   const handleEditCurrentReturn = () => {
-    if (currentReturnIsPosted) {
-      setPasswordActionType('edit_return');
-      setIsPasswordModalOpen(true);
-    } else {
-      setMode('edit');
-    }
+    setPasswordActionType('edit_return');
+    setIsPasswordModalOpen(true);
   };
 
   const handlePasswordSuccess = async (password: string) => {
@@ -403,29 +411,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       setTimeout(() => setSuccessMsg(''), 3000);
     } else if (passwordActionType === 'save_return') {
       await executeSave(password);
-    } else if (passwordActionType === 'save_and_post') {
-      const saved = await executeSave();
-      if (saved) {
-        const postRes = await api.saleReturns.post(saved.return_id, password);
-        if (!postRes.ok) {
-          setErrorMsg('Return was saved, but posting failed: ' + postRes.error.message);
-        } else {
-          setCurrentReturnIsPosted(true);
-          setSuccessMsg('Return saved & posted successfully.');
-          setTimeout(() => setSuccessMsg(''), 3000);
-        }
-      }
-    } else if (passwordActionType === 'post_return') {
-      if (returnId != null) {
-        const res = await api.saleReturns.post(returnId, password);
-        if (!res.ok) {
-          setErrorMsg('Failed to post return: ' + res.error.message);
-        } else {
-          setCurrentReturnIsPosted(true);
-          setSuccessMsg('Return posted successfully.');
-          setTimeout(() => setSuccessMsg(''), 3000);
-        }
-      }
     }
     setPasswordActionType(null);
   };
@@ -601,7 +586,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           </div>
           <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Date</label>
-            <span>{date}</span>
+            <span>{formatDate(date)}</span>
           </div>
           <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>TO Store</label>
@@ -705,7 +690,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );
@@ -813,7 +798,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   const custName = customers.find(c => c.customer_id === d.customer_id)?.name || 'Unnamed Customer';
                   return (
                     <option key={d.return_id} value={d.return_id}>
-                      {d.bill_no || 'No Number'} - {custName} ({d.return_date.slice(0, 10)})
+                      {d.bill_no || 'No Number'} - {custName} ({formatDate(d.return_date)})
                     </option>
                   );
                 })}
@@ -968,7 +953,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
-              <input type="date" value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
+              <input type="date"
+            value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
@@ -1106,11 +1092,11 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           <div className="mb-6 rounded-lg border bg-white overflow-visible" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                   <th className="p-3 pl-4" style={{ minWidth: '190px' }}>Returned Article <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 pl-4" style={{ minWidth: '150px' }}>Color <span className="text-red-500 font-bold">*</span></th>
+                  <th className="p-3 pl-4" style={{ width: '130px', minWidth: '110px' }}>Color <span className="text-red-500 font-bold">*</span></th>
                   <th className="p-3 text-center" style={{ width: '80px' }}>Packing</th>
-                  <th className="p-3 text-center" style={{ width: '90px' }}>Stock</th>
+                  <th className="p-3 text-center" style={{ minWidth: '120px' }}>Stock</th>
                   <th className="p-3 text-center" style={{ width: '90px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
                   <th className="p-3 text-center" style={{ width: '90px' }}>Pairs</th>
                   <th className="p-3 text-right" style={{ width: '110px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
@@ -1125,7 +1111,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   const variantOptions = (item.articleId != null ? variantsByArticle[item.articleId] || [] : [])
                     .map(v => ({ value: String(v.variant_id), label: v.color }));
                   return (
-                    <tr key={item.uid} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                    <tr key={item.uid} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                       {/* Article select */}
                       <td className="p-3 pl-4">
                         {isViewMode ? (
@@ -1150,7 +1136,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                             options={variantOptions}
                             value={item.variantId != null ? String(item.variantId) : ''}
                             onChange={val => handleVariantChange(idx, val)}
-                            placeholder={item.articleId != null ? 'Select color...' : 'Select article first'}
+                            placeholder="Color..."
                             searchPlaceholder="Search colors..."
                             disabled={item.articleId == null}
                           />
@@ -1158,7 +1144,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                       </td>
 
                       {/* Packing */}
-                      <td className="p-3 text-center text-sm text-slate-600 font-medium">
+                      <td className="p-3 text-center font-mono text-sm text-slate-600">
                         {item.packing || '-'}
                       </td>
 
@@ -1173,7 +1159,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                           disabled={isViewMode}
                           min={1}
                           onChange={e => updateNumericField(idx, 'cartons', parseInt(e.target.value) || 0)}
-                          className="soleria-input text-center font-medium"
+                          className="soleria-input text-center font-mono"
                           style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
                       </td>
@@ -1191,7 +1177,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                           disabled={isViewMode}
                           min={0}
                           onChange={e => updateNumericField(idx, 'rate', parseInt(e.target.value) || 0)}
-                          className="soleria-input text-right font-medium"
+                          className="soleria-input text-right font-mono"
                           style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
                       </td>
@@ -1205,28 +1191,19 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                           min={0}
                           max={100}
                           onChange={e => updateNumericField(idx, 'discountPercent', parseFloat(e.target.value) || 0)}
-                          className="soleria-input text-center font-medium"
+                          className="soleria-input text-center font-mono"
                           style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
                       </td>
 
-                      {/* Discount Value */}
-                      <td className="p-3">
-                        <input
-                          type="number"
-                          value={item.discountValue || ''}
-                          disabled={isViewMode}
-                          min={0}
-                          onChange={e => updateNumericField(idx, 'discountValue', parseInt(e.target.value) || 0)}
-                          className="soleria-input text-right font-medium"
-                          style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
-                        />
+                      {/* Discount Value — Calculated from Discount % */}
+                      <td className="p-3 text-right font-mono text-xs font-semibold text-slate-700">
+                        {item.discountValue > 0 ? item.discountValue.toLocaleString() : '-'}
                       </td>
 
                       {/* Row Total Value */}
-                      <td className="p-3 text-right font-semibold text-sm">
-                        <span style={{ color: '#B08D57' }}>Rs </span>
-                        <span style={{ color: '#B08D57' }}>{item.value.toLocaleString('en-US')}</span>
+                      <td className="p-3 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>
+                        Rs {item.value.toLocaleString('en-US')}
                       </td>
 
                       {/* Delete Action */}
@@ -1257,9 +1234,9 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           )}
 
           {/* Invoice Summary and Remarks */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4">
             {/* Remarks */}
-            <div className="md:col-span-2 flex flex-col">
+            <div className="flex flex-col">
               <label className="block text-xs font-bold uppercase tracking-wider mb-2 text-slate-500 font-inter">
                 RETURN REASON / REMARKS
               </label>
@@ -1275,41 +1252,41 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
 
             {/* Calculations Box */}
-            <div className="flex flex-col justify-between p-5 rounded-2xl border transition-all bg-[#111c2a] text-white border-slate-800 shadow-lg min-h-[180px]">
-              <div className="text-xs font-bold uppercase tracking-wider border-b pb-2 mb-3 text-slate-400 border-slate-800/80 font-inter">
-                CALCULATIONS
+            <div className="flex flex-col justify-between p-4 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md" style={{ minHeight: '160px' }}>
+              <div className="text-xs font-semibold uppercase tracking-wider border-b pb-1.5 mb-2 text-slate-400 border-slate-800">
+                Calculations
               </div>
               <div className="flex flex-col gap-2 font-inter text-xs">
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400 font-medium">Total Cartons:</span>
-                  <span className="font-semibold font-mono text-sm text-slate-200">{totalCartons}</span>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Total Cartons:</span>
+                  <span className="font-semibold font-mono">{totalCartons}</span>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400 font-medium">Total Pairs:</span>
-                  <span className="font-semibold font-mono text-sm text-slate-200">{totalPairs.toLocaleString('en-US')}</span>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Total Pairs:</span>
+                  <span className="font-semibold font-mono">{totalPairs.toLocaleString('en-US')}</span>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400 font-medium">Gross Total:</span>
-                  <span className="font-semibold font-mono text-sm text-slate-200">Rs {itemsTotalValue.toLocaleString('en-US')}</span>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Gross Total:</span>
+                  <span className="font-semibold font-mono">Rs {itemsTotalValue.toLocaleString('en-US')}</span>
                 </div>
                 <div className="flex justify-between items-center mt-1">
-                  <span className="text-slate-400 font-medium">Inv. Discount:</span>
+                  <span className="text-slate-400">Inv. Discount:</span>
                   {isViewMode ? (
-                    <span className="font-semibold font-mono text-sm text-slate-200">Rs {invoiceDiscount.toLocaleString('en-US')}</span>
+                    <span className="font-semibold font-mono">Rs {invoiceDiscount.toLocaleString('en-US')}</span>
                   ) : (
                     <input
                       type="number"
                       value={invoiceDiscount || ''}
                       onChange={e => setInvoiceDiscount(Math.max(0, parseInt(e.target.value) || 0))}
-                      className="soleria-input text-right font-mono py-1 px-2.5 rounded-lg border bg-slate-800/80 text-white border-slate-700 focus:outline-none focus:border-[var(--brand-gold)] shadow-2xs"
-                      style={{ width: '90px', fontSize: '12px' }}
+                      className="soleria-input text-right font-mono py-0.5 px-2 border focus:ring-amber-500"
+                      style={{ width: '85px', fontSize: '12px', background: '#111c2a', color: '#ffffff', borderColor: '#334155' }}
                     />
                   )}
                 </div>
               </div>
-              <div className="flex justify-between items-center border-t pt-3 mt-3 border-slate-800/80">
-                <span className="font-bold text-[11px] uppercase tracking-wider text-slate-400">TOTAL CREDIT AMOUNT:</span>
-                <span className="text-xl font-bold font-mono text-[var(--brand-gold)]">
+              <div className="flex justify-between items-center border-t pt-2 mt-2 border-[#1e293b]">
+                <span className="font-bold text-[11px] uppercase tracking-wider text-slate-400">Total Credit Amount:</span>
+                <span className="text-xl font-bold font-mono text-[#B08D57] font-extrabold">
                   Rs {finalTotalValue.toLocaleString('en-US')}
                 </span>
               </div>

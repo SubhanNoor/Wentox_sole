@@ -5,15 +5,16 @@ import WeeklyTab from '@/components/WeeklyTab';
 import MonthlyTab from '@/components/MonthlyTab';
 import OverallTab from '@/components/OverallTab';
 import FindTab from '@/components/FindTab';
-import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit } from 'lucide-react';
+import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit, AlertTriangle } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
+import { formatDate } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
-  RegionRow, CityRow, SaleBillRow, SaleBillCreateInput, SaleBillItemInput
+  RegionRow, CityRow, SaleBillRow, SaleBillCreateInput, SaleBillItemInput, StockRow
 } from '@/lib/api';
 
 interface UiItem {
@@ -76,13 +77,15 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   const [regions, setRegions] = useState<RegionRow[]>([]);
   const [cities, setCities] = useState<CityRow[]>([]);
   const [variantsByArticle, setVariantsByArticle] = useState<Record<number, ProductVariantRow[]>>({});
+  const [stockRows, setStockRows] = useState<StockRow[]>([]);
   const [lookupError, setLookupError] = useState('');
 
   useEffect(() => {
     (async () => {
-      const [c, sc, p, st, ad, rg, ct] = await Promise.all([
+      const [c, sc, p, st, ad, rg, ct, stRes] = await Promise.all([
         api.listCustomers(), api.listSubCustomers(), api.listProducts(),
-        api.listStores(), api.listAddas(), api.listRegions(), api.listCities()
+        api.listStores(), api.listAddas(), api.listRegions(), api.listCities(),
+        api.reports.stock()
       ]);
       const failures: string[] = [];
       if (c.ok) setCustomers(c.data); else failures.push(c.error.message);
@@ -92,9 +95,33 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       if (ad.ok) setAddas(ad.data); else failures.push(ad.error.message);
       if (rg.ok) setRegions(rg.data); else failures.push(rg.error.message);
       if (ct.ok) setCities(ct.data); else failures.push(ct.error.message);
+      if (stRes.ok) setStockRows(stRes.data);
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
   }, []);
+
+  const refreshStock = useCallback(async () => {
+    const res = await api.reports.stock();
+    if (res.ok) setStockRows(res.data);
+  }, []);
+
+  const getStockInfo = useCallback((articleId: number | null, variantId: number | null) => {
+    if (!articleId) return null;
+    if (variantId != null) {
+      const s = stockRows.find(r => r.variant_id === variantId);
+      if (s) {
+        return { cartons: s.cartons, pairs: s.total_pairs };
+      }
+      return { cartons: 0, pairs: 0 };
+    }
+    const matching = stockRows.filter(r => r.article_id === articleId);
+    if (matching.length > 0) {
+      const cartons = matching.reduce((sum, r) => sum + r.cartons, 0);
+      const pairs = matching.reduce((sum, r) => sum + r.total_pairs, 0);
+      return { cartons, pairs };
+    }
+    return { cartons: 0, pairs: 0 };
+  }, [stockRows]);
 
   const fetchVariants = useCallback(async (articleId: number) => {
     if (variantsByArticle[articleId]) return variantsByArticle[articleId];
@@ -177,23 +204,50 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       }));
   }, [customers, regions, cities]);
 
-  const addaOptions = useMemo(() => addas.map(ad => ({ value: String(ad.adda_id), label: ad.name })), [addas]);
+  const addaOptions = useMemo(() => [
+    { value: '', label: 'Not set yet (fill in later)' },
+    ...addas.map(ad => ({ value: String(ad.adda_id), label: ad.name })),
+  ], [addas]);
 
   const selectedCustomer = useMemo(() => customers.find(c => c.customer_id === Number(customerId)), [customers, customerId]);
 
   const isCustomDelivery = useMemo(() => deliveryType === 'custom', [deliveryType]);
+
+  const stockExceededRows = useMemo(() => {
+    const requestedByVariant: Record<number, number> = {};
+    items.forEach(it => {
+      if (it.variantId != null && it.cartons > 0) {
+        requestedByVariant[it.variantId] = (requestedByVariant[it.variantId] || 0) + it.cartons;
+      }
+    });
+
+    const exceededMap: Record<string, { available: number; requested: number; itemCartons: number }> = {};
+    items.forEach((it) => {
+      if (it.variantId != null && it.cartons > 0) {
+        const stockInfo = getStockInfo(it.articleId, it.variantId);
+        const available = stockInfo ? stockInfo.cartons : 0;
+        const totalReq = requestedByVariant[it.variantId] || it.cartons;
+        if (totalReq > available) {
+          exceededMap[it.uid] = { available, requested: totalReq, itemCartons: it.cartons };
+        }
+      }
+    });
+    return exceededMap;
+  }, [items, getStockInfo]);
+
+  const hasStockExceeded = useMemo(() => Object.keys(stockExceededRows).length > 0, [stockExceededRows]);
 
   const isNecessaryFieldsFilled = useMemo(() => {
     if (!customerId) return false;
     if (!date) return false;
     if (!storeId) return false;
     if (!billNo) return false;
-    if (!addaId) return false;
     if (items.length === 0) return false;
     if (items.some(it => !it.variantId || it.cartons <= 0 || it.rate <= 0)) return false;
     if (isCustomDelivery && !subCustomerId) return false;
+    if (hasStockExceeded) return false;
     return true;
-  }, [customerId, date, storeId, billNo, addaId, items, isCustomDelivery, subCustomerId]);
+  }, [customerId, date, storeId, billNo, items, isCustomDelivery, subCustomerId, hasStockExceeded]);
 
   const pendingEditRow = useRef<SaleBillRow | null>(null);
 
@@ -221,7 +275,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setBillNo(row.bill_no);
     setGpNo(row.gp_no || '');
     setBiltyNo(row.bilty_no || '');
-    setAddaId(String(row.adda_id));
+    setAddaId(row.adda_id != null ? String(row.adda_id) : '');
     setRemarks(row.remarks || '');
     setDueDate(row.due_date ? row.due_date.slice(0, 10) : '');
     setInvoiceDiscount(row.invoice_discount || 0);
@@ -250,16 +304,10 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   };
 
   const handleEditSpecificBill = async (bill: SaleBillRow) => {
-    if (bill.is_posted) {
-      setPasswordActionType('edit_bill');
-      setIsPasswordModalOpen(true);
-      // stash for the password success handler
-      pendingEditRow.current = bill;
-    } else {
-      await loadBillRow(bill);
-      setMode('edit');
-      setActiveTab('billing');
-    }
+    setPasswordActionType('edit_bill');
+    setIsPasswordModalOpen(true);
+    // stash for the password success handler
+    pendingEditRow.current = bill;
   };
 
   const handlePrintSpecificBill = async (bill: SaleBillRow) => {
@@ -302,7 +350,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setBillNo((Math.floor(Math.random() * 90000) + 10000).toString());
     setGpNo('');
     setBiltyNo('');
-    setAddaId(addas[0] ? String(addas[0].adda_id) : '');
+    setAddaId('');
     setRemarks('');
     setDueDate('');
     setInvoiceDiscount(0);
@@ -315,8 +363,12 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     if (!storeId) { setErrorMsg('Store is required.'); return null; }
     if (!customerId) { setErrorMsg('Customer is required.'); return null; }
     if (!billNo) { setErrorMsg('Bill No. is required.'); return null; }
-    if (!addaId) { setErrorMsg('Transport Adda is required.'); return null; }
     if (items.length === 0) { setErrorMsg('At least one product item is required.'); return null; }
+
+    if (hasStockExceeded) {
+      setErrorMsg('Cannot save bill: Requested cartons exceed current stock in hand.');
+      return null;
+    }
 
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
@@ -347,7 +399,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       bill_no: billNo,
       gp_no: gpNo,
       bilty_no: biltyNo,
-      adda_id: Number(addaId),
+      adda_id: addaId ? Number(addaId) : undefined,
       remarks: remarks || undefined,
       invoice_discount: invoiceDiscount,
       due_date: dueDate || undefined,
@@ -375,11 +427,12 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setMode('view');
     setErrorMsg('');
     refreshDrafts();
+    refreshStock();
     return result.data;
   };
 
   const handleSave = () => {
-    if (mode === 'edit' && currentBillIsPosted) {
+    if (mode === 'edit') {
       setPasswordActionType('save_bill');
       setIsPasswordModalOpen(true);
     } else {
@@ -387,14 +440,31 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     }
   };
 
-  const handleSaveAndPost = () => {
-    setPasswordActionType('save_and_post');
-    setIsPasswordModalOpen(true);
+  const handleSaveAndPost = async () => {
+    const saved = await executeSave();
+    if (saved) {
+      const postRes = await api.saleBills.post(saved.bill_id);
+      if (!postRes.ok) {
+        setErrorMsg('Bill was saved, but posting failed: ' + postRes.error.message);
+      } else {
+        setCurrentBillIsPosted(true);
+        setSuccessMsg('Bill saved & posted successfully.');
+        setTimeout(() => setSuccessMsg(''), 3000);
+      }
+    }
   };
 
-  const handlePostCurrentBill = () => {
-    setPasswordActionType('post_bill');
-    setIsPasswordModalOpen(true);
+  const handlePostCurrentBill = async () => {
+    if (billId != null) {
+      const res = await api.saleBills.post(billId);
+      if (!res.ok) {
+        setErrorMsg('Failed to post bill: ' + res.error.message);
+      } else {
+        setCurrentBillIsPosted(true);
+        setSuccessMsg('Bill posted successfully.');
+        setTimeout(() => setSuccessMsg(''), 3000);
+      }
+    }
   };
 
   const handleUnpostCurrentBill = async () => {
@@ -410,12 +480,8 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   };
 
   const handleEditCurrentBill = () => {
-    if (currentBillIsPosted) {
-      setPasswordActionType('edit_bill');
-      setIsPasswordModalOpen(true);
-    } else {
-      setMode('edit');
-    }
+    setPasswordActionType('edit_bill');
+    setIsPasswordModalOpen(true);
   };
 
   const handlePasswordSuccess = async (password: string) => {
@@ -431,29 +497,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       setTimeout(() => setSuccessMsg(''), 3000);
     } else if (passwordActionType === 'save_bill') {
       await executeSave(password);
-    } else if (passwordActionType === 'save_and_post') {
-      const saved = await executeSave();
-      if (saved) {
-        const postRes = await api.saleBills.post(saved.bill_id, password);
-        if (!postRes.ok) {
-          setErrorMsg('Bill was saved, but posting failed: ' + postRes.error.message);
-        } else {
-          setCurrentBillIsPosted(true);
-          setSuccessMsg('Bill saved & posted successfully.');
-          setTimeout(() => setSuccessMsg(''), 3000);
-        }
-      }
-    } else if (passwordActionType === 'post_bill') {
-      if (billId != null) {
-        const res = await api.saleBills.post(billId, password);
-        if (!res.ok) {
-          setErrorMsg('Failed to post bill: ' + res.error.message);
-        } else {
-          setCurrentBillIsPosted(true);
-          setSuccessMsg('Bill posted successfully.');
-          setTimeout(() => setSuccessMsg(''), 3000);
-        }
-      }
     }
     setPasswordActionType(null);
   };
@@ -643,7 +686,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
           </div>
           <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Date</label>
-            <span>{date}</span>
+            <span>{formatDate(date)}</span>
           </div>
           <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>From Store</label>
@@ -768,7 +811,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );
@@ -876,7 +919,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   const custName = customers.find(c => c.customer_id === d.customer_id)?.name || 'Unnamed Customer';
                   return (
                     <option key={d.bill_id} value={d.bill_id}>
-                      {d.bill_no || 'No Number'} - {custName} ({d.bill_date.slice(0, 10)})
+                      {d.bill_no || 'No Number'} - {custName} ({formatDate(d.bill_date)})
                     </option>
                   );
                 })}
@@ -968,21 +1011,20 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               <>
                 <button
                   onClick={handleSave}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-sm font-inter hover:opacity-90"
-                  style={{
-                    backgroundColor: isNecessaryFieldsFilled ? '#111c2a' : '#e2e8f0',
-                    color: isNecessaryFieldsFilled ? '#B08D57' : '#64748b',
-                    border: isNecessaryFieldsFilled ? '1px solid #B08D57' : '1px solid #cbd5e1',
-                    cursor: 'pointer'
-                  }}
+                  disabled={!isNecessaryFieldsFilled || hasStockExceeded}
+                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-sm font-inter ${
+                    isNecessaryFieldsFilled && !hasStockExceeded
+                      ? 'bg-[#111c2a] text-[#B08D57] border border-[#B08D57] cursor-pointer hover:bg-[#1a293d]'
+                      : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                  }`}
                 >
                   <Save size={16} /> {mode === 'edit' ? 'Update Bill' : 'Save Bill'}
                 </button>
                 {!currentBillIsPosted && (
                   <button
                     onClick={handleSaveAndPost}
-                    disabled={!isNecessaryFieldsFilled}
-                    className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-50"
+                    disabled={!isNecessaryFieldsFilled || hasStockExceeded}
+                    className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Save &amp; Post
                   </button>
@@ -1041,7 +1083,8 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
-              <input type="date" value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
+              <input type="date"
+            value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
@@ -1182,7 +1225,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 )}
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Transport Adda <span className="text-red-500 font-bold">*</span>
+                    Transport Adda
                   </label>
                   <SearchableSelect
                     options={addaOptions}
@@ -1210,15 +1253,31 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
           </div>
 
+          {/* Stock Limit Warning Banner */}
+          {hasStockExceeded && !isViewMode && (
+            <div className="flex items-center justify-between p-3.5 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-semibold mb-4 shadow-sm animate-in fade-in slide-in-from-top-2">
+              <div className="flex items-center gap-2.5">
+                <AlertTriangle size={18} className="text-rose-600 shrink-0" />
+                <div>
+                  <span className="font-bold block text-sm text-rose-900">Stock Limit Exceeded!</span>
+                  <span className="text-rose-700">Requested cartons exceed current stock in hand. Please adjust carton quantities to save or post this bill.</span>
+                </div>
+              </div>
+              <span className="px-2.5 py-1 rounded-lg bg-rose-200 text-rose-900 font-bold text-[11px] uppercase tracking-wider shrink-0">
+                Save Disabled
+              </span>
+            </div>
+          )}
+
           {/* Product Items Table */}
           <div className="mb-6 rounded-lg border bg-white overflow-visible" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                   <th className="p-3 pl-4" style={{ minWidth: '190px' }}>Article <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 pl-4" style={{ minWidth: '150px' }}>Color <span className="text-red-500 font-bold">*</span></th>
+                  <th className="p-3 pl-4" style={{ width: '130px', minWidth: '110px' }}>Color <span className="text-red-500 font-bold">*</span></th>
                   <th className="p-3 text-center" style={{ width: '80px' }}>Packing</th>
-                  <th className="p-3 text-center" style={{ width: '90px' }}>Stock</th>
+                  <th className="p-3 text-center" style={{ minWidth: '120px' }}>Stock in Hand</th>
                   <th className="p-3 text-center" style={{ width: '90px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
                   <th className="p-3 text-center" style={{ width: '90px' }}>Pairs</th>
                   <th className="p-3 text-right" style={{ width: '110px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
@@ -1258,7 +1317,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                             options={variantOptions}
                             value={item.variantId != null ? String(item.variantId) : ''}
                             onChange={val => handleVariantChange(idx, val)}
-                            placeholder={item.articleId != null ? 'Select color...' : 'Select article first'}
+                            placeholder="Color..."
                             searchPlaceholder="Search colors..."
                             disabled={item.articleId == null}
                           />
@@ -1270,8 +1329,24 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                         {item.packing || '-'}
                       </td>
 
-                      {/* Stock — no real-time stock IPC channel exposed yet, see comment above */}
-                      <td className="p-3 text-center font-mono text-xs">—</td>
+                      {/* Stock in Hand — Cartons & Pairs */}
+                      <td className="p-3 text-center font-mono">
+                        {(() => {
+                          const stockInfo = getStockInfo(item.articleId, item.variantId);
+                          if (!stockInfo) return <span className="text-slate-400 text-xs">—</span>;
+                          const hasStock = stockInfo.cartons > 0 || stockInfo.pairs > 0;
+                          return (
+                            <div className="flex flex-col items-center justify-center leading-tight py-0.5" title="Current Stock in Hand">
+                              <span className={`font-bold text-xs ${hasStock ? 'text-slate-800' : 'text-rose-600'}`}>
+                                {stockInfo.cartons} <span className="text-[10px] font-medium text-slate-500 uppercase">Ctn</span>
+                              </span>
+                              <span className={`text-[11px] ${hasStock ? 'text-slate-600 font-semibold' : 'text-rose-400'}`}>
+                                {stockInfo.pairs} <span className="text-[9px] text-slate-400 uppercase">Prs</span>
+                              </span>
+                            </div>
+                          );
+                        })()}
+                      </td>
 
                       {/* Cartons */}
                       <td className="p-3">
@@ -1281,9 +1356,17 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                           disabled={isViewMode}
                           min={1}
                           onChange={e => updateNumericField(idx, 'cartons', parseInt(e.target.value) || 0)}
-                          className="soleria-input text-center font-mono"
-                          style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
+                          className={`soleria-input text-center font-mono ${
+                            stockExceededRows[item.uid] ? 'border-2 border-red-500 bg-rose-50 text-red-700 font-bold focus:ring-2 focus:ring-red-300' : ''
+                          }`}
+                          style={{ fontSize: '13px', border: isViewMode ? (stockExceededRows[item.uid] ? '2 border-red-500' : 'none') : undefined, background: isViewMode ? (stockExceededRows[item.uid] ? '#fef2f2' : 'transparent') : undefined }}
                         />
+                        {stockExceededRows[item.uid] && (
+                          <div className="text-[10px] font-bold text-red-600 mt-1 flex items-center justify-center gap-1 animate-in fade-in" title="Requested cartons exceed available stock in hand">
+                            <AlertTriangle size={12} className="shrink-0 text-red-500" />
+                            <span>Exceeds Stock! (Max: {stockExceededRows[item.uid].available} Ctn)</span>
+                          </div>
+                        )}
                       </td>
 
                       {/* Pairs */}
@@ -1318,17 +1401,9 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                         />
                       </td>
 
-                      {/* Discount Value */}
-                      <td className="p-3">
-                        <input
-                          type="number"
-                          value={item.discountValue || ''}
-                          disabled={isViewMode}
-                          min={0}
-                          onChange={e => updateNumericField(idx, 'discountValue', parseInt(e.target.value) || 0)}
-                          className="soleria-input text-right font-mono"
-                          style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
-                        />
+                      {/* Discount Value — Calculated from Discount % */}
+                      <td className="p-3 text-right font-mono text-xs font-semibold text-slate-700">
+                        {item.discountValue > 0 ? item.discountValue.toLocaleString() : '-'}
                       </td>
 
                       {/* Row Total Value */}
@@ -1378,7 +1453,8 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mt-1">
                 Payment Due Date <span className="text-slate-400 font-normal normal-case">— optional</span>
               </label>
-              <input type="date" value={dueDate} disabled={isViewMode} onChange={e => setDueDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
+              <input type="date"
+            value={dueDate} disabled={isViewMode} onChange={e => setDueDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
               <p className="text-[10px] text-slate-400 -mt-1">
                 Leave blank if this customer has no fixed payment terms — no overdue alert will be generated.
               </p>
@@ -1411,8 +1487,8 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       type="number"
                       value={invoiceDiscount || ''}
                       onChange={e => setInvoiceDiscount(Math.max(0, parseInt(e.target.value) || 0))}
-                      className="soleria-input text-right font-mono py-0.5 px-2 border bg-slate-800 text-white border-slate-700 focus:ring-amber-500"
-                      style={{ width: '85px', fontSize: '12px' }}
+                      className="soleria-input text-right font-mono py-0.5 px-2 border focus:ring-amber-500"
+                      style={{ width: '85px', fontSize: '12px', background: '#111c2a', color: '#ffffff', borderColor: '#334155' }}
                     />
                   )}
                 </div>
@@ -1584,15 +1660,13 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         onSuccess={handlePasswordSuccess}
         title={
           passwordActionType === 'edit_bill'
-            ? 'Authorization Required to Edit Posted Bill'
-            : passwordActionType === 'post_bill'
-              ? 'Authorization Required to Post Bill'
-              : 'Authorization Required to Save Bill Changes'
+            ? 'Authorization Required to Edit Bill'
+            : 'Authorization Required to Update Bill'
         }
         subtitle={
           passwordActionType === 'edit_bill'
-            ? `Please enter password for user '${state.currentUsername || 'user'}' to unlock & edit Bill #${billNo || billId}.`
-            : `Please enter password for user '${state.currentUsername || 'user'}' to confirm changes to Bill #${billNo || billId}.`
+            ? `Please enter password for user '${state.currentUsername || 'user'}' to unlock & edit Bill #${billNo || billId || ''}.`
+            : `Please enter password for user '${state.currentUsername || 'user'}' to save changes to Bill #${billNo || billId || ''}.`
         }
       />
     </AppLayout>

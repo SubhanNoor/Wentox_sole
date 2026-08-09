@@ -3,15 +3,13 @@ import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import type { ProductCosts, CostFieldKey } from '@/types';
 import { COST_FIELDS } from '@/types';
-import { Plus, Trash2, Edit2, Hammer, Settings, Search, ArrowLeft, RotateCcw } from 'lucide-react';
+import { Plus, Trash2, Edit2, Search, ArrowLeft, RotateCcw, Layers } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
+import ProductArticleForm, { emptyArticleValues } from '@/components/ProductArticleForm';
+import type { ArticleFormValues, ArticleFieldErrors } from '@/components/ProductArticleForm';
 import * as api from '@/lib/api';
-import type { ProductRow, CategoryRow, VendorRow } from '@/lib/api';
-
-/** All twelve stage costs at zero — used to reset the form and to read a product in. */
-const emptyCosts = (): ProductCosts =>
-  Object.fromEntries(COST_FIELDS.map(f => [f.key, 0])) as ProductCosts;
+import type { ProductRow, CategoryRow, VendorRow, ProductBatchFieldError } from '@/lib/api';
 
 // The 12 manufacturing-stage cost columns share the same keys on both sides, just cased
 // differently — frontend's CostFieldKey is camelCase, the backend's ProductRow/CreateInput is
@@ -36,6 +34,12 @@ function costsToApiPayload(costs: ProductCosts) {
     shape_form: number; chipkai: number; bottom: number; machine: number; trimming: number;
     sock_stitch: number; finish: number;
   };
+}
+
+/** An article counts as "unsaved work" once the user has typed a name or picked a vendor for it. */
+function articleHasContent(a: ArticleFormValues): boolean {
+  return a.name.trim() !== '' || a.vendorId !== '' || a.color.trim() !== '' ||
+    a.packing > 0 || a.salePrice > 0 || Object.values(a.costs).some(v => v > 0);
 }
 
 export default function ProductSetupPage() {
@@ -71,23 +75,21 @@ export default function ProductSetupPage() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // Selected product for edit — null means "adding new"
+  // Selected product for edit — null means "adding new" (multi-article workflow below)
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [selectedProductCode, setSelectedProductCode] = useState('');
 
-  const [reactivatePrompt, setReactivatePrompt] = useState<{ article_id: number; name: string } | null>(null);
+  const [reactivatePrompt, setReactivatePrompt] = useState<{ article_id: number; name: string; articleIndex?: number } | null>(null);
 
-  // Form State
-  const [name, setName] = useState('');
-  const [color, setColor] = useState('');
-  const [categoryId, setCategoryId] = useState('');
-  const [vendorId, setVendorId] = useState('');
-  const [packing, setPacking] = useState(0);
-  const [salePrice, setSalePrice] = useState(0);
-  const [costs, setCosts] = useState<ProductCosts>(emptyCosts);
+  // --- Single-product edit form state (unchanged behaviour: category editable inline, vendor fixed) ---
+  const [editCategoryId, setEditCategoryId] = useState('');
+  const [editValues, setEditValues] = useState<ArticleFormValues>(emptyArticleValues());
 
-  const setCost = (key: CostFieldKey, value: number) =>
-    setCosts(prev => ({ ...prev, [key]: value }));
+  // --- Multi-article "Add New Product" workflow state ---
+  const [batchCategoryId, setBatchCategoryId] = useState('');
+  const [articles, setArticles] = useState<ArticleFormValues[]>([emptyArticleValues()]);
+  const [articleErrors, setArticleErrors] = useState<Record<number, ArticleFieldErrors>>({});
+  const [pendingCategoryChange, setPendingCategoryChange] = useState<string | null>(null);
 
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -97,13 +99,9 @@ export default function ProductSetupPage() {
   const handleAddNew = () => {
     setSelectedProductId(null);
     setSelectedProductCode('');
-    setName('');
-    setColor('');
-    setCategoryId('');
-    setVendorId('');
-    setPacking(0);
-    setSalePrice(0);
-    setCosts(emptyCosts());
+    setBatchCategoryId('');
+    setArticles([emptyArticleValues()]);
+    setArticleErrors({});
     setErrorMsg('');
     handleSwitchTab('form');
   };
@@ -111,61 +109,155 @@ export default function ProductSetupPage() {
   const handleSelectProduct = (prod: ProductRow) => {
     setSelectedProductId(prod.article_id);
     setSelectedProductCode(prod.code);
-    setName(prod.name);
-    setColor('');
-    setCategoryId(String(prod.category_id));
-    setVendorId(String(prod.vendor_id));
-    setPacking(prod.packing || 0);
-    setSalePrice(prod.sale_price || 0);
-    setCosts(costsFromRow(prod));
+    setEditCategoryId(String(prod.category_id));
+    setEditValues({
+      name: prod.name,
+      color: '',
+      vendorId: String(prod.vendor_id),
+      packing: prod.packing || 0,
+      salePrice: prod.sale_price || 0,
+      costs: costsFromRow(prod),
+    });
     setErrorMsg('');
     handleSwitchTab('form');
     // Prefill the color field from the article's own existing variant, if any — reflects today's
     // one-color-per-product UX without needing a full colors list UI.
     api.productColors.listByArticle(prod.article_id).then(r => {
-      if (r.ok && r.data.length > 0) setColor(r.data[0].color);
+      if (r.ok && r.data.length > 0) setEditValues(prev => ({ ...prev, color: r.data[0].color }));
     });
   };
 
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    const typedName = name.trim();
+    const typedName = editValues.name.trim();
     if (!typedName) return fail('Product Article Name is required.');
-    if (!categoryId) return fail('Category is required. Please select a category.');
-    if (!vendorId) return fail('Vendor Partner is required. Please select a vendor partner.');
-    if (!packing || packing <= 0) return fail('Packing (pairs/carton) must be greater than 0.');
+    if (!editCategoryId) return fail('Category is required. Please select a category.');
+    if (!editValues.vendorId) return fail('Vendor Partner is required. Please select a vendor partner.');
+    if (!editValues.packing || editValues.packing <= 0) return fail('Packing (pairs/carton) must be greater than 0.');
 
-    const costFields = costsToApiPayload(costs);
+    const costFields = costsToApiPayload(editValues.costs);
 
-    let articleId: number;
-    if (selectedProductId) {
-      const res = await api.products.update(selectedProductId, {
-        name: typedName, category_id: Number(categoryId), packing, sale_price: salePrice, ...costFields,
-      });
-      if (!res.ok) return fail(res.error.message);
-      articleId = res.data.article_id;
-      flash('Product details updated successfully.');
-    } else {
-      const res = await api.products.create({
-        name: typedName, category_id: Number(categoryId), vendor_id: Number(vendorId), packing, sale_price: salePrice, ...costFields,
-      });
-      if (!res.ok) {
-        if (res.error.code === 'INACTIVE_DUPLICATE' && res.error.details) {
-          setReactivatePrompt(res.error.details as { article_id: number; name: string });
-          return;
-        }
-        return fail(res.error.message);
-      }
-      articleId = res.data.article_id;
-      flash('New product article registered successfully.');
-    }
+    const res = await api.products.update(selectedProductId!, {
+      name: typedName, category_id: Number(editCategoryId), packing: editValues.packing,
+      sale_price: editValues.salePrice, ...costFields,
+    });
+    if (!res.ok) return fail(res.error.message);
+    const articleId = res.data.article_id;
+    flash('Product details updated successfully.');
 
-    if (color.trim()) {
-      await api.productColors.resolveOrCreate({ article_id: articleId, color: color.trim(), packing });
+    if (editValues.color.trim()) {
+      await api.productColors.resolveOrCreate({ article_id: articleId, color: editValues.color.trim(), packing: editValues.packing });
     }
 
     setSelectedProductId(null);
     setErrorMsg('');
+    handleSwitchTab('list');
+    loadAll();
+  };
+
+  // --- Multi-article helpers ---
+
+  const updateArticle = (idx: number, patch: Partial<ArticleFormValues>) => {
+    setArticles(prev => prev.map((a, i) => (i === idx ? { ...a, ...patch } : a)));
+  };
+
+  const addArticle = () => setArticles(prev => [...prev, emptyArticleValues()]);
+
+  const removeArticle = (idx: number) => {
+    setArticles(prev => prev.filter((_, i) => i !== idx));
+    setArticleErrors(prev => {
+      const next: Record<number, ArticleFieldErrors> = {};
+      Object.entries(prev).forEach(([key, val]) => {
+        const i = Number(key);
+        if (i < idx) next[i] = val;
+        else if (i > idx) next[i - 1] = val;
+      });
+      return next;
+    });
+  };
+
+  const handleCategoryChange = (newVal: string) => {
+    if (newVal === batchCategoryId) return;
+    const hasUnsaved = articles.some(articleHasContent);
+    if (hasUnsaved) {
+      setPendingCategoryChange(newVal);
+      return;
+    }
+    setBatchCategoryId(newVal);
+  };
+
+  const confirmCategoryChange = () => {
+    if (pendingCategoryChange === null) return;
+    setBatchCategoryId(pendingCategoryChange);
+    setArticles([emptyArticleValues()]);
+    setArticleErrors({});
+    setPendingCategoryChange(null);
+  };
+
+  const validateArticles = (): boolean => {
+    const errs: Record<number, ArticleFieldErrors> = {};
+    articles.forEach((a, i) => {
+      const e: ArticleFieldErrors = {};
+      if (!a.name.trim()) e.name = 'Article name is required.';
+      if (!a.vendorId) e.vendorId = 'Vendor is required.';
+      if (!a.packing || a.packing <= 0) e.packing = 'Must be greater than 0.';
+      if (Object.keys(e).length) errs[i] = e;
+    });
+    setArticleErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
+
+  const applyServerFieldErrors = (errors: ProductBatchFieldError[]) => {
+    const errs: Record<number, ArticleFieldErrors> = {};
+    errors.forEach(fe => { errs[fe.index] = { name: fe.message }; });
+    setArticleErrors(errs);
+  };
+
+  const handleSaveAll = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!batchCategoryId) return fail('Category is required. Please select a category.');
+    if (!validateArticles()) return fail('Please fix the highlighted fields before saving.');
+
+    const res = await api.products.createBatch({
+      category_id: Number(batchCategoryId),
+      articles: articles.map(a => ({
+        name: a.name.trim(),
+        vendor_id: Number(a.vendorId),
+        packing: a.packing,
+        sale_price: a.salePrice,
+        ...costsToApiPayload(a.costs),
+      })),
+    });
+
+    if (!res.ok) {
+      const details = res.error.details as { index?: number; article_id?: number; name?: string; errors?: ProductBatchFieldError[] } | undefined;
+      if (res.error.code === 'BATCH_VALIDATION_FAILED' && details?.errors) {
+        applyServerFieldErrors(details.errors);
+        return fail('Please fix the highlighted articles.');
+      }
+      if (res.error.code === 'INACTIVE_DUPLICATE' && details?.article_id != null && details?.name) {
+        setReactivatePrompt({ article_id: details.article_id, name: details.name, articleIndex: details.index });
+        return;
+      }
+      if (details?.index != null) {
+        setArticleErrors({ [details.index]: { name: res.error.message } });
+        return fail(res.error.message);
+      }
+      return fail(res.error.message);
+    }
+
+    // Resolve each article's color the same way the single-product flow does, matched by order —
+    // createBatch()/service returns rows in the same order the articles were submitted in.
+    await Promise.all(res.data.map((row, i) => {
+      const color = articles[i]?.color.trim();
+      if (!color) return Promise.resolve();
+      return api.productColors.resolveOrCreate({ article_id: row.article_id, color, packing: row.packing });
+    }));
+
+    flash(`${res.data.length} product article${res.data.length > 1 ? 's' : ''} registered successfully.`);
+    setBatchCategoryId('');
+    setArticles([emptyArticleValues()]);
+    setArticleErrors({});
     handleSwitchTab('list');
     loadAll();
   };
@@ -173,12 +265,17 @@ export default function ProductSetupPage() {
   const confirmReactivateFromPrompt = async () => {
     if (!reactivatePrompt) return;
     const res = await api.products.reactivate(reactivatePrompt.article_id);
+    const wasBatchMode = selectedProductId === null;
     setReactivatePrompt(null);
     if (!res.ok) return fail('Failed to reactivate: ' + res.error.message);
     flash('Existing product reactivated.');
-    setSelectedProductId(null);
-    handleSwitchTab('list');
     loadAll();
+    if (!wasBatchMode) {
+      setSelectedProductId(null);
+      handleSwitchTab('list');
+    }
+    // In batch mode, stay on the form — the rest of the in-progress articles are preserved so the
+    // user can remove the colliding one and press Save All again.
   };
 
   const [deletingProduct, setDeletingProduct] = useState<ProductRow | null>(null);
@@ -203,6 +300,9 @@ export default function ProductSetupPage() {
       (prod.vendor_name || '').toLowerCase().includes(q)
     );
   }, [productList, productSearch]);
+
+  const isEditing = selectedProductId !== null;
+  const selectedCategoryLabel = categoryList.find(c => String(c.category_id) === batchCategoryId)?.name;
 
   return (
     <AppLayout pageTitle="Product Detail Info Setup">
@@ -324,19 +424,12 @@ export default function ProductSetupPage() {
                     >
                       <Edit2 size={15} />
                     </button>
-                    <button
-                      onClick={() => setDeletingProduct(prod)}
-                      className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                      title="Delete Product"
-                    >
-                      <Trash2 size={15} />
-                    </button>
                   </>
                 )}
               />
             </div>
-          ) : (
-            /* View 2: Add New / Edit Product Form */
+          ) : isEditing ? (
+            /* View 2a: Edit Existing Product — unchanged single-product form */
             <div className="card-white p-6 md:p-8 bg-white border">
               <div className="flex items-center gap-2 border-b pb-3 mb-6">
                 <button
@@ -350,49 +443,31 @@ export default function ProductSetupPage() {
                 </button>
                 <div>
                   <h3 className="font-lora font-semibold text-lg text-slate-800">
-                    {selectedProductId ? `Edit Product: ${name}` : 'Register New Product'}
+                    Edit Product: {editValues.name}
                   </h3>
-                  <p className="text-xs text-slate-500 font-medium">Fill in the fields below to update or register product specifications and pricing breakdown.</p>
+                  <p className="text-xs text-slate-500 font-medium">Fill in the fields below to update product specifications and pricing breakdown.</p>
                 </div>
               </div>
 
               <form onSubmit={handleSaveProduct} className="flex flex-col gap-6">
-
-                {/* Basic Details */}
-                <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-4" style={{ borderColor: 'var(--border-color)' }}>
-                  <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
-                    <Settings size={15} className="text-[#B08D57]" /> Basic Product Details
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <ProductArticleForm
+                  values={editValues}
+                  onChange={patch => setEditValues(prev => ({ ...prev, ...patch }))}
+                  vendorList={vendorList}
+                  vendorLocked
+                  vendorLockedLabel={vendorList.find(v => String(v.vendor_id) === editValues.vendorId)?.name || '—'}
+                  leadingSlot={
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Product / Article Code</label>
                       <input
                         type="text"
-                        value={selectedProductCode || '(auto-generated on save)'}
+                        value={selectedProductCode}
                         disabled
                         className="soleria-input font-semibold bg-slate-100 text-slate-500 cursor-not-allowed"
                       />
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Product Article Name</label>
-                      <input
-                        type="text"
-                        value={name}
-                        onChange={e => setName(e.target.value)}
-                        placeholder="e.g. F-751 Leather Sole"
-                        className="soleria-input font-semibold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Color</label>
-                      <input
-                        type="text"
-                        value={color}
-                        onChange={e => setColor(e.target.value)}
-                        placeholder="e.g. Black, White, Tan"
-                        className="soleria-input font-semibold"
-                      />
-                    </div>
+                  }
+                  categorySlot={
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Category</label>
                       <SearchableSelect
@@ -400,77 +475,14 @@ export default function ProductSetupPage() {
                           { value: '', label: 'Select Category...' },
                           ...categoryList.map(c => ({ value: String(c.category_id), label: c.name }))
                         ]}
-                        value={categoryId}
-                        onChange={setCategoryId}
+                        value={editCategoryId}
+                        onChange={setEditCategoryId}
                         placeholder="Select Category..."
                       />
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Vendor Partner</label>
-                      {selectedProductId ? (
-                        <div className="soleria-input bg-slate-100 text-slate-500 font-semibold flex items-center">
-                          {vendorList.find(v => String(v.vendor_id) === vendorId)?.name || '—'}
-                          <span className="ml-2 text-[10px] text-slate-400 normal-case font-normal">(fixed after creation)</span>
-                        </div>
-                      ) : (
-                        <SearchableSelect
-                          options={[
-                            { value: '', label: 'Select Vendor...' },
-                            ...vendorList.map(v => ({ value: String(v.vendor_id), label: v.name }))
-                          ]}
-                          value={vendorId}
-                          onChange={setVendorId}
-                          placeholder="Select Vendor..."
-                        />
-                      )}
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Packing (Pairs/Carton)</label>
-                      <input
-                        type="number"
-                        value={packing === 0 ? '' : packing}
-                        placeholder="0"
-                        onChange={e => setPacking(e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
-                        className="soleria-input font-semibold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Sale Price (Rs)</label>
-                      <input
-                        type="number"
-                        value={salePrice === 0 ? '' : salePrice}
-                        placeholder="0"
-                        onChange={e => setSalePrice(e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
-                        className="soleria-input font-semibold text-slate-800"
-                      />
-                      <p className="text-[10px] text-slate-400 mt-0.5">Used as the default rate when this article is sold</p>
-                    </div>
-                  </div>
-                </div>
+                  }
+                />
 
-                {/* Manufacturing Breakdown */}
-                <div className="p-4 bg-slate-50 rounded-xl border flex flex-col gap-4" style={{ borderColor: 'var(--border-color)' }}>
-                  <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
-                    <Hammer size={15} className="text-[#B08D57]" /> Production / Manufacturing Cost Breakdown (PKR)
-                  </div>
-
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    {COST_FIELDS.map(field => (
-                      <div key={field.key}>
-                        <label className="block text-xs text-slate-600 mb-0.5">{field.label}</label>
-                        <input
-                          type="number"
-                          value={costs[field.key] === 0 ? '' : costs[field.key]}
-                          placeholder="0"
-                          onChange={e => setCost(field.key, e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
-                          className="soleria-input text-xs font-semibold"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Form Buttons */}
                 <div className="flex gap-3 justify-end border-t pt-4">
                   <button
                     type="button"
@@ -482,17 +494,133 @@ export default function ProductSetupPage() {
                   >
                     Cancel
                   </button>
+                  <button type="submit" className="btn-gold px-6 py-2 cursor-pointer">
+                    Save Product Details
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : (
+            /* View 2b: Add New — multi-article entry workflow */
+            <div className="card-white p-6 md:p-8 bg-white border">
+              <div className="flex items-center gap-2 border-b pb-3 mb-6">
+                <button
+                  onClick={() => handleSwitchTab('list')}
+                  className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+                >
+                  <ArrowLeft size={16} />
+                </button>
+                <div>
+                  <h3 className="font-lora font-semibold text-lg text-slate-800">Register New Products</h3>
+                  <p className="text-xs text-slate-500 font-medium">Pick a category once, then add as many articles under it as you need.</p>
+                </div>
+              </div>
+
+              <form onSubmit={handleSaveAll} className="flex flex-col gap-6">
+                {/* Category — fixed at the top, applies to every article below */}
+                <div className="p-4 rounded-xl border-2 flex flex-col sm:flex-row sm:items-end gap-4" style={{ borderColor: 'var(--brand-gold)', background: 'linear-gradient(180deg, #fbf7f0 0%, #ffffff 100%)' }}>
+                  <div className="flex-1">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Category</label>
+                    <SearchableSelect
+                      options={[
+                        { value: '', label: 'Select Category...' },
+                        ...categoryList.map(c => ({ value: String(c.category_id), label: c.name }))
+                      ]}
+                      value={batchCategoryId}
+                      onChange={handleCategoryChange}
+                      placeholder="Select Category..."
+                    />
+                  </div>
+                  {batchCategoryId && (
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--brand-navy)] bg-white border border-[var(--brand-gold)]/50 rounded-lg px-3 py-2 whitespace-nowrap">
+                      <Layers size={14} className="text-[#B08D57]" />
+                      {articles.length} article{articles.length > 1 ? 's' : ''} in this batch
+                    </div>
+                  )}
+                </div>
+
+                {!batchCategoryId ? (
+                  <div className="text-center py-12 text-sm text-slate-400 font-medium border-2 border-dashed rounded-xl" style={{ borderColor: 'var(--border-color)' }}>
+                    Select a category above to start adding product articles.
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    <div className="text-xs font-bold text-slate-700 uppercase tracking-wider border-b pb-2">
+                      Articles under <span className="text-[var(--brand-navy)]">{selectedCategoryLabel}</span>
+                    </div>
+
+                    {articles.map((article, idx) => (
+                      <div key={idx} className="rounded-xl border-2 border-slate-200 overflow-hidden">
+                        <div className="flex items-center justify-between px-4 py-2.5 bg-[#111c2a]">
+                          <span className="text-xs font-bold text-[#B08D57] uppercase tracking-wider">Article {idx + 1}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeArticle(idx)}
+                            disabled={articles.length <= 1}
+                            title="Remove this article"
+                            className="p-1 rounded-md text-slate-300 hover:text-rose-400 hover:bg-white/10 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                        <div className="p-4">
+                          <ProductArticleForm
+                            values={article}
+                            onChange={patch => updateArticle(idx, patch)}
+                            vendorList={vendorList}
+                            errors={articleErrors[idx]}
+                          />
+                        </div>
+                      </div>
+                    ))}
+
+                    <button
+                      type="button"
+                      onClick={addArticle}
+                      className="btn-dashed flex items-center justify-center gap-1.5 py-3 cursor-pointer"
+                    >
+                      <Plus size={15} /> Add New Article
+                    </button>
+                  </div>
+                )}
+
+                <div className="flex gap-3 justify-end border-t pt-4">
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchTab('list')}
+                    className="btn-outline px-5 py-2 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
                   <button
                     type="submit"
-                    className="btn-gold px-6 py-2 cursor-pointer"
+                    disabled={!batchCategoryId}
+                    className="btn-gold px-6 py-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    Save Product Details
+                    Save All{batchCategoryId ? ` (${articles.length})` : ''}
                   </button>
                 </div>
               </form>
             </div>
           )}
         </div>
+
+        {/* Confirm category change when unsaved articles exist */}
+        {pendingCategoryChange !== null && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setPendingCategoryChange(null)}>
+            <div className="bg-white rounded-2xl border-2 border-amber-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+              <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Unsaved Articles</h3>
+              <p className="text-xs text-slate-600 mb-4">
+                You have unsaved articles under the current category. Changing the category will
+                clear these entries. Continue?
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={() => setPendingCategoryChange(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
+                <button onClick={confirmCategoryChange} className="px-4 py-2 text-xs font-semibold cursor-pointer rounded-lg bg-rose-600 text-white hover:bg-rose-700">Change Category</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Reactivate-inactive-duplicate prompt */}
         {reactivatePrompt && (

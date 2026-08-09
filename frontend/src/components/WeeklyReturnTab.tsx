@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { SaleReturnRow, CustomerRow, SubCustomerRow, CityRow } from '@/lib/api';
+import { formatDate } from '@/lib/utils';
 import { Calendar, Search, ArrowRight, ArrowLeft, FileText, Edit2, Printer, ChevronDown, Check } from 'lucide-react';
 
 interface WeeklyReturnTabProps {
@@ -185,7 +186,7 @@ export default function WeeklyReturnTab({ onEditReturn, onPrintReturn }: WeeklyR
 
                   return (
                     <tr key={ret.return_id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="p-3.5 pl-4 font-mono text-slate-600">{ret.return_date.slice(0, 10)}</td>
+                      <td className="p-3.5 pl-4 font-mono text-slate-600">{formatDate(ret.return_date)}</td>
                       <td className="p-3.5 text-center">
                         <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
                           {ret.return_id}

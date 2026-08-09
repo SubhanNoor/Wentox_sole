@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Search, Edit2, RefreshCw, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
+import { formatDate } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { SaleBillRow, AddaRow } from '@/lib/api';
@@ -95,7 +96,7 @@ export default function BiltyUpdatePage() {
   const handleExportExcel = () => {
     const headers = ['Invoice Date', 'Inv. No (Sys)', 'Manual No.', 'Customer Name', 'Sub Customer Name', 'Bilty No.', 'Transport Adda', 'Adda Code'];
     const rows = filteredInvoices.map(bill => [
-      bill.bill_date, bill.bill_id, bill.bill_no,
+      formatDate(bill.bill_date), bill.bill_id, bill.bill_no,
       bill.customer_name || '-',
       bill.sub_customer_name || 'SAME (Direct)',
       bill.bilty_no || '-',
@@ -151,10 +152,10 @@ export default function BiltyUpdatePage() {
         <div style={{ textAlign: 'right' }}>
           <h2 style={{ margin: 0, fontSize: '19px', fontWeight: 'bold' }}>BILTY &amp; ADDA UPDATION REPORT</h2>
           <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#444' }}>
-            Period: {startDate || 'All'} — {endDate || 'All'}
+            Period: {startDate ? formatDate(startDate) : 'All'} — {endDate ? formatDate(endDate) : 'All'}
           </p>
           <p style={{ margin: '3px 0 0', fontSize: '11px', color: '#555' }}>
-            Date of Print: {new Date().toLocaleDateString()}
+            Date of Print: {formatDate(new Date())}
           </p>
           <p style={{ margin: '4px 0 0', fontSize: '11px', fontWeight: 'bold' }}>
             Total Records: {filteredInvoices.length} &nbsp;|&nbsp;
@@ -203,7 +204,7 @@ export default function BiltyUpdatePage() {
             const rowBg = missingB || missingA ? '#fff8f0' : (idx % 2 === 0 ? '#ffffff' : '#fafafa');
             return (
               <tr key={bill.bill_id} style={{ backgroundColor: rowBg }}>
-                <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace' }}>{bill.bill_date}</td>
+                <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace' }}>{formatDate(bill.bill_date)}</td>
                 <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', textAlign: 'center' }}>{bill.bill_id}</td>
                 <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', textAlign: 'center', fontWeight: 'bold' }}>{bill.bill_no}</td>
                 <td style={{ border: '1px solid #000', padding: '4px 7px', fontWeight: 'bold' }}>{bill.customer_name || '-'}</td>
@@ -254,7 +255,7 @@ export default function BiltyUpdatePage() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
         <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-        <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
       </div>
     </div>
   );
@@ -350,11 +351,13 @@ export default function BiltyUpdatePage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">Start Date</label>
-                <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="soleria-input py-1.5" />
+                <input type="date"
+            value={startDate} onChange={e => setStartDate(e.target.value)} className="soleria-input py-1.5" />
               </div>
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">End Date</label>
-                <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="soleria-input py-1.5" />
+                <input type="date"
+            value={endDate} onChange={e => setEndDate(e.target.value)} className="soleria-input py-1.5" />
               </div>
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">Bill Number</label>
@@ -488,7 +491,7 @@ export default function BiltyUpdatePage() {
                       className={`border-b text-sm transition-colors ${isSelected ? 'bg-amber-50/70 hover:bg-amber-50' : 'hover:bg-slate-50/50'}`}
                       style={{ borderColor: 'var(--border-table)' }}
                     >
-                      <td className="p-3 pl-4 font-mono">{bill.bill_date}</td>
+                      <td className="p-3 pl-4 font-mono">{formatDate(bill.bill_date)}</td>
                       <td className="p-3 text-center font-mono">{bill.bill_id}</td>
                       <td className="p-3 text-center font-mono font-semibold">{bill.bill_no}</td>
                       <td className="p-3 font-semibold text-slate-700">{bill.customer_name || '-'}</td>

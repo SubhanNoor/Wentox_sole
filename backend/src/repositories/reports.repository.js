@@ -230,8 +230,9 @@ async function netBalance({ ba_id, ac_id, up_to_date, exclusive = false }) {
 }
 
 // UC-31/32 Sale Analysis & Sale Report share one grouped aggregation — one row per customer,
-// joined to region for the Region Wise grouping (done in the service, not here: this always
-// returns per-customer rows, the service rolls them into region buckets when asked).
+// joined to region AND city so the frontend can group/sort by either or both (Region Wise, City
+// Wise, Region + City Wise) — bucketing itself happens client-side, this always returns flat
+// per-customer rows. LEFT JOIN on cities since customers.city_id is nullable.
 async function saleAggregateByCustomer(filters = {}) {
   const params = {};
   const billDate = [];
@@ -257,11 +258,13 @@ async function saleAggregateByCustomer(filters = {}) {
   const result = await query(
     `SELECT
        c.customer_id, c.name AS customer_name, c.region_id, r.name AS region_name,
+       c.city_id, ci.name AS city_name,
        ISNULL(sb.total_sales, 0) AS total_sales, ISNULL(sb.total_cartons, 0) AS total_cartons,
        ISNULL(sr.total_returns, 0) AS total_returns,
        ISNULL(rc.total_payment, 0) AS total_payment, ISNULL(rc.total_commission, 0) AS total_commission
      FROM dbo.customers c
      JOIN dbo.regions r ON r.region_id = c.region_id
+     LEFT JOIN dbo.cities ci ON ci.city_id = c.city_id
      LEFT JOIN (
        SELECT customer_id, SUM(net_value) AS total_sales, SUM(total_cartons) AS total_cartons
        FROM dbo.sale_bills ${billWhere} GROUP BY customer_id
@@ -276,7 +279,7 @@ async function saleAggregateByCustomer(filters = {}) {
        GROUP BY customer_id
      ) rc ON rc.customer_id = c.customer_id
      WHERE sb.total_sales IS NOT NULL OR sr.total_returns IS NOT NULL OR rc.total_payment IS NOT NULL
-     ORDER BY r.name, c.name`,
+     ORDER BY r.name, ci.name, c.name`,
     params,
   );
   return result.recordset;

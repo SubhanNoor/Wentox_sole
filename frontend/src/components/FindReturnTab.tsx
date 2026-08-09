@@ -4,7 +4,7 @@ import * as api from '@/lib/api';
 import type { SaleReturnRow, SaleReturnItemRow, CustomerRow, SubCustomerRow, ProductRow } from '@/lib/api';
 import { Search, Printer, Calendar, FileText, User, Edit2, Package, Layers, RotateCcw, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
@@ -124,7 +124,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
     const headers = ['Date', 'Sys ID', 'Return No.', 'Customer', 'Cartons', 'Pairs', 'Total Value', 'Status'];
     const rows = filteredReturns.map(ret => {
       const cust = customers.find(c => c.customer_id === ret.customer_id);
-      return [ret.return_date.slice(0, 10), ret.return_id, ret.bill_no, cust?.name || '-', ret.total_cartons, ret.total_pairs, ret.net_value, ret.is_posted ? 'Posted' : 'Unposted'];
+      return [formatDate(ret.return_date), ret.return_id, ret.bill_no, cust?.name || '-', ret.total_cartons, ret.total_pairs, ret.net_value, ret.is_posted ? 'Posted' : 'Unposted'];
     });
     exportRowsToExcel('sale-returns-search', headers, rows);
   };
@@ -146,10 +146,10 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
         <div style={{ textAlign: 'right' }}>
           <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>SALE RETURNS DIRECTORY</h2>
           <p style={{ margin: '6px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>
-            Period: {fromDate || 'Start'} to {toDate || 'End'}
+            Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}
           </p>
           <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
-            Date of Print: {new Date().toLocaleDateString()}
+            Date of Print: {formatDate(new Date())}
           </p>
           {(customerQuery || returnNoQuery || biltyNoQuery || gpNoQuery || subCustomerQuery) && (
             <div style={{ marginTop: '6px', fontSize: '10.5px', color: '#444444' }}>
@@ -193,7 +193,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
 
               return (
                 <tr key={ret.return_id}>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{ret.return_date.slice(0, 10)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{formatDate(ret.return_date)}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontFamily: 'monospace' }}>{ret.return_id}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontWeight: 'bold', fontFamily: 'monospace' }}>{ret.bill_no}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{cust?.name || 'Walk-in'}</td>
@@ -235,7 +235,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
         <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-        <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
       </div>
     </div>
   );
@@ -269,13 +269,15 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
                 <Calendar size={12} /> From Date
               </label>
-              <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input text-xs" />
+              <input type="date"
+            value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input text-xs" />
             </div>
             <div>
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
                 <Calendar size={12} /> To Date
               </label>
-              <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input text-xs" />
+              <input type="date"
+            value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input text-xs" />
             </div>
             <div>
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
@@ -416,7 +418,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
                         key={ret.return_id}
                         className="hover:bg-slate-50/50 transition-colors"
                       >
-                        <td className="p-3.5 pl-4 font-mono text-slate-600 whitespace-nowrap">{ret.return_date.slice(0, 10)}</td>
+                        <td className="p-3.5 pl-4 font-mono text-slate-600 whitespace-nowrap">{formatDate(ret.return_date)}</td>
                         <td className="p-3.5 text-center">
                           <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
                             {ret.return_id}

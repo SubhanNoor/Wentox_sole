@@ -4,6 +4,7 @@ const repository = require('../repositories/products.repository');
 const categoriesService = require('./categories.service');
 const vendorsService = require('./vendors.service');
 const ApiError = require('../errors/ApiError');
+const { withTransaction } = require('../db/pool');
 
 function validate(payload) {
   if (!payload.name || !payload.name.trim()) throw ApiError.badRequest('name is required');
@@ -54,10 +55,95 @@ async function create(payload) {
     );
   }
 
-  const code = await repository.nextCode();
-  const batchNo = await repository.nextBatchNo(payload.vendor_id);
-  const id = await repository.insert({ ...payload, name, code, batch_no: batchNo });
+  const id = await withTransaction(async (transaction) => {
+    const code = await repository.nextCode(transaction);
+    const batchNo = await repository.nextBatchNo(transaction, payload.vendor_id);
+    return repository.insert(transaction, { ...payload, name, code, batch_no: batchNo });
+  });
   return repository.findById(id);
+}
+
+// UC-07 "multi-article entry": one category selected once, several articles registered under it
+// in a single save. Same rules as create() per article (name/packing/vendor validation, category
+// existence, name+vendor duplicate check — including duplicates *within* the batch itself, since
+// two rows for the same vendor+name in one submission would otherwise both pass the DB-lookup
+// check and collide on insert). Validates every article before writing any of them, so a bad row
+// doesn't leave a partial batch committed; codes/batch_nos are drawn inside one transaction so
+// concurrent rows in the same batch never race each other for the same number (see
+// products.repository.js#nextCode/#nextBatchNo).
+async function createBatch(payload) {
+  const categoryId = payload.category_id;
+  if (!categoryId) throw ApiError.badRequest('category_id is required');
+  const articles = payload.articles;
+  if (!Array.isArray(articles) || articles.length === 0) {
+    throw ApiError.badRequest('articles must be a non-empty array');
+  }
+
+  await categoriesService.getById(categoryId);
+
+  const fieldErrors = [];
+  articles.forEach((article, index) => {
+    try {
+      validate({ ...article, category_id: categoryId });
+      validateVendor(article);
+    } catch (err) {
+      fieldErrors.push({ index, message: err.message });
+    }
+  });
+  if (fieldErrors.length) {
+    throw ApiError.badRequest('One or more articles are invalid', 'BATCH_VALIDATION_FAILED', { errors: fieldErrors });
+  }
+
+  const vendorIds = [...new Set(articles.map((a) => a.vendor_id))];
+  for (const vendorId of vendorIds) {
+    await vendorsService.getById(vendorId); // 404s if any referenced vendor doesn't exist
+  }
+
+  const seenInBatch = new Set();
+  const names = articles.map((a) => a.name.trim());
+  for (let index = 0; index < articles.length; index += 1) {
+    const name = names[index];
+    const key = `${name.toLowerCase()}::${articles[index].vendor_id}`;
+    if (seenInBatch.has(key)) {
+      throw ApiError.conflict(
+        `Duplicate article "${name}" for the same vendor within this batch`,
+        'BATCH_DUPLICATE_IN_REQUEST',
+        { index },
+      );
+    }
+    seenInBatch.add(key);
+
+    const existing = await repository.findByNameAndVendor(name, articles[index].vendor_id);
+    if (existing) {
+      if (existing.is_active) {
+        throw ApiError.conflict('A product with this name already exists for this vendor', 'DUPLICATE_NAME', { index });
+      }
+      throw ApiError.conflict(
+        'An inactive product with this name already exists for this vendor',
+        'INACTIVE_DUPLICATE',
+        { index, article_id: existing.article_id, name: existing.name },
+      );
+    }
+  }
+
+  const ids = await withTransaction(async (transaction) => {
+    const inserted = [];
+    for (let index = 0; index < articles.length; index += 1) {
+      const code = await repository.nextCode(transaction);
+      const batchNo = await repository.nextBatchNo(transaction, articles[index].vendor_id);
+      const id = await repository.insert(transaction, {
+        ...articles[index],
+        name: names[index],
+        category_id: categoryId,
+        code,
+        batch_no: batchNo,
+      });
+      inserted.push(id);
+    }
+    return inserted;
+  });
+
+  return Promise.all(ids.map((id) => repository.findById(id)));
 }
 
 async function update(articleId, payload) {
@@ -84,4 +170,4 @@ async function reactivate(articleId) {
   return repository.findById(articleId);
 }
 
-module.exports = { list, getById, create, update, remove, reactivate };
+module.exports = { list, getById, create, createBatch, update, remove, reactivate };

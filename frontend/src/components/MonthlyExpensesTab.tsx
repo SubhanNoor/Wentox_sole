@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { ExpenseRow, BusinessAccountRow } from '@/lib/api';
+import { formatDate } from '@/lib/utils';
 import { Calendar, Search, ArrowRight, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check } from 'lucide-react';
 
 function isChequeMode(mode: ExpenseRow['payment_mode']): boolean {
@@ -162,7 +163,7 @@ export default function MonthlyExpensesTab() {
             <tbody className="divide-y divide-slate-100 bg-white">
               {activeBizDetails.expenses.map(e => (
                 <tr key={e.expense_id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="p-3.5 pl-4 font-mono text-slate-600">{e.expense_date.slice(0, 10)}</td>
+                  <td className="p-3.5 pl-4 font-mono text-slate-600">{formatDate(e.expense_date)}</td>
                   <td className="p-3.5 text-center">
                     <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
                       #{e.expense_id}

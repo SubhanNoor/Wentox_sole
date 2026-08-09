@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, X, Users, MapPin } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, X, Users, MapPin } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -20,7 +20,7 @@ export default function SubCustomerSetupPage() {
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
   const [pendingSubCustomer, setPendingSubCustomer] = useState<{ name: string; region_id: number; city_id?: number } | null>(null);
 
-  const [deletingSub, setDeletingSub] = useState<SubCustomerRow | null>(null);
+
 
   // Form State
   const [subName, setSubName] = useState('');
@@ -135,14 +135,7 @@ export default function SubCustomerSetupPage() {
     setPendingSubCustomer(null);
   };
 
-  const confirmDelete = async () => {
-    if (!deletingSub) return;
-    const res = await api.subCustomers.remove(deletingSub.sub_customer_id);
-    setDeletingSub(null);
-    if (!res.ok) return setErrorMsg('Failed to delete: ' + res.error.message);
-    flash('Sub Customer deleted successfully.');
-    loadAll();
-  };
+
 
   const filteredSubCustomers = useMemo(() => {
     if (!searchQuery.trim()) return subCustomerList;
@@ -246,13 +239,6 @@ export default function SubCustomerSetupPage() {
                   title="Edit Sub Customer"
                 >
                   <Edit2 size={15} />
-                </button>
-                <button
-                  onClick={() => setDeletingSub(sc)}
-                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                  title="Delete Sub Customer"
-                >
-                  <Trash2 size={15} />
                 </button>
               </>
             )}
@@ -363,21 +349,7 @@ export default function SubCustomerSetupPage() {
           }}
         />
 
-        {/* Delete confirmation */}
-        {deletingSub && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setDeletingSub(null)}>
-            <div className="bg-white rounded-2xl border-2 border-rose-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
-              <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Delete Sub Customer</h3>
-              <p className="text-xs text-slate-600 mb-4">
-                Delete <strong>{deletingSub.name}</strong>? This deactivates the record.
-              </p>
-              <div className="flex items-center justify-end gap-2">
-                <button onClick={() => setDeletingSub(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
-                <button onClick={confirmDelete} className="px-4 py-2 text-xs font-semibold cursor-pointer rounded-lg bg-rose-600 text-white hover:bg-rose-700">Delete</button>
-              </div>
-            </div>
-          </div>
-        )}
+
 
       </div>
     </AppLayout>

@@ -20,6 +20,11 @@ module.exports = function register() {
     return service.create(payload);
   }));
 
+  ipcMain.handle('products:createBatch', wrap((payload) => {
+    requireSession();
+    return service.createBatch(payload);
+  }));
+
   ipcMain.handle('products:update', wrap((payload) => {
     requireSession();
     return service.update(payload.id, payload);

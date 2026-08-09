@@ -105,10 +105,10 @@ async function remove(draftId) {
 async function confirm(draftId, userId) {
   const draft = await getById(draftId);
 
+  // gp_no/bilty_no/adda_id are optional on sale_bills itself now (dispatch details filled in
+  // later via the bilty/adda update flow), so confirming a draft shouldn't require them either —
+  // only bill_no, which sale_bills.service.js#validateHeader also still requires.
   if (!draft.bill_no) throw ApiError.badRequest('bill_no is required before confirming');
-  if (!draft.gp_no) throw ApiError.badRequest('gp_no is required before confirming');
-  if (!draft.bilty_no) throw ApiError.badRequest('bilty_no is required before confirming');
-  if (!draft.adda_id) throw ApiError.badRequest('adda_id is required before confirming');
   // sale_bills enforces CK_sale_bills_custdlv but draft_sale_bills doesn't — a draft may have been
   // saved as CUSTOM delivery with no sub-customer yet; catch it here with a clear message instead
   // of letting the INSERT below fail on the real table's constraint.

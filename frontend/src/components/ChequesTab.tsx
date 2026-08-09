@@ -1,6 +1,7 @@
 import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import { todayISO } from '@/lib/cheques';
+import { formatDate } from '@/lib/utils';
 import { Search, AlertTriangle, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -262,7 +263,7 @@ export default function ChequesTab() {
   const handleExportExcel = () => {
     const headers = ['Cheque No', 'Date on Cheque', 'Received', 'Customer', 'Amount', 'Unallocated', 'Status'];
     const rows = chequeRows.map(r => [
-      r.cheque.cheque_no || '-', r.cheque.cheque_date || '-', r.cheque.cheque_received_date || '-',
+      r.cheque.cheque_no || '-', formatDate(r.cheque.cheque_date), formatDate(r.cheque.cheque_received_date),
       r.customerName, r.cheque.receipt_amount ?? 0, r.unallocated, r.status,
     ]);
     exportRowsToExcel('cheque-register', headers, rows);
@@ -284,7 +285,7 @@ export default function ChequesTab() {
             Filter: {selectedStatusLabel}
           </p>
           <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
-            Date of Print: {new Date().toLocaleDateString()}
+            Date of Print: {formatDate(new Date())}
           </p>
         </div>
       </div>
@@ -312,7 +313,7 @@ export default function ChequesTab() {
             chequeRows.map(row => (
               <tr key={row.cheque.cheque_id}>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace', fontWeight: 'bold' }}>{row.cheque.cheque_no || '-'}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{row.cheque.cheque_date || '-'}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{formatDate(row.cheque.cheque_date)}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{row.customerName}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontWeight: 'bold' }}>{row.status}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(row.cheque.receipt_amount ?? 0)}</td>
@@ -346,7 +347,7 @@ export default function ChequesTab() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
         <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-        <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
       </div>
     </div>
   );
@@ -455,8 +456,8 @@ export default function ChequesTab() {
                         <td className="p-3 pl-4 font-mono font-semibold text-slate-800">
                           {row.cheque.cheque_no || '-'}
                         </td>
-                        <td className="p-3 text-center text-xs text-slate-600">{row.cheque.cheque_date || '-'}</td>
-                        <td className="p-3 text-center text-xs text-slate-500">{row.cheque.cheque_received_date || '-'}</td>
+                        <td className="p-3 text-center text-xs text-slate-600">{formatDate(row.cheque.cheque_date)}</td>
+                        <td className="p-3 text-center text-xs text-slate-500">{formatDate(row.cheque.cheque_received_date)}</td>
                         <td className="p-3 font-semibold text-slate-800">{row.customerName}</td>
                         <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.cheque.receipt_amount ?? 0)}</td>
                         <td className="p-3 text-right font-bold" style={{ color: row.unallocated > 0 ? '#b45309' : '#64748b' }}>
@@ -517,7 +518,7 @@ export default function ChequesTab() {
                                   </span>
                                   <span className="font-semibold text-slate-700">{allocTargetName(a)}</span>
                                   <span className="font-mono font-bold text-slate-800">{formatCurrency(a.amount)}</span>
-                                  <span className="text-slate-500">{a.allocation_date}</span>
+                                  <span className="text-slate-500">{formatDate(a.allocation_date)}</span>
                                   {a.status === 'REVERSED' && (
                                     <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 uppercase">
                                       Reversed

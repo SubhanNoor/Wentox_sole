@@ -4,6 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { VendorRow, CityRow, PurchaseRow, PurchaseReturnRow, PurchaseReturnCreateInput, PurchaseReturnItemInput } from '@/lib/api';
+import { formatDate } from '@/lib/utils';
 import { Plus, Trash2, Save, Undo2, Edit } from 'lucide-react';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
@@ -87,7 +88,7 @@ export default function PurchaseReturnPage() {
       .filter(p => !vendorId || p.vendor_id === Number(vendorId))
       .map(p => ({
         value: String(p.purchase_id),
-        label: `${p.purchase_date} — ${formatCurrency(p.total_value)}`
+        label: `${formatDate(p.purchase_date)} — ${formatCurrency(p.total_value)}`
       }));
   }, [priorPurchases, vendorId]);
 
@@ -583,7 +584,7 @@ export default function PurchaseReturnPage() {
                         className="border-b hover:bg-slate-50/40 cursor-pointer"
                         style={{ borderColor: 'var(--border-table)' }}
                       >
-                        <td className="p-3 pl-4 font-mono">{r.return_date}</td>
+                        <td className="p-3 pl-4 font-mono">{formatDate(r.return_date)}</td>
                         <td className="p-3 font-semibold text-slate-700">{vendorName}</td>
                         <td className="p-3 text-xs text-slate-500">{r.bill_no || '-'}</td>
                         <td className="p-3 text-xs text-slate-500">{r.remarks || '-'}</td>

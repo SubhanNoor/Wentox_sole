@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, X, Globe } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, X, Globe } from 'lucide-react';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import DataListTable from '@/components/DataListTable';
 import { regions as regionsApi, type RegionRow } from '@/lib/api';
@@ -95,18 +95,7 @@ export default function RegionSetupPage() {
     handleCloseModal();
   };
 
-  const handleDeleteRegion = async (id: number) => {
-    if (!window.confirm('Are you sure you want to delete this region?')) return;
-    const res = await regionsApi.remove(id);
-    if (!res.ok) {
-      alert(res.error.message);
-      return;
-    }
-    setSuccessMsg('Region deleted successfully.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-    handleCloseModal();
-    await loadData();
-  };
+
 
   const filteredRegions = useMemo(() => {
     const activeRegions = regions.filter(r => r.is_active);
@@ -207,13 +196,6 @@ export default function RegionSetupPage() {
                   title="Edit Region"
                 >
                   <Edit2 size={15} />
-                </button>
-                <button
-                  onClick={() => handleDeleteRegion(region.region_id)}
-                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                  title="Delete Region"
-                >
-                  <Trash2 size={15} />
                 </button>
               </>
             )}

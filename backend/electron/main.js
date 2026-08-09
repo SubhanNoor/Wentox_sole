@@ -12,6 +12,13 @@ const seed = require('../src/db/seeds/run');
 // installer script writes to. Must run before app.whenReady()/any getPath() call.
 app.setName('Wentox');
 
+// Forces Chromium's UI locale for this whole renderer to en-GB, so every native <input
+// type="date"> picker displays dd/mm/yyyy — the OS/Chromium default locale here is en-US
+// (mm/dd/yyyy), and a per-element `lang` attribute does NOT override a native date input's
+// displayed format in Electron/Chromium, only this process-wide switch does. Must be set before
+// app.whenReady()/any window is created.
+app.commandLine.appendSwitch('lang', 'en-GB');
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,

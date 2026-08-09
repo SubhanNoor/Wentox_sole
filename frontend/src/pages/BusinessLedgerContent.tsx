@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
-import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Eye } from 'lucide-react';
 import * as api from '@/lib/api';
@@ -52,7 +52,7 @@ export default function BusinessLedgerContent() {
   const handleExportExcel = () => {
     if (viewMode === 'detail') {
       const headers = ['Date', 'Type', 'Ref', 'Debit', 'Credit', 'Balance'];
-      const rows = (detail?.rows || []).map(e => [e.date, e.type, e.inv_no ?? e.bill_no ?? `#${e.entry_id}`, e.debit, e.credit, e.balance]);
+      const rows = (detail?.rows || []).map(e => [formatDate(e.date), e.type, e.inv_no ?? e.bill_no ?? `#${e.entry_id}`, e.debit, e.credit, e.balance]);
       exportRowsToExcel(`business-ledger-${selectedAccount?.name || 'detail'}`, headers, rows);
     } else {
       const headers = ['Code', 'Description', 'Main Account', 'City / Region', 'Closing Balance'];
@@ -73,10 +73,10 @@ export default function BusinessLedgerContent() {
               BUSINESS LEDGER REPORT — {viewMode.toUpperCase()} VIEW
             </h2>
             <p style={{ margin: '6px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>
-              Period: {fromDate || 'Start'} to {toDate || 'End'}
+              Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}
             </p>
             <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
-              Date of Print: {new Date().toLocaleDateString()}
+              Date of Print: {formatDate(new Date())}
             </p>
           </div>
         </div>
@@ -96,7 +96,7 @@ export default function BusinessLedgerContent() {
             <tbody>
               {(detail?.rows || []).map(e => (
                 <tr key={e.entry_id}>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{e.date}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{formatDate(e.date)}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{e.type}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{e.inv_no ?? e.bill_no ?? `#${e.entry_id}`}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{e.debit > 0 ? formatCurrency(e.debit) : '-'}</td>
@@ -156,7 +156,7 @@ export default function BusinessLedgerContent() {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );
@@ -189,11 +189,13 @@ export default function BusinessLedgerContent() {
 
           <div className="flex items-center gap-2">
             <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
-            <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
+            <input type="date"
+            value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
           </div>
           <div className="flex items-center gap-2">
             <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
-            <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
+            <input type="date"
+            value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
           </div>
         </div>
 
@@ -241,7 +243,7 @@ export default function BusinessLedgerContent() {
                   ) : (
                     detail.rows.map((e) => (
                       <tr key={e.entry_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-3 pl-4 font-mono text-slate-600">{e.date}</td>
+                        <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(e.date)}</td>
                         <td className="p-3 text-slate-700">{e.type}</td>
                         <td className="p-3 text-slate-500">{e.inv_no ?? e.bill_no ?? `#${e.entry_id}`}</td>
                         <td className="p-3 text-right font-bold text-rose-700">{e.debit > 0 ? formatCurrency(e.debit) : '-'}</td>

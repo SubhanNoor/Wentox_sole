@@ -2,8 +2,9 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { EmployeeRow, SalaryRunRow } from '@/lib/api';
+import { formatDate } from '@/lib/utils';
 import AppLayout from '@/components/AppLayout';
-import { Save, BadgeDollarSign, History, Edit2, Undo2, Trash2, AlertTriangle, RotateCcw } from 'lucide-react';
+import { Save, BadgeDollarSign, History, Edit2, Undo2, AlertTriangle, RotateCcw } from 'lucide-react';
 
 interface FormLine {
   employee_id: number;
@@ -197,16 +198,7 @@ export default function SalaryRunPage() {
     loadAll();
   };
 
-  const removeRun = async (run: SalaryRunRow) => {
-    if (run.status === 'CONFIRMED') {
-      return fail('A posted run cannot be deleted — unpost it first, so the change to the balances is deliberate.');
-    }
-    if (!window.confirm('Delete this unposted run? It counts toward nothing, so nothing will move.')) return;
-    const res = await api.salaryRuns.remove(run.salary_run_id);
-    if (!res.ok) return fail(res.error.message);
-    flash('Unposted run deleted.');
-    loadAll();
-  };
+
 
   const sortedRuns = useMemo(
     () => [...runs].sort((a, b) => b.period_month.localeCompare(a.period_month)),
@@ -410,7 +402,7 @@ export default function SalaryRunPage() {
                   ) : sortedRuns.map(r => (
                     <tr key={r.salary_run_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                       <td className="p-3 pl-4 font-semibold text-slate-900">{monthLabel(r.period_month)}</td>
-                      <td className="p-3 font-mono text-slate-600">{r.run_date}</td>
+                      <td className="p-3 font-mono text-slate-600">{formatDate(r.run_date)}</td>
                       <td className="p-3 text-center text-slate-600">{r.item_count ?? '—'}</td>
                       <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.total_amount)}</td>
                       <td className="p-3 text-center">
@@ -432,9 +424,6 @@ export default function SalaryRunPage() {
                               <Edit2 size={15} />
                             </button>
                           )}
-                          <button onClick={() => removeRun(r)} title="Delete" className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600">
-                            <Trash2 size={15} />
-                          </button>
                         </div>
                       </td>
                     </tr>

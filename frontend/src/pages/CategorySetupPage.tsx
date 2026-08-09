@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Trash2, Edit2, Search, Settings, Save, X, RotateCcw } from 'lucide-react';
+import { Plus, Edit2, Search, Settings, Save, X, RotateCcw } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import * as api from '@/lib/api';
 import type { CategoryRow, ProductRow } from '@/lib/api';
@@ -13,7 +13,6 @@ export default function CategorySetupPage() {
   const [selectedCatId, setSelectedCatId] = useState<number | null>(null);
 
   const [reactivatePrompt, setReactivatePrompt] = useState<{ category_id: number; name: string } | null>(null);
-  const [deletingCategory, setDeletingCategory] = useState<CategoryRow | null>(null);
 
   // Drill-down: clicking a category row expands it to show every product registered under that category
   const [expandedCatId, setExpandedCatId] = useState<number | null>(null);
@@ -94,15 +93,7 @@ export default function CategorySetupPage() {
     loadAll();
   };
 
-  const confirmDelete = async () => {
-    if (!deletingCategory) return;
-    const res = await api.categories.remove(deletingCategory.category_id);
-    setDeletingCategory(null);
-    if (!res.ok) return setErrorCat('Failed to delete: ' + res.error.message);
-    flash('Category deleted successfully.');
-    handleCloseModal();
-    loadAll();
-  };
+
 
   const filteredCategories = useMemo(() => {
     if (!categorySearch.trim()) return categoryList;
@@ -228,13 +219,6 @@ export default function CategorySetupPage() {
                 >
                   <Edit2 size={15} />
                 </button>
-                <button
-                  onClick={() => setDeletingCategory(cat)}
-                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                  title="Delete Category"
-                >
-                  <Trash2 size={15} />
-                </button>
               </>
             )}
           />
@@ -315,21 +299,7 @@ export default function CategorySetupPage() {
           </div>
         )}
 
-        {/* Delete confirmation */}
-        {deletingCategory && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setDeletingCategory(null)}>
-            <div className="bg-white rounded-2xl border-2 border-rose-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
-              <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Delete Category</h3>
-              <p className="text-xs text-slate-600 mb-4">
-                Delete <strong>{deletingCategory.name}</strong>? This deactivates the record.
-              </p>
-              <div className="flex items-center justify-end gap-2">
-                <button onClick={() => setDeletingCategory(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
-                <button onClick={confirmDelete} className="px-4 py-2 text-xs font-semibold cursor-pointer rounded-lg bg-rose-600 text-white hover:bg-rose-700">Delete</button>
-              </div>
-            </div>
-          </div>
-        )}
+
 
       </div>
     </AppLayout>

@@ -4,8 +4,9 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { BankAccountRow, TransferRow, TransferCreateInput, DepositRow, DepositCreateInput } from '@/lib/api';
+import { formatDate } from '@/lib/utils';
 import {
-  ArrowLeftRight, PiggyBank, Save, Trash2, AlertTriangle, TrendingUp, TrendingDown, Edit
+  ArrowLeftRight, PiggyBank, Save, AlertTriangle, TrendingUp, TrendingDown, Edit
 } from 'lucide-react';
 
 const today = () => new Date().toISOString().split('T')[0];
@@ -100,7 +101,7 @@ export default function TransferPage() {
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-  const [deleteTarget, setDeleteTarget] = useState<{ kind: 'transfer' | 'deposit'; row: TransferRow | DepositRow } | null>(null);
+
 
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
@@ -183,16 +184,7 @@ export default function TransferPage() {
     refreshTransfers();
   };
 
-  const confirmDeleteTransfer = async () => {
-    if (!deleteTarget || deleteTarget.kind !== 'transfer') return;
-    const row = deleteTarget.row as TransferRow;
-    const res = await api.transfers.remove(row.transfer_id);
-    setDeleteTarget(null);
-    if (!res.ok) { fail('Failed to delete transfer: ' + res.error.message); return; }
-    flash('Transfer deleted.');
-    if (transferId === row.transfer_id) handleNewTransfer();
-    refreshTransfers();
-  };
+
 
   // ── Deposit handlers ──
   const handleNewDeposit = () => {
@@ -277,16 +269,7 @@ export default function TransferPage() {
     refreshDeposits();
   };
 
-  const confirmDeleteDeposit = async () => {
-    if (!deleteTarget || deleteTarget.kind !== 'deposit') return;
-    const row = deleteTarget.row as DepositRow;
-    const res = await api.deposits.remove(row.deposit_id);
-    setDeleteTarget(null);
-    if (!res.ok) { fail('Failed to delete entry: ' + res.error.message); return; }
-    flash('Entry deleted.');
-    if (depositId === row.deposit_id) handleNewDeposit();
-    refreshDeposits();
-  };
+
 
   const depSourceLabel = depDirection === 'DEBIT' ? 'Reason (e.g. Bank Charges, Correction)' : 'Source (e.g. Owner Capital, Bank Loan)';
 
@@ -392,19 +375,7 @@ export default function TransferPage() {
                         Unpost
                       </button>
                     )}
-                    {!isTransferPosted && transferId != null && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const row = transfers.find(t => t.transfer_id === transferId);
-                          if (row) setDeleteTarget({ kind: 'transfer', row });
-                        }}
-                        className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
-                        title="Delete"
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    )}
+
                     <button
                       type="button"
                       onClick={handleNewTransfer}
@@ -427,7 +398,8 @@ export default function TransferPage() {
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
                       <input
-                        type="date" value={date} disabled={isTransferViewMode}
+                        type="date"
+            value={date} disabled={isTransferViewMode}
                         onChange={e => setDate(e.target.value)} className="soleria-input"
                       />
                     </div>
@@ -517,7 +489,7 @@ export default function TransferPage() {
                         className="border-b hover:bg-slate-50/50 cursor-pointer"
                         style={{ borderColor: 'var(--border-table)' }}
                       >
-                        <td className="p-3 pl-4 font-mono text-slate-600">{t.transfer_date.slice(0, 10)}</td>
+                        <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(t.transfer_date)}</td>
                         <td className="p-3 font-semibold text-slate-900">{t.from_name || bankName(t.from_ba_id)}</td>
                         <td className="p-3 font-semibold text-slate-900">{t.to_name || bankName(t.to_ba_id)}</td>
                         <td className="p-3 text-slate-600">{t.remarks || <span className="text-slate-300">—</span>}</td>
@@ -579,19 +551,7 @@ export default function TransferPage() {
                         Unpost
                       </button>
                     )}
-                    {!isDepositPosted && depositId != null && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const row = deposits.find(d => d.deposit_id === depositId);
-                          if (row) setDeleteTarget({ kind: 'deposit', row });
-                        }}
-                        className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
-                        title="Delete"
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    )}
+
                     <button
                       type="button"
                       onClick={handleNewDeposit}
@@ -638,7 +598,8 @@ export default function TransferPage() {
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
                       <input
-                        type="date" value={depDate} disabled={isDepositViewMode}
+                        type="date"
+            value={depDate} disabled={isDepositViewMode}
                         onChange={e => setDepDate(e.target.value)} className="soleria-input"
                       />
                     </div>
@@ -727,7 +688,7 @@ export default function TransferPage() {
                         className="border-b hover:bg-slate-50/50 cursor-pointer"
                         style={{ borderColor: 'var(--border-table)' }}
                       >
-                        <td className="p-3 pl-4 font-mono text-slate-600">{d.deposit_date.slice(0, 10)}</td>
+                        <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(d.deposit_date)}</td>
                         <td className="p-3 font-semibold text-slate-900">{d.to_name || bankName(d.to_ba_id)}</td>
                         <td className="p-3 text-center">
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
@@ -758,36 +719,7 @@ export default function TransferPage() {
         )}
 
         {/* ── Delete-DRAFT confirmation ── */}
-        {deleteTarget && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
-              <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
-                <AlertTriangle size={18} className="text-rose-600" /> Delete {deleteTarget.kind === 'transfer' ? 'Transfer' : 'Entry'}
-              </h3>
-              <p className="text-xs text-slate-600 mb-4 leading-relaxed">
-                {deleteTarget.kind === 'transfer' ? (
-                  <>This draft transfer of <strong>{formatCurrency((deleteTarget.row as TransferRow).amount)}</strong> will be permanently removed. This cannot be undone.</>
-                ) : (
-                  <>This draft entry of <strong>{formatCurrency((deleteTarget.row as DepositRow).amount)}</strong> will be permanently removed. This cannot be undone.</>
-                )}
-              </p>
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => setDeleteTarget(null)}
-                  className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={deleteTarget.kind === 'transfer' ? confirmDeleteTransfer : confirmDeleteDeposit}
-                  className="px-4 py-2 text-sm rounded-lg bg-rose-600 text-white hover:bg-rose-700"
-                >
-                  Confirm Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+
         </div>
 
       </div>

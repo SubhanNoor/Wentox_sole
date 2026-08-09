@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { AlertRow } from '@/lib/api';
+import { formatDate } from '@/lib/utils';
 import { Bell, X, RotateCw } from 'lucide-react';
 
 const POLL_INTERVAL_MS = 60_000;
@@ -86,7 +87,7 @@ export default function NotificationBell() {
                   {alert.title}
                 </span>
                 <span className="block text-[11px] text-slate-500 mt-0.5">
-                  {alert.detail} &middot; {alert.date}
+                  {alert.detail} &middot; {formatDate(alert.date)}
                 </span>
                 <span className="block text-[11px] font-bold font-mono mt-0.5" style={{ color: accent }}>
                   {formatCurrency(alert.amount)}

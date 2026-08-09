@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, RotateCcw, X, Landmark } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, RotateCcw, X, Landmark } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
 import {
@@ -129,21 +129,6 @@ export default function BusinessAcSetupPage() {
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
-    handleCloseModal();
-  };
-
-  const handleDeleteBusinessAc = async (biz: BusinessAccountRow) => {
-    if (!window.confirm('Are you sure you want to delete this Business Account?')) return;
-    const res = await businessAccountsApi.remove(biz.ba_id);
-    if (!res.ok) {
-      setErrorMsg(res.error.message);
-      setTimeout(() => setErrorMsg(''), 4000);
-      return;
-    }
-    setSuccessMsg('Business Account deleted successfully.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-    handleCloseModal();
-    await loadData();
   };
 
   const handleReactivateBusinessAc = async (biz: BusinessAccountRow) => {
@@ -344,15 +329,7 @@ export default function BusinessAcSetupPage() {
                   >
                     <RotateCcw size={15} />
                   </button>
-                ) : (
-                  <button
-                    onClick={() => handleDeleteBusinessAc(biz)}
-                    className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                    title="Delete Business Account"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                )}
+                ) : null}
               </>
             )}
           />

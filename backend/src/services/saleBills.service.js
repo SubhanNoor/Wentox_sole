@@ -10,12 +10,13 @@ const {
 } = require('./saleBillMath');
 const CODES = require('../constants/reservedAccounts');
 
+// bilty_no/gp_no/adda_id are all optional at save time — dispatch details are often not known yet
+// when the bill is written up, and get filled in later via updateBiltyInfo() below (which still
+// requires both bilty_no and adda_id — that flow's whole purpose is setting them) once the goods
+// actually ship. bill_no stays required (unaffected by this).
 function validateHeader(payload) {
   if (!payload.customer_id) throw ApiError.badRequest('customer_id is required');
-  if (!payload.bilty_no) throw ApiError.badRequest('bilty_no is required');
-  if (!payload.adda_id) throw ApiError.badRequest('adda_id is required');
   if (!payload.bill_no) throw ApiError.badRequest('bill_no is required');
-  if (!payload.gp_no) throw ApiError.badRequest('gp_no is required');
   validateDeliveryCustomer(payload);
 }
 

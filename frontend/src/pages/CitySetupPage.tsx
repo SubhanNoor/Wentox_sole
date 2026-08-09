@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, X, Building2, MapPin } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, X, Building2, MapPin } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -107,18 +107,7 @@ export default function CitySetupPage() {
     handleCloseModal();
   };
 
-  const handleDeleteCity = async (id: number) => {
-    if (!window.confirm('Are you sure you want to delete this city?')) return;
-    const res = await citiesApi.remove(id);
-    if (!res.ok) {
-      alert(res.error.message);
-      return;
-    }
-    setSuccessMsg('City deleted successfully.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-    handleCloseModal();
-    await loadData();
-  };
+
 
   const filteredCities = useMemo(() => {
     const activeCities = cities.filter(c => c.is_active);
@@ -231,13 +220,6 @@ export default function CitySetupPage() {
                   title="Edit City"
                 >
                   <Edit2 size={15} />
-                </button>
-                <button
-                  onClick={() => handleDeleteCity(city.city_id)}
-                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                  title="Delete City"
-                >
-                  <Trash2 size={15} />
                 </button>
               </>
             )}

@@ -4,6 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { VendorRow, RegionRow, CityRow, PurchaseRow, PurchaseCreateInput, PurchaseItemInput } from '@/lib/api';
+import { formatDate } from '@/lib/utils';
 import { Plus, Trash2, Save, ShoppingBag, Edit } from 'lucide-react';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
@@ -356,9 +357,10 @@ export default function PurchasePage() {
                   <button
                     type="button"
                     onClick={() => setIsAddVendorOpen(true)}
-                    className="text-[10px] font-bold underline transition-colors text-blue-600 hover:text-blue-800"
+                    className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102"
                   >
-                    + Add New Vendor
+                    <Plus size={12} className="text-blue-600" />
+                    <span>Add New Vendor</span>
                   </button>
                 )}
               </div>
@@ -584,7 +586,7 @@ export default function PurchasePage() {
                         className="border-b hover:bg-slate-50/40 cursor-pointer"
                         style={{ borderColor: 'var(--border-table)' }}
                       >
-                        <td className="p-3 pl-4 font-mono">{p.purchase_date}</td>
+                        <td className="p-3 pl-4 font-mono">{formatDate(p.purchase_date)}</td>
                         <td className="p-3 font-semibold text-slate-700">{vendorName}</td>
                         <td className="p-3 text-xs text-slate-500">{p.bill_no || '-'}</td>
                         <td className="p-3 text-xs text-slate-500">{p.remarks || '-'}</td>

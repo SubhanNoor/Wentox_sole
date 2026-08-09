@@ -3,7 +3,7 @@ import { formatCurrency } from '@/context/AppContext';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Search, ArrowLeft, ChevronRight, Filter, Eye, RotateCcw } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { OverallTrailRow, LedgerRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
@@ -122,9 +122,9 @@ export default function OverallTrailContent() {
     if (!selectedAccount || !ledger) return;
     const headers = ['Date', 'Type', 'Reference', 'Narration', 'Debit (PKR)', 'Credit (PKR)', 'Balance (PKR)'];
     const rows = [
-      [ledgerFromDate ? `Before ${ledgerFromDate}` : '---', 'Opening Balance', '-', 'Opening Balance brought forward', 0, 0, ledger.opening_balance],
+      [ledgerFromDate ? `Before ${formatDate(ledgerFromDate)}` : '---', 'Opening Balance', '-', 'Opening Balance brought forward', 0, 0, ledger.opening_balance],
       ...ledger.rows.map(r => [
-        r.date, r.type, r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, r.narration ?? '',
+        formatDate(r.date), r.type, r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, r.narration ?? '',
         r.debit > 0 ? r.debit : '-', r.credit > 0 ? r.credit : '-', r.balance
       ]),
     ];
@@ -141,8 +141,8 @@ export default function OverallTrailContent() {
           </div>
           <div style={{ textAlign: 'right' }}>
             <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>OVERALL TRIAL BALANCE REPORT</h2>
-            <p style={{ margin: '6px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>As On: {asOfDate}</p>
-            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Date of Print: {new Date().toLocaleDateString()}</p>
+            <p style={{ margin: '6px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>As On: {formatDate(asOfDate)}</p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Date of Print: {formatDate(new Date())}</p>
           </div>
         </div>
 
@@ -222,7 +222,7 @@ export default function OverallTrailContent() {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );
@@ -241,8 +241,8 @@ export default function OverallTrailContent() {
             <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>ACCOUNT LEDGER STATEMENT</h2>
             <p style={{ margin: '4px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>{selectedAccount.description}</p>
             <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Code: {selectedAccount.code} | Category: {selectedAccount.type_label}</p>
-            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Period: {ledgerFromDate || 'Start'} to {ledgerToDate || 'End'}</p>
-            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Date of Print: {new Date().toLocaleDateString()}</p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Period: {ledgerFromDate ? formatDate(ledgerFromDate) : 'Start'} to {ledgerToDate ? formatDate(ledgerToDate) : 'End'}</p>
+            <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Date of Print: {formatDate(new Date())}</p>
           </div>
         </div>
 
@@ -260,7 +260,7 @@ export default function OverallTrailContent() {
           </thead>
           <tbody>
             <tr style={{ backgroundColor: '#fdf6ec', fontWeight: 'bold' }}>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{ledgerFromDate ? `Before ${ledgerFromDate}` : '---'}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{ledgerFromDate ? `Before ${formatDate(ledgerFromDate)}` : '---'}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>Opening Balance</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>-</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontStyle: 'italic' }}>Opening Balance brought forward</td>
@@ -270,7 +270,7 @@ export default function OverallTrailContent() {
             </tr>
             {ledger.rows.map(row => (
               <tr key={row.entry_id}>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.date}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{formatDate(row.date)}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.type}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.narration}</td>
@@ -304,7 +304,7 @@ export default function OverallTrailContent() {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );
@@ -416,7 +416,7 @@ export default function OverallTrailContent() {
             <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-start">
               <div>
                 <h3 className="font-lora font-bold text-lg text-slate-900">Business Accounts Balances Details</h3>
-                <p className="text-xs text-slate-500 font-medium">As On Date: <span className="font-bold text-slate-700">{asOfDate || 'Today'}</span></p>
+                <p className="text-xs text-slate-500 font-medium">As On Date: <span className="font-bold text-slate-700">{asOfDate ? formatDate(asOfDate) : 'Today'}</span></p>
               </div>
               <div className="text-right text-xs text-slate-500">
                 <p className="font-bold text-slate-800 uppercase tracking-wider">WENTOX FOOTWEAR DISTRIBUTION</p>
@@ -578,7 +578,7 @@ export default function OverallTrailContent() {
             <div className="border-b pb-4 mb-6 flex justify-between items-start">
               <div>
                 <h3 className="font-lora font-bold text-lg text-slate-900">{selectedAccount.description} Account Statement</h3>
-                <p className="text-xs text-slate-500">Period: {ledgerFromDate || 'Start'} to {ledgerToDate || 'End'}</p>
+                <p className="text-xs text-slate-500">Period: {ledgerFromDate ? formatDate(ledgerFromDate) : 'Start'} to {ledgerToDate ? formatDate(ledgerToDate) : 'End'}</p>
               </div>
               <div className="text-right text-xs text-slate-500">
                 <p className="font-bold text-slate-800">WENTOX FOOTWEAR DISTRIBUTION</p>
@@ -601,7 +601,7 @@ export default function OverallTrailContent() {
                 </thead>
                 <tbody>
                   <tr className="border-b bg-amber-50/40 font-semibold text-slate-700" style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 text-slate-500">{ledgerFromDate ? `Before ${ledgerFromDate}` : '---'}</td>
+                    <td className="p-3 text-slate-500">{ledgerFromDate ? `Before ${formatDate(ledgerFromDate)}` : '---'}</td>
                     <td className="p-3 font-bold text-amber-800">Opening Balance</td>
                     <td className="p-3">-</td>
                     <td className="p-3 italic text-slate-500">Opening Balance brought forward</td>
@@ -621,7 +621,7 @@ export default function OverallTrailContent() {
                   ) : (
                     ledger.rows.map((row) => (
                       <tr key={row.entry_id} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-3 font-medium text-slate-600">{row.date}</td>
+                        <td className="p-3 font-medium text-slate-600">{formatDate(row.date)}</td>
                         <td className="p-3 font-semibold text-slate-800">{row.type}</td>
                         <td className="p-3 text-slate-500 font-mono">{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                         <td className="p-3 text-slate-700">{row.narration}</td>

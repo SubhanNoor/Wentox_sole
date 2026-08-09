@@ -4,7 +4,8 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { CustomerRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow } from '@/lib/api';
-import { Save, DollarSign, Search, Edit, Trash2, AlertTriangle } from 'lucide-react';
+import { formatDate } from '@/lib/utils';
+import { Save, Search, Edit } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
@@ -107,7 +108,7 @@ export default function ReceiptsPage() {
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-  const [deleteTarget, setDeleteTarget] = useState<ReceiptRow | null>(null);
+
 
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
@@ -242,33 +243,9 @@ export default function ReceiptsPage() {
     setMode('view');
   };
 
-  const handlePost = async () => {
-    if (receiptId == null) return;
-    const res = await api.receipts.post(receiptId);
-    if (!res.ok) { fail('Failed to post receipt: ' + res.error.message); return; }
-    setReceiptStatus(res.data.status);
-    flash('Receipt posted successfully.');
-    refreshReceipts();
-  };
 
-  const handleUnpost = async () => {
-    if (receiptId == null) return;
-    const res = await api.receipts.unpost(receiptId);
-    if (!res.ok) { fail('Failed to unpost receipt: ' + res.error.message); return; }
-    setReceiptStatus(res.data.status);
-    flash('Receipt unposted successfully.');
-    refreshReceipts();
-  };
 
-  const confirmDeleteReceipt = async () => {
-    if (!deleteTarget) return;
-    const res = await api.receipts.remove(deleteTarget.receipt_id);
-    setDeleteTarget(null);
-    if (!res.ok) { fail('Failed to delete receipt: ' + res.error.message); return; }
-    flash('Receipt deleted.');
-    if (receiptId === deleteTarget.receipt_id) handleNew();
-    refreshReceipts();
-  };
+
 
   // ── draftReceipts (server-side, CASH/ONLINE only) ──
   /*
@@ -296,16 +273,7 @@ export default function ReceiptsPage() {
     setErrorMsg('');
   };
 
-  const handleDeleteDraft = async () => {
-    if (!selectedDraftPick) { fail('Please select a draft first.'); return; }
-    const id = Number(selectedDraftPick);
-    const res = await api.draftReceipts.remove(id);
-    if (!res.ok) { fail('Failed to delete draft: ' + res.error.message); return; }
-    if (loadedDraftId === id) handleNew();
-    setSelectedDraftPick('');
-    flash('Draft deleted successfully.');
-    refreshDrafts();
-  };
+
 
   const handleConfirmDraft = async () => {
     if (!selectedDraftPick) { fail('Please select a draft first.'); return; }
@@ -457,7 +425,7 @@ export default function ReceiptsPage() {
                     <option value="">Select a draft to load...</option>
                     {drafts.map(d => (
                       <option key={d.draft_id} value={d.draft_id}>
-                        {customerName(d.customer_id)} - {formatCurrency(d.amount)} ({d.receipt_date.slice(0, 10)})
+                        {customerName(d.customer_id)} - {formatCurrency(d.amount)} ({formatDate(d.receipt_date)})
                       </option>
                     ))}
                   </select>
@@ -468,13 +436,6 @@ export default function ReceiptsPage() {
                   >
                     Confirm Draft
                   </button>
-                  <button
-                    type="button"
-                    onClick={handleDeleteDraft}
-                    className="text-xs text-rose-600 hover:text-rose-800 font-semibold transition-colors"
-                  >
-                    Delete Selected Draft
-                  </button>
                 </div>
               </div>
             )}
@@ -482,59 +443,34 @@ export default function ReceiptsPage() {
             {/* Entry Form Card */}
             <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print>
               <div className="flex items-center justify-between border-b pb-3 mb-5">
-                <h3 className="font-lora font-semibold text-xl text-slate-800 flex items-center gap-2">
-                  <DollarSign size={20} className="text-[#B08D57]" /> Customer Payment Receipt (Jamma)
-                </h3>
-                {mode === 'view' && (
-                  <div className="flex items-center gap-2">
-                    {!isPosted && (
-                      <button
-                        type="button"
-                        onClick={() => setMode('edit')}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
-                      >
-                        <Edit size={13} /> Edit
-                      </button>
-                    )}
-                    {!isPosted ? (
-                      <button
-                        type="button"
-                        onClick={handlePost}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
-                      >
-                        Post
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={handleUnpost}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
-                      >
-                        Unpost
-                      </button>
-                    )}
-                    {!isPosted && receiptId != null && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const row = receipts.find(r => r.receipt_id === receiptId);
-                          if (row) setDeleteTarget(row);
-                        }}
-                        className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
-                        title="Delete"
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    )}
+                <div className="flex items-center gap-2">
+                  <span className="font-lora font-bold text-lg text-slate-900">
+                    {mode === 'edit' ? `Editing Receipt #${receiptId}` : mode === 'view' ? `Receipt #${receiptId}` : 'New Receipt Voucher'}
+                  </span>
+                  {isPosted && (
+                    <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">
+                      Posted
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {mode === 'view' && (
                     <button
                       type="button"
-                      onClick={handleNew}
-                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
+                      onClick={() => setMode('edit')}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all flex items-center gap-1"
                     >
-                      New Receipt
+                      <Edit size={14} /> Edit
                     </button>
-                  </div>
-                )}
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleNew}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
+                  >
+                    New Receipt
+                  </button>
+                </div>
               </div>
 
               <form onSubmit={handleSaveReceipt} className="flex flex-col gap-4">
@@ -811,7 +747,7 @@ export default function ReceiptsPage() {
                           className="border-b hover:bg-slate-50/50 cursor-pointer"
                           style={{ borderColor: 'var(--border-table)' }}
                         >
-                          <td className="p-3 pl-4 font-mono text-slate-600">{r.receipt_date.slice(0, 10)}</td>
+                          <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(r.receipt_date)}</td>
                           <td className="p-3 font-semibold text-slate-900">{r.customer_name || customerName(r.customer_id)}</td>
                           <td className="p-3 text-center text-xs text-slate-500">{r.payment_mode}</td>
                           <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
@@ -832,33 +768,7 @@ export default function ReceiptsPage() {
           </div>
         )}
 
-        {/* ── Delete confirmation ── */}
-        {deleteTarget && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
-              <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
-                <AlertTriangle size={18} className="text-rose-600" /> Delete Receipt
-              </h3>
-              <p className="text-xs text-slate-600 mb-4 leading-relaxed">
-                This receipt of <strong>{formatCurrency(deleteTarget.amount)}</strong> will be permanently removed. This cannot be undone.
-              </p>
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => setDeleteTarget(null)}
-                  className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmDeleteReceipt}
-                  className="px-4 py-2 text-sm rounded-lg bg-rose-600 text-white hover:bg-rose-700"
-                >
-                  Confirm Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+
 
       </div>
     </AppLayout>

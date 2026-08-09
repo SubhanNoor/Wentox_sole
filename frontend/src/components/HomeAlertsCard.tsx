@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { AlertRow } from '@/lib/api';
+import { formatDate } from '@/lib/utils';
 import { Bell, X, ChevronRight, RotateCw } from 'lucide-react';
 
 const POLL_INTERVAL_MS = 60_000;
@@ -65,7 +66,7 @@ export default function HomeAlertsCard() {
                 </div>
                 {alert.detail && <p className="text-xs text-slate-500 mt-0.5 leading-snug">{alert.detail}</p>}
                 <div className="mt-2 flex items-center justify-between">
-                  <span className="text-[11px] font-mono text-slate-400">{alert.date}</span>
+                  <span className="text-[11px] font-mono text-slate-400">{formatDate(alert.date)}</span>
                   <span className={`text-xs font-bold font-mono ${amountColor}`}>{formatCurrency(alert.amount)}</span>
                 </div>
               </div>

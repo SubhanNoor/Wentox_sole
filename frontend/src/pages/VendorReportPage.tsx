@@ -3,7 +3,7 @@ import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Search, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { VendorReportRow, VendorRow, LedgerRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
@@ -63,8 +63,8 @@ export function VendorReportContent() {
   const runningVendorLedger = useMemo(() => {
     if (!ledger) return [];
     return [
-      { date: fromDate ? `Before ${fromDate}` : '---', type: 'Opening Balance', ref: '-', debit: 0, credit: 0, balance: ledger.opening_balance },
-      ...ledger.rows.map(r => ({ date: r.date, type: r.type, ref: r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, debit: r.debit, credit: r.credit, balance: r.balance })),
+      { date: fromDate ? `Before ${formatDate(fromDate)}` : '---', type: 'Opening Balance', ref: '-', debit: 0, credit: 0, balance: ledger.opening_balance },
+      ...ledger.rows.map(r => ({ date: formatDate(r.date), type: r.type, ref: r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, debit: r.debit, credit: r.credit, balance: r.balance })),
     ];
   }, [ledger, fromDate]);
 
@@ -76,7 +76,7 @@ export function VendorReportContent() {
 
   const handleExportLedgerExcel = () => {
     const headers = ['Date', 'Type', 'Ref', 'Debit', 'Credit', 'Balance'];
-    const rows = runningVendorLedger.map(row => [row.date, row.type, row.ref, row.debit, row.credit, row.balance]);
+    const rows = runningVendorLedger.map(r => [formatDate(r.date), r.type, r.ref, r.debit, r.credit, r.balance]);
     exportRowsToExcel(`vendor-ledger-${selectedVendor?.name || 'export'}`, headers, rows);
   };
 
@@ -94,10 +94,10 @@ export function VendorReportContent() {
               {selectedVendorId ? `VENDOR LEDGER STATEMENT — ${selectedVendor?.name?.toUpperCase()}` : 'VENDOR REPORT — GROUPED SUMMARY'}
             </h2>
             <p style={{ margin: '6px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>
-              Period: {fromDate || 'Start'} to {toDate || 'End'}
+              Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}
             </p>
             <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
-              Date of Print: {new Date().toLocaleDateString()}
+              Date of Print: {formatDate(new Date())}
             </p>
           </div>
         </div>
@@ -147,7 +147,7 @@ export function VendorReportContent() {
             <tbody>
               {runningVendorLedger.map((row, idx) => (
                 <tr key={idx} style={{ backgroundColor: idx === 0 ? '#f9f9f9' : '#ffffff', fontWeight: idx === 0 ? 'bold' : 'normal' }}>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{row.date}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{formatDate(row.date)}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{row.type}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{row.ref}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
@@ -176,7 +176,7 @@ export function VendorReportContent() {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );
@@ -205,11 +205,13 @@ export function VendorReportContent() {
                 </div>
                 <div className="flex items-center gap-2">
                   <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
-                  <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
+                  <input type="date"
+            value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
                 </div>
                 <div className="flex items-center gap-2">
                   <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
-                  <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
+                  <input type="date"
+            value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -232,7 +234,7 @@ export function VendorReportContent() {
                 <div className="text-right">
                   <h2 className="font-lora font-semibold text-lg uppercase">Vendor Report — Grouped Summary</h2>
                   {(fromDate || toDate) && (
-                    <p className="text-xs text-amber-700 font-semibold mt-0.5">Period: {fromDate || 'Start'} to {toDate || 'End'}</p>
+                    <p className="text-xs text-amber-700 font-semibold mt-0.5">Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}</p>
                   )}
                 </div>
               </div>
@@ -307,11 +309,13 @@ export function VendorReportContent() {
                 <div className="flex items-center gap-3">
                   <div>
                     <span className="block text-xs font-semibold text-slate-500 uppercase mb-0.5">From:</span>
-                    <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1 text-xs" />
+                    <input type="date"
+            value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1 text-xs" />
                   </div>
                   <div>
                     <span className="block text-xs font-semibold text-slate-500 uppercase mb-0.5">To:</span>
-                    <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1 text-xs" />
+                    <input type="date"
+            value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1 text-xs" />
                   </div>
                 </div>
                 <button
@@ -359,7 +363,7 @@ export function VendorReportContent() {
                     ) : (
                       runningVendorLedger.map((row, idx) => (
                         <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                          <td className="p-3 pl-4 text-slate-700 font-semibold">{row.date}</td>
+                          <td className="p-3 pl-4 text-slate-700 font-semibold">{formatDate(row.date)}</td>
                           <td className="p-3 font-semibold text-slate-800">{row.type}</td>
                           <td className="p-3 text-center font-mono text-xs">{row.ref}</td>
                           <td className="p-3 text-right font-bold text-rose-700">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>

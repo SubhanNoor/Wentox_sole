@@ -1,11 +1,12 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, Phone, MapPin, X, Truck, RotateCcw } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Phone, MapPin, X, Truck, RotateCcw } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { VendorRow, RegionRow, CityRow, ProductRow, PurchaseRow } from '@/lib/api';
+import { formatDate } from '@/lib/utils';
 
 export default function VendorSetupPage() {
   const [vendorSearch, setVendorSearch] = useState('');
@@ -16,7 +17,6 @@ export default function VendorSetupPage() {
   const [selectedVendorId, setSelectedVendorId] = useState<number | null>(null);
 
   const [reactivatePrompt, setReactivatePrompt] = useState<{ vendor_id: number; name: string; phone: string | null } | null>(null);
-  const [deletingVendor, setDeletingVendor] = useState<VendorRow | null>(null);
 
   // Drill-down: clicking a vendor card opens a details window showing that vendor's purchase history
   const [viewingVendorId, setViewingVendorId] = useState<number | null>(null);
@@ -133,14 +133,7 @@ export default function VendorSetupPage() {
     loadAll();
   };
 
-  const confirmDelete = async () => {
-    if (!deletingVendor) return;
-    const res = await api.vendors.remove(deletingVendor.vendor_id);
-    setDeletingVendor(null);
-    if (!res.ok) return setErrorMsg('Failed to delete: ' + res.error.message);
-    flash('Vendor deleted successfully.');
-    loadAll();
-  };
+
 
   const openPurchaseHistory = (vendorId: number) => {
     setViewingVendorId(vendorId);
@@ -311,13 +304,6 @@ export default function VendorSetupPage() {
                 >
                   <Edit2 size={15} />
                 </button>
-                <button
-                  onClick={() => setDeletingVendor(vendor)}
-                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                  title="Delete Vendor"
-                >
-                  <Trash2 size={15} />
-                </button>
               </>
             )}
           />
@@ -478,7 +464,7 @@ export default function VendorSetupPage() {
                     <tbody>
                       {viewingPurchases.map(pu => (
                         <tr key={pu.purchase_id} className="border-t align-top hover:bg-slate-50" style={{ borderColor: 'var(--border-table)' }}>
-                          <td className="p-2 pl-3 font-mono text-slate-600 whitespace-nowrap">{pu.purchase_date}</td>
+                          <td className="p-2 pl-3 font-mono text-slate-600 whitespace-nowrap">{formatDate(pu.purchase_date)}</td>
                           <td className="p-2 text-slate-700">{pu.bill_no || '-'}</td>
                           <td className="p-2 text-slate-500">{pu.remarks || '-'}</td>
                           <td className="p-2 text-center">
@@ -518,22 +504,7 @@ export default function VendorSetupPage() {
         </div>
       )}
 
-      {/* Delete confirmation */}
-      {deletingVendor && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setDeletingVendor(null)}>
-          <div className="bg-white rounded-2xl border-2 border-rose-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
-            <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Delete Vendor</h3>
-            <p className="text-xs text-slate-600 mb-4">
-              Delete <strong>{deletingVendor.name}</strong>? This deactivates the record — past
-              purchase history is kept intact.
-            </p>
-            <div className="flex items-center justify-end gap-2">
-              <button onClick={() => setDeletingVendor(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
-              <button onClick={confirmDelete} className="px-4 py-2 text-xs font-semibold cursor-pointer rounded-lg bg-rose-600 text-white hover:bg-rose-700">Delete</button>
-            </div>
-          </div>
-        </div>
-      )}
+
     </AppLayout>
   );
 }

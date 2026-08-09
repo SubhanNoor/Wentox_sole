@@ -4,6 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Search, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
+import { formatDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { CashBookResult } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
@@ -50,7 +51,7 @@ export function ReportCashBookContent() {
 
   const handleExportExcel = () => {
     const headers = ['No.', 'Date', 'Type', 'Narration', 'Cash Received', 'Cash Paid', 'Balance'];
-    const rows = filteredRows.map((row, idx) => [idx + 1, row.date, row.type, row.narration || '', row.debit, row.credit, row.balance]);
+    const rows = filteredRows.map((row, idx) => [idx + 1, formatDate(row.date), row.type, row.narration || '', row.debit, row.credit, row.balance]);
     exportRowsToExcel(`cash-book-${periodLabel}`, headers, rows);
   };
 
@@ -67,7 +68,7 @@ export function ReportCashBookContent() {
               Period: {periodLabel}
             </p>
             <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
-              Date of Print: {new Date().toLocaleDateString()}
+              Date of Print: {formatDate(new Date())}
             </p>
           </div>
         </div>
@@ -111,7 +112,7 @@ export function ReportCashBookContent() {
             {filteredRows.map((row, idx) => (
               <tr key={idx}>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{idx + 1}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{row.date}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{formatDate(row.date)}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{row.type}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.narration || '—'}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#047857' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
@@ -139,7 +140,7 @@ export function ReportCashBookContent() {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );
@@ -291,7 +292,7 @@ export function ReportCashBookContent() {
                   filteredRows.map((row, idx) => (
                     <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                       <td className="p-3 pl-4 text-center text-xs font-mono text-slate-400">{idx + 1}</td>
-                      <td className="p-3 text-xs font-mono text-slate-600">{row.date}</td>
+                      <td className="p-3 text-xs font-mono text-slate-600">{formatDate(row.date)}</td>
                       <td className="p-3">
                         <span className={`inline-block text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${row.debit > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
                           {row.type}

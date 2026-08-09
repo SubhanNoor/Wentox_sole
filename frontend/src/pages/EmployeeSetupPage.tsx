@@ -4,7 +4,7 @@ import * as api from '@/lib/api';
 import type { EmployeeRow, EmployeeType, StageRow, CityRow, WageRunRow, ExpenseRow } from '@/lib/api';
 import { getEmployeeBalance, type FlatSalaryItem } from '@/lib/payroll';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, Phone, MapPin, HardHat, BadgeDollarSign, X, RotateCcw } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Phone, MapPin, HardHat, BadgeDollarSign, X, RotateCcw } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 
 type ListTab = 'workers' | 'salaried';
@@ -47,7 +47,6 @@ export default function EmployeeSetupPage() {
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [reactivatePrompt, setReactivatePrompt] = useState<{ employee_id: number; name: string; phone: string | null } | null>(null);
-  const [deletingEmployee, setDeletingEmployee] = useState<EmployeeRow | null>(null);
 
   const cityName = (id?: number | null) => cities.find(c => c.city_id === id)?.name || '';
   const flash = (msg: string) => { setSuccessMsg(msg); setTimeout(() => setSuccessMsg(''), 3000); };
@@ -188,15 +187,7 @@ export default function EmployeeSetupPage() {
     loadAll();
   };
 
-  const confirmDelete = async () => {
-    if (!deletingEmployee) return;
-    const res = await api.employees.remove(deletingEmployee.employee_id);
-    setDeletingEmployee(null);
-    if (!res.ok) return fail('Failed to delete: ' + res.error.message);
-    flash('Employee deleted.');
-    handleCloseModal();
-    loadAll();
-  };
+
 
   const activeEmployees = useMemo(
     () => employeeList.filter(e => e.is_active && e.employee_type === (activeTab === 'workers' ? 'WORKER' : 'SALARIED')),
@@ -380,13 +371,6 @@ export default function EmployeeSetupPage() {
                     className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
                   >
                     <Edit2 size={15} />
-                  </button>
-                  <button
-                    onClick={() => setDeletingEmployee(emp)}
-                    title="Delete Employee"
-                    className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                  >
-                    <Trash2 size={15} />
                   </button>
                 </>
               )}
@@ -588,22 +572,7 @@ export default function EmployeeSetupPage() {
           </div>
         )}
 
-        {/* Delete confirmation */}
-        {deletingEmployee && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setDeletingEmployee(null)}>
-            <div className="bg-white rounded-2xl border-2 border-rose-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
-              <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Delete Employee</h3>
-              <p className="text-xs text-slate-600 mb-4">
-                Delete <strong>{deletingEmployee.name}</strong>? This deactivates the record —
-                past wage/salary run history is kept intact.
-              </p>
-              <div className="flex items-center justify-end gap-2">
-                <button onClick={() => setDeletingEmployee(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
-                <button onClick={confirmDelete} className="px-4 py-2 text-xs font-semibold cursor-pointer rounded-lg bg-rose-600 text-white hover:bg-rose-700">Delete</button>
-              </div>
-            </div>
-          </div>
-        )}
+
 
       </div>
     </AppLayout>

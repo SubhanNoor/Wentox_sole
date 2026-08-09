@@ -4,6 +4,7 @@ import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { EmployeeRow, ProductRow, StageRow, WageRunRow, ExpenseRow } from '@/lib/api';
 import { getRunBalanceBlock } from '@/lib/payroll';
+import { formatDate } from '@/lib/utils';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Plus, Trash2, Save, HardHat, AlertTriangle, Edit2, Undo2, History, Clock, ChevronDown, Check } from 'lucide-react';
@@ -255,16 +256,7 @@ export default function WageRunPage() {
     loadAll();
   };
 
-  const removeRun = async (run: WageRunRow) => {
-    if (run.status === 'CONFIRMED') {
-      return fail('A posted run cannot be deleted — unpost it first, so the change to the balance is deliberate.');
-    }
-    if (!window.confirm('Delete this unposted run? It counts toward nothing, so nothing will move.')) return;
-    const res = await api.wageRuns.remove(run.wage_run_id);
-    if (!res.ok) return fail(res.error.message);
-    flash('Unposted run deleted.');
-    loadAll();
-  };
+
 
   function nameOf(id: number) {
     return workers.find(e => e.employee_id === id)?.name || '—';
@@ -315,7 +307,8 @@ export default function WageRunPage() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Settlement Date</label>
-                  <input type="date" value={date} onChange={e => setDate(e.target.value)} className="soleria-input" />
+                  <input type="date"
+            value={date} onChange={e => setDate(e.target.value)} className="soleria-input" />
                   <p className="text-[10px] text-slate-400 mt-1">The day you settle up — not the day the work was done.</p>
                 </div>
                 <div>
@@ -397,7 +390,7 @@ export default function WageRunPage() {
                   <div className="flex flex-wrap gap-2">
                     {recentRuns.map(r => (
                       <span key={r.wage_run_id} className="px-2 py-1 rounded bg-white border border-amber-200 text-xs font-semibold text-slate-700">
-                        {r.run_date} — {formatCurrency(r.total_amount)}
+                        {formatDate(r.run_date)} — {formatCurrency(r.total_amount)}
                         {r.status === 'DRAFT' && <span className="ml-1 text-slate-400 font-medium">(unposted)</span>}
                       </span>
                     ))}
@@ -510,8 +503,8 @@ export default function WageRunPage() {
               <div className="card-white p-6 bg-white border" style={{ borderColor: 'var(--border-color)' }}>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <Figure label="Grand Total" value={grandTotal} hint="Earned on this run" strong />
-                  <Figure label="Baqaya" value={block.baqaya} hint={`Owed before ${date}`} />
-                  <Figure label="Banam" value={block.banam} hint={`Paid on/after ${date}`} />
+                  <Figure label="Baqaya" value={block.baqaya} hint={`Owed before ${formatDate(date)}`} />
+                  <Figure label="Banam" value={block.banam} hint={`Paid on/after ${formatDate(date)}`} />
                   <Figure label="Net Balance" value={block.net} hint="Still owed after this run" strong highlight />
                 </div>
                 {block.net < 0 && (
@@ -571,7 +564,7 @@ export default function WageRunPage() {
                     </tr>
                   ) : sortedRuns.map(r => (
                     <tr key={r.wage_run_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                      <td className="p-3 pl-4 font-mono text-slate-600">{r.run_date}</td>
+                      <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(r.run_date)}</td>
                       <td className="p-3 font-semibold text-slate-900">{r.employee_name || nameOf(r.employee_id)}</td>
                       <td className="p-3 text-slate-600">{r.stage_label || stageLabel(r.stage_key)}</td>
                       <td className="p-3 text-center text-slate-600">{r.item_count ?? '—'}</td>
@@ -597,9 +590,6 @@ export default function WageRunPage() {
                               <Edit2 size={15} />
                             </button>
                           )}
-                          <button onClick={() => removeRun(r)} title="Delete" className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600">
-                            <Trash2 size={15} />
-                          </button>
                         </div>
                       </td>
                     </tr>

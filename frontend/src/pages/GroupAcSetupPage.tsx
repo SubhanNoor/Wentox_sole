@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, X, ListCollapse } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, X, ListCollapse } from 'lucide-react';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import DataListTable from '@/components/DataListTable';
 import {
@@ -121,19 +121,7 @@ export default function GroupAcSetupPage() {
     handleCloseModal();
   };
 
-  const handleDeleteGroup = async (grpId: number) => {
-    if (!window.confirm('Are you sure you want to delete this Group Account?')) return;
-    const res = await groupAccountsApi.remove(grpId);
-    if (!res.ok) {
-      setErrorMsg(res.error.message);
-      setTimeout(() => setErrorMsg(''), 4000);
-      return;
-    }
-    setSuccessMsg('Group Account deleted successfully.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-    handleCloseModal();
-    await loadData();
-  };
+
 
   const filteredAndSortedGroups = useMemo(() => {
     let list = groups.filter(g => g.is_active);
@@ -275,13 +263,6 @@ export default function GroupAcSetupPage() {
                   title="Edit Group Account"
                 >
                   <Edit2 size={15} />
-                </button>
-                <button
-                  onClick={() => handleDeleteGroup(grp.group_id)}
-                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                  title="Delete Group Account"
-                >
-                  <Trash2 size={15} />
                 </button>
               </>
             )}

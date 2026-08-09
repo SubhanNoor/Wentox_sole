@@ -4,7 +4,7 @@ import * as api from '@/lib/api';
 import type { SaleBillRow, SaleBillItemRow, CustomerRow, SubCustomerRow, AddaRow, ProductRow } from '@/lib/api';
 import { Search, Printer, Calendar, FileText, User, Edit2, Package, Truck, Layers, RotateCcw, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
@@ -133,7 +133,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
     const headers = ['Date', 'Sys ID', 'Bill No.', 'Customer', 'Cartons', 'Pairs', 'Invoice Value', 'Status'];
     const rows = filteredInvoices.map(bill => {
       const cust = customers.find(c => c.customer_id === bill.customer_id);
-      return [bill.bill_date.slice(0, 10), bill.bill_id, bill.bill_no, cust?.name || '-', bill.total_cartons, bill.total_pairs, bill.net_value, bill.is_posted ? 'Posted' : 'Unposted'];
+      return [formatDate(bill.bill_date), bill.bill_id, bill.bill_no, cust?.name || '-', bill.total_cartons, bill.total_pairs, bill.net_value, bill.is_posted ? 'Posted' : 'Unposted'];
     });
     exportRowsToExcel('sale-bills-search', headers, rows);
   };
@@ -156,10 +156,10 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
         <div style={{ textAlign: 'right' }}>
           <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>SALES INVOICES DIRECTORY</h2>
           <p style={{ margin: '6px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>
-            Period: {fromDate || 'Start'} to {toDate || 'End'}
+            Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}
           </p>
           <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
-            Date of Print: {new Date().toLocaleDateString()}
+            Date of Print: {formatDate(new Date())}
           </p>
           {(customerQuery || addaFilter || articleFilter || subCustomerQuery || biltyNoQuery || missingFilter !== 'all') && (
             <div style={{ marginTop: '6px', fontSize: '10.5px', color: '#444444' }}>
@@ -204,7 +204,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
 
               return (
                 <tr key={bill.bill_id}>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{bill.bill_date.slice(0, 10)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{formatDate(bill.bill_date)}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontFamily: 'monospace' }}>{bill.bill_id}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontWeight: 'bold', fontFamily: 'monospace' }}>{bill.bill_no}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{cust?.name || 'Walk-in'}</td>
@@ -246,7 +246,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
         <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-        <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
       </div>
     </div>
   );
@@ -280,13 +280,15 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
                 <Calendar size={12} /> From Date
               </label>
-              <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input text-xs" />
+              <input type="date"
+            value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input text-xs" />
             </div>
             <div>
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
                 <Calendar size={12} /> To Date
               </label>
-              <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input text-xs" />
+              <input type="date"
+            value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input text-xs" />
             </div>
             <div>
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
@@ -478,7 +480,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
                         key={bill.bill_id}
                         className="hover:bg-slate-50/50 transition-colors"
                       >
-                        <td className="p-3.5 pl-4 font-mono text-slate-600 whitespace-nowrap">{bill.bill_date.slice(0, 10)}</td>
+                        <td className="p-3.5 pl-4 font-mono text-slate-600 whitespace-nowrap">{formatDate(bill.bill_date)}</td>
                         <td className="p-3.5 text-center">
                           <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
                             {bill.bill_id}

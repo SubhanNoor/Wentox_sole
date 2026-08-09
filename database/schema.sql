@@ -687,10 +687,12 @@ GO
 
 /* ----------------------------------------------------------------------------
    dbo.sale_bills
-   WHAT:  A confirmed or draft sale invoice (TASK-16). bill_no, gp_no,
-          bilty_no and adda_id are NOT NULL in v4.3 — the "Without
-          Bilty"/"Without Adda" dispatch-later workflow was removed
-          (real behaviour change, see design doc §5.6).
+   WHAT:  A confirmed or draft sale invoice (TASK-16). bill_no is the only
+          dispatch-ish field still NOT NULL. gp_no/bilty_no/adda_id are all
+          nullable: dispatch paperwork (gate pass, bilty, transport adda)
+          often isn't known yet when the bill is written up, so they can be
+          left blank at save time and filled in later via the bilty/adda
+          update flow (UC-07 "Search & Bilty Adda Updation").
    WHY:   main_ac_id snapshots the customer's main A/C at bill time
           (TASK-05), so later reorganising the account tree cannot silently
           change which account an old bill posted to.
@@ -705,9 +707,9 @@ CREATE TABLE dbo.sale_bills (
   delivery_type    VARCHAR(10)   NOT NULL CONSTRAINT DF_sb_deliv    DEFAULT ('SAME'),
   delivery_address NVARCHAR(300) NULL,
   bill_no          VARCHAR(30)   NOT NULL,                    -- TASK-16 "Bill #" (manual)
-  gp_no            VARCHAR(30)   NOT NULL,
-  bilty_no         VARCHAR(30)   NOT NULL,
-  adda_id          INT           NOT NULL,
+  gp_no            VARCHAR(30)   NULL,                        -- optional at save time, fillable later
+  bilty_no         VARCHAR(30)   NULL,                        -- optional at save time, fillable later
+  adda_id          INT           NULL,                        -- optional at save time, fillable later
   remarks          NVARCHAR(500) NULL,
   invoice_discount DECIMAL(12,2) NOT NULL CONSTRAINT DF_sb_invdisc  DEFAULT (0),
   total_cartons    INT           NOT NULL CONSTRAINT DF_sb_ctn      DEFAULT (0),

@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, X, Truck, MapPin } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, X, Truck, MapPin } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -118,20 +118,6 @@ export default function AddaSetupPage() {
     }
     setIsDupModalOpen(false);
     setDupMatch(null);
-    handleCloseModal();
-  };
-
-  const handleDeleteAdda = async (id: number) => {
-    if (!window.confirm('Are you sure you want to delete this Transport Adda?')) return;
-    const res = await addasApi.remove(id);
-    if (!res.ok) {
-      alert(res.error.message);
-      return;
-    }
-    setSuccessMsg('Transport Adda deleted successfully.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-    handleCloseModal();
-    await loadData();
   };
 
   const filteredAddas = useMemo(() => {
@@ -249,13 +235,6 @@ export default function AddaSetupPage() {
                   title="Edit Adda"
                 >
                   <Edit2 size={15} />
-                </button>
-                <button
-                  onClick={() => handleDeleteAdda(adda.adda_id)}
-                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                  title="Delete Adda"
-                >
-                  <Trash2 size={15} />
                 </button>
               </>
             )}

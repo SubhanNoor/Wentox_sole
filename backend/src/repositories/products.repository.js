@@ -3,7 +3,7 @@
 // Naming note (milestone6.md): the feature/screen is "products"/"Product Details" but the real
 // table is dbo.articles (PK article_id) — database_schema_v4.3.md's products/product_id shape is
 // stale here.
-const { sql, query } = require('../db/pool');
+const { sql, query, requestWithParams } = require('../db/pool');
 
 const COST_FIELDS = [
   'cutting', 'edging', 'up_stitch', 'bending', 'stubble_dori', 'shape_form',
@@ -83,8 +83,12 @@ async function findById(articleId) {
 
 // Highest numeric suffix among existing 'P-<n>' codes, so a fresh install starts at P-101 (the
 // documented UC-07 example) and every later article increments from whatever's already there.
-async function nextCode() {
-  const result = await query(
+// Takes the in-flight transaction (not the pool) so a multi-article batch insert sees its own
+// prior rows within the same transaction — a plain pool query would repeat the same MAX() for
+// every row and hand out duplicate codes.
+async function nextCode(transaction) {
+  const request = requestWithParams(transaction, {});
+  const result = await request.query(
     `SELECT MAX(TRY_CAST(SUBSTRING(code, 3, 30) AS INT)) AS maxNum
      FROM dbo.articles WHERE code LIKE 'P-%'`,
   );
@@ -94,17 +98,18 @@ async function nextCode() {
 
 // batch_no is scoped per vendor (per client instruction — each vendor has its own batch
 // sequence, e.g. Ali's batches and Abdullah's don't share a counter), starting at 1. Backed by
-// UQ_articles_vendor_batch UNIQUE (vendor_id, batch_no).
-async function nextBatchNo(vendorId) {
-  const result = await query(
+// UQ_articles_vendor_batch UNIQUE (vendor_id, batch_no). Transaction-scoped for the same reason
+// as nextCode() above.
+async function nextBatchNo(transaction, vendorId) {
+  const request = requestWithParams(transaction, { vendorId: { type: sql.Int, value: vendorId } });
+  const result = await request.query(
     `SELECT MAX(batch_no) AS maxBatch FROM dbo.articles WHERE vendor_id = @vendorId`,
-    { vendorId: { type: sql.Int, value: vendorId } },
   );
   return (result.recordset[0].maxBatch || 0) + 1;
 }
 
-async function insert(article) {
-  const params = {
+async function insert(transaction, article) {
+  const request = requestWithParams(transaction, {
     code: { type: sql.VarChar(30), value: article.code },
     name: { type: sql.NVarChar(150), value: article.name },
     categoryId: { type: sql.Int, value: article.category_id },
@@ -113,11 +118,11 @@ async function insert(article) {
     packing: { type: sql.Int, value: article.packing },
     salePrice: { type: sql.Decimal(12, 2), value: article.sale_price || 0 },
     ...costParams(article),
-  };
+  });
 
   const costCols = COST_FIELDS.join(', ');
   const costVals = COST_FIELDS.map((f) => `@${f}`).join(', ');
-  const result = await query(`
+  const result = await request.query(`
     INSERT INTO dbo.articles (
       code, name, category_id, vendor_id, batch_no, packing, sale_price, ${costCols}
     )
@@ -125,7 +130,7 @@ async function insert(article) {
     VALUES (
       @code, @name, @categoryId, @vendorId, @batchNo, @packing, @salePrice, ${costVals}
     )
-  `, params);
+  `);
   return result.recordset[0].article_id;
 }
 

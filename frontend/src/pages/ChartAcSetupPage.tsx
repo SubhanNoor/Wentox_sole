@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, RotateCcw, X, BookOpen } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, RotateCcw, X, BookOpen } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
 import DataListTable from '@/components/DataListTable';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
@@ -126,20 +126,7 @@ export default function ChartAcSetupPage() {
     handleCloseModal();
   };
 
-  const handleDeleteChart = async (chart: ChartOfAccountRow) => {
-    if (RESERVED_ACCOUNT_CODES.includes(chart.code)) return;
-    if (!window.confirm('Are you sure you want to close this Account?')) return;
-    const res = await chartAccountsApi.remove(chart.ac_id);
-    if (!res.ok) {
-      setErrorMsg(res.error.message);
-      setTimeout(() => setErrorMsg(''), 4000);
-      return;
-    }
-    setSuccessMsg('Account closed successfully.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-    handleCloseModal();
-    await loadData();
-  };
+
 
   const handleReactivateChart = async (chart: ChartOfAccountRow) => {
     const res = await chartAccountsApi.reactivate(chart.ac_id);
@@ -337,7 +324,6 @@ export default function ChartAcSetupPage() {
               },
             ]}
             actions={c => {
-              const isReserved = RESERVED_ACCOUNT_CODES.includes(c.code);
               return (
                 <>
                   <button
@@ -355,16 +341,7 @@ export default function ChartAcSetupPage() {
                     >
                       <RotateCcw size={15} />
                     </button>
-                  ) : (
-                    <button
-                      onClick={() => handleDeleteChart(c)}
-                      disabled={isReserved}
-                      className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                      title={isReserved ? 'Reserved account — cannot be closed' : 'Close Account'}
-                    >
-                      <Trash2 size={15} />
-                    </button>
-                  )}
+                  ) : null}
                 </>
               );
             }}

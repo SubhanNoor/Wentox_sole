@@ -327,7 +327,8 @@ export default function BankSetupPage() {
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">As at</label>
-                      <input type="date" value={openingDate} onChange={e => setOpeningDate(e.target.value)}
+                      <input type="date"
+            value={openingDate} onChange={e => setOpeningDate(e.target.value)}
                         className="soleria-input" />
                     </div>
                   </div>

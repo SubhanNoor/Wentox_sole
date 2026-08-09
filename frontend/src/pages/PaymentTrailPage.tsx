@@ -3,7 +3,7 @@ import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { PaymentTrailResult } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
@@ -41,10 +41,10 @@ export function PaymentTrailContent() {
           <div style={{ textAlign: 'right' }}>
             <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>PAYMENT TRAIL REPORT</h2>
             <p style={{ margin: '6px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>
-              Period: {fromDate || 'Start'} to {toDate || 'End'}
+              Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}
             </p>
             <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
-              Date of Print: {new Date().toLocaleDateString()}
+              Date of Print: {formatDate(new Date())}
             </p>
           </div>
         </div>
@@ -87,7 +87,7 @@ export function PaymentTrailContent() {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );
@@ -101,11 +101,13 @@ export function PaymentTrailContent() {
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
               <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
-              <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
+              <input type="date"
+            value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
             </div>
             <div className="flex items-center gap-2">
               <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
-              <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
+              <input type="date"
+            value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -128,7 +130,7 @@ export function PaymentTrailContent() {
             <div className="text-right">
               <h2 className="font-lora font-semibold text-lg uppercase">Payment Trail</h2>
               {(fromDate || toDate) && (
-                <p className="text-xs text-amber-700 font-semibold mt-0.5">Period: {fromDate || 'Start'} to {toDate || 'End'}</p>
+                <p className="text-xs text-amber-700 font-semibold mt-0.5">Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}</p>
               )}
             </div>
           </div>

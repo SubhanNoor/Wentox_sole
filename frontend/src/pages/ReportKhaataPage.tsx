@@ -4,7 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import { Search, Eye } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { BusinessLedgerSummaryRow, LedgerRow } from '@/lib/api';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
@@ -18,7 +18,6 @@ interface KhaataRow {
   narration: string;
   chequeNo?: string | null;
   chequeDate?: string | null;
-  chequeReceivedDate?: string | null;
   pairs: number;
   debit: number;
   credit: number;
@@ -80,10 +79,10 @@ export function ReportKhaataContent() {
   const runningKhaata = useMemo<KhaataRow[]>(() => {
     if (!ledger) return [];
     return [
-      { date: fromDate ? `Before ${fromDate}` : '---', type: 'Opening Balance', invNo: '-', billNo: '-', narration: fromDate ? `Opening balance before ${fromDate}` : 'Opening Balance brought forward', chequeNo: undefined, chequeDate: undefined, chequeReceivedDate: undefined, pairs: 0, debit: 0, credit: 0, balance: ledger.opening_balance },
+      { date: fromDate ? `Before ${formatDate(fromDate)}` : '---', type: 'Opening Balance', invNo: '-', billNo: '-', narration: fromDate ? `Opening balance before ${formatDate(fromDate)}` : 'Opening Balance brought forward', chequeNo: undefined, chequeDate: undefined, pairs: 0, debit: 0, credit: 0, balance: ledger.opening_balance },
       ...ledger.rows.map(r => ({
-        date: r.date, type: r.type, invNo: r.inv_no != null ? String(r.inv_no) : String(r.entry_id), billNo: r.bill_no || '-', narration: r.narration || '',
-        chequeNo: r.cheque_no, chequeDate: r.cheque_date, chequeReceivedDate: r.cheque_received_date,
+        date: formatDate(r.date), type: r.type, invNo: r.inv_no != null ? String(r.inv_no) : String(r.entry_id), billNo: r.bill_no || '-', narration: r.narration || '',
+        chequeNo: r.cheque_no, chequeDate: r.cheque_date ? formatDate(r.cheque_date) : undefined,
         pairs: r.pairs || 0, debit: r.debit, credit: r.credit, balance: r.balance,
       })),
     ];
@@ -109,8 +108,8 @@ export function ReportKhaataContent() {
           <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>CUSTOMER KHAATA LEDGER STATEMENT</h2>
           <p style={{ margin: '4px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>{selectedCustomer?.name || 'All Customers'}</p>
           <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Code: {selectedCustomer?.code} | City: {selectedCustomer?.city_name || 'General'}</p>
-          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Period: {fromDate || 'Start'} to {toDate || 'End'}</p>
-          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Date of Print: {new Date().toLocaleDateString()}</p>
+          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}</p>
+          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Date of Print: {formatDate(new Date())}</p>
         </div>
       </div>
 
@@ -131,7 +130,7 @@ export function ReportKhaataContent() {
         <tbody>
           {runningKhaata.map((row, idx) => (
             <tr key={idx} style={{ fontWeight: row.type === 'Opening Balance' ? 'bold' : 'normal', backgroundColor: row.type === 'Opening Balance' ? '#f9f9f9' : '#ffffff' }}>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.date}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{formatDate(row.date)}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.type}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{row.invNo}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center' }}>{row.billNo}</td>
@@ -139,8 +138,7 @@ export function ReportKhaataContent() {
                 {row.chequeNo ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', lineHeight: '1.5' }}>
                     <span><span style={{ color: '#888888', fontWeight: 'bold' }}>Cheque No:</span> {row.chequeNo}</span>
-                    <span><span style={{ color: '#888888', fontWeight: 'bold' }}>Date:</span> {row.chequeDate}</span>
-                    <span><span style={{ color: '#888888', fontWeight: 'bold' }}>Rcvd:</span> {row.chequeReceivedDate || 'Pending'}</span>
+                    <span><span style={{ color: '#888888', fontWeight: 'bold' }}>Date:</span> {formatDate(row.chequeDate)}</span>
                   </div>
                 ) : row.narration}
               </td>
@@ -176,7 +174,7 @@ export function ReportKhaataContent() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
         <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-        <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
       </div>
     </div>
   );
@@ -372,7 +370,7 @@ export function ReportKhaataContent() {
                   </div>
                   {(fromDate || toDate) && (
                     <div className="text-xs text-amber-700 font-semibold mt-0.5">
-                      Period: {fromDate || 'Start'} to {toDate || 'End'}
+                      Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}
                     </div>
                   )}
                 </div>
@@ -414,7 +412,7 @@ export function ReportKhaataContent() {
                             className={`border-b ${row.type === 'Opening Balance' ? 'bg-slate-50 font-medium text-slate-700' : isRed ? 'text-rose-700 hover:bg-rose-50/30' : 'text-slate-700 hover:bg-slate-50/30'}`}
                             style={{ borderColor: 'var(--border-table)' }}
                           >
-                            <td className="p-3 pl-4 font-semibold">{row.date}</td>
+                            <td className="p-3 pl-4 font-semibold">{formatDate(row.date)}</td>
                             <td className="p-3">
                               <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${row.type === 'Sale Bill' ? 'bg-rose-50 text-rose-700' : row.type === 'Receipt (Jamma)' ? 'bg-emerald-50 text-emerald-700' : row.type === 'Sale Return' ? 'bg-blue-50 text-blue-700' : row.type === 'Commission' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-700'}`}>
                                 {row.type}
@@ -426,8 +424,7 @@ export function ReportKhaataContent() {
                               {row.chequeNo ? (
                                 <div className="flex flex-col gap-0.5">
                                   <span><span className="text-slate-400">Cheque No:</span> {row.chequeNo}</span>
-                                  <span><span className="text-slate-400">Date on Cheque:</span> {row.chequeDate}</span>
-                                  <span><span className="text-slate-400">Received:</span> {row.chequeReceivedDate}</span>
+                                  <span><span className="text-slate-400">Date on Cheque:</span> {row.chequeDate ? formatDate(row.chequeDate) : '-'}</span>
                                 </div>
                               ) : (
                                 row.narration

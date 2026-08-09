@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { ReceiptRow, CustomerRow, CityRow } from '@/lib/api';
+import { formatDate } from '@/lib/utils';
 import { Calendar, Search, ArrowRight, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check, MapPin } from 'lucide-react';
 
 export default function OverallReceiptsTab() {
@@ -181,7 +182,7 @@ export default function OverallReceiptsTab() {
             <tbody className="divide-y divide-slate-100 bg-white">
               {activeCustomerDetails.receipts.map(r => (
                 <tr key={r.receipt_id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="p-3.5 pl-4 font-mono text-slate-600">{r.receipt_date.slice(0, 10)}</td>
+                  <td className="p-3.5 pl-4 font-mono text-slate-600">{formatDate(r.receipt_date)}</td>
                   <td className="p-3.5 text-center">
                     <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
                       #{r.receipt_id}

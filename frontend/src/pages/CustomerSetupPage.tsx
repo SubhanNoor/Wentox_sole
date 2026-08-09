@@ -1,10 +1,10 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, MapPin, Edit2, Trash2, ArrowLeft, Settings, X, UserCheck, Eye } from 'lucide-react';
+import { Plus, Search, MapPin, Edit2, ArrowLeft, Settings, X, UserCheck, Eye } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
 import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
@@ -53,8 +53,6 @@ export default function CustomerSetupPage() {
   const [dupStatus, setDupStatus] = useState<'active' | 'inactive'>('active');
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
   const [pendingCustomer, setPendingCustomer] = useState<{ name: string; region_id: number; city_id?: number } | null>(null);
-
-  const [deletingCustomer, setDeletingCustomer] = useState<CustomerRow | null>(null);
 
   // Ledger detail filters
   const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
@@ -168,15 +166,7 @@ export default function CustomerSetupPage() {
     setPendingCustomer(null);
   };
 
-  const confirmDelete = async () => {
-    if (!deletingCustomer) return;
-    const res = await api.customers.remove(deletingCustomer.customer_id);
-    setDeletingCustomer(null);
-    if (!res.ok) return setErrorMsg('Failed to delete: ' + res.error.message);
-    flash('Customer deleted successfully.');
-    handleCloseModal();
-    loadAll();
-  };
+
 
   const filteredLedgerRows = useMemo(() => ledger?.rows || [], [ledger]);
 
@@ -184,7 +174,7 @@ export default function CustomerSetupPage() {
     if (!selectedCustomer) return;
     const headers = ['Date', 'Type', 'Ref No', 'Narration', 'Debit (PKR)', 'Credit (PKR)', 'Balance (PKR)'];
     const rows = [
-      [fromDate ? `Before ${fromDate}` : '---', 'Opening Balance', '-', 'Opening Balance brought forward', '0', '0', ledger?.opening_balance || 0],
+      [fromDate ? `Before ${formatDate(fromDate)}` : '---', 'Opening Balance', '-', 'Opening Balance brought forward', '0', '0', ledger?.opening_balance || 0],
       ...filteredLedgerRows.map(r => [r.date, r.type, r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, r.narration || '', r.debit, r.credit, r.balance]),
       ['Total', '', '', '', ledger?.total_debit || 0, ledger?.total_credit || 0, ledger?.closing_balance || 0]
     ];
@@ -213,10 +203,10 @@ export default function CustomerSetupPage() {
               Customer: {selectedCustomer.name} (Code: {selectedCustomer.customer_id})
             </p>
             <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
-              Period: {fromDate || 'Beginning'} to {toDate || 'Present'}
+              Period: {fromDate ? formatDate(fromDate) : 'Beginning'} to {toDate ? formatDate(toDate) : 'Present'}
             </p>
             <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#555555' }}>
-              Date of Print: {new Date().toLocaleDateString()}
+              Date of Print: {formatDate(new Date())}
             </p>
           </div>
         </div>
@@ -237,7 +227,7 @@ export default function CustomerSetupPage() {
           <tbody>
             {/* Opening Balance Row */}
             <tr style={{ backgroundColor: '#fafafa', fontWeight: 'bold' }}>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{fromDate ? `Before ${fromDate}` : '---'}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{fromDate ? `Before ${formatDate(fromDate)}` : '---'}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>Opening Balance</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>-</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontStyle: 'italic' }}>Opening Balance brought forward</td>
@@ -256,7 +246,7 @@ export default function CustomerSetupPage() {
             ) : (
               filteredLedgerRows.map((row) => (
                 <tr key={row.entry_id}>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{row.date}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{formatDate(row.date)}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{row.type}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.narration || '-'}</td>
@@ -303,7 +293,7 @@ export default function CustomerSetupPage() {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );
@@ -431,13 +421,6 @@ export default function CustomerSetupPage() {
                     >
                       <Edit2 size={15} />
                     </button>
-                    <button
-                      onClick={() => setDeletingCustomer(c)}
-                      className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                      title="Delete Customer"
-                    >
-                      <Trash2 size={15} />
-                    </button>
                   </>
                 )}
               />
@@ -526,7 +509,7 @@ export default function CustomerSetupPage() {
                     ) : (
                       filteredLedgerRows.map((row) => (
                         <tr key={row.entry_id} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
-                          <td className="p-3 font-medium text-slate-600">{row.date}</td>
+                          <td className="p-3 font-medium text-slate-600">{formatDate(row.date)}</td>
                           <td className="p-3 text-slate-700">{row.type}</td>
                           <td className="p-3 text-slate-500 font-mono">{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                           <td className="p-3 text-slate-600">{row.narration || '-'}</td>
@@ -642,33 +625,6 @@ export default function CustomerSetupPage() {
           onCreateNew={handleCreateNewAnyway}
           onCancel={() => { setIsDupModalOpen(false); setPendingCustomer(null); }}
         />
-
-        {/* Delete Confirmation Modal */}
-        {deletingCustomer && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200">
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95 duration-200">
-              <h3 className="font-lora font-bold text-lg text-slate-900 mb-2">Delete Customer?</h3>
-              <p className="text-xs text-slate-500 mb-4">
-                Are you sure you want to delete <span className="font-bold text-slate-800">{deletingCustomer.name}</span>? This action cannot be undone.
-              </p>
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => setDeletingCustomer(null)}
-                  className="px-4 py-2 text-xs font-semibold rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmDelete}
-                  className="px-4 py-2 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white transition-colors cursor-pointer"
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
       </div>
     </AppLayout>
   );

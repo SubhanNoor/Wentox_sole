@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, Trash2, Warehouse, X } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, Warehouse, X } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import { stores as storesApi, type StoreRow } from '@/lib/api';
@@ -93,18 +93,7 @@ export default function StoreSetupPage() {
     handleCloseModal();
   };
 
-  const handleDeleteStore = async (id: number) => {
-    if (!window.confirm('Are you sure you want to delete this Store?')) return;
-    const res = await storesApi.remove(id);
-    if (!res.ok) {
-      alert(res.error.message);
-      return;
-    }
-    setSuccessMsg('Store deleted successfully.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-    handleCloseModal();
-    await loadData();
-  };
+
 
   const filteredStores = useMemo(() => {
     const activeStores = stores.filter(s => s.is_active);
@@ -205,13 +194,6 @@ export default function StoreSetupPage() {
                   title="Edit Store"
                 >
                   <Edit2 size={15} />
-                </button>
-                <button
-                  onClick={() => handleDeleteStore(store.store_id)}
-                  className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                  title="Delete Store"
-                >
-                  <Trash2 size={15} />
                 </button>
               </>
             )}

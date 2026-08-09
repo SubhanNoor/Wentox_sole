@@ -3,7 +3,7 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Search, ChevronDown, ChevronRight, LayoutList, X, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { StockRow, VendorStockRow, ProductLedgerResult, StockMovementRow, StockMovementType, CategoryRow, VendorRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
@@ -320,7 +320,7 @@ export default function ReportStockPage() {
     let reportTitle = 'CURRENT FINISHED STOCK - FULL COLOR MATRIX REPORT';
     if (activeStockTab === 'material') reportTitle = 'RAW MATERIAL INVENTORY REPORT';
     else if (activeStockTab === 'ledger') reportTitle = 'PRODUCT MOVEMENT LEDGER';
-    else if (activeStockTab === 'daily') reportTitle = `DAILY PRODUCTION LOG (${dailyDate})`;
+    else if (activeStockTab === 'daily') reportTitle = `DAILY PRODUCTION LOG (${formatDate(dailyDate)})`;
     else if (activeStockTab === 'weekly') reportTitle = 'WEEKLY PRODUCTION REPORT';
     else if (activeStockTab === 'monthly') reportTitle = `MONTHLY PRODUCTION REPORT (${getMonthName(monthlyMonth)} ${monthlyYear})`;
     else if (activeStockTab === 'overall') reportTitle = 'CUMULATIVE OVERALL PRODUCTION REPORT';
@@ -338,7 +338,7 @@ export default function ReportStockPage() {
               Category: {selectedCategory === 'all' ? 'All Categories' : categories.find(c => String(c.category_id) === selectedCategory)?.name}
             </p>
             <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
-              Date of Print: {new Date().toLocaleDateString()}
+              Date of Print: {formatDate(new Date())}
             </p>
           </div>
         </div>
@@ -442,7 +442,7 @@ export default function ReportStockPage() {
                 ledgerResult.rows.map((e, idx) => (
                   <tr key={e.movement_id}>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{idx + 1}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{e.movement_date}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{formatDate(e.movement_date)}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace', fontWeight: 'bold' }}>{e.article_code}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{e.article_name}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{e.color}</td>
@@ -491,7 +491,7 @@ export default function ReportStockPage() {
                 filteredLogs.map((log, idx) => (
                   <tr key={log.movement_id}>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{idx + 1}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{log.movement_date}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{formatDate(log.movement_date)}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace', fontWeight: 'bold' }}>{log.article_code}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{log.article_name}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{log.color}</td>
@@ -536,7 +536,7 @@ export default function ReportStockPage() {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );
@@ -757,7 +757,7 @@ export default function ReportStockPage() {
                     <span className="text-xs bg-[#111c2a] text-[#B08D57] px-3 py-1.5 rounded-lg font-bold">
                       {(() => {
                         const { start, end } = getWeekRange(weeklyDate);
-                        return `${start.toLocaleDateString()} to ${end.toLocaleDateString()}`;
+                        return `${formatDate(start)} to ${formatDate(end)}`;
                       })()}
                     </span>
                   </div>
@@ -906,13 +906,7 @@ export default function ReportStockPage() {
                                         {group.rows.map(r => (
                                           <tr key={r.variant_id} className="border-t" style={{ borderColor: 'var(--border-table)' }}>
                                             <td className="p-2 pl-3">
-                                              <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${
-                                                r.color.toLowerCase() === 'black' ? 'bg-slate-900 text-white' :
-                                                r.color.toLowerCase() === 'white' ? 'bg-slate-100 text-slate-800 border border-slate-200' :
-                                                r.color.toLowerCase() === 'brown' ? 'bg-amber-900 text-amber-50' :
-                                                r.color.toLowerCase() === 'tan' ? 'bg-orange-100 text-orange-800' :
-                                                'bg-slate-100 text-slate-600'
-                                              }`}>
+                                              <span className="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
                                                 {r.color}
                                               </span>
                                             </td>
@@ -1033,7 +1027,7 @@ export default function ReportStockPage() {
                     ) : (
                       ledgerResult.rows.map((entry) => (
                         <tr key={entry.movement_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                          <td className="p-3 pl-4 font-mono text-slate-600">{entry.movement_date}</td>
+                          <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(entry.movement_date)}</td>
                           <td className="p-3 font-semibold text-slate-700">{entry.article_code}</td>
                           <td className="p-3 text-slate-700">{entry.article_name}</td>
                           <td className="p-3 text-slate-500">{entry.color}</td>
@@ -1093,17 +1087,11 @@ export default function ReportStockPage() {
                       filteredLogs.map((log, idx) => (
                         <tr key={log.movement_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                           <td className="p-3 pl-4 font-mono text-slate-500">{idx + 1}</td>
-                          <td className="p-3 text-slate-600 font-semibold">{log.movement_date}</td>
+                          <td className="p-3 text-slate-600 font-semibold">{formatDate(log.movement_date)}</td>
                           <td className="p-3 font-semibold text-slate-700">{log.article_code}</td>
                           <td className="p-3 font-semibold text-slate-800">{log.article_name}</td>
                           <td className="p-3">
-                            <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                              log.color.toLowerCase() === 'black' ? 'bg-slate-900 text-white' :
-                              log.color.toLowerCase() === 'white' ? 'bg-slate-100 text-slate-800 border border-slate-200' :
-                              log.color.toLowerCase() === 'brown' ? 'bg-amber-900 text-amber-50' :
-                              log.color.toLowerCase() === 'tan' ? 'bg-orange-100 text-orange-800' :
-                              'bg-slate-100 text-slate-600'
-                            }`}>
+                            <span className="px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
                               {log.color}
                             </span>
                           </td>
@@ -1159,13 +1147,13 @@ export default function ReportStockPage() {
                 {activeStockTab === 'overall' && 'OVERALL PRODUCTION REPORT'}
               </h2>
               <p style={{ margin: 0, fontSize: '11px', color: '#555555' }}>
-                {activeStockTab === 'current' && `Date: ${new Date().toLocaleDateString()}`}
-                {activeStockTab === 'material' && `Date: ${new Date().toLocaleDateString()}`}
-                {activeStockTab === 'ledger' && `Range: ${ledgerFromDate || 'Beginning'} to ${ledgerToDate || 'Present'}`}
-                {activeStockTab === 'daily' && `Production Date: ${dailyDate}`}
-                {activeStockTab === 'weekly' && `${getWeekRange(weeklyDate).start.toLocaleDateString()} - ${getWeekRange(weeklyDate).end.toLocaleDateString()}`}
+                {activeStockTab === 'current' && `Date: ${formatDate(new Date())}`}
+                {activeStockTab === 'material' && `Date: ${formatDate(new Date())}`}
+                {activeStockTab === 'ledger' && `Range: ${ledgerFromDate ? formatDate(ledgerFromDate) : 'Beginning'} to ${ledgerToDate ? formatDate(ledgerToDate) : 'Present'}`}
+                {activeStockTab === 'daily' && `Production Date: ${formatDate(dailyDate)}`}
+                {activeStockTab === 'weekly' && `${formatDate(getWeekRange(weeklyDate).start)} - ${formatDate(getWeekRange(weeklyDate).end)}`}
                 {activeStockTab === 'monthly' && `Period: ${getMonthName(monthlyMonth)} ${monthlyYear}`}
-                {activeStockTab === 'overall' && `Range: ${fromDate || 'Beginning'} to ${toDate || 'Present'}`}
+                {activeStockTab === 'overall' && `Range: ${fromDate ? formatDate(fromDate) : 'Beginning'} to ${toDate ? formatDate(toDate) : 'Present'}`}
               </p>
             </div>
           </div>
@@ -1265,7 +1253,7 @@ export default function ReportStockPage() {
                 {ledgerResult.rows.map((e, idx) => (
                   <tr key={e.movement_id}>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.movement_date}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{formatDate(e.movement_date)}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{e.article_code}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.article_name}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.color}</td>
@@ -1298,7 +1286,7 @@ export default function ReportStockPage() {
                 {filteredLogs.map((log, idx) => (
                   <tr key={log.movement_id}>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{log.movement_date}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{formatDate(log.movement_date)}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{log.article_code}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{log.article_name}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{log.color}</td>
@@ -1339,7 +1327,7 @@ export default function ReportStockPage() {
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
             <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-            <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+            <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
           </div>
         </div>
         )}
@@ -1357,7 +1345,7 @@ export default function ReportStockPage() {
             </div>
             <div style={{ textAlign: 'right' }}>
               <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>CURRENT STOCK — FULL REPORT</h2>
-              <p style={{ margin: 0, fontSize: '11px', color: '#555555' }}>Date: {new Date().toLocaleDateString()}</p>
+              <p style={{ margin: 0, fontSize: '11px', color: '#555555' }}>Date: {formatDate(new Date())}</p>
             </div>
           </div>
 
@@ -1413,7 +1401,7 @@ export default function ReportStockPage() {
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
             <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-            <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+            <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
           </div>
         </div>
         )}

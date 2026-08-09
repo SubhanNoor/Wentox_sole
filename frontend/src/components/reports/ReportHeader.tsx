@@ -1,6 +1,7 @@
 import React from 'react';
 import type { CompanyInfo, ReportMetaField } from '@/lib/reportConfig';
 import wentoxLogo from '@/assets/wentox_logo.png';
+import { formatDate } from '@/lib/utils';
 
 interface ReportHeaderProps {
   title: string;
@@ -48,11 +49,11 @@ export const ReportHeader: React.FC<ReportHeaderProps> = ({
           {(periodFrom || periodTo) && (
             <div className="mt-1 text-xs font-mono font-medium text-slate-700 print:text-[11px]">
               <span className="text-slate-500">Period: </span>
-              {periodFrom || 'Start'} <span className="text-slate-400">to</span> {periodTo || 'Today'}
+              {periodFrom ? formatDate(periodFrom) : 'Start'} <span className="text-slate-400">to</span> {periodTo ? formatDate(periodTo) : 'Today'}
             </div>
           )}
           <div className="text-[10px] text-slate-400 mt-0.5 font-mono print:text-[9px]">
-            Generated: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            Generated: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </div>
         </div>
       </div>

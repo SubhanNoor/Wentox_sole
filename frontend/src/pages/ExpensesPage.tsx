@@ -7,7 +7,8 @@ import type {
   VendorRow, BankAccountRow, BusinessAccountRow, ChequeRow, ChequeAllocationRow,
   ExpenseRow, ExpenseCreateInput, DraftExpenseRow, ExpensePaymentMode
 } from '@/lib/api';
-import { Save, Wallet, Edit, Trash2, AlertTriangle } from 'lucide-react';
+import { formatDate } from '@/lib/utils';
+import { Save, Wallet, Edit } from 'lucide-react';
 import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
 import MonthlyExpensesTab from '@/components/MonthlyExpensesTab';
 import OverallExpensesTab from '@/components/OverallExpensesTab';
@@ -100,7 +101,7 @@ export default function ExpensesPage() {
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-  const [deleteTarget, setDeleteTarget] = useState<ExpenseRow | null>(null);
+
 
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
@@ -318,15 +319,7 @@ export default function ExpensesPage() {
     refreshCheques();
   };
 
-  const confirmDeleteExpense = async () => {
-    if (!deleteTarget) return;
-    const res = await api.expenses.remove(deleteTarget.expense_id);
-    setDeleteTarget(null);
-    if (!res.ok) { fail('Failed to delete expense: ' + res.error.message); return; }
-    flash('Expense deleted.');
-    if (expenseId === deleteTarget.expense_id) handleNew();
-    refreshExpenses();
-  };
+
 
   // ── draftExpenses (server-side, all 4 payment modes draftable) ──
   /*
@@ -353,16 +346,7 @@ export default function ExpensesPage() {
     setErrorMsg('');
   };
 
-  const handleDeleteDraft = async () => {
-    if (!selectedDraftPick) { fail('Please select a draft first.'); return; }
-    const id = Number(selectedDraftPick);
-    const res = await api.draftExpenses.remove(id);
-    if (!res.ok) { fail('Failed to delete draft: ' + res.error.message); return; }
-    if (loadedDraftId === id) handleNew();
-    setSelectedDraftPick('');
-    flash('Draft deleted successfully.');
-    refreshDrafts();
-  };
+
 
   const handleConfirmDraft = async () => {
     if (!selectedDraftPick) { fail('Please select a draft first.'); return; }
@@ -479,7 +463,7 @@ export default function ExpensesPage() {
                     <option value="">Select a draft to load...</option>
                     {drafts.map(d => (
                       <option key={d.draft_id} value={d.draft_id}>
-                        {accountName(d.ba_id)} - {formatCurrency(d.amount)} ({d.expense_date.slice(0, 10)})
+                        {accountName(d.ba_id)} - {formatCurrency(d.amount)} ({formatDate(d.expense_date)})
                       </option>
                     ))}
                   </select>
@@ -492,10 +476,10 @@ export default function ExpensesPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={handleDeleteDraft}
-                    className="text-xs text-rose-600 hover:text-rose-800 font-semibold transition-colors"
+                    onClick={handleConfirmDraft}
+                    className="text-xs text-emerald-700 hover:text-emerald-900 font-semibold transition-colors"
                   >
-                    Delete Selected Draft
+                    Confirm Draft
                   </button>
                 </div>
               </div>
@@ -533,19 +517,6 @@ export default function ExpensesPage() {
                         className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
                       >
                         Unpost
-                      </button>
-                    )}
-                    {!isPosted && expenseId != null && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const row = expenseRows.find(r => r.expense_id === expenseId);
-                          if (row) setDeleteTarget(row);
-                        }}
-                        className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
-                        title="Delete"
-                      >
-                        <Trash2 size={15} />
                       </button>
                     )}
                     <button
@@ -787,7 +758,7 @@ export default function ExpensesPage() {
                           className="border-b hover:bg-slate-50/50 cursor-pointer"
                           style={{ borderColor: 'var(--border-table)' }}
                         >
-                          <td className="p-3 pl-4 font-mono text-slate-600">{r.expense_date.slice(0, 10)}</td>
+                          <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(r.expense_date)}</td>
                           <td className="p-3 font-semibold text-slate-900">{r.ba_name || accountName(r.ba_id)}</td>
                           <td className="p-3 text-center text-xs text-slate-500">{r.payment_mode}</td>
                           <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
@@ -808,33 +779,7 @@ export default function ExpensesPage() {
           </div>
         )}
 
-        {/* ── Delete confirmation ── */}
-        {deleteTarget && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
-              <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
-                <AlertTriangle size={18} className="text-rose-600" /> Delete Expense
-              </h3>
-              <p className="text-xs text-slate-600 mb-4 leading-relaxed">
-                This expense of <strong>{formatCurrency(deleteTarget.amount)}</strong> will be permanently removed. This cannot be undone.
-              </p>
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => setDeleteTarget(null)}
-                  className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmDeleteExpense}
-                  className="px-4 py-2 text-sm rounded-lg bg-rose-600 text-white hover:bg-rose-700"
-                >
-                  Confirm Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+
 
       </div>
     </AppLayout>

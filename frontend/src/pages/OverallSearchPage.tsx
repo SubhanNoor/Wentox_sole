@@ -4,7 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import { Search, ArrowLeft, Users, User, Truck, HardHat, Landmark, BookOpen, Eye } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { OverallDirectoryRow, OverallEntityType, LedgerRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
@@ -111,31 +111,16 @@ export default function OverallSearchPage() {
     if (!selectedPerson) return;
     const headers = ['Date', 'Type', 'Reference', 'Narration', 'Debit (PKR)', 'Credit (PKR)', 'Balance (PKR)'];
     const rows = [
-      [fromDate ? `Before ${fromDate}` : '---', 'Opening Balance', '-', 'Opening Balance brought forward', '0', '0', openingBalance],
-      ...filteredRows.map(r => [r.date, r.type, r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, r.narration || '', r.debit, r.credit, r.balance]),
+      [fromDate ? `Before ${formatDate(fromDate)}` : '---', 'Opening Balance', '-', 'Opening Balance brought forward', '0', '0', openingBalance],
+      ...filteredRows.map(r => [formatDate(r.date), r.type, r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, r.narration || '', r.debit, r.credit, r.balance]),
       ['Total', '', '', '', totalDebit, totalCredit, endingBalance]
     ];
     exportRowsToExcel(`ledger-${selectedPerson.name.toLowerCase().replace(/\s+/g, '-')}`, headers, rows);
   };
 
-  const getTypeBadgeStyle = (type: EntityType) => {
-    switch (type) {
-      case 'customer':
-        return 'bg-amber-100 text-amber-900 border-amber-300';
-      case 'vendor':
-        return 'bg-slate-900 text-[#B08D57] border-slate-700';
-      case 'employee':
-        return 'bg-blue-100 text-blue-800 border-blue-200';
-      case 'subcustomer':
-        return 'bg-emerald-100 text-emerald-800 border-emerald-200';
-      case 'account':
-        return 'bg-purple-100 text-purple-800 border-purple-200';
-      case 'bank':
-        return 'bg-cyan-100 text-cyan-800 border-cyan-200';
-      default:
-        return 'bg-slate-100 text-slate-700 border-slate-200';
-    }
-  };
+  // One consistent badge style for every entity type — the icon still varies (getTypeIcon) so
+  // the type is still distinguishable, but the box itself no longer changes color/size per type.
+  const TYPE_BADGE_STYLE = 'bg-slate-100 text-slate-700 border-slate-300';
 
   const getTypeIcon = (type: EntityType) => {
     switch (type) {
@@ -168,10 +153,10 @@ export default function OverallSearchPage() {
               Account: {selectedPerson.name} ({selectedPerson.typeLabel})
             </p>
             <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
-              Period: {fromDate || 'Beginning'} to {toDate || 'Present'}
+              Period: {fromDate ? formatDate(fromDate) : 'Beginning'} to {toDate ? formatDate(toDate) : 'Present'}
             </p>
             <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#555555' }}>
-              Date of Print: {new Date().toLocaleDateString()}
+              Date of Print: {formatDate(new Date())}
             </p>
           </div>
         </div>
@@ -192,7 +177,7 @@ export default function OverallSearchPage() {
           <tbody>
             {/* Opening Balance Row */}
             <tr style={{ backgroundColor: '#fafafa', fontWeight: 'bold' }}>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{fromDate ? `Before ${fromDate}` : '---'}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{fromDate ? `Before ${formatDate(fromDate)}` : '---'}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>Opening Balance</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>-</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontStyle: 'italic' }}>Opening Balance brought forward</td>
@@ -211,7 +196,7 @@ export default function OverallSearchPage() {
             ) : (
               filteredRows.map((row) => (
                 <tr key={row.entry_id}>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{row.date}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{formatDate(row.date)}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{row.type}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.narration || '-'}</td>
@@ -258,7 +243,7 @@ export default function OverallSearchPage() {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );
@@ -340,9 +325,9 @@ export default function OverallSearchPage() {
                   {
                     key: 'type',
                     header: 'Type',
-                    width: '150px',
+                    width: '180px',
                     render: person => (
-                      <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded border uppercase tracking-wider inline-flex items-center gap-1.5 ${getTypeBadgeStyle(person.type)}`}>
+                      <span className={`text-[10px] font-bold px-2.5 py-1 rounded border uppercase tracking-wider inline-flex items-center gap-1.5 whitespace-nowrap ${TYPE_BADGE_STYLE}`}>
                         {getTypeIcon(person.type)} {person.typeLabel}
                       </span>
                     ),
@@ -389,7 +374,7 @@ export default function OverallSearchPage() {
                 <div>
                   <h2 className="font-lora font-bold text-xl text-slate-900 flex items-center gap-2">
                     {selectedPerson.name}
-                    <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded border uppercase tracking-wider ${getTypeBadgeStyle(selectedPerson.type)}`}>
+                    <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded border uppercase tracking-wider whitespace-nowrap ${TYPE_BADGE_STYLE}`}>
                       {selectedPerson.typeLabel}
                     </span>
                   </h2>
@@ -443,12 +428,12 @@ export default function OverallSearchPage() {
                 <div>
                   <h3 className="font-lora font-bold text-xl text-slate-900">{selectedPerson.name} — Financial Ledger Statement</h3>
                   <p className="text-xs text-slate-500 font-medium mt-1">
-                    Period: {fromDate || 'Beginning'} to {toDate || 'Present'} • Account Type: {selectedPerson.typeLabel}
+                    Period: {fromDate ? formatDate(fromDate) : 'Beginning'} to {toDate ? formatDate(toDate) : 'Present'} • Account Type: {selectedPerson.typeLabel}
                   </p>
                 </div>
                 <div className="text-right text-xs text-slate-500">
                   <p className="font-bold text-slate-800">WENTOX FOOTWEAR DISTRIBUTION</p>
-                  <p>Generated: {new Date().toLocaleDateString()}</p>
+                  <p>Generated: {formatDate(new Date())}</p>
                 </div>
               </div>
 
@@ -475,7 +460,7 @@ export default function OverallSearchPage() {
                     <tbody>
                       {/* Opening Balance Row */}
                       <tr className="border-b bg-amber-50/40 font-semibold text-slate-700" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-3 text-slate-500">{fromDate ? `Before ${fromDate}` : '---'}</td>
+                        <td className="p-3 text-slate-500">{fromDate ? `Before ${formatDate(fromDate)}` : '---'}</td>
                         <td className="p-3 font-bold text-amber-800">Opening Balance</td>
                         <td className="p-3">-</td>
                         <td className="p-3 italic text-slate-500">Opening Balance brought forward</td>
@@ -498,7 +483,7 @@ export default function OverallSearchPage() {
                             className="border-b hover:bg-slate-50/60 transition-colors"
                             style={{ borderColor: 'var(--border-table)' }}
                           >
-                            <td className="p-3 font-medium text-slate-600">{row.date}</td>
+                            <td className="p-3 font-medium text-slate-600">{formatDate(row.date)}</td>
                             <td className="p-3 font-semibold text-slate-800">{row.type}</td>
                             <td className="p-3 text-slate-500 font-mono">{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                             <td className="p-3 text-slate-700">{row.narration}</td>

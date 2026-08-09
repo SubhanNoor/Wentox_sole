@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Eye } from 'lucide-react';
 import * as api from '@/lib/api';
@@ -54,7 +54,7 @@ export default function ProductLedgerContent() {
 
   const handleExportExcel = () => {
     const headers = ['Date', 'Product Code', 'Article', 'Color', 'Vendor', 'Type', 'Ref #', 'Debit (IN)', 'Credit (OUT)'];
-    const rows = result.rows.map(r => [r.movement_date, r.article_code, r.article_name, r.color, r.vendor_name || '', MOVEMENT_TYPE_LABEL[r.movement_type], `#${r.movement_id}`, r.debit, r.credit]);
+    const rows = result.rows.map(r => [formatDate(r.movement_date), r.article_code, r.article_name, r.color, r.vendor_name || '', MOVEMENT_TYPE_LABEL[r.movement_type], `#${r.movement_id}`, r.debit, r.credit]);
     exportRowsToExcel('product-ledger', headers, rows);
   };
 
@@ -68,10 +68,10 @@ export default function ProductLedgerContent() {
           <div style={{ textAlign: 'right' }}>
             <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>PRODUCT LEDGER REPORT</h2>
             <p style={{ margin: '6px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>
-              Period: {fromDate || 'Start'} to {toDate || 'End'}
+              Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}
             </p>
             <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
-              Date of Print: {new Date().toLocaleDateString()}
+              Date of Print: {formatDate(new Date())}
             </p>
           </div>
         </div>
@@ -93,7 +93,7 @@ export default function ProductLedgerContent() {
           <tbody>
             {result.rows.map(entry => (
               <tr key={entry.movement_id}>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{entry.movement_date}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{formatDate(entry.movement_date)}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace', fontWeight: 'bold' }}>{entry.article_code}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{entry.article_name}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{entry.color}</td>
@@ -129,7 +129,7 @@ export default function ProductLedgerContent() {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>
       </div>
     );
@@ -176,11 +176,13 @@ export default function ProductLedgerContent() {
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
-              <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
+              <input type="date"
+            value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
             </div>
             <div className="flex items-center gap-2">
               <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
-              <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
+              <input type="date"
+            value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
             </div>
           </div>
           <button
@@ -220,7 +222,7 @@ export default function ProductLedgerContent() {
               ) : (
                 result.rows.map((entry) => (
                   <tr key={entry.movement_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 pl-4 font-mono text-slate-600">{entry.movement_date}</td>
+                    <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(entry.movement_date)}</td>
                     <td className="p-3 font-semibold text-slate-700">{entry.article_code}</td>
                     <td className="p-3 text-slate-700">{entry.article_name}</td>
                     <td className="p-3 text-slate-500">{entry.color}</td>
