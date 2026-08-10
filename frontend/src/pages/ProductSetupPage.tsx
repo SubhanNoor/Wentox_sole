@@ -58,6 +58,10 @@ export default function ProductSetupPage() {
   const [productList, setProductList] = useState<ProductRow[]>([]);
   const [categoryList, setCategoryList] = useState<CategoryRow[]>([]);
   const [vendorList, setVendorList] = useState<VendorRow[]>([]);
+  // Every article belongs to the single system vendor (migration 017) — the business manufactures
+  // its own product. The field stays visible so it is clear what a product is attributed to, but it
+  // is locked, and products.service.js ignores whatever vendor_id arrives regardless.
+  const systemVendor = vendorList.find(v => v.is_system);
   const [loading, setLoading] = useState(false);
 
   const loadAll = useCallback(async () => {
@@ -65,7 +69,7 @@ export default function ProductSetupPage() {
     const [prodRes, catRes, venRes] = await Promise.all([
       api.products.list(),
       api.listCategories(),
-      api.listVendors(),
+      api.listVendors({ includeSystem: true }),
     ]);
     if (prodRes.ok) setProductList(prodRes.data);
     if (catRes.ok) setCategoryList(catRes.data);
@@ -199,7 +203,7 @@ export default function ProductSetupPage() {
     articles.forEach((a, i) => {
       const e: ArticleFieldErrors = {};
       if (!a.name.trim()) e.name = 'Article name is required.';
-      if (!a.vendorId) e.vendorId = 'Vendor is required.';
+
       if (!a.packing || a.packing <= 0) e.packing = 'Must be greater than 0.';
       if (Object.keys(e).length) errs[i] = e;
     });
@@ -222,7 +226,8 @@ export default function ProductSetupPage() {
       category_id: Number(batchCategoryId),
       articles: articles.map(a => ({
         name: a.name.trim(),
-        vendor_id: Number(a.vendorId),
+        // Ignored server-side (always the system vendor) — sent only to satisfy the payload shape.
+        vendor_id: systemVendor?.vendor_id ?? 0,
         packing: a.packing,
         sale_price: a.salePrice,
         ...costsToApiPayload(a.costs),
@@ -568,6 +573,8 @@ export default function ProductSetupPage() {
                             values={article}
                             onChange={patch => updateArticle(idx, patch)}
                             vendorList={vendorList}
+                            vendorLocked
+                            vendorLockedLabel={systemVendor?.name || 'Manufacturing Product'}
                             errors={articleErrors[idx]}
                           />
                         </div>

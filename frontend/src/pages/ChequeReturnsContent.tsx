@@ -23,7 +23,11 @@ interface UnifiedRow {
   paidTo: string;
   dispositionLabel: string;
   amount: number;
+  /** When it left our hands: the allocation date for an endorsed cheque, the issue date for one we
+   *  wrote. Both sources' equivalent of the standard's leading date column. */
   date: string;
+  /** The date written on the cheque — its due date. */
+  dueDate: string | null;
   endorsed?: ChequeAllocationRow;
   issued?: IssuedChequeRow;
 }
@@ -77,6 +81,7 @@ export function ChequeReturnsContent() {
       dispositionLabel: DISPOSITION_LABELS[a.disposition_type as Exclude<ChequeDispositionType, 'DEPOSIT'>],
       amount: a.amount,
       date: a.allocation_date,
+      dueDate: a.cheque_date ?? null,
       endorsed: a,
     }));
     const fromIssued: UnifiedRow[] = issuedCheques.map(e => ({
@@ -87,6 +92,7 @@ export function ChequeReturnsContent() {
       dispositionLabel: `Issued from ${e.bank_name || 'Our Bank'}`,
       amount: e.amount,
       date: e.issued_cheque_date || e.expense_date,
+      dueDate: e.issued_cheque_date,
       issued: e,
     }));
 
@@ -182,11 +188,12 @@ export function ChequeReturnsContent() {
                 className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500"
                 style={{ borderColor: 'var(--border-color)' }}
               >
-                <th className="p-3 pl-4">Cheque No.</th>
+                <th className="p-3 pl-4 text-center">Issue Date</th>
                 <th className="p-3">Paid To</th>
-                <th className="p-3 text-center">Disposition</th>
+                <th className="p-3">Cheque No.</th>
+                <th className="p-3 text-center">Due Date</th>
                 <th className="p-3 text-right">Amount</th>
-                <th className="p-3 text-center">Date</th>
+                <th className="p-3 text-center">Disposition</th>
                 <th className="p-3 text-center" data-no-print>Action</th>
               </tr>
             </thead>
@@ -200,15 +207,16 @@ export function ChequeReturnsContent() {
               ) : (
                 unifiedRows.map(row => (
                   <tr key={row.key} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 pl-4 font-mono font-semibold text-slate-800">{row.chequeNo}</td>
+                    <td className="p-3 pl-4 text-center text-xs text-slate-600">{formatDate(row.date)}</td>
                     <td className="p-3 font-semibold text-slate-700">{row.paidTo}</td>
+                    <td className="p-3 font-mono font-semibold text-slate-800">{row.chequeNo}</td>
+                    <td className="p-3 text-center text-xs text-slate-600">{row.dueDate ? formatDate(row.dueDate) : '-'}</td>
+                    <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.amount)}</td>
                     <td className="p-3 text-center">
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-violet-50 text-violet-800 border-violet-200">
                         {row.dispositionLabel}
                       </span>
                     </td>
-                    <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.amount)}</td>
-                    <td className="p-3 text-center text-xs text-slate-600">{formatDate(row.date)}</td>
                     <td className="p-3 text-center" data-no-print>
                       {row.source === 'endorsed' ? (
                         <button

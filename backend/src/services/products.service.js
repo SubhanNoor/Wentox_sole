@@ -12,11 +12,20 @@ function validate(payload) {
   if (!payload.packing || payload.packing <= 0) throw ApiError.badRequest('packing must be > 0');
 }
 
-// vendor_id is required only at creation (§ batch numbering — batch_no is generated per vendor,
-// so there must always be one to scope against). Not re-validated on update() since vendor_id is
-// immutable there.
-function validateVendor(payload) {
-  if (!payload.vendor_id) throw ApiError.badRequest('vendor_id is required');
+// Every article belongs to the single system vendor (migration 017) — the business manufactures
+// its own product, so there is no supplier to choose. Resolved by its flag rather than by name:
+// dbo.vendors has no code column and deliberately no UNIQUE(name), so a name match would break the
+// moment someone added a second "Manufacturing Product".
+//
+// vendor_id still matters structurally even though it is now constant — it scopes batch numbering
+// (UQ_articles_vendor_batch) and the duplicate-name rule, both of which simply become global.
+async function systemVendorId() {
+  const [vendor] = await vendorsService.list({ includeSystem: true, includeInactive: true })
+    .then((rows) => rows.filter((v) => v.is_system));
+  if (!vendor) {
+    throw new Error('System vendor "Manufacturing Product" not found — run npm run seed');
+  }
+  return vendor.vendor_id;
 }
 
 function list(filters) {
@@ -34,9 +43,11 @@ async function getById(articleId) {
 // by hand, and immutable once assigned (see products.repository.js:update()).
 async function create(payload) {
   validate(payload);
-  validateVendor(payload);
   await categoriesService.getById(payload.category_id); // 404s if the category doesn't exist
-  await vendorsService.getById(payload.vendor_id); // 404s if the vendor doesn't exist
+  // The business manufactures its own product, so every article is attributed to the single system
+  // vendor (migration 017) — whatever vendor_id a client sends is ignored rather than validated.
+  // Enforced here, not by the form's disabled input, so the lock cannot be bypassed over IPC.
+  payload.vendor_id = await systemVendorId();
 
   // Case-insensitive name+vendor collision (§ products.repository.js#findByNameAndVendor — not
   // name alone, since the same product name legitimately recurs across different vendors). ACTIVE
@@ -80,12 +91,12 @@ async function createBatch(payload) {
   }
 
   await categoriesService.getById(categoryId);
+  const mfgVendorId = await systemVendorId();
 
   const fieldErrors = [];
   articles.forEach((article, index) => {
     try {
       validate({ ...article, category_id: categoryId });
-      validateVendor(article);
     } catch (err) {
       fieldErrors.push({ index, message: err.message });
     }
@@ -113,7 +124,7 @@ async function createBatch(payload) {
     }
     seenInBatch.add(key);
 
-    const existing = await repository.findByNameAndVendor(name, articles[index].vendor_id);
+    const existing = await repository.findByNameAndVendor(name, mfgVendorId);
     if (existing) {
       if (existing.is_active) {
         throw ApiError.conflict('A product with this name already exists for this vendor', 'DUPLICATE_NAME', { index });
@@ -130,9 +141,10 @@ async function createBatch(payload) {
     const inserted = [];
     for (let index = 0; index < articles.length; index += 1) {
       const code = await repository.nextCode(transaction);
-      const batchNo = await repository.nextBatchNo(transaction, articles[index].vendor_id);
+      const batchNo = await repository.nextBatchNo(transaction, mfgVendorId);
       const id = await repository.insert(transaction, {
         ...articles[index],
+        vendor_id: mfgVendorId,
         name: names[index],
         category_id: categoryId,
         code,

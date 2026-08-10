@@ -356,8 +356,19 @@ export interface VendorRow {
   city_id: number | null;
   ba_id: number | null;
   is_active: boolean;
+  /** Manufacturing Product (migration 017) — the single vendor every article belongs to. Hidden
+   *  from vendor-facing screens and not editable or deletable. */
+  is_system?: boolean;
   region_name?: string;
   city_name?: string;
+}
+
+export interface VendorListFilters {
+  search?: string;
+  includeInactive?: boolean;
+  /** The system vendor (Manufacturing Product) is hidden unless a caller asks for it — it is a
+   *  bookkeeping device, not a supplier. Only the read-only Product Ledger filter needs it. */
+  includeSystem?: boolean;
 }
 
 export interface VendorCreateInput {
@@ -734,6 +745,9 @@ export interface ChequeAllocationRow {
   target_name?: string;
   cheque_id?: number;
   cheque_no?: string;
+  /** The date written on the cheque — its due date (see IX_cheques_due). */
+  cheque_date?: string;
+  cheque_received_date?: string | null;
   cheque_status?: ChequeStatus;
 }
 
@@ -2137,9 +2151,9 @@ export const draftPurchaseReturns = {
     window.api ? window.api.draftPurchaseReturns.confirm({ id }).then(r => mapResult(r, normalizePurchaseReturnRow)) : Promise.resolve(NO_BRIDGE)
 };
 
-export async function listVendors(): Promise<ApiResult<VendorRow[]>> {
+export async function listVendors(filters: VendorListFilters = {}): Promise<ApiResult<VendorRow[]>> {
   if (!window.api) return NO_BRIDGE;
-  return window.api.vendors.list({});
+  return window.api.vendors.list(filters);
 }
 
 export async function createVendor(payload: VendorCreateInput): Promise<ApiResult<VendorRow>> {

@@ -62,9 +62,23 @@ async function create(payload) {
   return repository.findById(id);
 }
 
+// The system vendor underpins every article's vendor_id (migration 017). Renaming it would make
+// the locked field on the product form read something else; deactivating it would break product
+// creation outright. Guarded here rather than trusted to the UI, same as the reserved chart
+// accounts' own delete guard.
+function assertNotSystem(vendor, action) {
+  if (vendor.is_system) {
+    throw ApiError.conflict(
+      `${vendor.name} is a system vendor and cannot be ${action}`,
+      'SYSTEM_VENDOR',
+    );
+  }
+}
+
 // UC-08 step 6: renaming a vendor keeps the linked account's name in sync.
 async function update(vendorId, payload) {
   const existing = await getById(vendorId);
+  assertNotSystem(existing, 'edited');
   validate(payload);
   const name = payload.name.trim();
 
@@ -87,7 +101,7 @@ async function update(vendorId, payload) {
 // Soft delete — is_active = 0, never a hard DELETE (purchases.vendor_id references this row
 // historically). The linked business_accounts row stays ACTIVE for ledger/history integrity.
 async function remove(vendorId) {
-  await getById(vendorId);
+  assertNotSystem(await getById(vendorId), 'deleted');
   await repository.setActive(vendorId, false);
   return { ok: true };
 }

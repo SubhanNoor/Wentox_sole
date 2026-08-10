@@ -102,12 +102,12 @@ export function ChequeInHandContent() {
                 className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500"
                 style={{ borderColor: 'var(--border-color)' }}
               >
-                <th className="p-3 pl-4">Cheque No.</th>
-                <th className="p-3">Customer</th>
-                <th className="p-3 text-center">Cheque Date</th>
-                <th className="p-3 text-center">Received</th>
-                <th className="p-3 text-center">Status</th>
+                <th className="p-3 pl-4 text-center">Received Date</th>
+                <th className="p-3">Party Name</th>
+                <th className="p-3">Cheque No.</th>
+                <th className="p-3 text-center">Due Date</th>
                 <th className="p-3 text-right">In Hand</th>
+                <th className="p-3 text-center">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -120,16 +120,16 @@ export function ChequeInHandContent() {
               ) : (
                 filteredRows.map(row => (
                   <tr key={row.cheque_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 pl-4 font-mono font-semibold text-slate-800">{row.cheque_no}</td>
-                    <td className="p-3 font-semibold text-slate-700">{row.customer_name || '-'}</td>
+                    <td className="p-3 pl-4 text-center text-xs text-slate-600">{row.cheque_received_date ? formatDate(row.cheque_received_date) : '-'}</td>
+                    <td className="p-3 font-semibold text-slate-700">{row.account_name || row.customer_name || '-'}</td>
+                    <td className="p-3 font-mono font-semibold text-slate-800">{row.cheque_no}</td>
                     <td className="p-3 text-center text-xs text-slate-600">{formatDate(row.cheque_date)}</td>
-                    <td className="p-3 text-center text-xs text-slate-600">{row.cheque_received_date ? formatDate(row.cheque_received_date) : '-'}</td>
+                    <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.unallocated)}</td>
                     <td className="p-3 text-center">
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-slate-100 text-slate-700 border-slate-300">
                         {row.cheque_status === 'PENDING' ? 'Fully in Hand' : 'Partially Disposed'}
                       </span>
                     </td>
-                    <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.unallocated)}</td>
                   </tr>
                 ))
               )}

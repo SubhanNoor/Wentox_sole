@@ -6,6 +6,12 @@ async function list(filters = {}) {
   const conditions = filters.includeInactive ? [] : ['v.is_active = 1'];
   const params = {};
 
+  // The system vendor (Manufacturing Product, migration 017) is a bookkeeping device, not somebody
+  // you buy from or pay — it is excluded unless a caller explicitly asks for it. Product Ledger's
+  // read-only "Company (Vendor)" filter does ask, since every article now belongs to it and the
+  // filter would otherwise be unable to select the only vendor that has any products.
+  if (!filters.includeSystem) conditions.push('v.is_system = 0');
+
   if (filters.search) {
     conditions.push('v.name LIKE @search');
     params.search = { type: sql.NVarChar(100), value: `%${filters.search}%` };

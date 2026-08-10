@@ -34,7 +34,7 @@ export default function ProductLedgerContent() {
 
   useEffect(() => {
     api.listCategories().then(r => { if (r.ok) setCategories(r.data); });
-    api.listVendors().then(r => { if (r.ok) setVendors(r.data); });
+    api.listVendors({ includeSystem: true })  /* read-only filter: every article belongs to the system vendor */.then(r => { if (r.ok) setVendors(r.data); });
   }, []);
 
   const load = useCallback(async () => {

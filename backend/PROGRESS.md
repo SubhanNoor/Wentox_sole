@@ -23,6 +23,100 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Cheque screens — one standard column order everywhere
+
+### 2026-08-10 — Six cheque tables, five different orders, now one
+- **What was asked:** wherever cheque detail is shown, lead with
+  **Received Date · Party Name · Cheque No · Due Date · Amount · rest**.
+- **Survey first:** six tables across four screens, in five different orders — Disposal summary
+  (print) and detail (screen), Cheque in Hand, Cheque Ledger (print + screen), Cheque Returns.
+- **"Due date" = `cheques.cheque_date`, and that is evidenced, not assumed:** the index over it is
+  named `IX_cheques_due` and commented "§12 cheque-due alerts". The alerts already treat the date
+  written on the cheque as when it falls due; the screens were calling the same column "Cheque Date"
+  and "Date on Cheque". Relabelled to **Due Date** so the UI agrees with the behaviour.
+- **Two places the standard does not fit as written, both raised before building:**
+  1. **Issued cheques** (ones we wrote, from `expenses`) have no received date and no receiving
+     party — their party is who we *paid*. User chose an equivalent layout rather than blank
+     columns: **Issue Date · Paid To · Cheque No · Due Date · Amount**.
+  2. **Cheque Ledger is an event log**, not a cheque list — its date column is the *event* date and
+     deliberately differs per row. It keeps that as the leading date and gains Due Date as its own
+     column, so the field order still reads the same left-to-right.
+- **One backend addition:** `cheque_allocations` rows carried no cheque date, so the Returns table
+  had no Due Date to show for an endorsed cheque. Added `ch.cheque_date` / `ch.cheque_received_date`
+  to that query.
+- **A bug caught by reading rather than by tooling:** reordering the on-screen Cheque Ledger left a
+  duplicate `{r.party}` cell after Event, so the row had 10 cells against 9 headers — every column
+  from Bank rightward would have rendered one place off. `tsc` cannot see this (JSX cell counts are
+  not typed) and it produces no error, just silently wrong columns. Wrote a header-vs-cell counter
+  across all six tables afterwards; all now match (9/9, 9/9, 6/6, 7/7, 7/7).
+- **Also updated the Disposal Excel export** to the same order — it had its own hardcoded header
+  list that would otherwise have disagreed with the screen it exports.
+- **Verified:** `tsc -b` clean; ChequesTab 0 lint errors, the other three carry 1 each — all the
+  pre-existing `react-hooks/set-state-in-effect` on their mount loaders, none introduced here (the
+  changes are JSX reordering only).
+- **Note:** a `git stash` used for a lint baseline comparison was interrupted by a command timeout
+  before its `pop`, leaving the work stashed. Recovered intact with `git stash pop`. Avoid
+  stash-based baselines inside a single timed command.
+- **Files:** `backend/src/repositories/cheques.repository.js`, `frontend/src/lib/api.ts`,
+  `frontend/src/components/ChequesTab.tsx`,
+  `frontend/src/pages/{ChequeInHandContent,ChequeLedgerContent,ChequeReturnsContent}.tsx`
+
+---
+
+## Products — one system vendor, "Manufacturing Product" (migration 017)
+
+### 2026-08-10 — The product form's vendor field locked to a single system vendor
+- **What was asked:** the vendor input on Add New Product "doesn't have any work here", so point it
+  permanently at a Manufacturing Product account that cannot be changed.
+- **Two corrections established before building, both confirmed with the user:**
+  1. **It could not be a business account.** `articles.vendor_id` is `NOT NULL` with an FK to
+     `dbo.vendors`, so the row has to be a **vendor**; creating one auto-creates its business
+     account under VENDORS ACCOUNTS, which gives the account for free.
+  2. **The field is not decorative.** It scopes batch numbering (`batch_no = MAX + 1` per vendor,
+     protected by `UQ_articles_vendor_batch`) and the duplicate-name rule (name + vendor). Both
+     simply become global now, which is arguably better — two vendors could previously each hold a
+     "P-101".
+- **The blocker, and why it dissolved:** moving the 5 existing articles onto one vendor violates
+  `UNIQUE (vendor_id, batch_no)` — three shared batch 1 and two shared batch 2, legal only because
+  they sat under different vendors. Renumbering meant rewriting numbers the schema calls
+  "immutable". Traced `batch_no` end to end first: **never typed, never edited, never rendered on
+  any screen, and read by nothing except its own MAX + 1.** The user confirmed batch numbers mean
+  nothing outside the app, so renumbering is invisible. That turned a blocking decision into a
+  non-issue — worth the twenty minutes it took to check rather than warning about a promise nothing
+  depended on.
+- **How it was done:** migration 017 adds `vendors.is_system` with a **filtered unique index**
+  (`WHERE is_system = 1`), so at most one can ever exist. A flag, not a name match — `dbo.vendors`
+  has no code column and deliberately no `UNIQUE(name)`, so matching on the string would break the
+  moment anyone added a second "Manufacturing Product". The row itself is seeded in
+  `db/seeds/manufacturing-vendor.js`, not the migration, because it needs the VENDORS ACCOUNTS
+  chart account and reserved accounts are seeded *after* migrations run.
+- **The move is one statement** — `UPDATE … SET vendor_id = @mfg, batch_no = ROW_NUMBER() OVER
+  (ORDER BY article_id)`. Setting the vendor first and renumbering second would trip the unique
+  constraint mid-flight. Idempotent: re-running matches nothing.
+- **The lock is server-side.** `products.service.js#create()` and the batch-create path both ignore
+  whatever `vendor_id` arrives and resolve the system vendor themselves, so a disabled input is not
+  the only guard. `vendors.service` now refuses to rename or deactivate the system row — either
+  would silently break product creation.
+- **Hidden where it would invite a wrong entry** (user's choice): excluded by default from the
+  Purchase / Purchase Return vendor dropdowns, Vendor Report, the Expenses "who to pay" picker,
+  Vendor Setup and the Cheques tab. Two callers pass `includeSystem: true` — the product form, and
+  Product Ledger's read-only "Company (Vendor)" filter, which the user chose to keep and which
+  would otherwise be unable to select the only vendor that has any products. `ReportStockPage` keeps
+  the default: its vendor list is the Vendor Stock tab (raw materials from real suppliers), and you
+  do not buy materials from your own factory.
+- **Verified:** all 5 articles moved and renumbered 1–5; re-running the seed moved nothing; a
+  product created while deliberately naming a real vendor stored as **Manufacturing Product**;
+  renaming and deleting the system vendor were both blocked; `vendors.list()` returns 3 vendors by
+  default and 4 with `includeSystem`. `tsc -b` clean, both changed pages' lint counts identical to
+  baseline (1 and 1).
+- **Files:** `backend/src/db/migrations/017_manufacturing_product_vendor.sql` (new),
+  `backend/src/db/seeds/manufacturing-vendor.js` (new), `backend/src/db/seeds/run.js`,
+  `backend/src/repositories/vendors.repository.js`,
+  `backend/src/services/{vendors,products}.service.js`, `frontend/src/lib/api.ts`,
+  `frontend/src/pages/{ProductSetupPage,ProductLedgerContent}.tsx`
+
+---
+
 ## Opening balances — settable on every account-opening screen, and editable
 
 ### 2026-08-10 — Was create-only on two screens and editable on none

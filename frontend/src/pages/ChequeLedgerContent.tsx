@@ -30,7 +30,10 @@ interface LedgerEvent {
   key: string;
   chequeType: 'Received' | 'Issued';
   chequeNo: string;
+  /** The EVENT's date — deliberately different per row, which is what makes this a ledger rather
+   *  than a cheque list. The cheque's own due date is a separate column. */
   date: string;
+  dueDate: string | null;
   eventType: EventType;
   party: string;
   bank: string;
@@ -43,7 +46,8 @@ function receivedEvents(c: ChequeRow, allocations: ChequeAllocationRow[]): Ledge
     key: `received-${c.cheque_id}-received`,
     chequeType: 'Received',
     chequeNo: c.cheque_no,
-    date: c.cheque_date,
+    date: c.cheque_received_date || c.cheque_date,
+    dueDate: c.cheque_date,
     eventType: 'Received',
     party: c.customer_name || c.account_name || '-',
     bank: '-',
@@ -57,6 +61,7 @@ function receivedEvents(c: ChequeRow, allocations: ChequeAllocationRow[]): Ledge
       : 'Endorsed to Expense';
     events.push({
       key: `received-${c.cheque_id}-alloc-${a.allocation_id}`,
+      dueDate: c.cheque_date,
       chequeType: 'Received',
       chequeNo: c.cheque_no,
       date: a.allocation_date,
@@ -70,14 +75,14 @@ function receivedEvents(c: ChequeRow, allocations: ChequeAllocationRow[]): Ledge
 
   if (c.bounced_date) {
     events.push({
-      key: `received-${c.cheque_id}-bounced`, chequeType: 'Received', chequeNo: c.cheque_no,
+      key: `received-${c.cheque_id}-bounced`, chequeType: 'Received', chequeNo: c.cheque_no, dueDate: c.cheque_date,
       date: c.bounced_date, eventType: 'Bounced', party: c.customer_name || '-', bank: '-',
       amount: c.receipt_amount || 0, reversed: false,
     });
   }
   if (c.returned_date) {
     events.push({
-      key: `received-${c.cheque_id}-returned`, chequeType: 'Received', chequeNo: c.cheque_no,
+      key: `received-${c.cheque_id}-returned`, chequeType: 'Received', chequeNo: c.cheque_no, dueDate: c.cheque_date,
       date: c.returned_date, eventType: 'Returned', party: c.customer_name || '-', bank: '-',
       amount: c.receipt_amount || 0, reversed: false,
     });
@@ -94,6 +99,7 @@ function issuedEvents(e: IssuedChequeRow): LedgerEvent[] {
     chequeType: 'Issued',
     chequeNo: e.issued_cheque_no || '-',
     date: e.issued_cheque_date || e.expense_date,
+    dueDate: e.issued_cheque_date,
     eventType: 'Issued',
     party: e.ba_name || '-',
     bank: e.bank_name || '-',
@@ -103,6 +109,7 @@ function issuedEvents(e: IssuedChequeRow): LedgerEvent[] {
   if (e.issued_cheque_bounced_date) {
     events.push({
       key: `issued-${e.expense_id}-bounced`, chequeType: 'Issued', chequeNo: e.issued_cheque_no || '-',
+      dueDate: e.issued_cheque_date,
       date: e.issued_cheque_bounced_date, eventType: 'Bounced', party: e.ba_name || '-',
       bank: e.bank_name || '-', amount: e.amount, reversed: false,
     });
@@ -110,6 +117,7 @@ function issuedEvents(e: IssuedChequeRow): LedgerEvent[] {
   if (e.issued_cheque_returned_date) {
     events.push({
       key: `issued-${e.expense_id}-returned`, chequeType: 'Issued', chequeNo: e.issued_cheque_no || '-',
+      dueDate: e.issued_cheque_date,
       date: e.issued_cheque_returned_date, eventType: 'Returned', party: e.ba_name || '-',
       bank: e.bank_name || '-', amount: e.amount, reversed: false,
     });
@@ -208,11 +216,12 @@ export function ChequeLedgerContent() {
       <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
         <thead>
           <tr>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Type</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Cheque No.</th>
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Date</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Event</th>
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Party</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Cheque No.</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Due Date</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Type</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Event</th>
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Bank</th>
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Amount</th>
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Reversed</th>
@@ -220,21 +229,22 @@ export function ChequeLedgerContent() {
         </thead>
         <tbody>
           {ledgerRows.length === 0 ? (
-            <tr><td colSpan={8} style={{ border: '1px solid #000000', padding: '12px', textAlign: 'center', fontStyle: 'italic', color: '#888' }}>No cheque events found.</td></tr>
+            <tr><td colSpan={9} style={{ border: '1px solid #000000', padding: '12px', textAlign: 'center', fontStyle: 'italic', color: '#888' }}>No cheque events found.</td></tr>
           ) : ledgerRows.map(r => (
             <tr key={r.key}>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{r.chequeType}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{r.chequeNo}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{formatDate(r.date)}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{r.eventType}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{r.party}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{r.chequeNo}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{r.dueDate ? formatDate(r.dueDate) : '-'}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{r.chequeType}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{r.eventType}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{r.bank}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(r.amount)}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', color: r.reversed ? '#cc0000' : '#888' }}>{r.reversed ? 'REVERSED' : '-'}</td>
             </tr>
           ))}
           <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
-            <td colSpan={6} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>TOTAL ({ledgerRows.length} events)</td>
+            <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>TOTAL ({ledgerRows.length} events)</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totals.totalAmount)}</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '10px' }}>
               R: {formatCurrency(totals.totalReceived)} / I: {formatCurrency(totals.totalIssued)}
@@ -314,11 +324,12 @@ export function ChequeLedgerContent() {
           <table className="w-full text-left border-collapse text-sm">
             <thead>
               <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                <th className="p-3 pl-4">Type</th>
-                <th className="p-3">Cheque No.</th>
-                <th className="p-3">Date</th>
-                <th className="p-3">Event</th>
+                <th className="p-3 pl-4">Date</th>
                 <th className="p-3">Party</th>
+                <th className="p-3">Cheque No.</th>
+                <th className="p-3">Due Date</th>
+                <th className="p-3">Type</th>
+                <th className="p-3">Event</th>
                 <th className="p-3">Bank</th>
                 <th className="p-3 text-right">Amount</th>
                 <th className="p-3 text-center">Reversed</th>
@@ -326,23 +337,24 @@ export function ChequeLedgerContent() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} className="text-center p-8 text-slate-400">Loading…</td></tr>
+                <tr><td colSpan={9} className="text-center p-8 text-slate-400">Loading…</td></tr>
               ) : ledgerRows.length === 0 ? (
-                <tr><td colSpan={8} className="text-center p-8 text-slate-400">No cheque events match this filter.</td></tr>
+                <tr><td colSpan={9} className="text-center p-8 text-slate-400">No cheque events match this filter.</td></tr>
               ) : (
                 ledgerRows.map(r => (
                   <tr key={r.key} className={`border-b hover:bg-slate-50/50 ${r.reversed ? 'opacity-60' : ''}`} style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 pl-4">
+                    <td className="p-3 pl-4 text-xs text-slate-600">{formatDate(r.date)}</td>
+                    <td className="p-3 font-semibold text-slate-700">{r.party}</td>
+                    <td className="p-3 font-mono font-semibold text-slate-800">{r.chequeNo}</td>
+                    <td className="p-3 text-xs text-slate-600">{r.dueDate ? formatDate(r.dueDate) : '-'}</td>
+                    <td className="p-3">
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-slate-100 text-slate-700 border-slate-300">{r.chequeType}</span>
                     </td>
-                    <td className="p-3 font-mono font-semibold text-slate-800">{r.chequeNo}</td>
-                    <td className="p-3 text-xs text-slate-600">{formatDate(r.date)}</td>
                     <td className="p-3">
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase ${EVENT_STYLES[r.eventType]}`}>
                         {r.eventType}
                       </span>
                     </td>
-                    <td className="p-3 font-semibold text-slate-700">{r.party}</td>
                     <td className="p-3 text-slate-600">{r.bank}</td>
                     <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
                     <td className="p-3 text-center">

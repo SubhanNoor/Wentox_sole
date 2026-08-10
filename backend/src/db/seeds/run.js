@@ -6,6 +6,7 @@ const config = require('../../config');
 const CODES = require('../../constants/reservedAccounts');
 const STAGES = require('../../constants/stages');
 const { seedLegacyAccounts } = require('./legacy-accounts');
+const { seedManufacturingVendor } = require('./manufacturing-vendor');
 
 async function ensureGroupAccount(pool, { code, name, classCode }) {
   const existing = await pool.request()
@@ -180,6 +181,10 @@ async function seed() {
                 VALUES (@stageKey, @formLabel, @workerLabel, @costColumn, @sortOrder)`);
     }
   }
+
+  // --- The single system vendor every article is attributed to (migration 017) ---
+  // After the reserved chart accounts above, since its business account hangs off VENDORS ACCOUNTS.
+  await seedManufacturingVendor(pool);
 
   // --- Legacy business accounts imported from the client's old KHAATA ledger ---
   // Runs last of the account seeding: it hangs rows off the reserved chart accounts created above.

@@ -228,7 +228,9 @@ async function listEndorsedAllocations(filters = {}) {
   const where = `WHERE ${conditions.join(' AND ')}`;
   const result = await query(
     `SELECT ca.*, v.name AS vendor_name, ba.name AS target_name, ch.cheque_id, ch.cheque_no,
-            ch.cheque_status
+            -- cheque_date is the DUE date (see IX_cheques_due / §12 alerts) and cheque_received_date
+            -- when it came in; both are shown on the Cheque Returns table's standard columns.
+            ch.cheque_date, ch.cheque_received_date, ch.cheque_status
      FROM dbo.cheque_allocations ca
      LEFT JOIN dbo.vendors v ON v.vendor_id = ca.target_vendor_id
      LEFT JOIN dbo.business_accounts ba ON ba.ba_id = ca.target_ba_id

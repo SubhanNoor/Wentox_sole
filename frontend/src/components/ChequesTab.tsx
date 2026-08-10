@@ -261,10 +261,10 @@ export default function ChequesTab() {
   }
 
   const handleExportExcel = () => {
-    const headers = ['Cheque No', 'Date on Cheque', 'Received', 'Customer', 'Amount', 'Unallocated', 'Status'];
+    const headers = ['Received Date', 'Party Name', 'Cheque No', 'Due Date', 'Amount', 'Unallocated', 'Status'];
     const rows = chequeRows.map(r => [
-      r.cheque.cheque_no || '-', formatDate(r.cheque.cheque_date), formatDate(r.cheque.cheque_received_date),
-      r.customerName, r.cheque.receipt_amount ?? 0, r.unallocated, r.status,
+      formatDate(r.cheque.cheque_received_date), r.customerName, r.cheque.cheque_no || '-',
+      formatDate(r.cheque.cheque_date), r.cheque.receipt_amount ?? 0, r.unallocated, r.status,
     ]);
     exportRowsToExcel('cheque-register', headers, rows);
   };
@@ -294,9 +294,10 @@ export default function ChequesTab() {
       <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
         <thead>
           <tr>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Received Date</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Party Name</th>
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Cheque No.</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Cheque Date</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Customer</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Due Date</th>
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Status</th>
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Total (Rs.)</th>
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Unassigned (Rs.)</th>
@@ -305,16 +306,17 @@ export default function ChequesTab() {
         <tbody>
           {chequeRows.length === 0 ? (
             <tr>
-              <td colSpan={6} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
+              <td colSpan={7} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
                 No cheques match the selected filter.
               </td>
             </tr>
           ) : (
             chequeRows.map(row => (
               <tr key={row.cheque.cheque_id}>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{formatDate(row.cheque.cheque_received_date)}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{row.customerName}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace', fontWeight: 'bold' }}>{row.cheque.cheque_no || '-'}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{formatDate(row.cheque.cheque_date)}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{row.customerName}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontWeight: 'bold' }}>{row.status}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(row.cheque.receipt_amount ?? 0)}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(row.unallocated)}</td>
@@ -426,10 +428,10 @@ export default function ChequesTab() {
                 className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500"
                 style={{ borderColor: 'var(--border-color)' }}
               >
-                <th className="p-3 pl-4">Cheque No.</th>
-                <th className="p-3 text-center">Date on Cheque</th>
-                <th className="p-3 text-center">Received</th>
-                <th className="p-3">Customer</th>
+                <th className="p-3 pl-4 text-center">Received Date</th>
+                <th className="p-3">Party Name</th>
+                <th className="p-3">Cheque No.</th>
+                <th className="p-3 text-center">Due Date</th>
                 <th className="p-3 text-right">Amount</th>
                 <th className="p-3 text-right">Unallocated</th>
                 <th className="p-3 text-center">Status</th>
@@ -453,12 +455,12 @@ export default function ChequesTab() {
                         className="border-b hover:bg-slate-50/50"
                         style={{ borderColor: 'var(--border-table)' }}
                       >
-                        <td className="p-3 pl-4 font-mono font-semibold text-slate-800">
+                        <td className="p-3 pl-4 text-center text-xs text-slate-500">{formatDate(row.cheque.cheque_received_date)}</td>
+                        <td className="p-3 font-semibold text-slate-800">{row.customerName}</td>
+                        <td className="p-3 font-mono font-semibold text-slate-800">
                           {row.cheque.cheque_no || '-'}
                         </td>
                         <td className="p-3 text-center text-xs text-slate-600">{formatDate(row.cheque.cheque_date)}</td>
-                        <td className="p-3 text-center text-xs text-slate-500">{formatDate(row.cheque.cheque_received_date)}</td>
-                        <td className="p-3 font-semibold text-slate-800">{row.customerName}</td>
                         <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.cheque.receipt_amount ?? 0)}</td>
                         <td className="p-3 text-right font-bold" style={{ color: row.unallocated > 0 ? '#b45309' : '#64748b' }}>
                           {row.unallocated > 0 ? formatCurrency(row.unallocated) : '—'}
