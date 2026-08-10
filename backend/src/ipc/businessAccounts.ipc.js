@@ -23,6 +23,12 @@ module.exports = function register() {
     return service.create(payload);
   }));
 
+  // UC-17 multi-account entry — one parent, several accounts, one save.
+  ipcMain.handle('business-accounts:createBatch', wrap((payload) => {
+    const session = requireSession();
+    return service.createBatch(payload, session);
+  }));
+
   ipcMain.handle('business-accounts:update', wrap((payload) => {
     const session = requireSession();
     return service.update(payload.id, payload, session);

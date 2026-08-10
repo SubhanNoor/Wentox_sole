@@ -6,6 +6,18 @@ const ApiError = require('../errors/ApiError');
 const CODES = require('../constants/reservedAccounts');
 const { withTransaction } = require('../db/pool');
 
+// The reserved chart heads that hold exactly ONE seeded business account, which the posting engine
+// resolves by ac_id (getCashAccount / journalVouchers.service#getJvAccount). Those two rows are
+// structural: Cash backs every transfer and the Cash Book, JOURNAL VOUCHER backs every JV, and
+// closing either breaks posting outright.
+//
+// NOT every reserved code. Most reserved heads — CUSTOMERS ACCOUNTS, VENDORS ACCOUNTS, Directors
+// Drawings, Business Running Expenses — hold ordinary party and expense accounts that must stay
+// closable. Guarding on "parent is reserved" would freeze all 41 accounts in the demo database.
+//
+// Only the close path needs this. Renaming is harmless: the engine resolves these by CODE.
+const STRUCTURAL_ACCOUNT_HEADS = new Set([CODES.CASH_IN_HAND, CODES.JOURNAL_VOUCHER]);
+
 // Cross-feature reads go through here rather than another feature reaching into
 // businessAccounts.repository.js directly (e.g. transfers.service.js validating from_ba_id/to_ba_id).
 async function getById(baId) {
@@ -59,9 +71,12 @@ function getByAcId(acId) {
 // cheques, reports) already depends on that exact shape. These add the setup screen's own
 // TASK-14 restricted-parent hiding on top, rather than changing getById()'s existing contract.
 
-function list(filters = {}, session) {
+async function list(filters = {}, session) {
   const isAdmin = session?.role === 'ADMIN';
-  return repository.list({ ...filters, excludeRestrictedParent: !isAdmin });
+  const rows = await repository.list({ ...filters, excludeRestrictedParent: !isAdmin });
+  // Derived from the parent code the list already selects — no extra query, and no column to keep
+  // in sync. Lets the setup screen badge these and hide their Close action.
+  return rows.map((r) => ({ ...r, is_reserved: STRUCTURAL_ACCOUNT_HEADS.has(r.ac_code) }));
 }
 
 // UC-03 point 4: "A `USER` who requests a restricted account directly receives a 403."
@@ -125,11 +140,37 @@ function validateOpeningPair(payload) {
 // blanks and silently WIPE an existing opening balance on every unrelated rename. Skipping the
 // no-op means those screens can set an opening balance when opening the account, and the Business
 // Account screen (which does load the stored values) remains the place to view, change or clear it.
+// Writes the OPENING ledger pair for an account from its stored opening_balance/opening_date.
+//
+// An opening balance used to be a one-sided figure: netBalance() added the stored column into a
+// balance and nothing posted the other side, so the trial balance went out by the total of every
+// opening balance in the system. Now it posts Dr account / Cr OPENING BALANCE EQUITY like any other
+// transaction, and netBalance() reads it from the ledger like everything else.
+//
+// Its own transaction rather than the caller's: party creation (vendor/customer/employee) commits
+// its business account inside a transaction this cannot join. A failure here therefore leaves the
+// stored input without its rows — recoverable, because db/seeds/opening-balances.js re-syncs every
+// account on startup, and because re-saving the account rewrites them.
+async function syncOpeningEntries(baId) {
+  const account = await repository.findById(baId);
+  if (!account) return;
+  const equity = await chartAccountsRepository.findByCode(CODES.OPENING_BALANCE_EQUITY);
+  if (!equity) throw new Error(`Reserved chart account OPENING BALANCE EQUITY (code ${CODES.OPENING_BALANCE_EQUITY}) not found — run npm run seed`);
+
+  await withTransaction((transaction) => repository.replaceOpeningEntries(transaction, {
+    baId,
+    openingBalance: account.opening_balance,
+    openingDate: account.opening_date,
+    equityAcId: equity.ac_id,
+  }));
+}
+
 async function setOpening(baId, payload) {
   const supplied = payload.opening_balance !== undefined || payload.opening_date !== undefined;
   if (!supplied) return repository.findById(baId);
   const opening = validateOpeningPair(payload);
   await repository.updateOpening(baId, opening);
+  await syncOpeningEntries(baId);
   return repository.findById(baId);
 }
 
@@ -162,7 +203,72 @@ async function create(payload) {
       opening_balance: payload.opening_balance, opening_date: payload.opening_date,
     });
   });
+  await syncOpeningEntries(id);
   return repository.findById(id);
+}
+
+// UC-17 multi-account entry: one parent chart account chosen once, several accounts registered
+// under it in a single save. Same contract as products.service.js#createBatch — every row is
+// validated before ANY is written, and failures come back as { index, message } so the form can
+// mark the offending row rather than failing opaquely.
+//
+// Serials are drawn per row INSIDE the transaction (nextSerial = MAX + 1 under that parent), so a
+// batch gets contiguous codes and two concurrent batches cannot collide on UQ_business_accounts_code.
+async function createBatch(payload, session) {
+  const acId = payload.ac_id;
+  if (!acId) throw ApiError.badRequest('ac_id is required');
+  const accounts = payload.accounts;
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    throw ApiError.badRequest('accounts must be a non-empty array');
+  }
+
+  const chartAccount = await chartAccountsRepository.findById(acId);
+  if (!chartAccount) throw ApiError.badRequest('ac_id does not exist');
+  if (chartAccount.status === 'CLOSED') {
+    throw ApiError.conflict('Cannot create business accounts under a closed chart account', 'CHART_ACCOUNT_CLOSED');
+  }
+
+  const fieldErrors = [];
+  accounts.forEach((account, index) => {
+    try {
+      if (!account.name || !account.name.trim()) throw ApiError.badRequest('name is required');
+      validateOpeningPair(account);
+    } catch (err) {
+      fieldErrors.push({ index, message: err.message });
+    }
+  });
+  if (fieldErrors.length) {
+    throw ApiError.badRequest('One or more accounts are invalid', 'BATCH_VALIDATION_FAILED', { errors: fieldErrors });
+  }
+
+  // UC-03 point 4 applies to every row, not just the first — a USER must not slip a restricted
+  // account in behind a valid one. Checked on the PARENT here, since the rows do not exist yet.
+  if (session && session.role !== 'ADMIN' && chartAccount.is_restricted) {
+    throw ApiError.unauthorized('This account is restricted to administrators');
+  }
+
+  const ids = await withTransaction(async (transaction) => {
+    const inserted = [];
+    for (const account of accounts) {
+      const serial = await repository.nextSerial(transaction, chartAccount.code);
+      const opening = validateOpeningPair(account);
+      inserted.push(await repository.insert(transaction, {
+        code: chartAccount.code + String(serial).padStart(4, '0'),
+        name: account.name.trim(),
+        ac_id: acId,
+        region_id: account.region_id,
+        city_id: account.city_id,
+        ...opening,
+      }));
+    }
+    return inserted;
+  });
+
+  // After the commit, for the same reason syncOpeningEntries documents: it runs in its own
+  // transaction, and the startup re-sync would otherwise be the only thing that wrote these.
+  for (const id of ids) await syncOpeningEntries(id);
+
+  return Promise.all(ids.map((id) => repository.findById(id)));
 }
 
 // name/region/city only — ac_id (and therefore code) fixed at creation, same reasoning as
@@ -178,6 +284,7 @@ async function update(baId, payload, session) {
   await repository.update(baId, {
     name, region_id: payload.region_id, city_id: payload.city_id, ...opening,
   });
+  await syncOpeningEntries(baId);
   return repository.findById(baId);
 }
 
@@ -187,6 +294,13 @@ async function update(baId, payload, session) {
 // closing it out from under them here would silently break their accounting).
 async function remove(baId, session) {
   await getForSetup(baId, session);
+  const account = await repository.findByIdWithRestriction(baId);
+  if (account && STRUCTURAL_ACCOUNT_HEADS.has(account.ac_code)) {
+    throw ApiError.conflict(
+      `${account.name} is a reserved account the posting engine depends on and cannot be closed`,
+      'RESERVED_ACCOUNT',
+    );
+  }
   const linked = await repository.isPartyLinked(baId);
   if (linked) {
     throw ApiError.conflict(
@@ -206,5 +320,7 @@ async function reactivate(baId, session) {
 
 module.exports = {
   createUnderChartCode, renameLinked, getById, getCashAccount, getByAcId, setOpening, validateOpeningPair,
+  createBatch,
+  syncOpeningEntries,
   list, getForSetup, assertAccessible, create, update, remove, reactivate,
 };

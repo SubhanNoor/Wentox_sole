@@ -23,6 +23,101 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Account setup — batch entry, and the two structural accounts protected
+
+### 2026-08-10 — Going-live prep: dozens of accounts to create, safely
+- **Framing established before building.** The user's real database `wentox` was found to be
+  **already clean** — 17 chart accounts, 1 business account, zero customers/vendors/ledger rows. All
+  demo data is confined to `wentox_demo`. And the system is **already generic**: nothing is
+  hardcoded per account except the reserved *codes*, which the engine resolves by code, never by
+  name or id. So the work was not "make it generic" — it was **volume** and **safety**.
+- **Piece 1 — batch entry.** `businessAccounts.service#createBatch({ ac_id, accounts })`, mirroring
+  `products.service#createBatch` rather than inventing a second pattern: every row validated before
+  any is written, failures returned as `{ index, message }`, serials drawn per row **inside** the
+  transaction so codes stay contiguous and concurrent batches cannot collide on
+  `UQ_business_accounts_code`. Opening balances flow through the existing `syncOpeningEntries`, so a
+  batched account posts its `OPENING` pair like any other. New `business-accounts:createBatch`
+  channel; `businessAccounts` was already in `ipcBridge.ts`'s FEATURES — **verified rather than
+  assumed**, since a missing entry there is what silently broke `settlements` earlier.
+- **Piece 2 — protect the structural accounts.** `remove()` previously only blocked *party-linked*
+  accounts, so **Cash in Hand and Journal Voucher could both be closed** — verified by query, both
+  reported `NOT protected`. Closing Cash breaks every transfer and the Cash Book; closing the JV
+  account breaks Journal Voucher posting. Now refused, and flagged `is_reserved` for a **System**
+  badge on the setup screen.
+- **A bug my own verification caught, worth recording.** The first guard compared the *parent chart
+  account's* code against the full reserved set — which flagged **all 41 accounts**, because every
+  business account sits under a reserved head (CUSTOMERS ACCOUNTS, Directors Drawings, …). That
+  would have frozen the entire chart. Narrowed to `STRUCTURAL_ACCOUNT_HEADS` = the two heads that
+  hold exactly ONE seeded account and are resolved by `ac_id` (`getCashAccount`, `getJvAccount`).
+  Re-verified: 2 flagged, ordinary heads still closable, party accounts still handled by their own
+  guard. **Being under a reserved head is not the same as being structural.**
+- **A second, pre-existing bug found on the way:** `ApiError.badRequest(message, code)` accepted no
+  `details` argument, so the `{ errors: [{ index, message }] }` that **`products.service#createBatch`
+  has always passed** was silently discarded — a failed product batch could only ever say "one or
+  more rows are invalid" with no way to mark the row. `ipc/wrap.js` was already forwarding
+  `err.details`; only the factory dropped it. Added the parameter, matching `conflict()`. Fixes the
+  products batch as a side effect.
+- **Verified** on `wentox_demo`: an invalid row rejected the whole batch with both offending indices
+  and wrote nothing (41 accounts before and after); a valid batch of 5 produced contiguous codes
+  `4000030004`–`0008`; the two rows carrying opening balances each got 2 `OPENING` ledger rows with
+  the trial balance still at difference **0**; a `USER` batching under Directors Drawings was
+  refused; Cash and JV refused closure while an ordinary expense head still closed.
+  `tsc -b` clean, `BusinessAcSetupPage` lint count identical to baseline (1).
+- **Files:** `backend/src/errors/ApiError.js`,
+  `backend/src/repositories/businessAccounts.repository.js`,
+  `backend/src/services/businessAccounts.service.js`,
+  `backend/src/ipc/businessAccounts.ipc.js`, `frontend/src/lib/api.ts`,
+  `frontend/src/pages/BusinessAcSetupPage.tsx`
+
+---
+
+## Opening balances are now real ledger entries (double-entry closed)
+
+### 2026-08-10 — The one place the books did not balance
+- **The hole:** `business_accounts.opening_balance` was a stored number that `netBalance()` added
+  into an account's balance with **no counter-entry anywhere**. Every other document in the system
+  posts two legs; an opening balance posted one. Proved before building: with none set, the trial
+  balance was 2,357,736.60 on both sides; one 100,000 opening balance on a single customer threw it
+  out by **exactly 100,000**, while `ledger_entries` itself still netted to zero — it never saw the
+  opening balance at all.
+- **Why it had become urgent:** opening balances were made enterable on five screens earlier the
+  same day, and 2,000+ legacy accounts are due to be imported carrying balances. Zero existed in the
+  database, so this was the cheapest possible moment — nothing to backfill.
+- **Fix:** new reserved chart account **OPENING BALANCE EQUITY** (`200003`, under LIABILITY — there
+  is no EQUITY class and what the business owes its owners is the closest fit). Setting an opening
+  balance now writes a real `source_type='OPENING'` pair dated `opening_date`: positive → Dr account
+  / Cr equity, negative → the reverse. **The schema anticipated exactly this** — `'OPENING'` was
+  already in `CK_ledger_entries_src` and `ledger_entries`' own comment described these rows. It was
+  designed and never built, so **no migration was needed at all**.
+- **`opening_balance` stays the INPUT; the rows are DERIVED** and replaced whole on every change —
+  delete-then-insert rather than update, because an opening balance can be cleared (no rows) or flip
+  sign (the legs swap accounts), both of which an UPDATE would have to special-case.
+- **Two places had to stop adding the stored column**, or it would double-count against its own
+  rows: `netBalance()` (both ba_id branches) and `businessAccountBalancesAsOf()` (the trial balance).
+- **Self-healing by design.** `syncOpeningEntries()` runs in its own transaction because party
+  creation commits the business account inside a transaction it cannot join — so a failure could
+  leave the stored input without its rows. `db/seeds/opening-balances.js` re-syncs every account on
+  startup, which is both the backfill for pre-existing values and a standing repair. All four party
+  creates (vendor/customer/employee/bank) sync after their commit, so a new account does not have to
+  wait for a restart.
+- **Verified:** the same 100,000 opening balance that previously broke the trial balance now leaves
+  it at **2,457,736.60 / 2,457,736.60, difference 0**, with `ledger_entries` still netting to zero.
+  Flipping to −40,000 kept it balanced; clearing removed both rows and returned the trial balance to
+  its starting figures exactly. The account's own Khaata now opens with an "Opening Balance" row
+  (Dr 50,000, dated 31-Dec-2025) and the equity account mirrors the total at −50,000. Cash Book,
+  Sale Report, Vendor Report and Business Ledger all unchanged.
+- **Still open from the same discussion, neither required for this fix:** routing the 13
+  ledger-writing repositories through one guard that refuses unbalanced pairs, and surfacing a
+  debits-vs-credits check in the app.
+- **Files:** `backend/src/constants/reservedAccounts.js`,
+  `backend/src/repositories/businessAccounts.repository.js`,
+  `backend/src/services/businessAccounts.service.js`,
+  `backend/src/services/{vendors,customers,employees,bankAccounts}.service.js`,
+  `backend/src/repositories/reports.repository.js`,
+  `backend/src/db/seeds/opening-balances.js` (new), `backend/src/db/seeds/run.js`
+
+---
+
 ## Cheque screens — one standard column order everywhere
 
 ### 2026-08-10 — Six cheque tables, five different orders, now one

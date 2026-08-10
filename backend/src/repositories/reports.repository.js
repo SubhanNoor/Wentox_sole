@@ -193,38 +193,32 @@ async function ledgerRows(filters = {}) {
 }
 
 // Net balance up to (and including, unless exclusive) a given date — business_accounts' own
-// opening_balance/opening_date (a stored INPUT, never itself a ledger_entries row — see the
-// column's own schema.sql comment) plus every ledger_entries row up to that date. Chart accounts
-// have no opening_balance column, so ac_id skips straight to the ledger sum.
+// Purely the ledger sum up to that date — for BOTH ba_id and ac_id.
+//
+// It used to add business_accounts.opening_balance on top for the ba_id case. That made an opening
+// balance one-sided: it reached the account's balance with no counter-entry anywhere, so the trial
+// balance went out by the total of every opening balance in the system. Opening balances are now
+// real OPENING ledger rows against OPENING BALANCE EQUITY (businessAccounts.service.js#
+// syncOpeningEntries), so adding the column here as well would double-count them.
 async function netBalance({ ba_id, ac_id, up_to_date, exclusive = false }) {
   const cmp = exclusive ? '<' : '<=';
   // cashBook() only — same both-dimensions case as ledgerRows() above. Opening balance still comes
   // only from the business_accounts side (chart accounts have no opening_balance column at all).
   if (ba_id && ac_id) {
     const result = await query(
-      `SELECT
-         (SELECT CASE WHEN opening_balance IS NOT NULL AND opening_date ${cmp} @upToDate
-                      THEN opening_balance ELSE 0 END
-          FROM dbo.business_accounts WHERE ba_id = @baId) AS opening,
-         (SELECT ISNULL(SUM(debit), 0) - ISNULL(SUM(credit), 0)
-          FROM dbo.ledger_entries WHERE (ba_id = @baId OR ac_id = @acId) AND entry_date ${cmp} @upToDate) AS ledger_net`,
+      `SELECT ISNULL(SUM(debit), 0) - ISNULL(SUM(credit), 0) AS ledger_net
+       FROM dbo.ledger_entries WHERE (ba_id = @baId OR ac_id = @acId) AND entry_date ${cmp} @upToDate`,
       { baId: { type: sql.Int, value: ba_id }, acId: { type: sql.Int, value: ac_id }, upToDate: { type: sql.Date, value: up_to_date } },
     );
-    const row = result.recordset[0];
-    return Number(row.opening) + Number(row.ledger_net);
+    return Number(result.recordset[0].ledger_net);
   }
   if (ba_id) {
     const result = await query(
-      `SELECT
-         (SELECT CASE WHEN opening_balance IS NOT NULL AND opening_date ${cmp} @upToDate
-                      THEN opening_balance ELSE 0 END
-          FROM dbo.business_accounts WHERE ba_id = @baId) AS opening,
-         (SELECT ISNULL(SUM(debit), 0) - ISNULL(SUM(credit), 0)
-          FROM dbo.ledger_entries WHERE ba_id = @baId AND entry_date ${cmp} @upToDate) AS ledger_net`,
+      `SELECT ISNULL(SUM(debit), 0) - ISNULL(SUM(credit), 0) AS ledger_net
+       FROM dbo.ledger_entries WHERE ba_id = @baId AND entry_date ${cmp} @upToDate`,
       { baId: { type: sql.Int, value: ba_id }, upToDate: { type: sql.Date, value: up_to_date } },
     );
-    const row = result.recordset[0];
-    return Number(row.opening) + Number(row.ledger_net);
+    return Number(result.recordset[0].ledger_net);
   }
   const result = await query(
     `SELECT ISNULL(SUM(debit), 0) - ISNULL(SUM(credit), 0) AS ledger_net
@@ -479,10 +473,10 @@ async function businessAccountsWithCategory() {
 // an N+1 netBalance() call per account).
 async function businessAccountBalancesAsOf(asOfDate) {
   const result = await query(
+    // Ledger sum only — the stored opening_balance used to be added on top here too, which would
+    // now double-count it against its own OPENING rows (see netBalance above).
     `SELECT ba.ba_id,
-       CASE WHEN ba.opening_balance IS NOT NULL AND ba.opening_date <= @asOf
-            THEN ba.opening_balance ELSE 0 END
-       + ISNULL(le.debit_sum, 0) - ISNULL(le.credit_sum, 0) AS balance
+       ISNULL(le.debit_sum, 0) - ISNULL(le.credit_sum, 0) AS balance
      FROM dbo.business_accounts ba
      LEFT JOIN (
        SELECT ba_id, SUM(debit) AS debit_sum, SUM(credit) AS credit_sum

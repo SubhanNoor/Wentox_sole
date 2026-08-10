@@ -7,6 +7,7 @@ const CODES = require('../../constants/reservedAccounts');
 const STAGES = require('../../constants/stages');
 const { seedLegacyAccounts } = require('./legacy-accounts');
 const { seedManufacturingVendor } = require('./manufacturing-vendor');
+const { seedOpeningBalanceEntries } = require('./opening-balances');
 
 async function ensureGroupAccount(pool, { code, name, classCode }) {
   const existing = await pool.request()
@@ -154,6 +155,11 @@ async function seed() {
   await ensureChartAccount(pool, { code: CODES.WAGES_EXPENSE, name: 'WAGES EXPENSE', groupId: expensesGroup });
   await ensureChartAccount(pool, { code: CODES.SALARIES_EXPENSE, name: 'SALARIES EXPENSE', groupId: expensesGroup });
 
+  // --- Opening balances' counter-account (see reservedAccounts.js) ---
+  await ensureChartAccount(pool, {
+    code: CODES.OPENING_BALANCE_EQUITY, name: 'OPENING BALANCE EQUITY', groupId: liabilityGroup,
+  });
+
   // --- Module 4c: Journal Voucher's counter-account, plus its own business account ---
   // Seeded WITH a business account (unlike the heads above) for the same reason cash is: the JV
   // ledger screen opens an account, and ledger_entries needs a ba_id to point at.
@@ -189,6 +195,10 @@ async function seed() {
   // --- Legacy business accounts imported from the client's old KHAATA ledger ---
   // Runs last of the account seeding: it hangs rows off the reserved chart accounts created above.
   await seedLegacyAccounts(pool);
+
+  // --- Opening balances: backfill + self-heal their derived ledger entries ---
+  // Last, so every account (including any created by the seeds above) is covered.
+  await seedOpeningBalanceEntries();
 
   // --- Default store ---
   const storeExists = await pool.request()

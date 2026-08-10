@@ -7,8 +7,13 @@ class ApiError extends Error {
     this.details = details;
   }
 
-  static badRequest(message, code = 'VALIDATION') {
-    return new ApiError(400, message, code);
+  // details, like conflict() below: batch validation needs to say WHICH row failed, and
+  // ipc/wrap.js already forwards err.details across the boundary. Without this parameter the
+  // { errors: [{ index, message }] } that products.service.js#createBatch and
+  // businessAccounts.service.js#createBatch both pass was silently discarded, so a failed batch
+  // could only report "one or more rows are invalid" with no way to mark the offending row.
+  static badRequest(message, code = 'VALIDATION', details) {
+    return new ApiError(400, message, code, details);
   }
 
   static unauthorized(message = 'Unauthorized') {

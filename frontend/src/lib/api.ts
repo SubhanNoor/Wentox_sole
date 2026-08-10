@@ -766,6 +766,9 @@ export interface BusinessAccountRow {
   ac_code?: string;
   ac_name?: string;
   is_restricted?: boolean;
+  /** Cash in Hand / Journal Voucher — the posting engine resolves these by their parent's code, so
+   *  they cannot be closed. Derived server-side; there is no column for it. */
+  is_reserved?: boolean;
   region_name?: string;
   city_name?: string;
 }
@@ -777,6 +780,20 @@ export interface BusinessAccountCreateInput {
   city_id?: number;
   opening_balance?: number;
   opening_date?: string;
+}
+
+// UC-17 multi-account entry — one parent chart account, several accounts, one save. Mirrors
+// ProductBatchCreateInput; a failed batch comes back as BATCH_VALIDATION_FAILED with
+// details.errors = [{ index, message }] so the form can mark the offending row.
+export interface BusinessAccountBatchCreateInput {
+  ac_id: number;
+  accounts: Array<{
+    name: string;
+    region_id?: number;
+    city_id?: number;
+    opening_balance?: number;
+    opening_date?: string;
+  }>;
 }
 
 export interface BusinessAccountUpdateInput {
@@ -1625,6 +1642,7 @@ declare global {
         list: (payload?: { ac_id?: number; excludeRestrictedParent?: boolean; excludeClosed?: boolean; includeInactive?: boolean }) => Promise<ApiResult<BusinessAccountRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<BusinessAccountRow>>;
         create: (payload: BusinessAccountCreateInput) => Promise<ApiResult<BusinessAccountRow>>;
+        createBatch: (payload: BusinessAccountBatchCreateInput) => Promise<ApiResult<BusinessAccountRow[]>>;
         update: (payload: { id: number } & BusinessAccountUpdateInput) => Promise<ApiResult<BusinessAccountRow>>;
         remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
         reactivate: (payload: { id: number }) => Promise<ApiResult<BusinessAccountRow>>;
@@ -2421,6 +2439,8 @@ export const businessAccounts = {
     window.api ? window.api.businessAccounts.get({ id }) : Promise.resolve(NO_BRIDGE),
   create: (payload: BusinessAccountCreateInput) =>
     window.api ? window.api.businessAccounts.create(payload) : Promise.resolve(NO_BRIDGE),
+  createBatch: (payload: BusinessAccountBatchCreateInput) =>
+    window.api ? window.api.businessAccounts.createBatch(payload) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: BusinessAccountUpdateInput) =>
     window.api ? window.api.businessAccounts.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
   remove: (id: number) => window.api ? window.api.businessAccounts.remove({ id }) : Promise.resolve(NO_BRIDGE),

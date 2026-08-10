@@ -2,6 +2,16 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, RotateCcw, X, Landmark } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
+
+interface BatchRow {
+  name: string;
+  regionId: string;
+  cityId: string;
+  openingBalance: string;
+  openingDate: string;
+}
+
+const emptyBatchRow = (): BatchRow => ({ name: '', regionId: '', cityId: '', openingBalance: '', openingDate: '' });
 import SearchableSelect from '@/components/SearchableSelect';
 import OpeningBalanceFields from '@/components/OpeningBalanceFields';
 import {
@@ -23,6 +33,12 @@ export default function BusinessAcSetupPage() {
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
+  // Multi-account entry: one parent chart account chosen once, several accounts saved together.
+  // Same shape as ProductSetupPage's batch mode, and the same per-row error contract — the backend
+  // returns BATCH_VALIDATION_FAILED with details.errors = [{ index, message }].
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchRows, setBatchRows] = useState<BatchRow[]>([emptyBatchRow()]);
+  const [batchErrors, setBatchErrors] = useState<Record<number, string>>({});
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   // Form State
@@ -57,6 +73,45 @@ export default function BusinessAcSetupPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  const resetBatch = () => {
+    setBatchMode(false);
+    setBatchRows([emptyBatchRow()]);
+    setBatchErrors({});
+  };
+
+  const updateBatchRow = (index: number, patch: Partial<BatchRow>) => {
+    setBatchRows(rows => rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  };
+
+  const handleSaveBatch = async () => {
+    setBatchErrors({});
+    if (!controlId) return setErrorMsg('Please select a parent Chart A/C.');
+    const res = await businessAccountsApi.createBatch({
+      ac_id: Number(controlId),
+      accounts: batchRows.map(r => ({
+        name: r.name.trim(),
+        region_id: r.regionId ? Number(r.regionId) : undefined,
+        city_id: r.cityId ? Number(r.cityId) : undefined,
+        opening_balance: r.openingBalance.trim() ? Number(r.openingBalance) : undefined,
+        opening_date: r.openingDate.trim() || undefined,
+      })),
+    });
+    if (!res.ok) {
+      // Nothing was written — the backend validates every row before inserting any — so the form
+      // keeps its contents and just marks the rows that failed.
+      const rowErrors = (res.error.details as { errors?: { index: number; message: string }[] } | undefined)?.errors;
+      if (rowErrors?.length) {
+        setBatchErrors(Object.fromEntries(rowErrors.map(e => [e.index, e.message])));
+        return setErrorMsg('Some rows need fixing — nothing was saved.');
+      }
+      return setErrorMsg(res.error.message);
+    }
+    setSuccessMsg(`${res.data.length} business accounts registered successfully.`);
+    handleCloseModal();
+    await loadData();
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
   const handleOpenAddModal = () => {
     setSelectedId(null);
     setName('');
@@ -66,6 +121,7 @@ export default function BusinessAcSetupPage() {
     setOpeningBalance('');
     setOpeningDate('');
     setErrorMsg('');
+    resetBatch();
     setIsModalOpen(true);
   };
 
@@ -84,6 +140,7 @@ export default function BusinessAcSetupPage() {
   };
 
   const handleCloseModal = () => {
+    resetBatch();
     setIsModalOpen(false);
     setSelectedId(null);
     setName('');
@@ -97,6 +154,7 @@ export default function BusinessAcSetupPage() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (batchMode && !selectedId) return handleSaveBatch();
     const typed = name.trim();
     if (!typed) return setErrorMsg('Business Account title / name is required.');
     if (!selectedId && !controlId) return setErrorMsg('Please select a parent Chart A/C.');
@@ -307,13 +365,25 @@ export default function BusinessAcSetupPage() {
                 width: '110px',
                 align: 'center',
                 render: biz => (
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${
-                    biz.status === 'ACTIVE'
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : 'bg-rose-50 text-rose-700 border-rose-200'
-                  }`}>
-                    {biz.status === 'ACTIVE' ? 'Active' : 'Closed'}
-                  </span>
+                  <div className="flex items-center justify-center gap-1">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${
+                      biz.status === 'ACTIVE'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : 'bg-rose-50 text-rose-700 border-rose-200'
+                    }`}>
+                      {biz.status === 'ACTIVE' ? 'Active' : 'Closed'}
+                    </span>
+                    {/* Cash in Hand / Journal Voucher — the posting engine resolves these, and the
+                        backend refuses to close them. Marked so nobody tries to reorganise them. */}
+                    {biz.is_reserved && (
+                      <span
+                        className="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border bg-slate-100 text-slate-600 border-slate-300"
+                        title="System account — the posting engine depends on it and it cannot be closed"
+                      >
+                        System
+                      </span>
+                    )}
+                  </div>
                 ),
               },
             ]}
@@ -362,6 +432,25 @@ export default function BusinessAcSetupPage() {
                   <div className="banner-error rounded-lg px-3 py-2 text-xs">{errorMsg}</div>
                 )}
 
+                {!selectedId && (
+                  <div className="flex gap-1 p-0.5 bg-slate-100 rounded-lg text-xs font-semibold">
+                    <button
+                      type="button"
+                      onClick={() => setBatchMode(false)}
+                      className={`flex-1 py-1.5 rounded-md transition-all ${!batchMode ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600'}`}
+                    >
+                      One Account
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBatchMode(true)}
+                      className={`flex-1 py-1.5 rounded-md transition-all ${batchMode ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600'}`}
+                    >
+                      Several at Once
+                    </button>
+                  </div>
+                )}
+
                 {selectedId && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">
@@ -376,6 +465,7 @@ export default function BusinessAcSetupPage() {
                   </div>
                 )}
 
+{(!batchMode || selectedId) && (<>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1.5">
                     Account Title / Name <span className="text-rose-500">*</span>
@@ -437,6 +527,86 @@ export default function BusinessAcSetupPage() {
                   onDateChange={setOpeningDate}
                   isExisting={selectedId != null}
                 />
+                </>)}
+
+                {batchMode && !selectedId && (
+                  <div className="flex flex-col gap-3">
+                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                      All of these are created under the one Chart A/C selected above. If any row is
+                      invalid the whole batch is rejected and nothing is saved, so you can fix it and
+                      try again without creating half of them.
+                    </p>
+
+                    {batchRows.map((row, idx) => (
+                      <div
+                        key={idx}
+                        className={`rounded-xl border p-3 flex flex-col gap-3 ${batchErrors[idx] ? 'border-rose-300 bg-rose-50/40' : ''}`}
+                        style={batchErrors[idx] ? undefined : { borderColor: 'var(--border-color)' }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                            Account {idx + 1}
+                          </span>
+                          {batchRows.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setBatchRows(rows => rows.filter((_, i) => i !== idx))}
+                              className="text-[10px] font-semibold text-rose-600 hover:text-rose-800 cursor-pointer"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+
+                        <input
+                          type="text"
+                          value={row.name}
+                          onChange={e => updateBatchRow(idx, { name: e.target.value })}
+                          placeholder="Account title / name"
+                          className="soleria-input w-full font-semibold"
+                        />
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <SearchableSelect
+                            options={[{ value: '', label: 'Region (optional)' },
+                              ...regions.map(r => ({ value: String(r.region_id), label: r.name }))]}
+                            value={row.regionId}
+                            onChange={v => updateBatchRow(idx, { regionId: v, cityId: '' })}
+                            placeholder="Region..."
+                          />
+                          <SearchableSelect
+                            options={[{ value: '', label: 'City (optional)' },
+                              ...cities.filter(c => !row.regionId || String(c.region_id) === row.regionId)
+                                .map(c => ({ value: String(c.city_id), label: c.name }))]}
+                            value={row.cityId}
+                            onChange={v => updateBatchRow(idx, { cityId: v })}
+                            placeholder="City..."
+                          />
+                        </div>
+
+                        <OpeningBalanceFields
+                          balance={row.openingBalance}
+                          date={row.openingDate}
+                          onBalanceChange={v => updateBatchRow(idx, { openingBalance: v })}
+                          onDateChange={v => updateBatchRow(idx, { openingDate: v })}
+                        />
+
+                        {batchErrors[idx] && (
+                          <p className="text-[11px] font-semibold text-rose-700">{batchErrors[idx]}</p>
+                        )}
+                      </div>
+                    ))}
+
+                    <button
+                      type="button"
+                      onClick={() => setBatchRows(rows => [...rows, emptyBatchRow()])}
+                      className="self-start px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all cursor-pointer"
+                    >
+                      + Add another account
+                    </button>
+                  </div>
+                )}
+
 
                 <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                   <button

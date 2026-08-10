@@ -93,7 +93,7 @@ async function list(filters = {}) {
 // findById() joined with is_restricted so getById() can enforce the same TASK-14 hiding as list().
 async function findByIdWithRestriction(baId) {
   const result = await query(
-    `SELECT ba.*, ca.is_restricted
+    `SELECT ba.*, ca.is_restricted, ca.code AS ac_code
      FROM dbo.business_accounts ba
      JOIN dbo.chart_of_accounts ca ON ca.ac_id = ba.ac_id
      WHERE ba.ba_id = @baId`,
@@ -132,6 +132,54 @@ async function updateOpening(baId, { opening_balance, opening_date }) {
   );
 }
 
+// Rewrites the account's OPENING ledger pair from its stored opening_balance/opening_date.
+//
+// opening_balance stays the INPUT you type; these two rows are DERIVED from it, replaced whole on
+// every change. Delete-then-insert rather than update, because an opening balance can be cleared
+// (no rows at all) or flip sign (the debit and credit legs swap accounts) — both of which an UPDATE
+// would have to special-case.
+//
+// Positive = the account owes us, so Dr account / Cr OPENING BALANCE EQUITY. Negative flips both.
+// ledger_entries requires non-negative debit/credit with one of them zero (CK_ledger_entries_side /
+// _sign), hence Math.abs and the swap rather than a signed amount.
+async function replaceOpeningEntries(transaction, { baId, openingBalance, openingDate, equityAcId }) {
+  const del = requestWithParams(transaction, { baId: { type: sql.Int, value: baId } });
+  await del.query(`DELETE FROM dbo.ledger_entries WHERE source_type = 'OPENING' AND source_id = @baId`);
+
+  const amount = Number(openingBalance ?? 0);
+  if (!amount || !openingDate) return;
+
+  const accountIsDebit = amount > 0;
+  const rows = [
+    { ba_id: baId, ac_id: null, debit: accountIsDebit ? Math.abs(amount) : 0, credit: accountIsDebit ? 0 : Math.abs(amount) },
+    { ba_id: null, ac_id: equityAcId, debit: accountIsDebit ? 0 : Math.abs(amount), credit: accountIsDebit ? Math.abs(amount) : 0 },
+  ];
+  for (const row of rows) {
+    const request = requestWithParams(transaction, {
+      entryDate: { type: sql.Date, value: openingDate },
+      baId: { type: sql.Int, value: row.ba_id },
+      acId: { type: sql.Int, value: row.ac_id },
+      debit: { type: sql.Decimal(14, 2), value: row.debit },
+      credit: { type: sql.Decimal(14, 2), value: row.credit },
+      sourceId: { type: sql.Int, value: baId },
+    });
+    await request.query(`
+      INSERT INTO dbo.ledger_entries (entry_date, ba_id, ac_id, debit, credit, source_type, source_id, narration)
+      VALUES (@entryDate, @baId, @acId, @debit, @credit, 'OPENING', @sourceId, 'Opening balance')
+    `);
+  }
+}
+
+// Every account carrying an opening balance — used by the startup re-sync, which is what makes the
+// derived rows self-healing if a save ever failed halfway.
+async function allWithOpening() {
+  const result = await query(
+    `SELECT ba_id, opening_balance, opening_date FROM dbo.business_accounts
+     WHERE opening_balance IS NOT NULL AND opening_date IS NOT NULL`,
+  );
+  return result.recordset;
+}
+
 async function setStatus(baId, status) {
   await query(
     'UPDATE dbo.business_accounts SET status = @status WHERE ba_id = @baId',
@@ -158,5 +206,5 @@ async function isPartyLinked(baId) {
 
 module.exports = {
   nextSerial, insert, updateName, findById, findByAcId, list, findByIdWithRestriction, update, updateOpening,
-  setStatus, isPartyLinked,
+  setStatus, isPartyLinked, replaceOpeningEntries, allWithOpening,
 };

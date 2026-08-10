@@ -63,7 +63,11 @@ async function create(payload) {
     return repository.insert(transaction, { ...payload, name, ba_id: baId });
   });
 
-  return repository.findById(id);
+  const created = await repository.findById(id);
+  // The business account was created inside the transaction above with its opening balance stored;
+  // its derived OPENING ledger pair is written after the commit (see syncOpeningEntries' own note).
+  if (created.ba_id) await businessAccountsService.syncOpeningEntries(created.ba_id);
+  return created;
 }
 
 // Renaming a bank account keeps the linked account's name in sync (same as vendors — UC-08 step 6).

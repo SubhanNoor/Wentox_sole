@@ -29,4 +29,10 @@ module.exports = {
   // gets a single business account seeded beneath it (db/seeds/run.js), because "what have we
   // given away in JVs" has to be an openable ledger, not a figure inside a mixed adjustments head.
   JOURNAL_VOUCHER: '400007',
+  // The other side of every opening balance. Before this existed, business_accounts.opening_balance
+  // was a stored number that netBalance() added into a balance with NO counter-entry anywhere — so
+  // the trial balance went out by the total of all opening balances (proved: one 100,000 opening
+  // threw it out by exactly 100,000). Equity sits under LIABILITY here because there is no EQUITY
+  // account class; what the business owes its owners is the closest existing fit.
+  OPENING_BALANCE_EQUITY: '200003',
 };

@@ -94,7 +94,11 @@ async function create(payload) {
     return employeeId;
   });
 
-  return getById(id);
+  const created = await getById(id);
+  // The business account was created inside the transaction above with its opening balance stored;
+  // its derived OPENING ledger pair is written after the commit (see syncOpeningEntries' own note).
+  if (created.ba_id) await businessAccountsService.syncOpeningEntries(created.ba_id);
+  return created;
 }
 
 // employee_type is immutable (payroll.md §7) — changing it would strand ba_id under the wrong
