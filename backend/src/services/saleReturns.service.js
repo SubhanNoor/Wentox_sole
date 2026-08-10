@@ -11,12 +11,13 @@ const {
 const CODES = require('../constants/reservedAccounts');
 const { toISODate } = require('../utils/dates');
 
+// bilty_no / gp_no / adda_id are dispatch details that are often unknown when the return is
+// recorded — the goods can come back before any bilty exists, or without going through an adda at
+// all. Optional since migration 018, matching sale bills (migrations 012/013) and matching the
+// draft tables, which have always allowed all three to be blank.
 function validateHeader(payload) {
   if (!payload.customer_id) throw ApiError.badRequest('customer_id is required');
-  if (!payload.bilty_no) throw ApiError.badRequest('bilty_no is required');
-  if (!payload.adda_id) throw ApiError.badRequest('adda_id is required');
   if (!payload.bill_no) throw ApiError.badRequest('bill_no is required');
-  if (!payload.gp_no) throw ApiError.badRequest('gp_no is required');
 }
 
 // Shared line/total resolution for create() and update() — validates items, looks up packing,

@@ -248,8 +248,8 @@ function biltySearch(filters = {}) {
 // is_posted, since it never writes to ledger_entries/stock_movements.
 async function updateBiltyInfo(billId, payload) {
   await getById(billId); // 404s if the bill doesn't exist
-  if (!payload.bilty_no) throw ApiError.badRequest('bilty_no is required');
-  if (!payload.adda_id) throw ApiError.badRequest('adda_id is required');
+  // Both optional since migrations 012/013 made the columns nullable — this screen exists precisely
+  // to fill them in later, so demanding them here blocked clearing a value that was entered wrongly.
 
   await repository.updateBiltyInfo(billId, { bilty_no: payload.bilty_no, adda_id: payload.adda_id });
   return getById(billId);

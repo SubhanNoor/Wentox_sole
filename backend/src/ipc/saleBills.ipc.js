@@ -47,12 +47,14 @@ module.exports = function register() {
     }),
   );
 
-  // Save/confirm — re-verifies the logged-in user's password before posting.
+  // Posting needs NO password (per explicit client instruction). Editing an ALREADY-POSTED
+  // bill still does — see update() above — because that silently reverses and reapplies a live
+  // ledger and stock effect, which is the destructive case the guard was there for. Posting a
+  // bill you have just reviewed on screen is not.
   ipcMain.handle(
     'sale-bills:post',
     wrap(async (payload) => {
-      const session = requireSession();
-      await authService.verifyPassword(session.userId, payload.password);
+      requireSession();
       return service.post(payload.id);
     }),
   );

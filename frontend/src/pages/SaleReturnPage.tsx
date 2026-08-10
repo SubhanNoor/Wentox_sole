@@ -288,9 +288,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     if (!storeId) { setErrorMsg('Store is required.'); return null; }
     if (!customerId) { setErrorMsg('Customer is required.'); return null; }
     if (!billNo) { setErrorMsg('Return Bill No. is required.'); return null; }
-    if (!gpNo) { setErrorMsg('GP No. is required.'); return null; }
-    if (!biltyNo) { setErrorMsg('Bilty No. is required.'); return null; }
-    if (!addaId) { setErrorMsg('Transport Adda is required.'); return null; }
     if (items.length === 0) { setErrorMsg('At least one product item is required.'); return null; }
 
     for (let i = 0; i < items.length; i++) {
@@ -1061,7 +1058,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Transport Adda <span className="text-red-500 font-bold">*</span>
+                    Transport Adda <span className="text-slate-400 font-normal normal-case">— optional</span>
                   </label>
                   <SearchableSelect
                     options={addas.map(ad => ({ value: String(ad.adda_id), label: ad.name }))}
@@ -1074,13 +1071,13 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
-                    GP No. <span className="text-red-500 font-bold">*</span>
+                    GP No. <span className="text-slate-400 font-normal normal-case">— optional</span>
                   </label>
                   <input type="text" value={gpNo} disabled={isViewMode} onChange={e => setGpNo(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Bilty No. <span className="text-red-500 font-bold">*</span>
+                    Bilty No. <span className="text-slate-400 font-normal normal-case">— optional</span>
                   </label>
                   <input type="text" value={biltyNo} disabled={isViewMode} onChange={e => setBiltyNo(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
                 </div>
@@ -1099,8 +1096,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   <th className="p-3 text-center" style={{ minWidth: '120px' }}>Stock</th>
                   <th className="p-3 text-center" style={{ width: '90px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
                   <th className="p-3 text-center" style={{ width: '90px' }}>Pairs</th>
-                  <th className="p-3 text-right" style={{ width: '110px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 text-center" style={{ width: '100px' }}>D%</th>
+                  <th className="p-3 text-right" style={{ width: '110px', minWidth: '96px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
+                  <th className="p-3 text-center" style={{ width: '100px', minWidth: '72px' }}>D%</th>
                   <th className="p-3 text-right" style={{ width: '110px' }}>D. Value</th>
                   <th className="p-3 text-right" style={{ width: '130px' }}>Total Credit</th>
                   {!isViewMode && <th className="p-3 text-center" style={{ width: '50px' }}></th>}

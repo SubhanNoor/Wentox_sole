@@ -1278,10 +1278,10 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   <th className="p-3 pl-4" style={{ width: '130px', minWidth: '110px' }}>Color <span className="text-red-500 font-bold">*</span></th>
                   <th className="p-3 text-center" style={{ width: '80px' }}>Packing</th>
                   <th className="p-3 text-center" style={{ minWidth: '120px' }}>Stock in Hand</th>
-                  <th className="p-3 text-center" style={{ width: '90px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 text-center" style={{ width: '90px' }}>Pairs</th>
-                  <th className="p-3 text-right" style={{ width: '110px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 text-center" style={{ width: '100px' }}>D%</th>
+                  <th className="p-3 text-center" style={{ width: '90px', minWidth: '76px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
+                  <th className="p-3 text-center" style={{ width: '90px', minWidth: '64px' }}>Pairs</th>
+                  <th className="p-3 text-right" style={{ width: '110px', minWidth: '96px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
+                  <th className="p-3 text-center" style={{ width: '100px', minWidth: '72px' }}>D%</th>
                   <th className="p-3 text-right" style={{ width: '110px' }}>D. Value</th>
                   <th className="p-3 text-right" style={{ width: '130px' }}>Value</th>
                   {!isViewMode && <th className="p-3 text-center" style={{ width: '50px' }}></th>}
