@@ -1,6 +1,6 @@
 {
   "name": "wentox-backend",
-  "version": "0.1.12",
+  "version": "1.0.0",
   "private": true,
   "description": "Wentox ERP — Electron desktop app; renderer and backend logic talk over IPC, no HTTP server",
   "main": "electron/main.js",
