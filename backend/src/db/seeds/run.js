@@ -27,25 +27,24 @@ async function ensureGroupAccount(pool, { code, name, classCode }) {
   return inserted.recordset[0].group_id;
 }
 
-// Cash needs a business_accounts row exactly like every bank does — schema.sql's own comment on
-// business_accounts.opening_balance says so ("cash needs one, every bank needs one"), and
-// cash_and_bank.md §9 decisions 4/5 require it (single Petty Cash account, opening balance lives
-// on business_accounts). Never seeded until now — without it, dbo.transfers (FK to
-// business_accounts only) has no row to reference for a cash<->bank transfer at all. One row only,
-// code = chartCode + '0001' (§3.2 composition, same as every other reserved-account party).
-async function ensureCashBusinessAccount(pool, cashAcId, chartCode) {
+// Some reserved chart accounts need exactly ONE business account beneath them, because something
+// has to reference a ba_id: dbo.transfers FKs to business_accounts only, and the JV ledger screen
+// opens an account rather than a chart head. One row, code = chartCode + '0001' (§3.2 composition,
+// same as every other reserved-account party).
+async function ensureNamedBusinessAccount(pool, acId, chartCode, name) {
   const existing = await pool.request()
-    .input('acId', sql.Int, cashAcId)
+    .input('acId', sql.Int, acId)
     .query('SELECT ba_id FROM dbo.business_accounts WHERE ac_id = @acId');
   if (existing.recordset.length) return existing.recordset[0].ba_id;
 
   const code = chartCode + '0001';
   const inserted = await pool.request()
     .input('code', sql.VarChar, code)
-    .input('name', sql.NVarChar, 'CASH IN HAND')
-    .input('acId', sql.Int, cashAcId)
+    .input('name', sql.NVarChar, name)
+    .input('acId', sql.Int, acId)
     .query(`INSERT INTO dbo.business_accounts (code, name, ac_id)
             OUTPUT inserted.ba_id VALUES (@code, @name, @acId)`);
+  console.log(`seeded business account: ${name}`);
   return inserted.recordset[0].ba_id;
 }
 
@@ -127,7 +126,9 @@ async function seed() {
   await ensureChartAccount(pool, { code: CODES.CUSTOMERS_ACCOUNTS, name: 'CUSTOMERS ACCOUNTS', groupId: assetsGroup });
   await ensureChartAccount(pool, { code: CODES.VENDORS_ACCOUNTS, name: 'VENDORS ACCOUNTS', groupId: liabilityGroup });
   const cashAcId = await ensureChartAccount(pool, { code: CODES.CASH_IN_HAND, name: 'CASH IN HAND', groupId: assetsGroup });
-  await ensureCashBusinessAccount(pool, cashAcId, CODES.CASH_IN_HAND);
+  // Cash needs one exactly as every bank does — schema.sql's own comment on
+  // business_accounts.opening_balance says so, and cash_and_bank.md §9 decisions 4/5 require it.
+  await ensureNamedBusinessAccount(pool, cashAcId, CODES.CASH_IN_HAND, 'CASH IN HAND');
   await ensureChartAccount(pool, {
     code: CODES.BANK_ACCOUNTS, name: 'BANK ACCOUNTS', groupId: assetsGroup, isRestricted: true,
   });
@@ -151,6 +152,14 @@ async function seed() {
   await ensureChartAccount(pool, { code: CODES.SALARIES_PAYABLE, name: 'SALARIES PAYABLE', groupId: liabilityGroup });
   await ensureChartAccount(pool, { code: CODES.WAGES_EXPENSE, name: 'WAGES EXPENSE', groupId: expensesGroup });
   await ensureChartAccount(pool, { code: CODES.SALARIES_EXPENSE, name: 'SALARIES EXPENSE', groupId: expensesGroup });
+
+  // --- Module 4c: Journal Voucher's counter-account, plus its own business account ---
+  // Seeded WITH a business account (unlike the heads above) for the same reason cash is: the JV
+  // ledger screen opens an account, and ledger_entries needs a ba_id to point at.
+  const jvAcId = await ensureChartAccount(pool, {
+    code: CODES.JOURNAL_VOUCHER, name: 'JOURNAL VOUCHER', groupId: expensesGroup,
+  });
+  await ensureNamedBusinessAccount(pool, jvAcId, CODES.JOURNAL_VOUCHER, 'JOURNAL VOUCHER');
 
   // --- Module 4b: Deposit's counter-account ---
   await ensureChartAccount(pool, { code: CODES.MISC_ADJUSTMENTS, name: 'Miscellaneous Adjustments', groupId: expensesGroup });

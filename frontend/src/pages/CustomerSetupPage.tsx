@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
+import OpeningBalanceFields from '@/components/OpeningBalanceFields';
 import { Plus, Search, MapPin, Edit2, ArrowLeft, Settings, X, UserCheck, Eye } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import { exportRowsToExcel } from '@/lib/export';
@@ -44,6 +45,10 @@ export default function CustomerSetupPage() {
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerRegionId, setNewCustomerRegionId] = useState('');
   const [newCustomerCityId, setNewCustomerCityId] = useState('');
+  // The opening balance lives on the auto-created business account, not on this row — the service
+  // forwards it there (same route bankAccounts.service.js has always used).
+  const [openingBalance, setOpeningBalance] = useState('');
+  const [openingDate, setOpeningDate] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3000); };
@@ -107,10 +112,12 @@ export default function CustomerSetupPage() {
     setNewCustomerName('');
     setNewCustomerRegionId('');
     setNewCustomerCityId('');
+    setOpeningBalance('');
+    setOpeningDate('');
     setErrorMsg('');
   };
 
-  const executeAddCustomer = async (data: { name: string; region_id: number; city_id?: number }) => {
+  const executeAddCustomer = async (data: api.CustomerCreateInput) => {
     const res = await api.customers.create(data);
     if (!res.ok) return setErrorMsg(res.error.message);
     flash('New customer added successfully.');
@@ -128,6 +135,8 @@ export default function CustomerSetupPage() {
       name: typed,
       region_id: Number(newCustomerRegionId),
       city_id: newCustomerCityId ? Number(newCustomerCityId) : undefined,
+      opening_balance: openingBalance.trim() ? Number(openingBalance) : undefined,
+      opening_date: openingDate.trim() || undefined,
     };
 
     if (editingCustomerId) {
@@ -593,6 +602,14 @@ export default function CustomerSetupPage() {
                     placeholder="Select City..."
                   />
                 </div>
+
+                <OpeningBalanceFields
+                  balance={openingBalance}
+                  date={openingDate}
+                  onBalanceChange={setOpeningBalance}
+                  onDateChange={setOpeningDate}
+                  isExisting={editingCustomerId != null}
+                />
 
                 <div className="flex justify-end gap-2.5 pt-4 border-t border-slate-100">
                   <button

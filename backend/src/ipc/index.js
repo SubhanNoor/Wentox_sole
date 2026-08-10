@@ -39,6 +39,7 @@ const registerStores = require('./stores.ipc');
 const registerSubCustomers = require('./subCustomers.ipc');
 const registerTransfers = require('./transfers.ipc');
 const registerSettlements = require('./settlements.ipc');
+const registerJournalVouchers = require('./journalVouchers.ipc');
 const registerDeposits = require('./deposits.ipc');
 const registerUpdates = require('./updates.ipc');
 const registerVendors = require('./vendors.ipc');
@@ -83,6 +84,7 @@ module.exports = function registerIpcHandlers() {
   registerSubCustomers();
   registerTransfers();
   registerSettlements();
+  registerJournalVouchers();
   registerDeposits();
   registerUpdates();
   registerVendors();

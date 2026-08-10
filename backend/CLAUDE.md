@@ -44,7 +44,12 @@ electron/          → main.js (registers IPC, opens BrowserWindow), preload.js 
 - `ipc` handlers never run SQL; repositories never touch IPC/session state.
 - Cross-feature reads go through the other feature's service, not its tables directly.
 - Adding a feature = 3 files (ipc/service/repository) + one line in `src/ipc/index.js`'s registrar +
-  the feature name added to `electron/preload.js`'s `FEATURES` array.
+  the feature name added to **`frontend/src/lib/ipcBridge.ts`**'s `FEATURES` array — NOT
+  `electron/preload.js`, which has exposed only a single `__ipcInvoke` primitive since the
+  contextBridge/Proxy fix and has no such array. Miss this and `window.api.<feature>` is
+  `undefined`, so the first call throws a TypeError instead of returning a failed ApiResult — the
+  symptom shows up somewhere unrelated (a dropdown that renders "no matching option" because an
+  unhandled rejection aborted the loader that also fetched the accounts).
 
 ## Conventions
 

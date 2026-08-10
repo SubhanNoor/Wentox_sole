@@ -4,6 +4,7 @@ import * as api from '@/lib/api';
 import type { EmployeeRow, EmployeeType, StageRow, CityRow, WageRunRow, ExpenseRow } from '@/lib/api';
 import { getEmployeeBalance, type FlatSalaryItem } from '@/lib/payroll';
 import AppLayout from '@/components/AppLayout';
+import OpeningBalanceFields from '@/components/OpeningBalanceFields';
 import { Plus, Search, Settings, Save, Edit2, Phone, MapPin, HardHat, BadgeDollarSign, X, RotateCcw } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -44,6 +45,10 @@ export default function EmployeeSetupPage() {
   const [cityId, setCityId] = useState('');
   const [selectedStages, setSelectedStages] = useState<string[]>([]);
   const [salary, setSalary] = useState('');
+  // The opening balance lives on the auto-created business account, not on this row — the service
+  // forwards it there (same route bankAccounts.service.js has always used).
+  const [openingBalance, setOpeningBalance] = useState('');
+  const [openingDate, setOpeningDate] = useState('');
 
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -156,6 +161,8 @@ export default function EmployeeSetupPage() {
       employee_type: empType,
       stages: empType === 'WORKER' ? selectedStages : undefined,
       monthly_salary: empType === 'SALARIED' ? Number(salary) : undefined,
+      opening_balance: openingBalance.trim() ? Number(openingBalance) : undefined,
+      opening_date: openingDate.trim() || undefined,
     };
 
     if (selectedId) {
@@ -481,6 +488,14 @@ export default function EmployeeSetupPage() {
                     />
                   </div>
                 </div>
+
+                <OpeningBalanceFields
+                  balance={openingBalance}
+                  date={openingDate}
+                  onBalanceChange={setOpeningBalance}
+                  onDateChange={setOpeningDate}
+                  isExisting={selectedId != null}
+                />
 
                 {/* Worker Trades vs Salaried Monthly Salary */}
                 {empType === 'WORKER' ? (

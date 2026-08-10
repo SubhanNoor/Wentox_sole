@@ -244,12 +244,14 @@ async function saleAggregateByCustomer(filters = {}) {
   const returnDate = [];
   const receiptDate = [];
   const settleDate = [];
+  const jvDate = [];
 
   if (filters.date_from) {
     billDate.push('bill_date >= @dateFrom');
     returnDate.push('return_date >= @dateFrom');
     receiptDate.push('receipt_date >= @dateFrom');
     settleDate.push('settlement_date >= @dateFrom');
+    jvDate.push('jv_date >= @dateFrom');
     params.dateFrom = { type: sql.Date, value: filters.date_from };
   }
   if (filters.date_to) {
@@ -257,6 +259,7 @@ async function saleAggregateByCustomer(filters = {}) {
     returnDate.push('return_date <= @dateTo');
     receiptDate.push('receipt_date <= @dateTo');
     settleDate.push('settlement_date <= @dateTo');
+    jvDate.push('jv_date <= @dateTo');
     params.dateTo = { type: sql.Date, value: filters.date_to };
   }
   const billWhere = billDate.length ? `WHERE ${billDate.join(' AND ')}` : '';
@@ -266,6 +269,10 @@ async function saleAggregateByCustomer(filters = {}) {
   // swap the FIRST 'receipt_date' and leave the date_to half pointing at a column settlements
   // does not have.
   const settleWhere = `WHERE ${[...settleDate, "status = 'CONFIRMED'"].join(' AND ')}`;
+  // Journal Vouchers are reported as their own ROW under the party, never folded into Payment
+  // Received — a JV reduces what is owed but is not money collected, and mixing the two would make
+  // collections read higher than the cash and cheques actually taken in.
+  const jvWhere = `WHERE ${[...jvDate, "status = 'CONFIRMED'"].join(' AND ')}`;
 
   const result = await query(
     `SELECT
@@ -274,7 +281,8 @@ async function saleAggregateByCustomer(filters = {}) {
        ISNULL(sb.total_sales, 0) AS total_sales, ISNULL(sb.total_cartons, 0) AS total_cartons,
        ISNULL(sr.total_returns, 0) AS total_returns,
        ISNULL(rc.total_payment, 0) + ISNULL(st.total_settled, 0) AS total_payment,
-       ISNULL(rc.total_commission, 0) AS total_commission
+       ISNULL(rc.total_commission, 0) AS total_commission,
+       ISNULL(jv.total_jv, 0) AS total_jv
      FROM dbo.customers c
      JOIN dbo.regions r ON r.region_id = c.region_id
      LEFT JOIN dbo.cities ci ON ci.city_id = c.city_id
@@ -303,8 +311,14 @@ async function saleAggregateByCustomer(filters = {}) {
        FROM dbo.settlements ${settleWhere}
        GROUP BY from_ba_id
      ) st ON st.from_ba_id = c.ba_id
+     LEFT JOIN (
+       SELECT ba_id,
+              SUM(CASE WHEN direction = 'CREDIT' THEN amount ELSE -amount END) AS total_jv
+       FROM dbo.journal_vouchers ${jvWhere} GROUP BY ba_id
+     ) jv ON jv.ba_id = c.ba_id
      WHERE sb.total_sales IS NOT NULL OR sr.total_returns IS NOT NULL
         OR rc.total_payment IS NOT NULL OR st.total_settled IS NOT NULL
+        OR jv.total_jv IS NOT NULL
      ORDER BY r.name, ci.name, c.name`,
     params,
   );
@@ -352,6 +366,10 @@ async function vendorReportRows(filters = {}) {
   if (filters.date_from) settleDate.push('settlement_date >= @dateFrom');
   if (filters.date_to) settleDate.push('settlement_date <= @dateTo');
   const settleWhere = [...settleDate, "status = 'CONFIRMED'"].join(' AND ');
+  const jvDate = [];
+  if (filters.date_from) jvDate.push('jv_date >= @dateFrom');
+  if (filters.date_to) jvDate.push('jv_date <= @dateTo');
+  const jvWhere = [...jvDate, "status = 'CONFIRMED'"].join(' AND ');
 
   const vendorFilter = filters.vendor_id ? 'WHERE v.vendor_id = @vendorId' : '';
   const result = await query(
@@ -360,7 +378,8 @@ async function vendorReportRows(filters = {}) {
        ISNULL(p.total_purchase, 0) AS total_purchase,
        ISNULL(pr.total_return, 0) AS total_return,
        ISNULL(ex.total_expense_payment, 0) + ISNULL(al.total_alloc_payment, 0)
-         + ISNULL(st.total_settled, 0) AS total_payment
+         + ISNULL(st.total_settled, 0) AS total_payment,
+       ISNULL(jv.total_jv, 0) AS total_jv
      FROM dbo.vendors v
      LEFT JOIN (
        SELECT vendor_id, SUM(total_value) AS total_purchase FROM dbo.purchases ${purchaseWhere} GROUP BY vendor_id
@@ -382,6 +401,11 @@ async function vendorReportRows(filters = {}) {
        SELECT to_ba_id, SUM(amount) AS total_settled
        FROM dbo.settlements WHERE ${settleWhere} GROUP BY to_ba_id
      ) st ON st.to_ba_id = v.ba_id
+     LEFT JOIN (
+       SELECT ba_id,
+              SUM(CASE WHEN direction = 'CREDIT' THEN amount ELSE -amount END) AS total_jv
+       FROM dbo.journal_vouchers WHERE ${jvWhere} GROUP BY ba_id
+     ) jv ON jv.ba_id = v.ba_id
      ${vendorFilter}
      ORDER BY v.name`,
     params,

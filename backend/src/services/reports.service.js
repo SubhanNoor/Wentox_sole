@@ -125,6 +125,11 @@ function formatLedgerRow(r) {
     case 'SETTLEMENT':
       type = 'Direct Settlement';
       break;
+    // The stored narration already carries the reason and the other side, so it stands as-is —
+    // showing a bare "Journal Voucher" would hide exactly the thing a JV row needs to explain.
+    case 'JOURNAL_VOUCHER':
+      type = 'Journal Voucher';
+      break;
     case 'PURCHASE':
       type = 'Purchase';
       break;
@@ -231,6 +236,9 @@ async function saleAnalysis(filters = {}) {
     total_returns: Number(r.total_returns),
     total_payment: Number(r.total_payment),
     total_commission: Number(r.total_commission),
+    // Reported as its own ROW under the party in the UI, not as another column — a JV reduces what
+    // is owed but is not money collected, so it must never be folded into total_payment.
+    total_jv: Number(r.total_jv),
   }));
   return filters.group_by === 'region' ? groupByRegion(mapped) : mapped;
 }
@@ -258,6 +266,9 @@ async function saleReport(filters = {}) {
       sale_return: saleReturn,
       net_sales: totalSales - commission - saleReturn,
       payment: Number(r.total_payment),
+      // Own row in the UI, deliberately not a column and deliberately NOT inside net_sales:
+      // net_sales is what the sale was worth, a JV is goodwill given afterwards.
+      total_jv: Number(r.total_jv),
     };
   });
   return filters.group_by === 'region' ? groupByRegion(mapped) : mapped;
@@ -276,6 +287,7 @@ async function vendorReport(filters = {}) {
       total_return: totalReturn,
       net_purchase: totalPurchase - totalReturn,
       payment_paid: Number(r.total_payment),
+      total_jv: Number(r.total_jv),
     };
   });
 }

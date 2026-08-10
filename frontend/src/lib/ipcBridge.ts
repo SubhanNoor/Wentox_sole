@@ -11,13 +11,18 @@
  * of main.tsx, before anything else can read window.api.
  */
 
+// EVERY feature must be listed here. This is an allow-list, not a fallback: a feature missing from
+// it leaves window.api.<feature> undefined, so the first call throws a TypeError rather than
+// failing as a rejected ApiResult — which surfaces as an unrelated symptom elsewhere on the page
+// (an empty dropdown, a list that never loads). Adding a backend feature means adding it here too;
+// backend/CLAUDE.md's "adding a feature" checklist says so.
 const FEATURES = [
   'auth', 'accountClasses', 'addas', 'alerts', 'backup', 'bankAccounts', 'businessAccounts', 'categories', 'chartAccounts', 'cheques',
   'cities', 'customers', 'draftExpenses', 'draftPurchases', 'draftPurchaseReturns', 'draftReceipts',
   'draftSaleBills', 'draftSaleReturns', 'employees', 'expenses',
   'groupAccounts', 'products', 'productColors', 'purchases', 'purchaseReturns', 'receipts',
   'regions', 'reports', 'salaryRuns', 'saleBills', 'saleReturns', 'stages', 'stock', 'stores',
-  'subCustomers', 'transfers', 'deposits', 'updates', 'vendors', 'wageRuns',
+  'subCustomers', 'transfers', 'settlements', 'journalVouchers', 'deposits', 'updates', 'vendors', 'wageRuns',
 ] as const;
 
 // window.api.<feature> stays camelCase (normal JS property access); the wire channel name is

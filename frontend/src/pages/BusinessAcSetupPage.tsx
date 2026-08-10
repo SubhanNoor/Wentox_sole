@@ -3,6 +3,7 @@ import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, RotateCcw, X, Landmark } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
+import OpeningBalanceFields from '@/components/OpeningBalanceFields';
 import {
   businessAccounts as businessAccountsApi,
   chartAccounts as chartAccountsApi,
@@ -74,8 +75,10 @@ export default function BusinessAcSetupPage() {
     setControlId(String(biz.ac_id));
     setRegionId(biz.region_id ? String(biz.region_id) : '');
     setCityId(biz.city_id ? String(biz.city_id) : '');
-    setOpeningBalance('');
-    setOpeningDate('');
+    // Load what is actually stored — these were blanked and the fields hidden while editing, which
+    // is why an opening balance could only ever be set at creation.
+    setOpeningBalance(biz.opening_balance != null ? String(biz.opening_balance) : '');
+    setOpeningDate(biz.opening_date ? biz.opening_date.slice(0, 10) : '');
     setErrorMsg('');
     setIsModalOpen(true);
   };
@@ -106,6 +109,8 @@ export default function BusinessAcSetupPage() {
         name: typed,
         region_id: regionId ? Number(regionId) : undefined,
         city_id: cityId ? Number(cityId) : undefined,
+        opening_balance: openingBalance.trim() ? Number(openingBalance) : undefined,
+        opening_date: openingDate.trim() || undefined,
       });
       if (!res.ok) {
         return setErrorMsg(res.error.message);
@@ -425,35 +430,13 @@ export default function BusinessAcSetupPage() {
                   </div>
                 </div>
 
-                {!selectedId && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                        Opening Balance
-                      </label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={openingBalance}
-                        onChange={e => setOpeningBalance(e.target.value)}
-                        placeholder="0.00"
-                        className="soleria-input w-full font-medium"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                        Opening Date
-                      </label>
-                      <input
-                        type="date"
-                        value={openingDate}
-                        onChange={e => setOpeningDate(e.target.value)}
-                        className="soleria-input w-full font-medium"
-                      />
-                    </div>
-                  </div>
-                )}
+                <OpeningBalanceFields
+                  balance={openingBalance}
+                  date={openingDate}
+                  onBalanceChange={setOpeningBalance}
+                  onDateChange={setOpeningDate}
+                  isExisting={selectedId != null}
+                />
 
                 <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                   <button

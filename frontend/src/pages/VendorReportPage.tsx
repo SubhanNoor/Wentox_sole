@@ -257,7 +257,7 @@ export function VendorReportContent() {
                     ) : filteredGroupRows.length === 0 ? (
                       <tr><td colSpan={6} className="text-center p-8 text-slate-400">No vendors found matching your search.</td></tr>
                     ) : (
-                      filteredGroupRows.map(row => (
+                      filteredGroupRows.flatMap(row => [
                         <tr key={row.vendor_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                           <td className="p-3 pl-4 font-semibold text-slate-800">{row.vendor_name}</td>
                           <td className="p-3 text-right font-bold text-slate-800">{row.total_purchase > 0 ? formatCurrency(row.total_purchase) : '-'}</td>
@@ -272,8 +272,22 @@ export function VendorReportContent() {
                               View Ledger
                             </button>
                           </td>
-                        </tr>
-                      ))
+                        </tr>,
+                        // A Journal Voucher gets its OWN row under the vendor rather than a column:
+                        // it reduces what is owed but is not a payment, and most vendors have none,
+                        // so a column would be mostly dashes across the whole report.
+                        row.total_jv !== 0 ? (
+                          <tr key={`jv-${row.vendor_id}`} className="border-b bg-amber-50/40" style={{ borderColor: 'var(--border-table)' }}>
+                            <td className="p-2 pl-8 text-xs font-semibold text-amber-900" colSpan={4}>
+                              Journal Voucher applied
+                            </td>
+                            <td className="p-2 text-right text-xs font-bold font-mono text-amber-900">
+                              {formatCurrency(Math.abs(row.total_jv))}
+                            </td>
+                            <td />
+                          </tr>
+                        ) : null,
+                      ])
                     )}
                   </tbody>
                   <tfoot>

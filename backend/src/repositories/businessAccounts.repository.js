@@ -104,13 +104,30 @@ async function findByIdWithRestriction(baId) {
 
 async function update(baId, ba) {
   await query(
-    `UPDATE dbo.business_accounts SET name = @name, region_id = @regionId, city_id = @cityId
+    `UPDATE dbo.business_accounts SET name = @name, region_id = @regionId, city_id = @cityId,
+       opening_balance = @openingBalance, opening_date = @openingDate
      WHERE ba_id = @baId`,
     {
       baId: { type: sql.Int, value: baId },
       name: { type: sql.NVarChar(100), value: ba.name },
       regionId: { type: sql.Int, value: ba.region_id ?? null },
       cityId: { type: sql.Int, value: ba.city_id ?? null },
+      openingBalance: { type: sql.Decimal(14, 2), value: ba.opening_balance ?? null },
+      openingDate: { type: sql.Date, value: ba.opening_date ?? null },
+    },
+  );
+}
+
+// Opening pair alone, for the party setup screens (vendor/customer/employee/bank), which own the
+// name/region/city on their OWN row and must not have them overwritten from here.
+async function updateOpening(baId, { opening_balance, opening_date }) {
+  await query(
+    `UPDATE dbo.business_accounts SET opening_balance = @openingBalance, opening_date = @openingDate
+     WHERE ba_id = @baId`,
+    {
+      baId: { type: sql.Int, value: baId },
+      openingBalance: { type: sql.Decimal(14, 2), value: opening_balance ?? null },
+      openingDate: { type: sql.Date, value: opening_date ?? null },
     },
   );
 }
@@ -140,6 +157,6 @@ async function isPartyLinked(baId) {
 }
 
 module.exports = {
-  nextSerial, insert, updateName, findById, findByAcId, list, findByIdWithRestriction, update,
+  nextSerial, insert, updateName, findById, findByAcId, list, findByIdWithRestriction, update, updateOpening,
   setStatus, isPartyLinked,
 };

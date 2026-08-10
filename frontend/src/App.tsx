@@ -10,6 +10,7 @@ import ExpensesPage from '@/pages/ExpensesPage';
 import WageRunPage from '@/pages/WageRunPage';
 import SalaryRunPage from '@/pages/SalaryRunPage';
 import TransferPage from '@/pages/TransferPage';
+import JournalVoucherPage from '@/pages/JournalVoucherPage';
 import ChequePage from '@/pages/ChequePage';
 import BankSetupPage from '@/pages/BankSetupPage';
 
@@ -81,6 +82,8 @@ export default function App() {
       return <SalaryRunPage />;
     case 'transfer':
       return <TransferPage />;
+    case 'journal-voucher':
+      return <JournalVoucherPage />;
     case 'cheque-return':
       return <ChequePage />;
 

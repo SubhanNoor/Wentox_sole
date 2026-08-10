@@ -319,6 +319,9 @@ export interface CustomerCreateInput {
   region_id: number;
   city_id?: number;
   address?: string;
+  /** Lives on the linked business account, not on this row. Both or neither (CK_business_accounts_opening). */
+  opening_balance?: number;
+  opening_date?: string;
 }
 
 export interface SubCustomerCreateInput {
@@ -362,6 +365,9 @@ export interface VendorCreateInput {
   phone?: string;
   region_id?: number;
   city_id?: number;
+  /** Lives on the linked business account, not on this row. Both or neither (CK_business_accounts_opening). */
+  opening_balance?: number;
+  opening_date?: string;
 }
 
 export type VendorUpdateInput = VendorCreateInput;
@@ -556,6 +562,40 @@ export interface SettlementListFilters {
   date_to?: string;
 }
 
+// Journal Voucher — goodwill written off a party's balance ("eidi" on a payable). CREDIT reduces
+// what they owe us; DEBIT reduces what we owe them. Countered against the JOURNAL VOUCHER business
+// account, which has its own openable ledger.
+export interface JournalVoucherRow {
+  jv_id: number;
+  jv_date: string;
+  ba_id: number;
+  direction: 'CREDIT' | 'DEBIT';
+  amount: number;
+  reason: string;
+  remarks: string | null;
+  status: 'CONFIRMED' | 'DRAFT';
+  ba_name?: string;
+  ba_code?: string;
+  main_account?: string;
+}
+
+export interface JournalVoucherCreateInput {
+  jv_date: string;
+  ba_id: number;
+  direction: 'CREDIT' | 'DEBIT';
+  amount: number;
+  reason: string;
+  remarks?: string;
+}
+
+export interface JournalVoucherListFilters {
+  ba_id?: number;
+  direction?: 'CREDIT' | 'DEBIT';
+  status?: 'CONFIRMED' | 'DRAFT';
+  date_from?: string;
+  date_to?: string;
+}
+
 export interface DepositRow {
   deposit_id: number;
   deposit_date: string;
@@ -729,6 +769,10 @@ export interface BusinessAccountUpdateInput {
   name: string;
   region_id?: number;
   city_id?: number;
+  /** Editable after creation. A stored input, not a ledger row — changing it rewrites past
+   *  balances for this account, which is the point when correcting a migration. */
+  opening_balance?: number;
+  opening_date?: string;
 }
 
 // ── Milestone 8.2/8.3: Account Classes, Group Accounts, Chart of Accounts ──
@@ -931,6 +975,9 @@ export interface EmployeeCreateInput {
   employee_type: EmployeeType;
   monthly_salary?: number;
   stages?: string[];
+  /** Lives on the linked business account, not on this row. Both or neither (CK_business_accounts_opening). */
+  opening_balance?: number;
+  opening_date?: string;
 }
 
 export interface EmployeeListFilters {
@@ -1168,6 +1215,8 @@ export interface SaleAnalysisRow {
   total_returns: number;
   total_payment: number;
   total_commission: number;
+  /** Rendered as its own row under the party, never a column — a JV is not a payment. */
+  total_jv: number;
 }
 
 export interface SaleAnalysisRegionGroup {
@@ -1189,6 +1238,8 @@ export interface SaleReportRow {
   sale_return: number;
   net_sales: number;
   payment: number;
+  /** Own row under the party, not a column, and deliberately outside net_sales. */
+  total_jv: number;
 }
 
 export interface SaleReportRegionGroup {
@@ -1208,6 +1259,8 @@ export interface VendorReportRow {
   total_return: number;
   net_purchase: number;
   payment_paid: number;
+  /** Own row under the vendor, not a column. */
+  total_jv: number;
 }
 
 export interface VendorReportFilters extends DateRangeFilters {
@@ -1484,6 +1537,16 @@ declare global {
         update: (payload: { id: number } & BankAccountUpdateInput) => Promise<ApiResult<BankAccountRow>>;
         remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
         reactivate: (payload: { id: number }) => Promise<ApiResult<BankAccountRow>>;
+      };
+      journalVouchers: {
+        list: (payload?: JournalVoucherListFilters) => Promise<ApiResult<JournalVoucherRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<JournalVoucherRow>>;
+        account: () => Promise<ApiResult<BusinessAccountRow>>;
+        create: (payload: JournalVoucherCreateInput) => Promise<ApiResult<JournalVoucherRow>>;
+        update: (payload: { id: number } & JournalVoucherCreateInput) => Promise<ApiResult<JournalVoucherRow>>;
+        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        post: (payload: { id: number }) => Promise<ApiResult<JournalVoucherRow>>;
+        unpost: (payload: { id: number }) => Promise<ApiResult<JournalVoucherRow>>;
       };
       settlements: {
         list: (payload?: SettlementListFilters) => Promise<ApiResult<SettlementRow[]>>;
@@ -2168,6 +2231,31 @@ function normalizeDepositRow<T extends { deposit_date: string }>(row: T): T {
 function normalizeSettlementRow<T extends { settlement_date: string }>(row: T): T {
   return { ...row, settlement_date: normalizeDate(row.settlement_date) };
 }
+
+function normalizeJvRow<T extends { jv_date: string }>(row: T): T {
+  return { ...row, jv_date: normalizeDate(row.jv_date) };
+}
+
+// window.api is keyed by the CAMEL feature name (ipcBridge.ts) — only the wire channel is
+// kebab-case, and the bridge derives that itself. Reaching for window.api['journal-vouchers']
+// yields undefined, which is a TypeError on the next property access rather than a clean failure.
+export const journalVouchers = {
+  list: (payload?: JournalVoucherListFilters) =>
+    window.api ? window.api.journalVouchers.list(payload).then(r => mapResult(r, rows => rows.map(normalizeJvRow))) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.journalVouchers.get({ id }).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
+  account: () =>
+    window.api ? window.api.journalVouchers.account() : Promise.resolve(NO_BRIDGE),
+  create: (payload: JournalVoucherCreateInput) =>
+    window.api ? window.api.journalVouchers.create(payload).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: JournalVoucherCreateInput) =>
+    window.api ? window.api.journalVouchers.update({ id, ...payload }).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number) => window.api ? window.api.journalVouchers.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  post: (id: number) =>
+    window.api ? window.api.journalVouchers.post({ id }).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
+  unpost: (id: number) =>
+    window.api ? window.api.journalVouchers.unpost({ id }).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
+};
 
 export const settlements = {
   list: (payload?: SettlementListFilters) =>

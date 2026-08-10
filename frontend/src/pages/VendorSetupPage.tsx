@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
+import OpeningBalanceFields from '@/components/OpeningBalanceFields';
 import { Plus, Search, Settings, Save, Edit2, Phone, MapPin, X, Truck, RotateCcw } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -26,6 +27,10 @@ export default function VendorSetupPage() {
   // Form State
   const [vendorName, setVendorName] = useState('');
   const [vendorPhone, setVendorPhone] = useState('');
+  // The opening balance lives on the auto-created business account, not on this row — the service
+  // forwards it there (same route bankAccounts.service.js has always used).
+  const [openingBalance, setOpeningBalance] = useState('');
+  const [openingDate, setOpeningDate] = useState('');
   const [vendorRegionId, setVendorRegionId] = useState('');
   const [vendorCityId, setVendorCityId] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -101,6 +106,8 @@ export default function VendorSetupPage() {
       phone: typedPhone || undefined,
       region_id: vendorRegionId ? Number(vendorRegionId) : undefined,
       city_id: vendorCityId ? Number(vendorCityId) : undefined,
+      opening_balance: openingBalance.trim() ? Number(openingBalance) : undefined,
+      opening_date: openingDate.trim() || undefined,
     };
 
     if (selectedVendorId) {
@@ -391,6 +398,14 @@ export default function VendorSetupPage() {
                     </div>
                   </div>
                 </div>
+
+                <OpeningBalanceFields
+                  balance={openingBalance}
+                  date={openingDate}
+                  onBalanceChange={setOpeningBalance}
+                  onDateChange={setOpeningDate}
+                  isExisting={selectedVendorId != null}
+                />
 
                 <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                   <button

@@ -551,6 +551,7 @@ export type NavPage =
   | 'wage-run'
   | 'salary-run'
   | 'transfer'
+  | 'journal-voucher'
   | 'cheque-return'
   | 'setup-bank'
   | 'setup-product'

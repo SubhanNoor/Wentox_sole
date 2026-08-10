@@ -23,6 +23,126 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Opening balances — settable on every account-opening screen, and editable
+
+### 2026-08-10 — Was create-only on two screens and editable on none
+- **What was actually wrong** (narrower and wider than "we can't edit it"):
+  - **Business Account** and **Bank** screens already asked for an opening balance on create.
+  - On the Business Account screen the fields were wrapped in `{!selectedId && …}` — **hidden
+    entirely when editing**, and `businessAccounts.service#update()` only ever passed
+    `name`/`region_id`/`city_id` to the repository, whose UPDATE didn't mention the opening columns
+    at all. So there was no route to change one after creation, on any screen.
+  - **Vendor, Customer and Employee** never asked, despite each auto-creating a business account —
+    which matters now that 2,000+ legacy accounts are coming over with balances attached.
+- **Fix:** `repository.update()` now writes the pair; `updateOpening()` added for the party screens,
+  which own name/region/city on their own row and must not have them overwritten. The paired
+  both-or-neither check moved into a shared `validateOpeningPair()` used by create, update and all
+  four party services, so every screen rejects a half-filled pair identically. Vendor, Customer and
+  Employee forward the pair into `createUnderChartCode`'s extra, exactly as `bankAccounts.service`
+  always has.
+- **A data-loss trap caught before it shipped.** The party pages cannot *show* the current opening
+  balance on edit — it lives on the linked business account and none of those three repositories
+  join it. An untouched edit form would therefore have sent blanks and **wiped the opening balance
+  on every unrelated rename**. `setOpening()` now applies only when the caller actually supplied one
+  of the keys. Consequence, stated rather than papered over: party screens can **set and change** an
+  opening balance but not clear it; the Business Account screen (which does load the stored values)
+  remains the place to view, change or clear one.
+- **`OpeningBalanceFields.tsx`** shared by all four screens so the wording, the both-or-neither hint
+  and the warning cannot drift between copies. When editing an existing account it warns plainly
+  that this **rewrites past balances and reports** with no reversing entry — because
+  `opening_balance` is a stored input `netBalance()` adds in, not a ledger row — and points at a
+  Journal Voucher for anything that actually happened. Per the user's choice, no role gate.
+- **Verified** end to end: vendor created with 25,000 opening → balance 25,000; changed via the
+  vendor screen → 40,000; changed via the Business Account screen (the path that previously had no
+  effect) → 12,345; cleared → 0; a rename carrying no opening keys left 7,000 **untouched**; an
+  unpaired balance was rejected; and an opening dated 2027 correctly counted as 0 today. `tsc -b`
+  clean; all four pages' lint counts identical to baseline (1/1/2/1) and the new component 0.
+- **Files:** `backend/src/repositories/businessAccounts.repository.js`,
+  `backend/src/services/{businessAccounts,vendors,customers,employees,bankAccounts}.service.js`,
+  `frontend/src/components/OpeningBalanceFields.tsx` (new), `frontend/src/lib/api.ts`,
+  `frontend/src/pages/{BusinessAcSetupPage,VendorSetupPage,CustomerSetupPage,EmployeeSetupPage}.tsx`
+
+---
+
+## Bridge allow-list — `settlements` and `journalVouchers` were never registered
+
+### 2026-08-10 — window.api.<feature> undefined; symptom surfaced as an empty dropdown
+- **Reported as** "when I select account in JV it says no matching option". The account fetch was
+  fine. `frontend/src/lib/ipcBridge.ts` keeps an explicit `FEATURES` allow-list and neither new
+  feature was in it, so `window.api.journalVouchers` was **undefined** and the call threw a
+  TypeError rather than returning a failed ApiResult. On the JV page that aborted the whole loader
+  (`Promise.all([listBusinessAccounts(), journalVouchers.account()])`), so `setAccounts` never ran
+  and the dropdown had zero options.
+- **`settlements` was missing too** — so the Receipts "Endorse" option shipped in `6c07a777` was
+  broken in exactly the same way, and reported as working. Backend verification ran against the
+  services directly, which never touches the bridge, so the gap was invisible to it. **Lesson:
+  service-level verification does not prove a feature reaches the screen.**
+- **Also keyed wrongly:** `window.api['journal-vouchers']`. The bridge keys by the CAMEL feature
+  name and derives the kebab wire channel itself, so that lookup would have stayed undefined even
+  once registered.
+- **Root cause of the miss:** `backend/CLAUDE.md`'s "adding a feature" checklist said to add the
+  name to `electron/preload.js`'s `FEATURES` array. That array does not exist there — preload has
+  exposed a single `__ipcInvoke` primitive since the contextBridge/Proxy fix, and the real list is
+  in `ipcBridge.ts`. The checklist has been corrected, with a note on the failure mode, and
+  `ipcBridge.ts` now says why the allow-list fails loudly-but-elsewhere.
+- **Files:** `frontend/src/lib/ipcBridge.ts`, `frontend/src/lib/api.ts`, `backend/CLAUDE.md`
+
+---
+
+## Journal Voucher (UC-40, migration 016)
+
+### 2026-08-10 — Goodwill written off a party's balance, with its own account and ledger
+- **What:** a customer with an outstanding payable asks for an *eidi* — a concession on what they
+  owe. Not a payment, not a discount on the sale: compensation granted afterwards. The amount comes
+  off their balance and the cost lands on a dedicated **JOURNAL VOUCHER** account. Any business
+  account can be named, not just customers. New page under Transactions with two tabs: entry, and
+  the JV account's own ledger.
+- **Two things it is deliberately NOT, both flagged to the user before building:**
+  - **Not commission.** `receipts.commission` (§7) only exists attached to a receipt and only for a
+    customer. A JV stands alone.
+  - **Not a Deposit.** `dbo.deposits` (Module 4b) is structurally almost identical — a one-sided
+    CREDIT/DEBIT adjustment against the *Miscellaneous Adjustments* chart account. The user chose to
+    keep both rather than merge: a JV counters against a real **business account**, so "what have we
+    given away in JVs" is an openable ledger instead of a figure buried in a mixed head.
+- **Posts as** (both legs `ba_id`, `source_type='JOURNAL_VOUCHER'`): CREDIT → Dr JV BA / Cr party
+  BA (what they owe us falls); DEBIT → the reverse (what we owe them falls). Both directions were
+  the user's call — with any account selectable, the reverse case arrives eventually and adding it
+  later would be a migration.
+- **The JV account is a business account, not just a chart head** — that is what makes the ledger
+  openable, since `ledger_entries` needs a `ba_id` to point at. Seeded like Cash is;
+  `ensureCashBusinessAccount` was generalised to `ensureNamedBusinessAccount` and the cash-specific
+  duplicate removed, so both reserved single-account heads share one helper.
+- **Reports, per the user's explicit wording** ("shouldn't have a separate column — a separate row
+  record that JV of this amount was applied"): Sale Report and Vendor Report gain a **row beneath
+  the party**, shown only when non-zero, never a column and never folded into Payment Received or
+  Net Sales. A JV reduces what is owed but is not money collected; folding it in would make
+  collections read higher than the cash actually taken.
+- **Guards:** `reason` is NOT NULL and rejected when blank — an unexplained write-off against a
+  party balance is exactly the entry that gets questioned later. A JV against the JV account itself
+  is blocked (both legs would land on one account). `assertAccessible` applies, so a USER cannot
+  raise a JV against a restricted account.
+- **Verified end to end** on `wentox_demo` with Ahmed Footwear: a 3,000 CREDIT moved the party
+  **−3,000** and the JV account **+3,000**, the report row read 3,000 while **Payment Received
+  stayed 134,500 unchanged**, both ledgers carried the reason ("Journal Voucher #1 — Eid
+  compensation" / "JV #1 to Ahmed Footwear — Eid compensation"), the Cash Book showed nothing, a
+  DEBIT of 500 moved the balance the other way, self-JV and blank-reason were both rejected, and
+  unpost + delete restored both balances exactly. `tsc -b` clean; the two report pages' lint counts
+  are identical to baseline (1 and 2), and the new page carries one — the `set-state-in-effect`
+  pattern every page here shares, after the avoidable second instance was refactored out.
+- **Files:** `backend/src/db/migrations/016_journal_vouchers.sql` (new),
+  `backend/src/repositories/journalVouchers.repository.js` (new),
+  `backend/src/services/journalVouchers.service.js` (new),
+  `backend/src/ipc/journalVouchers.ipc.js` (new), `backend/src/ipc/index.js`,
+  `backend/src/constants/reservedAccounts.js`, `backend/src/db/seeds/run.js`,
+  `backend/src/services/businessAccounts.service.js`,
+  `backend/src/repositories/reports.repository.js`, `backend/src/services/reports.service.js`,
+  `frontend/src/pages/JournalVoucherPage.tsx` (new), `frontend/src/lib/api.ts`,
+  `frontend/src/pages/{SaleReportPage,VendorReportPage}.tsx`, `frontend/src/App.tsx`,
+  `frontend/src/components/AppLayout.tsx`, `frontend/src/types/index.ts`,
+  `System_architecture/{use_cases.md,database_schema_v4.3.md}`
+
+---
+
 ## UC-03 — server-side role enforcement (was UI-only)
 
 ### 2026-08-10 — Restricted accounts guarded on the account, not the channel

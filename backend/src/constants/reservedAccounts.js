@@ -25,4 +25,8 @@ module.exports = {
   // capital, bank fees, etc). Generic on purpose — Deposit's free-text `source` field carries the
   // specific reason, same as how PURCHASES doesn't care what was bought.
   MISC_ADJUSTMENTS: '400006',
+  // Module 4c — Journal Voucher's counter-account. Unlike MISC_ADJUSTMENTS above, this one also
+  // gets a single business account seeded beneath it (db/seeds/run.js), because "what have we
+  // given away in JVs" has to be an openable ledger, not a figure inside a mixed adjustments head.
+  JOURNAL_VOUCHER: '400007',
 };

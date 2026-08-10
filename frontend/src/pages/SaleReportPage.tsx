@@ -24,6 +24,9 @@ interface SaleReportRow {
   saleReturn: number;
   netSales: number;
   payment: number;
+  /** Optional because the synthesized group/overall rows have no party of their own to attribute a
+   *  JV to — only real customer rows carry it. */
+  totalJv?: number;
 }
 
 const MONTHS = [
@@ -83,6 +86,7 @@ function mapRow(r: ApiSaleReportRow): SaleReportRow {
     saleReturn: r.sale_return,
     netSales: r.net_sales,
     payment: r.payment,
+    totalJv: r.total_jv,
   };
 }
 
@@ -424,7 +428,7 @@ export function SaleReportContent() {
                   customerRows.length === 0 ? (
                     <tr><td colSpan={7} className="text-center p-8 text-slate-400">No sales activity found for this period.</td></tr>
                   ) : (
-                    customerRows.map(row => (
+                    customerRows.flatMap(row => [
                       <tr key={row.key} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                         <td className="p-3 pl-4 font-semibold text-slate-800">{row.label}</td>
                         <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.totalSales)}</td>
@@ -433,8 +437,20 @@ export function SaleReportContent() {
                         <td className="p-3 text-right font-bold text-blue-700">{row.saleReturn > 0 ? formatCurrency(row.saleReturn) : '-'}</td>
                         <td className="p-3 text-right font-bold" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(row.netSales)}</td>
                         <td className="p-3 text-right font-bold text-emerald-700">{formatCurrency(row.payment)}</td>
-                      </tr>
-                    ))
+                      </tr>,
+                      // Own row, not a column: a JV reduces what is owed but is not money
+                      // collected, and most customers have none — a column would be mostly dashes.
+                      (row.totalJv ?? 0) !== 0 ? (
+                        <tr key={`jv-${row.key}`} className="border-b bg-amber-50/40" style={{ borderColor: 'var(--border-table)' }}>
+                          <td className="p-2 pl-8 text-xs font-semibold text-amber-900" colSpan={6}>
+                            Journal Voucher applied
+                          </td>
+                          <td className="p-2 text-right text-xs font-bold font-mono text-amber-900">
+                            {formatCurrency(Math.abs(row.totalJv ?? 0))}
+                          </td>
+                        </tr>
+                      ) : null,
+                    ])
                   )
                 ) : groupMode === 'region' || groupMode === 'city' ? (
                   (groupMode === 'region' ? regionGroups : cityGroups).length === 0 ? (

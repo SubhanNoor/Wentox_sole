@@ -71,9 +71,14 @@ async function create(payload) {
 
   const chartCode = employeeType === 'WORKER' ? CODES.WORKER_WAGES : CODES.SALARIES_PAYABLE;
 
+  // Opening balance belongs to the auto-created business account (same as bankAccounts.service.js).
+  // Validated before the transaction opens so a mismatched pair fails as a clean 400.
+  const opening = businessAccountsService.validateOpeningPair(payload);
+
   const id = await withTransaction(async (transaction) => {
     const baId = await businessAccountsService.createUnderChartCode(transaction, chartCode, name, {
       city_id: payload.city_id ?? null,
+      ...opening,
     });
     const employeeId = await repository.insert(transaction, {
       name,
@@ -125,6 +130,8 @@ async function update(employeeId, payload) {
   if (existing.ba_id && name !== existing.name) {
     await businessAccountsService.renameLinked(existing.ba_id, name);
   }
+  // The opening balance lives on the linked business account, not on this row.
+  if (existing.ba_id) await businessAccountsService.setOpening(existing.ba_id, payload);
 
   return getById(employeeId);
 }

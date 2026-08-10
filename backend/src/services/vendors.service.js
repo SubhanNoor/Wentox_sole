@@ -46,10 +46,15 @@ async function create(payload) {
     );
   }
 
+  // Opening balance belongs to the auto-created business account (same as bankAccounts.service.js).
+  // Validated before the transaction opens so a mismatched pair fails as a clean 400.
+  const opening = businessAccountsService.validateOpeningPair(payload);
+
   const id = await withTransaction(async (transaction) => {
     const baId = await businessAccountsService.createUnderChartCode(transaction, CODES.VENDORS_ACCOUNTS, name, {
       region_id: payload.region_id,
       city_id: payload.city_id,
+      ...opening,
     });
     return repository.insert(transaction, { ...payload, name, ba_id: baId });
   });
@@ -73,6 +78,8 @@ async function update(vendorId, payload) {
   if (existing.ba_id && name !== existing.name) {
     await businessAccountsService.renameLinked(existing.ba_id, name);
   }
+  // The opening balance lives on the linked business account, not on this row.
+  if (existing.ba_id) await businessAccountsService.setOpening(existing.ba_id, payload);
 
   return repository.findById(vendorId);
 }

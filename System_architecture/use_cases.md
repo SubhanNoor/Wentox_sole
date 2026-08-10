@@ -838,6 +838,56 @@ bounce/return cascade already put the money back.
 
 ---
 
+## UC-40: Raise a Journal Voucher (JV) — ✅
+
+**Actor:** Accountant · **Goal:** Write goodwill off a party's balance
+**Screen:** Transactions → Journal Voucher (Entry tab; JV Ledger tab beside it)
+
+A customer with an outstanding payable asks for an *eidi* — a concession on what they owe. It is
+not a payment and not a discount on the sale; it is compensation granted afterwards, so the amount
+comes off their balance and the cost lands on a dedicated account.
+
+> **Not commission.** `receipts.commission` (§7, UC-25) is payment-time trade discount: it only
+> exists attached to a receipt and only for a customer. A JV stands alone, needs no payment, and can
+> name **any** business account — a vendor, an employee, a director.
+>
+> **Not a Deposit.** `dbo.deposits` (Module 4b) counters against the *Miscellaneous Adjustments*
+> chart account for owner capital and bank fees — a mixed head with no ledger of its own. A JV
+> counters against a real **business account**, so "what have we given away in JVs" is openable.
+
+**Steps:**
+1. User picks the date and the account the JV applies to (any business account; the JV account
+   itself is excluded, since both legs would land on it).
+2. User picks the direction — **Credit** reduces what they owe you (the eidi case), **Debit**
+   reduces what you owe them (a concession a vendor grants you).
+3. A balance panel shows the account's current balance and what it becomes.
+4. User enters the amount and a **reason** (required — an unexplained write-off against a party
+   balance is exactly the entry that gets questioned later).
+5. Save creates the JV **DRAFT**; **Post** writes both ledger legs; Unpost reverses them.
+
+**Posts as** (both legs `ba_id`, `source_type='JOURNAL_VOUCHER'`):
+
+| Direction | Debit | Credit | Effect |
+|---|---|---|---|
+| CREDIT | JOURNAL VOUCHER BA | party BA | what the party owes us goes down |
+| DEBIT | party BA | JOURNAL VOUCHER BA | what we owe the party goes down |
+
+**Both ledgers state it explicitly:** the party's Khaata reads "Journal Voucher #N — «reason»", the
+JV account's reads "JV #N to «party» — «reason»".
+
+**Where it appears:** the party's Account Ledger; the **JV Ledger** tab (the JOURNAL VOUCHER
+account's own Khaata, with its running total); Business Ledger; Overall Trail. On **Sale Report**
+and **Vendor Report** it appears as its **own row beneath the party** ("Journal Voucher applied"),
+deliberately **not** as a column and **not** inside Payment Received or Net Sales — a JV reduces
+what is owed but is not money collected, and folding it in would make collections read higher than
+the cash actually taken. Not on the Cash Book: no cash, bank or cheque account is involved.
+
+**Data:** writes `journal_vouchers`, `ledger_entries`; reads `business_accounts`.
+**Seed:** reserved chart account `JOURNAL VOUCHER` (`400007`) with a single business account beneath
+it, created by `npm run seed`.
+
+---
+
 ## UC-39: Record a direct settlement — ✅
 
 **Actor:** Accountant · **Goal:** Record that a debtor of ours paid one of our creditors directly
@@ -923,8 +973,8 @@ The same report as UC-29, reachable as the eighth Reports tab.
 | Transactions | 10 | 8 | 2 | 0 |
 | Stock | 3 | 1 | 1 | 1 |
 | Reports | 8 | 8 | 0 | 0 |
-| Transactions (added) | UC-39 Direct Settlement | | | |
-| **Total** | **39** | **26** | **12** | **1** |
+| Transactions (added) | UC-39 Direct Settlement, UC-40 Journal Voucher | | | |
+| **Total** | **40** | **27** | **12** | **1** |
 
 > **Document version:** 3.0 · **System:** WentoX ERP — Footwear Wholesale Distribution
 > **Source:** `architecture-v2.md` · **Data model:** `database_schema.md` v4.0

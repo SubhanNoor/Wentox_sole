@@ -41,6 +41,13 @@
 > no posting target. Entered from the Receipts screen's **Endorse** option, not a page of its own.
 > The DDL is not reproduced here — same convention as `transfers` above, which this file also does
 > not carry; the migration file is the authority. See UC-39.
+> **`016_journal_vouchers.sql`** — new `dbo.journal_vouchers` plus `'JOURNAL_VOUCHER'` added to
+> `CK_ledger_entries_src`, and a reserved `JOURNAL VOUCHER` chart account (`400007`) seeded **with a
+> single business account beneath it** so the JV ledger opens a real account. Goodwill written off a
+> party's balance (an *eidi* on a payable): `CREDIT` posts Dr JV BA / Cr party BA, `DEBIT` the
+> reverse; both legs `ba_id`, so no cash, bank or cheque account can be involved. Distinct from
+> `receipts.commission` (payment-time, customer-only) and from `dbo.deposits` (counters against a
+> mixed chart head). See UC-40.
 >
 > **v4.3 changes:** merged in the working-session actions/answers applied on top of the reverted
 > v4.0 copy, so this file now carries both lineages. Renames `articles` → `products` (cascaded to
@@ -1667,6 +1674,7 @@ transaction. `CUSTOMER BA` / `VENDOR BA` mean the party's `business_accounts` ro
 | Receipt — commission (§7)                         | COMMISSION ALLOWED chart account | The receipt's BA (customer accounts only — §7)            | separate ledger row,`source_type='COMMISSION'`               |
 | Expense                                             | Expense head BA                  | CASH or BANK chart account                                | —                                                           |
 | Cheque allocation — VENDOR_PAYMENT                 | VENDOR BA                        | CHEQUES IN HAND                                           | `source_type='CHEQUE_ALLOCATION'`                            |
+| **Journal Voucher** — CREDIT                        | JOURNAL VOUCHER BA               | party BA (`ba_id`)                                        | `source_type='JOURNAL_VOUCHER'`; DEBIT direction is the exact reverse. Both legs `ba_id`. |
 | **Direct Settlement** (`amount`)                    | `to_ba_id` (our creditor)        | `from_ba_id` (our debtor)                                 | `source_type='SETTLEMENT'`; **both legs `ba_id`, no `ac_id`** — structurally cannot touch cash/bank/cheques |
 | Cheque allocation — EXPENSE_PAYMENT                | Target BA                        | CHEQUES IN HAND                                           | `source_type='CHEQUE_ALLOCATION'`                            |
 | **Bounce — receipt leg** (`amount` + `commission`) | The receipt's BA                 | CASH/BANK, and COMMISSION ALLOWED for the commission part | dated`cheques.bounced_date`                                  |

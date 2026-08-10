@@ -47,6 +47,13 @@ async function getCashAccount() {
   return account;
 }
 
+// The single business account seeded under a reserved chart head (Cash, Journal Voucher). Kept
+// here rather than each caller reaching into businessAccounts.repository directly — cross-feature
+// reads go through this service (see CLAUDE.md).
+function getByAcId(acId) {
+  return repository.findByAcId(acId);
+}
+
 // ── UC-17 setup screen (list/get/create/update/remove) ──────────────────────────────────────
 // getById() above stays a plain, unrestricted lookup — every cross-feature caller (transfers,
 // cheques, reports) already depends on that exact shape. These add the setup screen's own
@@ -89,14 +96,47 @@ async function getForSetup(baId, session) {
 // CK_business_accounts_opening requires opening_balance/opening_date together or neither —
 // checked here so a mismatched pair gets a clear 400 instead of a raw CHECK-constraint violation
 // surfacing as an opaque INTERNAL error through ipc/wrap.js.
-function validate(payload) {
-  if (!payload.name || !payload.name.trim()) throw ApiError.badRequest('name is required');
-  if (!payload.ac_id) throw ApiError.badRequest('ac_id is required');
-  const hasBalance = payload.opening_balance !== undefined && payload.opening_balance !== null;
-  const hasDate = payload.opening_date !== undefined && payload.opening_date !== null;
+// CK_business_accounts_opening requires both or neither — an opening balance with no date cannot be
+// placed on a timeline, so a ledger could not tell whether it sits before or after the first
+// document. Checked here so a mismatched pair is a clear 400 rather than a raw constraint violation.
+// Shared by create, update and the party services, so all five screens reject the same way.
+function validateOpeningPair(payload) {
+  const hasBalance = payload.opening_balance !== undefined && payload.opening_balance !== null && payload.opening_balance !== '';
+  const hasDate = payload.opening_date !== undefined && payload.opening_date !== null && payload.opening_date !== '';
   if (hasBalance !== hasDate) {
     throw ApiError.badRequest('opening_balance and opening_date must be provided together, or not at all');
   }
+  return {
+    opening_balance: hasBalance ? Number(payload.opening_balance) : null,
+    opening_date: hasDate ? payload.opening_date : null,
+  };
+}
+
+// The opening pair only, for the party setup screens (vendor/customer/employee/bank) — they own
+// name/region/city on their own row, so update() above would clobber them.
+//
+// NOTE: opening_balance is a stored INPUT that netBalance() adds in whenever opening_date is in
+// range — NOT a ledger row. Changing it on an account with posted history therefore rewrites every
+// past balance and report for that account, with no reversing entry. That is deliberate (it is how
+// a migration mistake gets corrected) and the UI warns before saving.
+// Applied ONLY when the caller actually supplied one of the two keys. The party setup screens
+// (vendor/customer/employee/bank) cannot show the current opening balance on edit — it lives on the
+// linked business account and their list queries do not join it — so an untouched form would send
+// blanks and silently WIPE an existing opening balance on every unrelated rename. Skipping the
+// no-op means those screens can set an opening balance when opening the account, and the Business
+// Account screen (which does load the stored values) remains the place to view, change or clear it.
+async function setOpening(baId, payload) {
+  const supplied = payload.opening_balance !== undefined || payload.opening_date !== undefined;
+  if (!supplied) return repository.findById(baId);
+  const opening = validateOpeningPair(payload);
+  await repository.updateOpening(baId, opening);
+  return repository.findById(baId);
+}
+
+function validate(payload) {
+  if (!payload.name || !payload.name.trim()) throw ApiError.badRequest('name is required');
+  if (!payload.ac_id) throw ApiError.badRequest('ac_id is required');
+  validateOpeningPair(payload);
 }
 
 // UC-17: a generic business account (an expense head), not a vendor/customer/employee/bank's
@@ -132,7 +172,12 @@ async function update(baId, payload, session) {
   if (!payload.name || !payload.name.trim()) throw ApiError.badRequest('name is required');
   const name = payload.name.trim();
 
-  await repository.update(baId, { name, region_id: payload.region_id, city_id: payload.city_id });
+  const opening = validateOpeningPair(payload);
+  // Previously dropped silently: the screen showed the opening-balance fields on an existing
+  // account, accepted an edit, reported success and changed nothing.
+  await repository.update(baId, {
+    name, region_id: payload.region_id, city_id: payload.city_id, ...opening,
+  });
   return repository.findById(baId);
 }
 
@@ -160,6 +205,6 @@ async function reactivate(baId, session) {
 }
 
 module.exports = {
-  createUnderChartCode, renameLinked, getById, getCashAccount,
+  createUnderChartCode, renameLinked, getById, getCashAccount, getByAcId, setOpening, validateOpeningPair,
   list, getForSetup, assertAccessible, create, update, remove, reactivate,
 };

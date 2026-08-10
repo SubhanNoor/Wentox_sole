@@ -82,6 +82,9 @@ async function update(bankId, payload) {
   if (existing.ba_id && name !== existing.name) {
     await businessAccountsService.renameLinked(existing.ba_id, name);
   }
+  // The opening balance lives on the linked business account, not on this row — create() already
+  // set it there, so editing has to go the same route.
+  if (existing.ba_id) await businessAccountsService.setOpening(existing.ba_id, payload);
 
   return repository.findById(bankId);
 }
