@@ -130,7 +130,10 @@ export default function BiltyUpdatePage() {
 
     result.sort((a, b) => {
       if (sortBy === 'inv-no') return a.bill_id - b.bill_id;
-      else return a.bill_no.localeCompare(b.bill_no);
+      // numeric: true, or the digits inside a bill number sort as text and BILL-10 lands before
+      // BILL-9 — wrong for any customer past their ninth bill. Same options ChartAcSetupPage and
+      // BusinessAcSetupPage already use for account codes.
+      return a.bill_no.localeCompare(b.bill_no, undefined, { numeric: true, sensitivity: 'base' });
     });
 
     return result;

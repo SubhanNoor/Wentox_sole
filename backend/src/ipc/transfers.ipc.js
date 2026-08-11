@@ -17,13 +17,13 @@ module.exports = function register() {
 
   ipcMain.handle('transfers:create', wrap((payload) => {
     const session = requireSession();
-    return service.create(payload, session.userId);
+    return service.create(payload, session.userId, session);
   }));
 
   // Blocked once posted (must unpost first) — same as purchases:update, no password guard.
   ipcMain.handle('transfers:update', wrap((payload) => {
-    requireSession();
-    return service.update(payload.id, payload);
+    const session = requireSession();
+    return service.update(payload.id, payload, session);
   }));
 
   ipcMain.handle('transfers:remove', wrap((payload) => {
@@ -33,11 +33,11 @@ module.exports = function register() {
 
   ipcMain.handle('transfers:post', wrap((payload) => {
     const session = requireSession();
-    return service.post(payload.id, session.userId);
+    return service.post(payload.id, session.userId, session);
   }));
 
   ipcMain.handle('transfers:unpost', wrap((payload) => {
     const session = requireSession();
-    return service.unpost(payload.id, session.userId);
+    return service.unpost(payload.id, session.userId, session);
   }));
 };

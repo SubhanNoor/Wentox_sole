@@ -39,11 +39,11 @@ module.exports = function register() {
 
   ipcMain.handle('journal-vouchers:post', wrap((payload) => {
     const session = requireSession();
-    return service.post(payload.id, session.userId);
+    return service.post(payload.id, session.userId, session);
   }));
 
   ipcMain.handle('journal-vouchers:unpost', wrap((payload) => {
     const session = requireSession();
-    return service.unpost(payload.id, session.userId);
+    return service.unpost(payload.id, session.userId, session);
   }));
 };

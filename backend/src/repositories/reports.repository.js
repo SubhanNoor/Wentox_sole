@@ -200,30 +200,37 @@ async function ledgerRows(filters = {}) {
 // balance went out by the total of every opening balance in the system. Opening balances are now
 // real OPENING ledger rows against OPENING BALANCE EQUITY (businessAccounts.service.js#
 // syncOpeningEntries), so adding the column here as well would double-count them.
+// up_to_date is OPTIONAL. Omit it and the balance covers every posted entry, which is what
+// "this account's balance" means and what accountLedger's closing figure already reported; pass one
+// and it is a balance as of that date. They used to disagree: accountBalance defaulted to today
+// while accountLedger applied no cutoff, so a document dated in the future showed on the ledger but
+// not in the balance panel beside it.
 async function netBalance({ ba_id, ac_id, up_to_date, exclusive = false }) {
   const cmp = exclusive ? '<' : '<=';
+  const dateFilter = up_to_date ? ` AND entry_date ${cmp} @upToDate` : '';
+  const dateParam = up_to_date ? { upToDate: { type: sql.Date, value: up_to_date } } : {};
   // cashBook() only — same both-dimensions case as ledgerRows() above. Opening balance still comes
   // only from the business_accounts side (chart accounts have no opening_balance column at all).
   if (ba_id && ac_id) {
     const result = await query(
       `SELECT ISNULL(SUM(debit), 0) - ISNULL(SUM(credit), 0) AS ledger_net
-       FROM dbo.ledger_entries WHERE (ba_id = @baId OR ac_id = @acId) AND entry_date ${cmp} @upToDate`,
-      { baId: { type: sql.Int, value: ba_id }, acId: { type: sql.Int, value: ac_id }, upToDate: { type: sql.Date, value: up_to_date } },
+       FROM dbo.ledger_entries WHERE (ba_id = @baId OR ac_id = @acId)${dateFilter}`,
+      { baId: { type: sql.Int, value: ba_id }, acId: { type: sql.Int, value: ac_id }, ...dateParam },
     );
     return Number(result.recordset[0].ledger_net);
   }
   if (ba_id) {
     const result = await query(
       `SELECT ISNULL(SUM(debit), 0) - ISNULL(SUM(credit), 0) AS ledger_net
-       FROM dbo.ledger_entries WHERE ba_id = @baId AND entry_date ${cmp} @upToDate`,
-      { baId: { type: sql.Int, value: ba_id }, upToDate: { type: sql.Date, value: up_to_date } },
+       FROM dbo.ledger_entries WHERE ba_id = @baId${dateFilter}`,
+      { baId: { type: sql.Int, value: ba_id }, ...dateParam },
     );
     return Number(result.recordset[0].ledger_net);
   }
   const result = await query(
     `SELECT ISNULL(SUM(debit), 0) - ISNULL(SUM(credit), 0) AS ledger_net
-     FROM dbo.ledger_entries WHERE ac_id = @acId AND entry_date ${cmp} @upToDate`,
-    { acId: { type: sql.Int, value: ac_id }, upToDate: { type: sql.Date, value: up_to_date } },
+     FROM dbo.ledger_entries WHERE ac_id = @acId${dateFilter}`,
+    { acId: { type: sql.Int, value: ac_id }, ...dateParam },
   );
   return Number(result.recordset[0].ledger_net);
 }
@@ -446,7 +453,7 @@ async function businessAccountsWithCategory() {
   const result = await query(
     `SELECT
        ba.ba_id, ba.code, ba.name, ba.city_id, ci.name AS city_name,
-       ca.ac_id, ca.code AS ac_code, ca.name AS ac_name,
+       ca.ac_id, ca.code AS ac_code, ca.name AS ac_name, ca.is_restricted,
        CASE
          WHEN cu.customer_id IS NOT NULL THEN 'CUSTOMER'
          WHEN ve.vendor_id   IS NOT NULL THEN 'VENDOR'
@@ -471,7 +478,9 @@ async function businessAccountsWithCategory() {
 // Balance-as-of for EVERY business account in one pass (used by Business Ledger's summary mode
 // and Overall Trail, which both need every account's balance rather than one at a time — avoids
 // an N+1 netBalance() call per account).
+// asOfDate is optional, same as netBalance: null means every posted entry.
 async function businessAccountBalancesAsOf(asOfDate) {
+  const dateFilter = asOfDate ? ' AND entry_date <= @asOf' : '';
   const result = await query(
     // Ledger sum only — the stored opening_balance used to be added on top here too, which would
     // now double-count it against its own OPENING rows (see netBalance above).
@@ -480,9 +489,9 @@ async function businessAccountBalancesAsOf(asOfDate) {
      FROM dbo.business_accounts ba
      LEFT JOIN (
        SELECT ba_id, SUM(debit) AS debit_sum, SUM(credit) AS credit_sum
-       FROM dbo.ledger_entries WHERE ba_id IS NOT NULL AND entry_date <= @asOf GROUP BY ba_id
+       FROM dbo.ledger_entries WHERE ba_id IS NOT NULL${dateFilter} GROUP BY ba_id
      ) le ON le.ba_id = ba.ba_id`,
-    { asOf: { type: sql.Date, value: asOfDate } },
+    asOfDate ? { asOf: { type: sql.Date, value: asOfDate } } : {},
   );
   return new Map(result.recordset.map((r) => [r.ba_id, Number(r.balance)]));
 }

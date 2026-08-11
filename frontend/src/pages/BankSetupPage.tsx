@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { useApp } from '@/context/AppContext';
+import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
 import type { BankAccountRow } from '@/lib/api';
@@ -32,11 +32,24 @@ export default function BankSetupPage() {
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3000); };
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
 
+  // Current balances, keyed by the linked business account. This screen could only ever SET an
+  // opening balance — it never showed what the bank actually stands at, which is the first thing
+  // anyone opens it to check. One businessLedger summary call covers every bank at once rather than
+  // an accountBalance round-trip per row. Restricted to admins by the same guard as everything else
+  // under BANK ACCOUNTS, and this page is admin-only anyway.
+  const [balances, setBalances] = useState<Record<number, number>>({});
+
   const loadBanks = useCallback(async (includeInactive: boolean) => {
     setLoading(true);
-    const res = await api.bankAccounts.list(includeInactive);
+    const [res, ledgerRes] = await Promise.all([
+      api.bankAccounts.list(includeInactive),
+      api.reports.businessLedger({ view: 'summary' }),
+    ]);
     if (res.ok) setBanks(res.data);
     else fail('Failed to load bank accounts: ' + res.error.message);
+    if (ledgerRes.ok && Array.isArray(ledgerRes.data)) {
+      setBalances(Object.fromEntries(ledgerRes.data.map(a => [a.ba_id, a.closing_balance])));
+    }
     setLoading(false);
   }, []);
 
@@ -238,6 +251,27 @@ export default function BankSetupPage() {
                 render: b => b.branch
                   ? <span className="text-slate-600">{b.branch}</span>
                   : <span className="text-slate-300">—</span>,
+              },
+              {
+                key: 'balance',
+                header: 'Balance',
+                width: '150px',
+                align: 'right',
+                render: b => {
+                  // ba_id is nullable on the row type; a bank with no linked ledger account has no
+                  // balance to show rather than a misleading zero.
+                  const bal = b.ba_id != null ? balances[b.ba_id] : undefined;
+                  if (bal === undefined) return <span className="text-slate-300">—</span>;
+                  return (
+                    <span
+                      className="font-mono text-xs font-bold"
+                      style={{ color: bal < 0 ? '#e11d48' : '#047857' }}
+                    >
+                      {formatCurrency(Math.abs(bal))}
+                      <span className="ml-1.5 text-[10px] font-semibold uppercase">{bal < 0 ? 'Cr' : 'Dr'}</span>
+                    </span>
+                  );
+                },
               },
               {
                 key: 'status',

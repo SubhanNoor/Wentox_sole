@@ -6,8 +6,38 @@ const vendorsService = require('./vendors.service');
 const businessAccountsService = require('./businessAccounts.service');
 const ApiError = require('../errors/ApiError');
 const CODES = require('../constants/reservedAccounts');
-const { findByCode } = require('../repositories/chartAccounts.repository');
+const { findByCode, findById: findChartAccountById } = require('../repositories/chartAccounts.repository');
 const { toISODate, todayISO } = require('../utils/dates');
+
+// UC-03 on the READ side. The write side has enforced this since 2026-08-10
+// (businessAccounts.service.js#assertAccessible), but every report channel except payment-trail
+// passed no session at all, so a USER could pull the balance and the full ledger of any bank or
+// Directors-Drawings account through the Reports Hub — precisely the accounts the rule exists to
+// hide. Adding the Balance column to the Business Ledger directory put those figures on a list
+// rather than behind a click, which is what made it worth closing now.
+//
+// Takes ac_id as well as ba_id because reports:account-ledger accepts either, and BANK ACCOUNTS /
+// Directors Expenses – Drawings are themselves chart accounts a USER could name directly.
+//
+// Same contract as assertAccessible: NO session means an internal caller (vendorLedger, the Cash
+// Book), which is trusted and unfiltered. Only a request that arrived with a session is judged.
+async function assertReadable({ ba_id, ac_id }, session) {
+  if (!session || session.role === 'ADMIN') return;
+  if (ba_id) await businessAccountsService.assertAccessible(ba_id, session);
+  if (ac_id) {
+    const chartAccount = await findChartAccountById(ac_id);
+    if (chartAccount?.is_restricted) {
+      throw ApiError.unauthorized('This account is restricted to administrators');
+    }
+  }
+}
+
+// Drops restricted accounts from a list rather than throwing — a USER asking for "every account"
+// is a legitimate request, they simply get the accounts they are allowed to see.
+function visibleTo(session, rows) {
+  if (!session || session.role === 'ADMIN') return rows;
+  return rows.filter((r) => !r.is_restricted);
+}
 
 
 // Weekly/monthly/overall convenience on top of explicit date_from/date_to (explicit wins) — same
@@ -174,8 +204,9 @@ function formatLedgerRow(r) {
 // UC-35 Account Ledger (Khaata) — opening balance (before date_from, or 0 for an overall/no-filter
 // view — nothing is excluded, so there is no "before" period to summarize), running balance per
 // row, closing balance = last running total.
-async function accountLedger({ ba_id, ac_id }, filters = {}) {
+async function accountLedger({ ba_id, ac_id }, filters = {}, session) {
   if (!ba_id && !ac_id) throw ApiError.badRequest('ba_id or ac_id is required');
+  await assertReadable({ ba_id, ac_id }, session);
   const range = resolveDateRange(filters);
   const opening = range.date_from
     ? await repository.netBalance({ ba_id, ac_id, up_to_date: range.date_from, exclusive: true })
@@ -325,20 +356,24 @@ async function paymentTrail(filters = {}, session) {
 // UC-36 Business Accounts Ledger — Code/Description/Main Account/City, Summary (closing balance
 // only, every account in one pass via businessAccountBalancesAsOf) or Detail (one account's full
 // ledger, via accountLedger()).
-async function businessLedger(filters = {}) {
-  const accounts = await repository.businessAccountsWithCategory();
+async function businessLedger(filters = {}, session) {
+  // Restricted accounts drop out of the directory itself, so a USER's list never names them — and
+  // the detail view goes through accountLedger, which rejects one asked for by id regardless.
+  const accounts = visibleTo(session, await repository.businessAccountsWithCategory());
   const filtered = filters.ba_id ? accounts.filter((a) => a.ba_id === filters.ba_id) : accounts;
 
   if (filters.view === 'detail') {
     if (!filters.ba_id) throw ApiError.badRequest('ba_id is required for detail view');
-    const ledger = await accountLedger({ ba_id: filters.ba_id }, filters);
+    const ledger = await accountLedger({ ba_id: filters.ba_id }, filters, session);
     const account = filtered[0];
     if (!account) throw ApiError.notFound('Business account not found');
     return { account, ...ledger };
   }
 
+  // Same reasoning as accountBalance: with no date filter this column is the account's whole book
+  // balance, so the directory and the statement you open from it always agree.
   const range = resolveDateRange(filters);
-  const balances = await repository.businessAccountBalancesAsOf(range.date_to || todayISO());
+  const balances = await repository.businessAccountBalancesAsOf(range.date_to || null);
   return filtered.map((a) => ({
     ba_id: a.ba_id,
     code: a.code,
@@ -359,11 +394,16 @@ async function businessLedger(filters = {}) {
 //
 // Sign follows the ledger's own convention: positive = debit = the account owes us (receivable),
 // negative = credit = we owe the account (payable).
-async function accountBalance({ ba_id, as_of }) {
+// as_of is optional and NO LONGER defaults to today. It used to, while accountLedger applied no
+// cutoff at all, so an entry dated ahead of today appeared on the ledger and not in the balance
+// panel sitting next to it — two numbers for the same account, both labelled "balance". Omitting
+// the cutoff makes this the account's actual book balance; callers that genuinely want a dated
+// figure still pass as_of.
+async function accountBalance({ ba_id, as_of }, session) {
   if (!ba_id) throw ApiError.badRequest('ba_id is required');
-  const asOf = as_of || todayISO();
-  const balance = await repository.netBalance({ ba_id, up_to_date: asOf });
-  return { ba_id, as_of: asOf, balance };
+  await assertReadable({ ba_id }, session);
+  const balance = await repository.netBalance({ ba_id, up_to_date: as_of || null });
+  return { ba_id, as_of: as_of || null, balance };
 }
 
 // UC-37 Cash Book — the "Account Name" column. A cash-book line names the OTHER side of the
@@ -528,14 +568,18 @@ async function cashBook(filters = {}) {
 // Sub-customers carry no ba_id (delivery-address-only, never financially responsible for a bill —
 // see dbo.sub_customers' own schema.sql comment) so they never appear here; overall-search still
 // finds them by name, just without a balance.
-async function overallTrail(filters = {}) {
+async function overallTrail(filters = {}, session) {
   const asOf = filters.as_of_date || todayISO();
-  const [accounts, chartAccounts, baBalances, acBalances] = await Promise.all([
+  // A trial balance for a USER simply omits the restricted accounts. The totals it prints are then
+  // the totals of what they can see — which is the point of the restriction, not a defect in it.
+  const [accountsRaw, chartAccountsRaw, baBalances, acBalances] = await Promise.all([
     repository.businessAccountsWithCategory(),
     repository.chartAccountsWithActivity(),
     repository.businessAccountBalancesAsOf(asOf),
     repository.chartAccountBalancesAsOf(asOf),
   ]);
+  const accounts = visibleTo(session, accountsRaw);
+  const chartAccounts = visibleTo(session, chartAccountsRaw);
 
   const rows = [];
   for (const a of accounts) {
@@ -569,6 +613,35 @@ async function overallTrail(filters = {}) {
     });
   }
 
+  // A trial balance is a whole-books document: drop two accounts out of it and it stops balancing,
+  // and the gap it leaves IS their combined total — so filtering alone would have hidden nothing
+  // while breaking the report. Instead the restricted accounts collapse into ONE line for a USER.
+  // Their names, codes and individual balances stay hidden, the report still proves the books
+  // balance, and the line is honest about there being something it isn't showing.
+  if (session && session.role !== 'ADMIN') {
+    const hiddenNet = accountsRaw
+      .filter((a) => a.is_restricted)
+      .reduce((sum, a) => sum + (baBalances.get(a.ba_id) || 0), 0)
+      + chartAccountsRaw
+        .filter((ca) => ca.is_restricted)
+        .reduce((sum, ca) => sum + (acBalances.get(ca.ac_id) || 0), 0);
+
+    if (hiddenNet !== 0) {
+      rows.push({
+        code: '—',
+        description: 'Restricted accounts (administrator only)',
+        type: 'restricted',
+        type_label: 'Restricted',
+        // No ba_id/ac_id: there is no single account to drill into, and the frontend keys its
+        // drill-down off this flag rather than off the absence of an id.
+        is_aggregate: true,
+        debit: hiddenNet > 0 ? hiddenNet : 0,
+        credit: hiddenNet < 0 ? -hiddenNet : 0,
+        net_balance: hiddenNet,
+      });
+    }
+  }
+
   const totals = rows.reduce(
     (acc, r) => ({ total_debit: acc.total_debit + r.debit, total_credit: acc.total_credit + r.credit }),
     { total_debit: 0, total_credit: 0 },
@@ -584,11 +657,11 @@ function overallSearch(searchQuery, entityType) {
 
 // Drill-down from an Overall Search / Overall Trail result into its ledger. Sub-customers have no
 // ba_id, so they get an explicit "no financial account" result instead of a fabricated balance.
-async function overallSearchLedger(entityType, baId, filters = {}) {
+async function overallSearchLedger(entityType, baId, filters = {}, session) {
   if (entityType === 'SUB_CUSTOMER' || !baId) {
     return { has_account: false, message: 'This is a delivery-address-only party with no financial account.' };
   }
-  const ledger = await accountLedger({ ba_id: baId }, filters);
+  const ledger = await accountLedger({ ba_id: baId }, filters, session);
   return { has_account: true, ...ledger };
 }
 

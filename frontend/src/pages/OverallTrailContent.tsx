@@ -468,14 +468,23 @@ export default function OverallTrailContent() {
                           {groupRows.map((row, idx) => (
                             <tr
                               key={`${row.type}-${row.code}-${idx}`}
-                              onClick={() => setSelectedAccount(row)}
-                              className="border-b border-slate-100 hover:bg-amber-50/30 transition-colors cursor-pointer group"
+                              // The aggregate row stands for several accounts at once — there is no
+                              // single ledger to open, and drilling in would ask the backend for a
+                              // row with neither ba_id nor ac_id.
+                              onClick={row.is_aggregate ? undefined : () => setSelectedAccount(row)}
+                              className={`border-b border-slate-100 transition-colors group ${
+                                row.is_aggregate
+                                  ? 'bg-slate-50/70 cursor-default'
+                                  : 'hover:bg-amber-50/30 cursor-pointer'
+                              }`}
                             >
                               <td className="p-2.5 pl-3 font-mono text-[11px] text-slate-600 whitespace-nowrap">{row.code}</td>
-                              <td className="p-2.5 text-slate-800 group-hover:text-[var(--brand-gold)] transition-colors">
+                              <td className={`p-2.5 transition-colors ${row.is_aggregate ? 'text-slate-500 italic' : 'text-slate-800 group-hover:text-[var(--brand-gold)]'}`}>
                                 <div className="flex items-center justify-between">
                                   <span>{row.description}</span>
-                                  <ChevronRight size={12} className="text-slate-300 opacity-0 group-hover:opacity-100 ml-2 shrink-0" />
+                                  {!row.is_aggregate && (
+                                    <ChevronRight size={12} className="text-slate-300 opacity-0 group-hover:opacity-100 ml-2 shrink-0" />
+                                  )}
                                 </div>
                               </td>
                               <td className="p-2.5 text-right font-mono border-l border-slate-100 text-[11px]">

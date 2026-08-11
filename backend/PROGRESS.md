@@ -23,6 +23,239 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## QA pass over the whole app, and the cheque-deposit hole it found
+
+### 2026-08-10 — Full-app QA run; deposited cheques never reached the bank (Milestone 9, verification)
+- **What:** a structured QA sweep of the entire app, then a fix for the one material defect it
+  surfaced. Three static audits (renderer→bridge→handler surface: 260 call sites, 0 gaps;
+  ipc→service method references: 261, 0 missing; every nav page routed: 31/31) plus a 14-phase live
+  run against a database built from nothing — auth/roles, masters, structural guards, stock,
+  purchases + returns, sale bills + returns (including editing a POSTED bill), receipts, expenses,
+  endorsements, transfers, deposits, payroll, JV, the full cheque lifecycle, all 16 reports, alerts,
+  backup, and per-document double-entry integrity. **113 checks, 0 failures** after the fix.
+- **The defect — a deposited cheque moved nothing.** `cheques.service.js#deposit()` deliberately
+  wrote no ledger row, deferring to `cash_and_bank.md` §10's derived-balance helper
+  (`balance(bank) = ... + Σ cheque DEPOSITs where the cheque's bank_id = B`). **That helper was
+  never built** — every balance the app shows reads `ledger_entries`, and nothing anywhere derives a
+  balance from `cheque_allocations`. So banking a cheque (even marking it CLEARED) never credited
+  the bank and never drained CHEQUES IN HAND. Evidence from the QA database: bank 222,800 with an
+  8,000 CLEARED cheque missing, CHEQUES IN HAND still holding that same 8,000. Both errors are equal
+  and opposite, which is exactly why the trial balance stayed at zero and never flagged it — and why
+  it survived the earlier full-flow check, which asserted on the trial balance.
+- **How fixed:** `deposit()` now writes Dr bank BA / Cr CHEQUES IN HAND like every other money
+  movement — the same pair `reports.repository.js#cashBookNonCashRows` already documented a deposit
+  as being. Chose this over building the §10 derivation helper: one mechanism for all money
+  movements beats a second, parallel one that only cheque deposits use and that every future report
+  would have to remember to call. `reverseCheque()` gained the matching branch, so a cheque that
+  bounces *after* being banked now pulls the money back out of the bank (a DEPOSITED cheque is not
+  terminal, so this path is reachable); its other side is the bank on the cheque itself, since
+  `cheque_allocations` has no bank column. `markCleared()` stays a pure status flip — the money
+  moved at deposit time.
+- **Migration 019** backfills the missing pair for deposits made before the fix. ACTIVE allocations
+  only: a REVERSED one wrote nothing and was reversed against nothing, so its two errors already
+  cancel and inserting one side now would *create* an imbalance. Both legs go in one `CROSS APPLY`
+  statement so a half-written pair is impossible, and `NOT EXISTS` on `allocation_id` makes re-runs
+  a no-op. Verified on `wentox_demo`: Meezan Bank 232,000 → 292,000, CHEQUES IN HAND 297,000 →
+  237,000, ledger still nets to zero with no unbalanced document.
+- **Gotcha caught in testing:** the first version of 019 `THROW`-ed when CHEQUES IN HAND was absent.
+  Migrations run *before* seeds, so that aborted `npm run migrate` on every brand-new database. It
+  is now a guarded no-op — no chart account means no cheques, so there is nothing to backfill.
+- **Second gotcha, spotted by the user:** 019 tagged its narration `(backfilled by migration 019)`,
+  which is not an internal note — `ledger_entries.narration` renders verbatim in the Narration column
+  of the account and cheque ledgers the client reads. A backfilled deposit is the *same business
+  event* as a live one, so the wording now matches `deposit()`'s byte for byte, and which code path
+  wrote the row is left to `schema_migrations.applied_at` where it belongs. The six rows already
+  written locally were stripped with a one-off UPDATE. **Note this edits an already-applied
+  migration**, against the standing rule — justified only because 019 is uncommitted and unreleased
+  and had run on exactly two local databases (scratch QA and `wentox_demo`), both corrected here. Had
+  it shipped, the fix would have had to be migration 020 doing that UPDATE.
+- **Still open, reported not fixed:** (1) read-side role guard — `reports:account-ledger`,
+  `:account-balance` and `:business-ledger` only `requireSession()`, so a USER can read restricted
+  accounts (Bank, Directors Drawings) that the write side correctly blocks, and no frontend filters
+  on `is_restricted`; (2) `products.service.js#createBatch` 404s on a `vendor_id` it then overwrites
+  with the system vendor; (3) `direction: 'CREDIT'` means opposite ledger sides on Deposits vs
+  Journal Vouchers; (4) `accountBalance` cuts off at today while `accountLedger` does not, so the two
+  disagree on a future-dated document.
+- **Not a defect:** cheque disposal actions are ADMIN-only by design, on screen (`ChequePage`'s
+  Disposal tab) *and* in the API (`requireRole('ADMIN')` on all six channels). A `User` sees the
+  cheque on the read-only "Cheque in Hand" tab with no actions and no explanation of why — a
+  discoverability gap, not a permissions bug.
+- **Files:** `backend/src/services/cheques.service.js`,
+  `backend/src/db/migrations/019_backfill_cheque_deposit_ledger.sql`
+
+### 2026-08-12 — The remaining QA lows, cleared in one pass
+- **post()/unpost() now re-check the restricted-account rule.** The guard only ran on create/update,
+  so an ADMIN could leave a draft against a bank or Directors account and a USER could post it —
+  demonstrated live before the fix. Added to **transfers, deposits, receipts, expenses, journal
+  vouchers and settlements**, not just the two it was found on, since a partial fix leaves the same
+  hole open elsewhere. `draftExpenses.confirm()` carries the session through too. Verified: a USER
+  posting an admin-made cash→bank transfer, bank deposit and Directors JV is refused on all three,
+  ADMIN unaffected.
+- **`products.createBatch` no longer 404s on a `vendor_id` it discards.** The loop validated the
+  caller's vendor and then overwrote every row with the system vendor anyway, so a batch failed
+  outright whenever the form's vendor list had not loaded and it fell back to `?? 0` — a check that
+  could only ever reject valid input. The in-batch duplicate key now uses the vendor the rows are
+  actually written with.
+- **Balances and ledgers now agree.** `accountBalance` defaulted its cutoff to today while
+  `accountLedger` applied none, so an entry dated ahead of today appeared on the statement but not
+  in the balance panel beside it — two numbers for one account, both called "balance".
+  `netBalance`/`businessAccountBalancesAsOf` take an OPTIONAL cutoff now; absent means the whole
+  book. Verified with an entry dated 2027-01-15: balance −4,019, ledger closing −4,019.
+- **The Disposal screen stops offering actions that cannot succeed.** `cheques.repository.list()`
+  now carries `receipt_status`, so a cheque whose receipt is still DRAFT shows a "Receipt not
+  posted" tag instead of a Dispose button that always came back "This receipt is not posted yet".
+- **Bank Accounts shows what each bank actually holds.** The screen could only ever set an opening
+  balance. One `businessLedger({view:'summary'})` call fills a Balance column for every row rather
+  than a round-trip per bank.
+- **Cheque in Hand gained a way out, not duplicated actions.** A per-row "Dispose →" button switches
+  to the Disposal tab (`ChequePage` passes `switchTab`). The tab stays read-only — the machinery
+  belongs on one screen — but landing here with a cheque and no route to acting on it was the
+  complaint that started all of this. **Also fixed while in there:** its TOTAL IN HAND used
+  `colSpan={5}`, which covered the In Hand column itself and put the figure under **Status**. Same
+  family as yesterday's Cheque Ledger bug, and one my cell-count sweep could not catch — the count
+  was right, the placement was not.
+- **Not done, by instruction:** the CREDIT/DEBIT naming clash between Deposits and Journal Vouchers.
+- **Files:** `backend/src/services/{transfers,deposits,receipts,expenses,journalVouchers,settlements,draftExpenses,products,reports}.service.js`,
+  `backend/src/repositories/{reports,cheques}.repository.js`,
+  `backend/src/ipc/{transfers,deposits,receipts,expenses,journalVouchers,settlements,draftExpenses}.ipc.js`,
+  `frontend/src/lib/api.ts`, `frontend/src/components/ChequesTab.tsx`,
+  `frontend/src/pages/{ChequeInHandContent,ChequePage,BankSetupPage}.tsx`
+
+### 2026-08-12 — Cheque Ledger total row was a column short
+- **What:** the Cheque Ledger's on-screen total row had **8 cells against 9 headers**
+  (`colSpan={6}` where it needed 7), so every figure sat one column to the left of where it
+  belonged — the gold total under **Bank**, the received/issued split under **Amount**, spilling
+  toward Reversed. Reported from a screenshot.
+- **How fixed:** `colSpan={7}` + amount + one empty cell = 9. The received/issued split moved
+  alongside the label and was spelled out ("Received … · Issued …" rather than "R: … / I: …") —
+  Reversed is a badge column barely wider than the word and cannot hold two figures. The print
+  table's cell count was already right but had the same cramming, so it got the same treatment and
+  now matches the screen.
+- **Then swept the whole app for the same class of bug:** a script comparing header count against
+  total-row cells across every table, 42 total rows. One more real mismatch — `ChequesTab`'s printed
+  report was one cell short (the Status column had no footer), fixed the same way. The other eight
+  flags were artifacts of the scan, verified by hand and dismissed: grouped `<th colSpan={2}>`
+  headers (OverallTrail), a computed `colSpan={3 + colors.length}` (ReportStock), and conditional
+  columns behind `{showDate && <th/>}` (Cash Book) — none of which a regex can count.
+- **Note for next time:** `tsc` cannot see this and neither can lint. A cell-count check is worth
+  running whenever a table's columns change — this is the second time a miscounted row has shipped.
+- **Files:** `frontend/src/pages/ChequeLedgerContent.tsx`, `frontend/src/components/ChequesTab.tsx`
+
+### 2026-08-12 — Two QA mediums: bill-number sort, and deposited cheques vanishing
+- **Bill numbers sorted as text.** `BiltyUpdatePage`'s "Sort by Bill No" used a bare
+  `localeCompare`, so `BILL-10` came before `BILL-2` and `BILL-9` — wrong for any customer past
+  their ninth bill. Now passes `{ numeric: true, sensitivity: 'base' }`, the same options
+  `ChartAcSetupPage` and `BusinessAcSetupPage` already use for account codes. Verified:
+  `BILL-2, BILL-9, BILL-10, BILL-21, BILL-100`.
+- **A deposited cheque disappeared from the Disposal tab.** The status filter defaults to "open",
+  which meant PENDING/PARTIALLY_ENDORSED only — so the moment a cheque was fully deposited its row
+  dropped out of the default view. Since **Mark Cleared renders only on a DEPOSITED row**, the
+  button became unreachable unless the operator knew to switch the filter by hand. Banking a cheque
+  does not settle it: the bank has not confirmed it, and clearing is the next thing someone must do
+  to it. `OPEN_STATUSES` now includes DEPOSITED and the option reads "Open (not yet cleared)".
+  Verified against a live DEPOSITED cheque — hidden under the old rule, shown under the new, with
+  Mark Cleared on the row. `unallocatedFor` returns 0 for a fully deposited cheque, so Dispose stays
+  hidden on it and the Unallocated total is unchanged.
+- **Left alone deliberately:** the "Cheque in Hand" tab still lists PENDING/PARTIALLY_ENDORSED only.
+  That tab answers "what is physically still with us", and a banked cheque is not.
+- **Files:** `frontend/src/pages/BiltyUpdatePage.tsx`, `frontend/src/components/ChequesTab.tsx`
+
+### 2026-08-11 — UC-03 closed on the read side, and on Transfers/Deposits
+- **What:** the two remaining holes in the USER rule, both closed by the same mechanism the write
+  side already used. (1) **Reports.** `payment-trail` was the only report channel that received the
+  session, so a USER could pull the balance and full ledger of any bank or Directors account through
+  the Reports Hub. `account-ledger`, `account-balance`, `business-ledger`, `overall-trail` and
+  `overall-search-ledger` now take it. (2) **Transfers and Deposits.** Neither service called
+  `assertAccessible` at all — the pages are hidden from a USER, but the channels accepted anything,
+  and every account these two documents touch is a bank.
+- **How:** two helpers in `reports.service.js`. `assertReadable({ba_id, ac_id}, session)` rejects a
+  restricted account by id — it takes `ac_id` too, because `reports:account-ledger` accepts either
+  and BANK ACCOUNTS / Directors Drawings are themselves chart accounts a USER could name directly.
+  `visibleTo(session, rows)` drops restricted rows from a list rather than throwing, because asking
+  for "every account" is a legitimate request that should simply return fewer rows. Both follow
+  `assertAccessible`'s existing contract: **no session means an internal caller** (vendorLedger, the
+  Cash Book) and is unfiltered — only a request that arrived with a session is judged.
+  `businessAccountsWithCategory()` gained `ca.is_restricted` to make the filtering possible.
+- **Verified by role** on a database built from nothing — USER: bank ledger ❌, bank balance ❌,
+  Directors ledger ❌, BANK ACCOUNTS by `ac_id` ❌, a customer's ledger ✅; business ledger lists 10
+  accounts to a USER vs 12 to an ADMIN, with zero restricted rows among them; transfer to a bank ❌,
+  deposit into a bank ❌; ADMIN unaffected on all of them. Full suite 113/113.
+- **The Overall Trail collapses rather than filters** (client's choice, 2026-08-11). Plain filtering
+  left the trial balance 230,800 out — and that gap *was* the restricted total, so it hid nothing
+  while breaking the report. A USER now gets one line, "Restricted accounts (administrator only)",
+  carrying their combined net: 15 rows either way, debit 315,250 = credit 315,250, difference 0 for
+  both roles, with `QA Bank` named only for the ADMIN. The row has no `ba_id`/`ac_id` and a new
+  `is_aggregate` flag; `OverallTrailContent` keys its drill-down off that flag, so the row renders
+  un-clickable instead of asking the backend for a ledger with neither id. **Caveat worth
+  remembering:** with only ONE restricted account carrying a balance the aggregate equals that
+  account's balance — the collapse hides which accounts and how they split, not the total.
+- **Files:** `backend/src/services/reports.service.js`, `backend/src/repositories/reports.repository.js`,
+  `backend/src/ipc/reports.ipc.js`, `backend/src/services/transfers.service.js`,
+  `backend/src/services/deposits.service.js`, `backend/src/ipc/transfers.ipc.js`,
+  `backend/src/ipc/deposits.ipc.js`
+
+### 2026-08-11 — Cheque disposal un-restricted; the USER rule stated plainly
+- **What:** removed `requireRole('ADMIN')` from all six cheque disposal channels and the `adminOnly`
+  flag from the Cheque page's Disposal tab, then covered the same ground properly with the
+  account-level guard.
+- **Why it was wrong:** traced with `git log -S`. The on-screen restriction originated in Subhan's
+  old Receipts "Cheques Disposal" tab (`73bbb2ce`, 4 Aug), carried across to the new Cheque page
+  (`c8125838`), and I then hardened it into the API (`3c6cadf4`) citing UC-03 point 3 — "the API
+  enforces the same rule server-side". The flaw: UC-03's restriction list is *only* Cash at Banks and
+  Directors Expenses – Drawings, and the doc explicitly says the restriction is about visibility,
+  "not the ability to record a bank or director's-drawings transaction". I enforced an inherited UI
+  behaviour instead of the specified rule. It showed: a USER could receive a cheque and then do
+  nothing with it, yet could still `reverse-allocation` — undo an endorsement they were barred from
+  making. **Client confirmed 2026-08-11: a USER is restricted to those two heads and everything
+  under them; everything else is open.**
+- **The guard that replaces it:** opening the channels exposed two accounts a USER must not reach —
+  `deposit`'s bank (every bank is under the restricted head) and `endorse-to-expense`'s
+  `target_ba_id` (could be Directors Drawings). All three targeting actions now take the session and
+  call `assertAccessible`, the same account-level guard receipts/expenses/settlements/JV use.
+  `bounce`/`return-to-sender` stay unguarded on purpose: their target was fixed at disposal time, and
+  blocking a USER from recording a bounce would recreate the dead end.
+- **Verified by role** on a database built from nothing — USER: endorse to vendor ✅, endorse to an
+  expense head ✅, deposit into a bank ❌, endorse to Directors ❌; ADMIN: both ✅. Ledger nets to
+  zero; full suite still 113/113.
+- **Consequence worth flagging:** a USER can no longer bank a cheque at all, since every bank is
+  restricted. That follows from the rule as stated rather than contradicting it, but it is the one
+  outcome the client may not have pictured.
+- **Files:** `backend/src/ipc/cheques.ipc.js`, `backend/src/services/cheques.service.js`,
+  `frontend/src/pages/ChequePage.tsx`, `System_architecture/use_cases.md`
+
+### 2026-08-10 — Bank balances made visible: directory column + Transfer page panels
+- **What:** two places to read a balance that previously had none. (1) The Business Ledger
+  directory (Reports Hub → Business Ledger) gained a **Balance** column — `businessLedger({view:
+  'summary'})` had always returned `closing_balance` on every row and the table simply never
+  rendered it, so reading a bank or cash balance meant opening one statement at a time. (2) The
+  **Transfer page** now shows both sides' balances as you pick them, and the Deposit form shows its
+  target's — the one screen where you need to know the money is actually there before moving it.
+- **How:** `AccountBalancePanel` gained a `variant` prop (`'party'` default | `'money'`). Its
+  Receivable/Payable wording is right for Receipts/Expenses but reads as nonsense on a bank
+  ("Receivable 349,000"), so `'money'` says In Hand / Overdrawn / Empty instead. Same sign
+  convention either way — positive is a debit balance — only the words change; Receipts and Expenses
+  are untouched. The directory column uses **Dr/Cr** rather than either wording, because that list
+  mixes customers, vendors, employees, banks and expense heads in one table, and the statement's own
+  columns already say Dr/Cr.
+- **Gotcha:** the first version bumped the panels' `refreshKey` inside `refreshTransfers`/
+  `refreshDeposits`, which the mount effect also calls — that turned a clean call into a
+  `react-hooks/set-state-in-effect` error. Moved to the six save/post/delete handlers instead
+  (`bumpBalances()`); the panels fetch on mount by themselves anyway. Changed files add **zero** new
+  lint problems over baseline (TransferPage 1 and ReportKhaataPage 1 were both pre-existing,
+  verified by linting the stashed originals).
+- **Data correction:** two cheques deposited into Meezan (12,000 + 45,000) by an app instance still
+  running the pre-fix `deposit()` had left no ledger rows. Migration 019 had already run, and it is
+  a one-shot, so it did not pick them up — cleared its `schema_migrations` row and re-ran the
+  (idempotent) backfill. Meezan Bank 292,000 → **349,000**, CHEQUES IN HAND 237,000 → 180,000,
+  ledger nets to zero, no unbalanced document. Worth knowing for the rollout: the one-shot is
+  correct for the upgrade path (install the new build → 019 backfills what exists → `deposit()`
+  writes its own rows from then on), but any deposit made by an OLD instance after 019 has run needs
+  the same manual re-run.
+- **Files:** `frontend/src/components/AccountBalancePanel.tsx`, `frontend/src/pages/TransferPage.tsx`,
+  `frontend/src/pages/ReportKhaataPage.tsx`
+
+---
+
 ## Account setup — batch entry, and the two structural accounts protected
 
 ### 2026-08-10 — Going-live prep: dozens of accounts to create, safely

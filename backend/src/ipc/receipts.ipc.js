@@ -32,12 +32,12 @@ module.exports = function register() {
   }));
 
   ipcMain.handle('receipts:post', wrap((payload) => {
-    requireSession();
-    return service.post(payload.id);
+    const session = requireSession();
+    return service.post(payload.id, session);
   }));
 
   ipcMain.handle('receipts:unpost', wrap((payload) => {
-    requireSession();
-    return service.unpost(payload.id);
+    const session = requireSession();
+    return service.unpost(payload.id, session);
   }));
 };

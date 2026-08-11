@@ -105,16 +105,16 @@ async function createBatch(payload) {
     throw ApiError.badRequest('One or more articles are invalid', 'BATCH_VALIDATION_FAILED', { errors: fieldErrors });
   }
 
-  const vendorIds = [...new Set(articles.map((a) => a.vendor_id))];
-  for (const vendorId of vendorIds) {
-    await vendorsService.getById(vendorId); // 404s if any referenced vendor doesn't exist
-  }
-
+  // No vendor validation: every article is forced onto the system vendor a few lines above, exactly
+  // as create() does. This used to 404 "Vendor not found" on whatever vendor_id the caller sent —
+  // a value it then discarded — so a batch save failed outright whenever the form had not finished
+  // loading its vendor list and fell back to `?? 0`. A check that can only ever reject valid input.
   const seenInBatch = new Set();
   const names = articles.map((a) => a.name.trim());
   for (let index = 0; index < articles.length; index += 1) {
     const name = names[index];
-    const key = `${name.toLowerCase()}::${articles[index].vendor_id}`;
+    // Keyed on the vendor the rows will actually be written with, not the one the caller sent.
+    const key = `${name.toLowerCase()}::${mfgVendorId}`;
     if (seenInBatch.has(key)) {
       throw ApiError.conflict(
         `Duplicate article "${name}" for the same vendor within this batch`,

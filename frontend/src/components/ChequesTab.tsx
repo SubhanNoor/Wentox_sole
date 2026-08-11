@@ -38,8 +38,15 @@ export default function ChequesTab() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | ChequeStatus>('open');
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
+  // "Open" = still outstanding, i.e. not yet CLEARED and not BOUNCED/RETURNED. DEPOSITED belongs
+  // here: banking a cheque does not settle it — the bank has not confirmed it yet, and Mark Cleared
+  // is the next thing someone has to do to it. Leaving DEPOSITED out meant a cheque vanished from
+  // the default view the moment it was deposited, and since Mark Cleared only renders on a
+  // DEPOSITED row, the button was unreachable until the operator changed the filter by hand.
+  const OPEN_STATUSES: ChequeStatus[] = ['PENDING', 'PARTIALLY_ENDORSED', 'DEPOSITED'];
+
   const statusOptionsList: { value: 'all' | 'open' | ChequeStatus; label: string }[] = [
-    { value: 'open', label: 'Open (Pending / Partial)' },
+    { value: 'open', label: 'Open (not yet cleared)' },
     { value: 'all', label: 'All cheques' },
     { value: 'PENDING', label: 'Pending' },
     { value: 'PARTIALLY_ENDORSED', label: 'Partially Endorsed' },
@@ -51,7 +58,7 @@ export default function ChequesTab() {
   ];
 
   const selectedStatusLabel = useMemo(() => {
-    return statusOptionsList.find(o => o.value === statusFilter)?.label || 'Open (Pending / Partial)';
+    return statusOptionsList.find(o => o.value === statusFilter)?.label || 'Open (not yet cleared)';
   }, [statusFilter]);
 
   // Dispose dialog state
@@ -123,7 +130,7 @@ export default function ChequesTab() {
       }))
       .filter(row => {
         if (statusFilter === 'open') {
-          if (row.status !== 'PENDING' && row.status !== 'PARTIALLY_ENDORSED') return false;
+          if (!OPEN_STATUSES.includes(row.status)) return false;
         } else if (statusFilter !== 'all' && row.status !== statusFilter) {
           return false;
         }
@@ -327,6 +334,9 @@ export default function ChequesTab() {
             <td colSpan={4} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL SUM</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totalValue)}</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totalUnallocated)}</td>
+            {/* 4 + 1 + 1 + 1 = 7, matching the header. Without this cell the Status column had no
+                footer, so the printed totals sat one column left of the figures they belonged to. */}
+            <td style={{ border: '1px solid #000000', padding: '6px' }} />
           </tr>
         </tbody>
       </table>
@@ -447,8 +457,13 @@ export default function ChequesTab() {
                 </tr>
               ) : (
                 chequeRows.map(row => {
-                  const canDispose = row.status !== 'BOUNCED' && row.status !== 'CLEARED' && row.unallocated > 0;
-                  const canReturn = row.status === 'PENDING' || row.status === 'PARTIALLY_ENDORSED';
+                  // assertDisposable() rejects every disposal action while the underlying receipt is
+                  // still DRAFT. Until receipt_status was carried on the row the screen could not
+                  // tell, so it offered a Dispose button that always came back "This receipt is not
+                  // posted yet" — the operator's actual next step is on the Receipts screen.
+                  const receiptPosted = row.cheque.receipt_status !== 'DRAFT';
+                  const canDispose = receiptPosted && row.status !== 'BOUNCED' && row.status !== 'CLEARED' && row.unallocated > 0;
+                  const canReturn = receiptPosted && (row.status === 'PENDING' || row.status === 'PARTIALLY_ENDORSED');
                   return (
                     <Fragment key={row.cheque.cheque_id}>
                       <tr
@@ -480,7 +495,15 @@ export default function ChequesTab() {
                                 Dispose
                               </button>
                             )}
-                            {row.status === 'DEPOSITED' && (
+                            {!receiptPosted && (
+                              <span
+                                title="Post the receipt on the Receipts (Jamma) screen before disposing of this cheque"
+                                className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-amber-50 text-amber-800 border-amber-200"
+                              >
+                                Receipt not posted
+                              </span>
+                            )}
+                            {receiptPosted && row.status === 'DEPOSITED' && (
                               <button
                                 onClick={() => markCleared(row.cheque)}
                                 className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 transition-colors"
@@ -488,7 +511,7 @@ export default function ChequesTab() {
                                 Mark Cleared
                               </button>
                             )}
-                            {row.status !== 'BOUNCED' && row.status !== 'RETURNED' && (
+                            {receiptPosted && row.status !== 'BOUNCED' && row.status !== 'RETURNED' && (
                               <button
                                 onClick={() => { setBouncingCheque(row.cheque); setBounceDate(todayISO()); }}
                                 className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 transition-colors"

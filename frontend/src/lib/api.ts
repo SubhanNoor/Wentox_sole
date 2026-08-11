@@ -719,6 +719,12 @@ export interface ChequeRow {
   returned_date: string | null;
   return_reason: string | null;
   receipt_amount?: number;
+  /**
+   * Status of the receipt that brought this cheque in. Every disposal action requires it to be
+   * CONFIRMED (cheques.service.js#assertDisposable), so the screen uses this to avoid offering an
+   * action that can only fail. Present on list()/get(), absent on rows built from other calls.
+   */
+  receipt_status?: 'DRAFT' | 'CONFIRMED';
   // The receipt's business account (migration 014). customer_id/customer_name are resolved
   // through customers.ba_id and are absent when the cheque came from a non-customer account.
   ba_id?: number;
@@ -1378,6 +1384,11 @@ export interface OverallTrailRow {
   type_label: string;
   ba_id?: number;
   ac_id?: number;
+  /**
+   * The single collapsed line a USER gets in place of the restricted accounts (UC-03). It stands
+   * for several accounts at once, so it carries no ba_id/ac_id and cannot be drilled into.
+   */
+  is_aggregate?: boolean;
   debit: number;
   credit: number;
   net_balance: number;

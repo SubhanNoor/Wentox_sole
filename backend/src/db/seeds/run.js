@@ -5,7 +5,6 @@ const sql = require('mssql');
 const config = require('../../config');
 const CODES = require('../../constants/reservedAccounts');
 const STAGES = require('../../constants/stages');
-const { seedLegacyAccounts } = require('./legacy-accounts');
 const { seedManufacturingVendor } = require('./manufacturing-vendor');
 const { seedOpeningBalanceEntries } = require('./opening-balances');
 
@@ -191,10 +190,6 @@ async function seed() {
   // --- The single system vendor every article is attributed to (migration 017) ---
   // After the reserved chart accounts above, since its business account hangs off VENDORS ACCOUNTS.
   await seedManufacturingVendor(pool);
-
-  // --- Legacy business accounts imported from the client's old KHAATA ledger ---
-  // Runs last of the account seeding: it hangs rows off the reserved chart accounts created above.
-  await seedLegacyAccounts(pool);
 
   // --- Opening balances: backfill + self-heal their derived ledger entries ---
   // Last, so every account (including any created by the seeds above) is covered.

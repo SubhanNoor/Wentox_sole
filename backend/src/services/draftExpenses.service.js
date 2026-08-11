@@ -113,7 +113,7 @@ async function remove(draftId) {
 // BEFORE post() is attempted — so ANY later confirm() call on this draft resumes against the SAME
 // expense_id (whose post() is now genuinely idempotent) instead of creating another one. The draft
 // is only ever deleted on full success.
-async function confirm(draftId, userId) {
+async function confirm(draftId, userId, session) {
   const draft = await getById(draftId);
   const payload = {
     expense_date: draft.expense_date,
@@ -142,7 +142,7 @@ async function confirm(draftId, userId) {
 
   let posted;
   try {
-    posted = await expensesService.post(expenseId, userId);
+    posted = await expensesService.post(expenseId, userId, session);
   } catch (err) {
     if (draft.payment_mode === 'CHEQUE_ENDORSED') {
       // Never delete here — pending_expense_id already guarantees a future confirm() (or a direct

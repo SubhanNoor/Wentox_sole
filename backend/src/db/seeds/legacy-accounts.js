@@ -1,3 +1,9 @@
+// NOT WIRED IN. db/seeds/run.js no longer calls this — per client instruction (2026-08-10) a fresh
+// database ships with the reserved chart accounts only, and no pre-made party accounts. The
+// transcription below is kept because it was typed by hand from the client's screenshot of their
+// old system and would be tedious to reproduce; re-enable by importing seedLegacyAccounts into
+// run.js and calling it after the reserved chart accounts are ensured.
+//
 // Legacy business accounts carried over from the client's old "BUSINESS ACCOUNTS LEDGER (KHAATA)"
 // system, transcribed from their screenshot of it. Idempotent like the rest of run.js — keyed on
 // business_accounts.legacy_code, which schema.sql defines for exactly this ("old system's number;

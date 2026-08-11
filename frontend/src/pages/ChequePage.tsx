@@ -8,10 +8,14 @@ import { ChequeInHandContent } from '@/pages/ChequeInHandContent';
 
 type ChequeTab = 'disposal' | 'returns' | 'ledger' | 'in-hand';
 
-const ALL_TABS: { key: ChequeTab; label: string; adminOnly?: boolean }[] = [
-  // Disposal was hidden from role 'User' on the old Receipts "Cheques Disposal" tab — kept
-  // restricted here too now that it's moved onto a page that isn't itself admin-only.
-  { key: 'disposal', label: 'Disposal', adminOnly: true },
+// Every tab is open to every role. Disposal used to be hidden from 'User' — inherited from the old
+// Receipts "Cheques Disposal" tab — which left a USER able to receive a cheque through Receipts and
+// then do nothing with it, while still being allowed to *undo* an endorsement on the Returns tab.
+// UC-03 restricts a USER to two account heads (Cash at Banks, Directors Expenses – Drawings) and
+// nothing else; that guard lives on the account itself, not on this screen. Confirmed with the
+// client 2026-08-11.
+const ALL_TABS: { key: ChequeTab; label: string }[] = [
+  { key: 'disposal', label: 'Disposal' },
   { key: 'returns', label: 'Returns' },
   { key: 'ledger', label: 'Cheque Ledger' },
   { key: 'in-hand', label: 'Cheque in Hand' },
@@ -19,13 +23,9 @@ const ALL_TABS: { key: ChequeTab; label: string; adminOnly?: boolean }[] = [
 
 export default function ChequePage() {
   const { state } = useApp();
-  const isUser = state.currentUserRole === 'User';
-  const TABS = ALL_TABS.filter(t => !t.adminOnly || !isUser);
+  const TABS = ALL_TABS;
 
-  const [activeTab, setActiveTab] = useState<ChequeTab>(() => {
-    const initial = (state.currentTab as ChequeTab) || 'disposal';
-    return initial === 'disposal' && isUser ? 'returns' : initial;
-  });
+  const [activeTab, setActiveTab] = useState<ChequeTab>(() => (state.currentTab as ChequeTab) || 'disposal');
 
   const [tabAnimating, setTabAnimating] = useState(false);
 
@@ -73,10 +73,10 @@ export default function ChequePage() {
         </div>
 
         <div className={`transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
-          {activeTab === 'disposal' && !isUser && <ChequesTab />}
+          {activeTab === 'disposal' && <ChequesTab />}
           {activeTab === 'returns' && <ChequeReturnsContent />}
           {activeTab === 'ledger' && <ChequeLedgerContent />}
-          {activeTab === 'in-hand' && <ChequeInHandContent />}
+          {activeTab === 'in-hand' && <ChequeInHandContent onGoToDisposal={() => switchTab('disposal')} />}
         </div>
       </div>
     </AppLayout>

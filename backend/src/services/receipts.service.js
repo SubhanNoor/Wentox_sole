@@ -224,8 +224,12 @@ async function postWithinTransaction(transaction, receiptId, receipt) {
 // second Dr COMMISSION ALLOWED / Cr that same account pair when commission > 0 — the sale bill
 // itself is never touched
 // (database_schema_v4.3.md §6/§7).
-async function post(receiptId) {
+// The account guard runs again here, not only on create/update: posting is the moment the money
+// actually moves, and the document being posted may have been created by somebody else. Without it
+// an ADMIN could leave a draft against a restricted account for a USER to post.
+async function post(receiptId, session) {
   const receipt = await getById(receiptId);
+  await businessAccountsService.assertAccessible(receipt.ba_id, session);
   if (receipt.status === 'CONFIRMED') {
     throw ApiError.conflict('Receipt is already posted', 'ALREADY_POSTED');
   }
@@ -237,8 +241,9 @@ async function post(receiptId) {
 
 // Blocked once the underlying cheque has moved past PENDING (deposited/endorsed/etc. — unposting
 // at that point would leave cheque_allocations pointing at ledger rows that no longer exist).
-async function unpost(receiptId) {
+async function unpost(receiptId, session) {
   const receipt = await getById(receiptId);
+  await businessAccountsService.assertAccessible(receipt.ba_id, session);
   if (receipt.status !== 'CONFIRMED') {
     throw ApiError.conflict('Receipt is not posted', 'NOT_POSTED');
   }

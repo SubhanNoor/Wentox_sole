@@ -33,13 +33,13 @@ module.exports = function register() {
 
   ipcMain.handle('expenses:post', wrap((payload) => {
     const session = requireSession();
-    return service.post(payload.id, session.userId);
+    return service.post(payload.id, session.userId, session);
   }));
 
   // CHEQUE_ENDORSED is rejected here (USE_CHEQUE_REVERSAL) — see expenses.service.js#unpost().
   ipcMain.handle('expenses:unpost', wrap((payload) => {
-    requireSession();
-    return service.unpost(payload.id);
+    const session = requireSession();
+    return service.unpost(payload.id, session);
   }));
 
   // "Cheque Return" page — a cheque WE wrote (CHEQUE_ISSUED) bouncing or being handed back unpaid.

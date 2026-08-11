@@ -11,9 +11,11 @@ interface InHandRow extends ChequeRow {
 
 // "Cheque in Hand" — every RECEIVED cheque still physically sitting with us (PENDING = untouched,
 // nothing allocated yet; PARTIALLY_ENDORSED = part of it already disposed, the rest still in
-// hand). Deliberately read-only — no dispose/bounce/return actions here, those live on the
-// Disposal tab; this is just "what's currently uncashed, at a glance."
-export function ChequeInHandContent() {
+// hand). Still read-only by design — this is "what's currently uncashed, at a glance", and the
+// dispose/bounce/return machinery belongs on one screen, not two. What it now does carry is a way
+// OUT to that screen: landing here with a cheque in front of you and no route to acting on it was
+// the complaint that started this, and the answer is a signpost rather than duplicated actions.
+export function ChequeInHandContent({ onGoToDisposal }: { onGoToDisposal?: () => void }) {
   const [rows, setRows] = useState<InHandRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -108,12 +110,13 @@ export function ChequeInHandContent() {
                 <th className="p-3 text-center">Due Date</th>
                 <th className="p-3 text-right">In Hand</th>
                 <th className="p-3 text-center">Status</th>
+                {onGoToDisposal && <th className="p-3 text-center" data-no-print>Action</th>}
               </tr>
             </thead>
             <tbody>
               {filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="text-center p-8 text-slate-400">
+                  <td colSpan={onGoToDisposal ? 7 : 6} className="text-center p-8 text-slate-400">
                     {loading ? 'Loading…' : 'No cheques currently in hand.'}
                   </td>
                 </tr>
@@ -130,6 +133,18 @@ export function ChequeInHandContent() {
                         {row.cheque_status === 'PENDING' ? 'Fully in Hand' : 'Partially Disposed'}
                       </span>
                     </td>
+                    {onGoToDisposal && (
+                      <td className="p-3 text-center" data-no-print>
+                        <button
+                          type="button"
+                          onClick={onGoToDisposal}
+                          title="Deposit, endorse, bounce or return this cheque on the Disposal tab"
+                          className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 transition-colors cursor-pointer"
+                        >
+                          Dispose →
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))
               )}
@@ -137,8 +152,10 @@ export function ChequeInHandContent() {
             {filteredRows.length > 0 && (
               <tfoot>
                 <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                  <td colSpan={5} className="p-4 text-left font-lora">TOTAL IN HAND</td>
+                  <td colSpan={4} className="p-4 text-left font-lora">TOTAL IN HAND</td>
                   <td className="p-4 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(total)}</td>
+                  <td className="p-4" />
+                  {onGoToDisposal && <td className="p-4" data-no-print />}
                 </tr>
               </tfoot>
             )}

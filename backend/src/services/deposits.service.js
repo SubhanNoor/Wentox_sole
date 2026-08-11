@@ -7,7 +7,7 @@ const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 const CODES = require('../constants/reservedAccounts');
 
-async function validate(payload) {
+async function validate(payload, session) {
   if (!payload.deposit_date) throw ApiError.badRequest('deposit_date is required');
   if (!payload.to_ba_id) throw ApiError.badRequest('to_ba_id is required');
   if (payload.direction !== 'CREDIT' && payload.direction !== 'DEBIT') {
@@ -18,6 +18,11 @@ async function validate(payload) {
 
   // 404s if the account doesn't exist.
   await businessAccountsService.getById(payload.to_ba_id);
+
+  // UC-03 — a deposit always lands in a bank, and every bank is under the restricted BANK ACCOUNTS
+  // head, so in practice this closes the channel to a USER entirely. Enforced here rather than by
+  // the hidden nav item, per UC-03 point 3.
+  await businessAccountsService.assertAccessible(payload.to_ba_id, session);
 }
 
 function list(filters) {
@@ -43,8 +48,8 @@ function buildFields(payload) {
 
 // Always created DRAFT — post() is the only thing that moves money (same reasoning as
 // transfers.service.js: an unposted deposit must have no ledger footprint at all).
-async function create(payload, userId) {
-  await validate(payload);
+async function create(payload, userId, session) {
+  await validate(payload, session);
   const id = await withTransaction(async (transaction) => {
     return repository.insert(transaction, { ...buildFields(payload), created_by: userId });
   });
@@ -52,12 +57,12 @@ async function create(payload, userId) {
 }
 
 // Financial edits only while DRAFT — same rule as transfers.service.js:update().
-async function update(depositId, payload) {
+async function update(depositId, payload, session) {
   const existing = await getById(depositId);
   if (existing.status === 'CONFIRMED') {
     throw ApiError.conflict('Unpost the deposit before editing', 'POSTED_LOCK');
   }
-  await validate(payload);
+  await validate(payload, session);
   await repository.update(depositId, buildFields(payload));
   return getById(depositId);
 }
@@ -75,8 +80,12 @@ async function remove(depositId) {
 
 // Post: CREDIT -> Dr to_ba_id / Cr MISC_ADJUSTMENTS; DEBIT -> Dr MISC_ADJUSTMENTS / Cr to_ba_id.
 // source_type = 'DEPOSIT'.
-async function post(depositId, userId) {
+// The account guard runs again here, not only on create/update: posting is the moment the money
+// actually moves, and the document being posted may have been created by somebody else. Without it
+// an ADMIN could leave a draft against a restricted account for a USER to post.
+async function post(depositId, userId, session) {
   const deposit = await getById(depositId);
+  await businessAccountsService.assertAccessible(deposit.to_ba_id, session);
   if (deposit.status === 'CONFIRMED') {
     throw ApiError.conflict('Deposit is already posted', 'ALREADY_POSTED');
   }
@@ -105,8 +114,9 @@ async function post(depositId, userId) {
   return getById(depositId);
 }
 
-async function unpost(depositId, userId) {
+async function unpost(depositId, userId, session) {
   const deposit = await getById(depositId);
+  await businessAccountsService.assertAccessible(deposit.to_ba_id, session);
   if (deposit.status !== 'CONFIRMED') {
     throw ApiError.conflict('Deposit is not posted', 'NOT_POSTED');
   }

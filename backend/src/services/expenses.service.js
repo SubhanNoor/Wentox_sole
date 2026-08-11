@@ -171,8 +171,12 @@ async function resolveCreditSide(paymentMode, bankId) {
 // of it, and the existing bounce/return reversal already handles it correctly with no new
 // reversal logic needed (this was a deliberate design decision after finding the two screens would
 // otherwise describe the same real-world action through two disconnected mechanisms).
-async function post(expenseId, userId) {
+// The account guard runs again here, not only on create/update: posting is the moment the money
+// actually moves, and the document being posted may have been created by somebody else. Without it
+// an ADMIN could leave a draft against a restricted account for a USER to post.
+async function post(expenseId, userId, session) {
   const expense = await getById(expenseId);
+  if (expense.ba_id) await businessAccountsService.assertAccessible(expense.ba_id, session);
   if (expense.status === 'CONFIRMED') {
     throw ApiError.conflict('Expense is already posted', 'ALREADY_POSTED');
   }
@@ -222,8 +226,9 @@ async function post(expenseId, userId) {
 // rows, so an unguarded unpost would erase the reversal history too and strand issued_cheque_status
 // at a terminal value on a DRAFT row (same class of bug receipts.service.js#unpost() already guards
 // against for a disposed-of received cheque).
-async function unpost(expenseId) {
+async function unpost(expenseId, session) {
   const expense = await getById(expenseId);
+  if (expense.ba_id) await businessAccountsService.assertAccessible(expense.ba_id, session);
   if (expense.status !== 'CONFIRMED') {
     throw ApiError.conflict('Expense is not posted', 'NOT_POSTED');
   }

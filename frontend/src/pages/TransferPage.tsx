@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
+import AccountBalancePanel from '@/components/AccountBalancePanel';
 import * as api from '@/lib/api';
 import type { BankAccountRow, TransferRow, TransferCreateInput, DepositRow, DepositCreateInput } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -44,6 +45,13 @@ export default function TransferPage() {
     if (cashAccount && cashAccount.ba_id === baId) return cashAccount.name;
     return banks.find(b => b.ba_id === baId)?.name || 'Unknown Account';
   }, [banks, cashAccount]);
+
+  // Bumped by every save/post/delete handler — the balance panels are stale the moment a document
+  // moves money. Deliberately NOT bumped inside refreshTransfers/refreshDeposits, which the mount
+  // effect also calls: setting state there is a cascading render (react-hooks/set-state-in-effect),
+  // and the panels fetch on mount anyway.
+  const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
+  const bumpBalances = () => setBalanceRefreshKey(k => k + 1);
 
   const refreshTransfers = useCallback(async () => {
     const res = await api.transfers.list({});
@@ -152,6 +160,7 @@ export default function TransferPage() {
     flash(tMode === 'edit' ? 'Transfer updated.' : 'Transfer recorded as draft.');
     setTMode('view');
     refreshTransfers();
+    bumpBalances();
   };
 
   const loadTransferRow = (row: TransferRow) => {
@@ -173,6 +182,7 @@ export default function TransferPage() {
     setTransferStatus(res.data.status);
     flash('Transfer posted.');
     refreshTransfers();
+    bumpBalances();
   };
 
   const handleUnpostTransfer = async () => {
@@ -182,6 +192,7 @@ export default function TransferPage() {
     setTransferStatus(res.data.status);
     flash('Transfer unposted.');
     refreshTransfers();
+    bumpBalances();
   };
 
 
@@ -236,6 +247,7 @@ export default function TransferPage() {
     flash(dMode === 'edit' ? 'Entry updated.' : 'Entry recorded as draft.');
     setDMode('view');
     refreshDeposits();
+    bumpBalances();
   };
 
   const loadDepositRow = (row: DepositRow) => {
@@ -258,6 +270,7 @@ export default function TransferPage() {
     setDepositStatus(res.data.status);
     flash('Entry posted.');
     refreshDeposits();
+    bumpBalances();
   };
 
   const handleUnpostDeposit = async () => {
@@ -267,6 +280,7 @@ export default function TransferPage() {
     setDepositStatus(res.data.status);
     flash('Entry unposted.');
     refreshDeposits();
+    bumpBalances();
   };
 
 
@@ -443,6 +457,24 @@ export default function TransferPage() {
                         disabled={isTransferViewMode}
                       />
                     </div>
+                  </div>
+
+                  {/* Both balances, because a transfer is the one screen where you need to know
+                      whether the money is actually there before moving it. Signed the way each side
+                      is about to move: out of From, into To. */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <AccountBalancePanel
+                      baId={fromBaId ? Number(fromBaId) : null}
+                      variant="money"
+                      refreshKey={balanceRefreshKey}
+                      lines={[{ label: 'This transfer out', delta: -amount }]}
+                    />
+                    <AccountBalancePanel
+                      baId={toBaId ? Number(toBaId) : null}
+                      variant="money"
+                      refreshKey={balanceRefreshKey}
+                      lines={[{ label: 'This transfer in', delta: amount }]}
+                    />
                   </div>
 
                   <div>
@@ -630,6 +662,18 @@ export default function TransferPage() {
                       disabled={isDepositViewMode}
                     />
                   </div>
+
+                  {/* CREDIT puts money IN (see deposits.service.js#post), DEBIT takes it out — so the
+                      panel's delta follows the direction toggle, not the raw amount. */}
+                  <AccountBalancePanel
+                    baId={depToBaId ? Number(depToBaId) : null}
+                    variant="money"
+                    refreshKey={balanceRefreshKey}
+                    lines={[{
+                      label: depDirection === 'DEBIT' ? 'This deduction' : 'This deposit',
+                      delta: depDirection === 'DEBIT' ? -depAmount : depAmount,
+                    }]}
+                  />
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">

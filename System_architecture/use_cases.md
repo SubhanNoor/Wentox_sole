@@ -99,12 +99,26 @@ director's-drawings transaction.
 `businessAccounts.service.js#assertAccessible(ba_id, session)` rejects a `USER` touching any account
 whose parent chart account has `is_restricted = 1`, and it is called by **expenses, receipts and
 settlements** on create and update — the guard sits on the ACCOUNT, so closing one channel cannot be
-side-stepped through another. Separately, the six cheque **disposal** channels (`deposit`,
-`endorse-to-vendor`, `endorse-to-expense`, `mark-cleared`, `bounce`, `return-to-sender`) now call
-`requireRole('ADMIN')`; they were admin-only on screen and unguarded underneath. The cheque
-**Returns** actions stay open to `USER` deliberately — that has always been their behaviour, and
-locking them would remove working functionality rather than close a gap. Expense/receipt entry
-itself also stays open to `USER`, per the paragraph above.
+side-stepped through another. Expense/receipt entry itself stays open to `USER`, per the paragraph
+above.
+
+**Correction (2026-08-11) — cheque disposal was never restricted, and is not now.** On 2026-08-10
+the six cheque **disposal** channels (`deposit`, `endorse-to-vendor`, `endorse-to-expense`,
+`mark-cleared`, `bounce`, `return-to-sender`) were given `requireRole('ADMIN')`, on the reasoning
+that they were already admin-only on screen and so the API should match. That reasoning was wrong at
+its root: the on-screen rule came from a frontend decision on the old Receipts "Cheques Disposal"
+tab (`73bbb2ce`), not from this use case or from the client, and hardening it server-side cemented a
+restriction nobody had asked for. It also produced a dead end — a `USER` could receive a cheque
+through Receipts and then do nothing with it — alongside an incoherent split, since
+`reverse-allocation` stayed open, letting a `USER` undo an endorsement they were not allowed to
+make. The client confirmed the rule on 2026-08-11: **a `USER` is restricted to Cash at Banks and
+Directors Expenses – Drawings and everything under them; everything else is open.** All six channels
+are back to `requireSession()`, the Disposal tab is visible to every role, and the account-level
+guard now covers the three disposal actions that pick a target — `deposit` (every bank sits under
+the restricted BANK ACCOUNTS head), `endorse-to-vendor` and `endorse-to-expense` (whose
+`target_ba_id` could be a Directors account). `bounce`/`return-to-sender` are deliberately left
+unguarded: their target was chosen when the cheque was disposed of, and blocking a `USER` from
+recording a bounce would recreate the same dead end.
 Still outstanding: the `User` role still comes from a static `user`/`user` demo login rather than a
 real `users` row (see UC-02's own rework note) — that lands with Milestone 8's `users`/`chart_of_accounts` backend work
 and Milestone 9's frontend↔backend wiring, not before.

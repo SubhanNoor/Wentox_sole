@@ -90,8 +90,11 @@ async function list(filters = {}) {
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT ch.*, r.amount AS receipt_amount, r.ba_id, ba.name AS account_name,
-            c.customer_id, c.name AS customer_name, b.name AS bank_name
+    // receipt_status rides along so the Disposal screen can tell a posted cheque from one whose
+    // receipt is still DRAFT — assertDisposable() refuses the latter, and without this column the
+    // UI offered a Dispose button that could only ever fail.
+    `SELECT ch.*, r.amount AS receipt_amount, r.ba_id, r.status AS receipt_status,
+            ba.name AS account_name, c.customer_id, c.name AS customer_name, b.name AS bank_name
      FROM dbo.cheques ch
      JOIN dbo.receipts r ON r.receipt_id = ch.receipt_id
      JOIN dbo.business_accounts ba ON ba.ba_id = r.ba_id

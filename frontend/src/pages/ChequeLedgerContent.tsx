@@ -244,11 +244,14 @@ export function ChequeLedgerContent() {
             </tr>
           ))}
           <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
-            <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>TOTAL ({ledgerRows.length} events)</td>
-            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totals.totalAmount)}</td>
-            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '10px' }}>
-              R: {formatCurrency(totals.totalReceived)} / I: {formatCurrency(totals.totalIssued)}
+            <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>
+              TOTAL ({ledgerRows.length} events)
+              <span style={{ marginLeft: '10px', fontSize: '10px', fontWeight: 'normal' }}>
+                Received {formatCurrency(totals.totalReceived)} · Issued {formatCurrency(totals.totalIssued)}
+              </span>
             </td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totals.totalAmount)}</td>
+            <td style={{ border: '1px solid #000000', padding: '6px' }} />
           </tr>
         </tbody>
       </table>
@@ -371,11 +374,17 @@ export function ChequeLedgerContent() {
             {ledgerRows.length > 0 && (
               <tfoot>
                 <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                  <td colSpan={6} className="p-4 text-left font-lora">TOTAL ({ledgerRows.length} events)</td>
-                  <td className="p-4 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(totals.totalAmount)}</td>
-                  <td className="p-4 text-xs text-slate-500">
-                    R: {formatCurrency(totals.totalReceived)} / I: {formatCurrency(totals.totalIssued)}
+                  {/* 7 + 1 + 1 = 9, matching the header exactly. The received/issued split rides
+                      alongside the label, where there is room for it — the Reversed column is a
+                      badge column barely wider than the word, and it cannot hold two figures. */}
+                  <td colSpan={7} className="p-4 text-left font-lora">
+                    TOTAL ({ledgerRows.length} events)
+                    <span className="ml-3 font-inter text-xs font-semibold text-slate-500">
+                      Received {formatCurrency(totals.totalReceived)} · Issued {formatCurrency(totals.totalIssued)}
+                    </span>
                   </td>
+                  <td className="p-4 text-right whitespace-nowrap" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(totals.totalAmount)}</td>
+                  <td className="p-4" />
                 </tr>
               </tfoot>
             )}

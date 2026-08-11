@@ -312,6 +312,32 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                       ),
                     },
                     {
+                      // businessLedger({view:'summary'}) has always returned closing_balance on every
+                      // row; the directory just never showed it, so reading a bank or cash balance
+                      // meant opening the statement one account at a time. Dr/Cr rather than
+                      // Receivable/Payable because this list mixes customers, vendors, employees,
+                      // banks and expense heads — the statement's own columns already say Dr/Cr.
+                      key: 'balance',
+                      header: 'Balance',
+                      width: '160px',
+                      align: 'right',
+                      render: c => (
+                        c.closing_balance === 0 ? (
+                          <span className="text-xs font-mono text-slate-400">—</span>
+                        ) : (
+                          <span
+                            className="text-xs font-mono font-bold"
+                            style={{ color: c.closing_balance > 0 ? '#047857' : '#e11d48' }}
+                          >
+                            {formatCurrency(Math.abs(c.closing_balance))}
+                            <span className="ml-1.5 text-[10px] font-semibold uppercase">
+                              {c.closing_balance > 0 ? 'Dr' : 'Cr'}
+                            </span>
+                          </span>
+                        )
+                      ),
+                    },
+                    {
                       key: 'statement',
                       header: '',
                       width: '140px',

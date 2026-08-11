@@ -27,6 +27,6 @@ module.exports = function register() {
 
   ipcMain.handle('draft-expenses:confirm', wrap((payload) => {
     const session = requireSession();
-    return service.confirm(payload.id, session.userId);
+    return service.confirm(payload.id, session.userId, session);
   }));
 };

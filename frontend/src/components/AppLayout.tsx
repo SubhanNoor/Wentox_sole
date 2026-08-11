@@ -99,6 +99,35 @@ const DEFAULT_SHORTCUTS: QuickShortcut[] = [
   { id: 'default_search-customer', label: 'Search Customer', page: 'search-customer' },
 ];
 
+// Where the bar is stored, and which generation of DEFAULT_SHORTCUTS has been published to this
+// machine. The seed marker exists because "has this machine ever stored a bar?" is the wrong
+// question: an install that ran an older build (whose default was an empty bar) and pinned or
+// unpinned anything has a stored list forever, so it would never pick the defaults up. Keying on a
+// seed version instead means bumping SHORTCUTS_SEED_VERSION republishes the default set to every
+// install exactly once — at the cost of replacing whatever that install had pinned, which is why
+// it should only be bumped when the defaults themselves change.
+const SHORTCUTS_STORAGE_KEY = 'wento_quick_shortcuts_clean_v3';
+const SHORTCUTS_SEED_KEY = 'wento_quick_shortcuts_seed';
+const SHORTCUTS_SEED_VERSION = '2026-08-10';
+
+function loadShortcuts(): QuickShortcut[] {
+  if (localStorage.getItem(SHORTCUTS_SEED_KEY) !== SHORTCUTS_SEED_VERSION) {
+    localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(DEFAULT_SHORTCUTS));
+    localStorage.setItem(SHORTCUTS_SEED_KEY, SHORTCUTS_SEED_VERSION);
+    return DEFAULT_SHORTCUTS;
+  }
+  // Already seeded, so from here on the user's own bar wins — including an empty one they cleared
+  // themselves, which is why this returns [] rather than re-seeding.
+  const saved = localStorage.getItem(SHORTCUTS_STORAGE_KEY);
+  if (!saved) return [];
+  try {
+    const parsed = JSON.parse(saved);
+    return Array.isArray(parsed) ? parsed : DEFAULT_SHORTCUTS;
+  } catch {
+    return DEFAULT_SHORTCUTS;
+  }
+}
+
 let savedSidebarScrollTop = 0;
 
 interface AppLayoutProps {
@@ -119,20 +148,10 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     return localStorage.getItem('wento_sidebar_hidden') !== 'false';
   });
 
-  // Top Menu Bar Shortcuts State — pre-seeded with the everyday-use pages on first-ever launch
-  // (nothing in localStorage yet); once the user has saved anything of their own (including
-  // clearing it down to zero), that always wins from then on.
-  const SHORTCUTS_STORAGE_KEY = 'wento_quick_shortcuts_clean_v3';
-
-  const [shortcuts, setShortcuts] = useState<QuickShortcut[]>(() => {
-    const saved = localStorage.getItem(SHORTCUTS_STORAGE_KEY);
-    if (!saved) return DEFAULT_SHORTCUTS;
-    try {
-      return JSON.parse(saved);
-    } catch {
-      return DEFAULT_SHORTCUTS;
-    }
-  });
+  // Top Menu Bar Shortcuts State — seeded with the everyday-use pages the first time an install
+  // sees this generation of the defaults (see loadShortcuts above); after that the user's own bar
+  // wins from then on.
+  const [shortcuts, setShortcuts] = useState<QuickShortcut[]>(loadShortcuts);
 
   // Drag & Drop Quick Menu State
   const [isDragging, setIsDragging] = useState(false);

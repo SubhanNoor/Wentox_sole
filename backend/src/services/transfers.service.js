@@ -5,7 +5,7 @@ const businessAccountsService = require('./businessAccounts.service');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 
-async function validate(payload) {
+async function validate(payload, session) {
   if (!payload.transfer_date) throw ApiError.badRequest('transfer_date is required');
   if (!payload.from_ba_id) throw ApiError.badRequest('from_ba_id is required');
   if (!payload.to_ba_id) throw ApiError.badRequest('to_ba_id is required');
@@ -19,6 +19,13 @@ async function validate(payload) {
   // both are just business_accounts rows, no party-specific check beyond existing.
   await businessAccountsService.getById(payload.from_ba_id);
   await businessAccountsService.getById(payload.to_ba_id);
+
+  // UC-03, BOTH sides. Every bank sits under the restricted BANK ACCOUNTS head, so this is what
+  // stops a USER moving money into or out of one. The Transfer page is already hidden from a USER,
+  // but UC-03 point 3 is explicit that hiding a nav item is never the only guard — the channel was
+  // wide open until now.
+  await businessAccountsService.assertAccessible(payload.from_ba_id, session);
+  await businessAccountsService.assertAccessible(payload.to_ba_id, session);
 }
 
 function list(filters) {
@@ -44,8 +51,8 @@ function buildFields(payload) {
 // Always created DRAFT — post() is the only thing that moves money (cash_and_bank.md §7: a
 // transfer must never appear in income/expense totals, so an unposted transfer must have no
 // ledger footprint at all, same as receipts/expenses/purchases).
-async function create(payload, userId) {
-  await validate(payload);
+async function create(payload, userId, session) {
+  await validate(payload, session);
   const id = await withTransaction(async (transaction) => {
     return repository.insert(transaction, { ...buildFields(payload), created_by: userId });
   });
@@ -54,12 +61,12 @@ async function create(payload, userId) {
 
 // Financial edits only while DRAFT — same rule as purchases.service.js:update() (no
 // edit-a-posted-document flow; unpost first).
-async function update(transferId, payload) {
+async function update(transferId, payload, session) {
   const existing = await getById(transferId);
   if (existing.status === 'CONFIRMED') {
     throw ApiError.conflict('Unpost the transfer before editing', 'POSTED_LOCK');
   }
-  await validate(payload);
+  await validate(payload, session);
   await repository.update(transferId, buildFields(payload));
   return getById(transferId);
 }
@@ -77,8 +84,13 @@ async function remove(transferId) {
 }
 
 // Post: Dr to_ba_id / Cr from_ba_id, source_type = 'TRANSFER' (cash_and_bank.md §7).
-async function post(transferId, userId) {
+// The account guard runs again here, not only on create/update: posting is the moment the money
+// actually moves, and the document being posted may have been created by somebody else. Without it
+// an ADMIN could leave a draft against a restricted account for a USER to post.
+async function post(transferId, userId, session) {
   const transfer = await getById(transferId);
+  await businessAccountsService.assertAccessible(transfer.from_ba_id, session);
+  await businessAccountsService.assertAccessible(transfer.to_ba_id, session);
   if (transfer.status === 'CONFIRMED') {
     throw ApiError.conflict('Transfer is already posted', 'ALREADY_POSTED');
   }
@@ -97,8 +109,10 @@ async function post(transferId, userId) {
   return getById(transferId);
 }
 
-async function unpost(transferId, userId) {
+async function unpost(transferId, userId, session) {
   const transfer = await getById(transferId);
+  await businessAccountsService.assertAccessible(transfer.from_ba_id, session);
+  await businessAccountsService.assertAccessible(transfer.to_ba_id, session);
   if (transfer.status !== 'CONFIRMED') {
     throw ApiError.conflict('Transfer is not posted', 'NOT_POSTED');
   }

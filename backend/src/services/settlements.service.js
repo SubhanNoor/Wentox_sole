@@ -99,8 +99,13 @@ async function remove(settlementId) {
 // Post: Dr to_ba_id (our creditor) / Cr from_ba_id (our debtor), source_type 'SETTLEMENT'.
 // Both legs are ba_id — no chart account is written, which is what structurally keeps this out of
 // every cash/bank/cheque balance rather than relying on each report to remember to exclude it.
-async function post(settlementId, userId) {
+// The account guard runs again here, not only on create/update: posting is the moment the money
+// actually moves, and the document being posted may have been created by somebody else. Without it
+// an ADMIN could leave a draft against a restricted account for a USER to post.
+async function post(settlementId, userId, session) {
   const settlement = await getById(settlementId);
+  await businessAccountsService.assertAccessible(settlement.from_ba_id, session);
+  await businessAccountsService.assertAccessible(settlement.to_ba_id, session);
   if (settlement.status === 'CONFIRMED') {
     throw ApiError.conflict('Settlement is already posted', 'ALREADY_POSTED');
   }
@@ -121,8 +126,10 @@ async function post(settlementId, userId) {
   return getById(settlementId);
 }
 
-async function unpost(settlementId, userId) {
+async function unpost(settlementId, userId, session) {
   const settlement = await getById(settlementId);
+  await businessAccountsService.assertAccessible(settlement.from_ba_id, session);
+  await businessAccountsService.assertAccessible(settlement.to_ba_id, session);
   if (settlement.status !== 'CONFIRMED') {
     throw ApiError.conflict('Settlement is not posted', 'NOT_POSTED');
   }

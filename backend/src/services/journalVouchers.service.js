@@ -100,8 +100,12 @@ async function remove(jvId) {
   return { ok: true };
 }
 
-async function post(jvId, userId) {
+// The account guard runs again here, not only on create/update: posting is the moment the money
+// actually moves, and the document being posted may have been created by somebody else. Without it
+// an ADMIN could leave a draft against a restricted account for a USER to post.
+async function post(jvId, userId, session) {
   const jv = await getById(jvId);
+  await businessAccountsService.assertAccessible(jv.ba_id, session);
   if (jv.status === 'CONFIRMED') {
     throw ApiError.conflict('Journal Voucher is already posted', 'ALREADY_POSTED');
   }
@@ -124,8 +128,9 @@ async function post(jvId, userId) {
   return getById(jvId);
 }
 
-async function unpost(jvId, userId) {
+async function unpost(jvId, userId, session) {
   const jv = await getById(jvId);
+  await businessAccountsService.assertAccessible(jv.ba_id, session);
   if (jv.status !== 'CONFIRMED') {
     throw ApiError.conflict('Journal Voucher is not posted', 'NOT_POSTED');
   }

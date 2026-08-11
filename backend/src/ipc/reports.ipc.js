@@ -51,18 +51,18 @@ module.exports = function register() {
   }));
 
   ipcMain.handle('reports:account-ledger', wrap((payload) => {
-    requireSession();
-    return service.accountLedger({ ba_id: payload.ba_id, ac_id: payload.ac_id }, payload);
+    const session = requireSession();
+    return service.accountLedger({ ba_id: payload.ba_id, ac_id: payload.ac_id }, payload, session);
   }));
 
   ipcMain.handle('reports:business-ledger', wrap((payload) => {
-    requireSession();
-    return service.businessLedger(payload);
+    const session = requireSession();
+    return service.businessLedger(payload, session);
   }));
 
   ipcMain.handle('reports:account-balance', wrap((payload) => {
-    requireSession();
-    return service.accountBalance(payload);
+    const session = requireSession();
+    return service.accountBalance(payload, session);
   }));
 
   ipcMain.handle('reports:cash-book', wrap((payload) => {
@@ -71,8 +71,8 @@ module.exports = function register() {
   }));
 
   ipcMain.handle('reports:overall-trail', wrap((payload) => {
-    requireSession();
-    return service.overallTrail(payload);
+    const session = requireSession();
+    return service.overallTrail(payload, session);
   }));
 
   ipcMain.handle('reports:overall-search', wrap((payload) => {
@@ -81,7 +81,7 @@ module.exports = function register() {
   }));
 
   ipcMain.handle('reports:overall-search-ledger', wrap((payload) => {
-    requireSession();
-    return service.overallSearchLedger(payload.entity_type, payload.ba_id, payload);
+    const session = requireSession();
+    return service.overallSearchLedger(payload.entity_type, payload.ba_id, payload, session);
   }));
 };

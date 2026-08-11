@@ -77,24 +77,41 @@ async function recomputeStatus(transaction, cheque, closingDispositionType) {
   }
 }
 
-// DEPOSIT — no ledger entry (the customer was already credited when the CHEQUE receipt posted;
-// depositing just relocates it from the CHEQUES IN HAND holding bucket to a specific bank for
-// balance-tracking purposes — cash_and_bank.md §10's derived-balance formula reads
-// cheque_allocations directly, not a new ledger row). "One cheque is never deposited into two
-// different banks" (§9.3) — if the cheque already carries a bank_id, a second deposit must use
-// the same one.
-async function deposit(chequeId, payload, userId) {
+// DEPOSIT — Dr bank BA / Cr CHEQUES IN HAND. Banking a cheque is an internal asset move: the
+// customer was already credited when the CHEQUE receipt posted, so no new money arrives, but the
+// asset does leave the CHEQUES IN HAND holding bucket for a specific bank and both figures have to
+// follow it.
+//
+// This DID write no ledger row until 2026-08-10. cash_and_bank.md §10 specifies a derived-balance
+// helper instead (`balance(bank) = ... + Σ cheque DEPOSITs where the cheque's bank_id = B`), and
+// this deferred to it — but that helper was never built, and every balance the app shows reads
+// ledger_entries. The observable result was that a deposited (even CLEARED) cheque never reached
+// the bank and never left CHEQUES IN HAND, in equal and opposite amounts, so the trial balance
+// stayed at zero and never flagged it. Writing the pair here is what the rest of the system already
+// does for every other money movement, and it is what reports.repository.js#cashBookNonCashRows
+// already documented a deposit as being.
+//
+// "One cheque is never deposited into two different banks" (§9.3) — if the cheque already carries a
+// bank_id, a second deposit must use the same one.
+async function deposit(chequeId, payload, userId, session) {
   const cheque = await getById(chequeId);
   const amount = await assertDisposable(cheque, payload.amount);
   if (!payload.bank_id) throw ApiError.badRequest('bank_id is required');
   if (cheque.bank_id && cheque.bank_id !== payload.bank_id) {
     throw ApiError.badRequest('This cheque is already tied to a different bank — one cheque is never split across banks');
   }
-  await bankAccountsService.getById(payload.bank_id); // 404s if it doesn't exist
+  const bank = await bankAccountsService.getById(payload.bank_id); // 404s if it doesn't exist
+  if (!bank.ba_id) throw ApiError.conflict('Bank account has no linked ledger account yet', 'NO_BANK_ACCOUNT');
+  // UC-03: every bank sits under the restricted BANK ACCOUNTS head, so this is the guard that keeps
+  // a USER out of them — the channel itself is open to any session (see cheques.ipc.js).
+  await businessAccountsService.assertAccessible(bank.ba_id, session);
   if (!payload.allocation_date) throw ApiError.badRequest('allocation_date is required');
 
+  const chequesInHand = await chartAccountsRepository.findByCode(CODES.CHEQUES_IN_HAND);
+  if (!chequesInHand) throw new Error(`Reserved chart account CHEQUES IN HAND (code ${CODES.CHEQUES_IN_HAND}) not found — run npm run seed`);
+
   await withTransaction(async (transaction) => {
-    await repository.insertAllocation(transaction, {
+    const allocationId = await repository.insertAllocation(transaction, {
       receipt_id: cheque.receipt_id,
       disposition_type: 'DEPOSIT',
       amount,
@@ -102,6 +119,10 @@ async function deposit(chequeId, payload, userId) {
       remarks: payload.remarks,
       created_by: userId,
     });
+    await repository.insertLedgerEntries(transaction, [
+      { entry_date: payload.allocation_date, ba_id: bank.ba_id, debit: amount, credit: 0, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration: `Cheque #${chequeId} deposited into ${bank.name}` },
+      { entry_date: payload.allocation_date, ac_id: chequesInHand.ac_id, debit: 0, credit: amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration: `Cheque #${chequeId} deposited into ${bank.name}` },
+    ]);
     if (!cheque.bank_id) await repository.setBank(transaction, chequeId, payload.bank_id);
     await recomputeStatus(transaction, cheque, 'DEPOSIT');
   });
@@ -112,7 +133,7 @@ async function deposit(chequeId, payload, userId) {
 // VENDOR_PAYMENT — this DOES write a ledger entry: handing a received cheque to a vendor actually
 // moves money out to someone else, unlike a deposit into your own bank. Dr VENDOR BA / Cr CHEQUES
 // IN HAND.
-async function endorseToVendor(chequeId, payload, userId) {
+async function endorseToVendor(chequeId, payload, userId, session) {
   const cheque = await getById(chequeId);
   const amount = await assertDisposable(cheque, payload.amount);
   if (!payload.vendor_id) throw ApiError.badRequest('vendor_id is required');
@@ -120,6 +141,7 @@ async function endorseToVendor(chequeId, payload, userId) {
 
   const vendor = await vendorsService.getById(payload.vendor_id);
   if (!vendor.ba_id) throw ApiError.conflict('Vendor has no linked account yet', 'NO_VENDOR_ACCOUNT');
+  await businessAccountsService.assertAccessible(vendor.ba_id, session);
   const chequesInHand = await chartAccountsRepository.findByCode(CODES.CHEQUES_IN_HAND);
   if (!chequesInHand) throw new Error(`Reserved chart account CHEQUES IN HAND (code ${CODES.CHEQUES_IN_HAND}) not found — run npm run seed`);
 
@@ -145,13 +167,16 @@ async function endorseToVendor(chequeId, payload, userId) {
 
 // EXPENSE_PAYMENT — same shape as endorseToVendor, target is any business_accounts row (an
 // expense head) rather than a vendor. Dr target BA / Cr CHEQUES IN HAND.
-async function endorseToExpense(chequeId, payload, userId) {
+async function endorseToExpense(chequeId, payload, userId, session) {
   const cheque = await getById(chequeId);
   const amount = await assertDisposable(cheque, payload.amount);
   if (!payload.target_ba_id) throw ApiError.badRequest('target_ba_id is required');
   if (!payload.allocation_date) throw ApiError.badRequest('allocation_date is required');
 
   const target = await businessAccountsService.getById(payload.target_ba_id);
+  // target_ba_id is any business account the operator picks, Directors Drawings included — this is
+  // the same account-level guard receipts/expenses/settlements/JV already apply.
+  await businessAccountsService.assertAccessible(payload.target_ba_id, session);
   const chequesInHand = await chartAccountsRepository.findByCode(CODES.CHEQUES_IN_HAND);
   if (!chequesInHand) throw new Error(`Reserved chart account CHEQUES IN HAND (code ${CODES.CHEQUES_IN_HAND}) not found — run npm run seed`);
 
@@ -207,14 +232,21 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
     const reversedAllocations = await repository.reverseAllocations(transaction, cheque.receipt_id);
 
     for (const allocation of reversedAllocations) {
-      // DEPOSIT allocations never wrote a ledger entry in the first place (deposit.md decision:
-      // depositing only relocates an already-credited cheque, no new row) — nothing to reverse on
-      // the ledger side for those; reverseAllocations() above already flipped their status.
-      if (allocation.disposition_type === 'DEPOSIT') continue;
-
-      const targetBaId = allocation.target_vendor_id
-        ? (await vendorsService.getById(allocation.target_vendor_id)).ba_id
-        : allocation.target_ba_id;
+      // Every disposition now carries a ledger pair (Dr somewhere / Cr CHEQUES IN HAND), so every
+      // one of them reverses the same way — only the "somewhere" differs. A DEPOSIT's other side is
+      // the bank the cheque was banked into, which lives on the cheque itself rather than on the
+      // allocation (cheque_allocations has no bank column; CK_cheque_allocations_target is what
+      // limits target_vendor_id/target_ba_id to the endorsement types).
+      let targetBaId;
+      if (allocation.disposition_type === 'DEPOSIT') {
+        const bank = await bankAccountsService.getById(cheque.bank_id);
+        if (!bank.ba_id) throw ApiError.conflict('Bank account has no linked ledger account yet', 'NO_BANK_ACCOUNT');
+        targetBaId = bank.ba_id;
+      } else {
+        targetBaId = allocation.target_vendor_id
+          ? (await vendorsService.getById(allocation.target_vendor_id)).ba_id
+          : allocation.target_ba_id;
+      }
       // Opposite of the original allocation entry (Dr target / Cr CHEQUES IN HAND): here we credit
       // target and debit CHEQUES IN HAND back.
       await repository.insertLedgerEntries(transaction, [

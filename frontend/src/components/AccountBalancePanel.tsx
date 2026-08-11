@@ -26,18 +26,30 @@ interface AccountBalancePanelProps {
   lines: BalanceLine[];
   /** Bump to force a re-fetch after a save — the balance is stale the moment an entry posts. */
   refreshKey?: number;
+  /**
+   * Which vocabulary to label the figure with. 'party' (default) is who-owes-whom, for the
+   * Receipts/Expenses forms. 'money' is for an account that HOLDS money rather than owes it —
+   * cash and bank on the Transfer screen, where "Receivable 349,000" would read as nonsense.
+   */
+  variant?: 'party' | 'money';
   className?: string;
 }
 
 // 'Receivable' / 'Payable' rather than Dr / Cr: the people using this screen think in who-owes-whom,
-// and the Naam/Jamma columns elsewhere already carry the accounting vocabulary.
-function balanceTone(value: number): { label: string; color: string } {
+// and the Naam/Jamma columns elsewhere already carry the accounting vocabulary. Same sign
+// convention either way — positive is a debit balance — only the words change.
+function balanceTone(value: number, variant: 'party' | 'money'): { label: string; color: string } {
+  if (variant === 'money') {
+    if (value > 0) return { label: 'In Hand', color: '#047857' };
+    if (value < 0) return { label: 'Overdrawn', color: '#e11d48' };
+    return { label: 'Empty', color: '#64748b' };
+  }
   if (value > 0) return { label: 'Receivable', color: '#047857' };
   if (value < 0) return { label: 'Payable', color: '#e11d48' };
   return { label: 'Settled', color: '#64748b' };
 }
 
-export default function AccountBalancePanel({ baId, lines, refreshKey = 0, className = '' }: AccountBalancePanelProps) {
+export default function AccountBalancePanel({ baId, lines, refreshKey = 0, variant = 'party', className = '' }: AccountBalancePanelProps) {
   // The fetched value is stored WITH the account it belongs to, so switching accounts derives its
   // way back to "loading" instead of needing a synchronous reset inside the effect (which would
   // both trip react-hooks/set-state-in-effect and briefly show the previous account's balance).
@@ -80,8 +92,8 @@ export default function AccountBalancePanel({ baId, lines, refreshKey = 0, class
 
   const effective = lines.filter(l => l.delta !== 0);
   const after = current + effective.reduce((sum, l) => sum + l.delta, 0);
-  const currentTone = balanceTone(current);
-  const afterTone = balanceTone(after);
+  const currentTone = balanceTone(current, variant);
+  const afterTone = balanceTone(after, variant);
 
   return (
     <div className={`rounded-xl border overflow-hidden bg-white ${className}`} style={{ borderColor: 'var(--border-color)' }}>

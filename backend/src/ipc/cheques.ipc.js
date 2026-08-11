@@ -2,15 +2,20 @@
 const { ipcMain } = require('electron');
 const service = require('../services/cheques.service');
 const { wrap } = require('./wrap');
-const { requireSession, requireRole } = require('./session');
+const { requireSession } = require('./session');
 
-// UC-03 point 3: "The API enforces the same rule server-side; hiding a nav item is never the only
-// guard." The six disposal actions below were ADMIN-only on screen and nowhere else — the Cheque
-// page filters the Disposal tab out for role 'User', but every channel accepted any logged-in
-// session. Now the lock is real.
-// Deliberately NOT applied to the Returns actions (reverse-allocation, and expenses'
-// bounce/return of an issued cheque): role 'User' can do those today, could before the Cheque page
-// existed, and locking them would remove working behaviour rather than close a gap.
+// No role guard on any channel here, deliberately. UC-03 restricts a USER from exactly two account
+// heads — Cash at Banks and Directors Expenses – Drawings — and nothing else; that restriction is
+// enforced on the ACCOUNT (businessAccounts.service.js#assertAccessible), which is the only place
+// it can't be side-stepped through a different channel.
+//
+// These six disposal channels briefly carried requireRole('ADMIN') (2026-08-10). That was wrong:
+// the rule came from a frontend decision on the old Receipts "Cheques Disposal" tab, not from
+// UC-03 or from the client, and hardening it server-side cemented a restriction nobody had asked
+// for. It produced a dead end — a USER could take a cheque in through Receipts and then do nothing
+// with it — and an incoherent split, since reverse-allocation stayed open, allowing a USER to undo
+// an endorsement they were not allowed to make. Confirmed with the client 2026-08-11: a USER is
+// restricted to those two account heads and everything under them, and everything else is open.
 
 module.exports = function register() {
   ipcMain.handle('cheques:list', wrap((payload) => {
@@ -24,33 +29,33 @@ module.exports = function register() {
   }));
 
   ipcMain.handle('cheques:deposit', wrap((payload) => {
-    const session = requireRole('ADMIN');
-    return service.deposit(payload.id, payload, session.userId);
+    const session = requireSession();
+    return service.deposit(payload.id, payload, session.userId, session);
   }));
 
   ipcMain.handle('cheques:endorse-to-vendor', wrap((payload) => {
-    const session = requireRole('ADMIN');
-    return service.endorseToVendor(payload.id, payload, session.userId);
+    const session = requireSession();
+    return service.endorseToVendor(payload.id, payload, session.userId, session);
   }));
 
   ipcMain.handle('cheques:endorse-to-expense', wrap((payload) => {
-    const session = requireRole('ADMIN');
-    return service.endorseToExpense(payload.id, payload, session.userId);
+    const session = requireSession();
+    return service.endorseToExpense(payload.id, payload, session.userId, session);
   }));
 
   ipcMain.handle('cheques:mark-cleared', wrap((payload) => {
-    requireRole('ADMIN');
+    requireSession();
     return service.markCleared(payload.id);
   }));
 
   ipcMain.handle('cheques:bounce', wrap((payload) => {
-    const session = requireRole('ADMIN');
+    const session = requireSession();
     return service.bounce(payload.id, payload, session.userId);
   }));
 
   // "Returned to sender" — distinct from a bank bounce (see cheques.service.js#returnToSender).
   ipcMain.handle('cheques:return-to-sender', wrap((payload) => {
-    const session = requireRole('ADMIN');
+    const session = requireSession();
     return service.returnToSender(payload.id, payload, session.userId);
   }));
 
