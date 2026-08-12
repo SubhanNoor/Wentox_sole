@@ -1,5 +1,5 @@
 const path = require('path');
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, Menu } = require('electron');
 const registerIpcHandlers = require('../src/ipc');
 const alertsService = require('../src/services/alerts.service');
 const backupService = require('../src/services/backup.service');
@@ -18,6 +18,38 @@ app.setName('Wentox');
 // displayed format in Electron/Chromium, only this process-wide switch does. Must be set before
 // app.whenReady()/any window is created.
 app.commandLine.appendSwitch('lang', 'en-GB');
+
+// Electron's DEFAULT menu carries zoomIn/zoomOut/resetZoom roles on Ctrl +/-/0. Those are removed
+// here, and nothing replaces them, because the app now owns zoom itself (ZoomControl.tsx -> the
+// zoom:set channel): with both in play a single keypress fires both paths, the window jumps two
+// steps, and the percentage shown on screen stops matching the window it describes. One code path
+// is the only way that stays honest.
+//
+// Everything else useful about the default menu is kept — Reload and Toggle DevTools especially,
+// which is how a packaged install gets diagnosed (localStorage inspection found the Quick Menu
+// bug), plus the Edit roles, without which Ctrl+C/V stop working in inputs on some platforms.
+function buildMenu() {
+  return Menu.buildFromTemplate([
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+        { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'close' }] },
+  ]);
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -64,6 +96,8 @@ app.whenReady().then(async () => {
   }
 
   registerIpcHandlers(); // every ipcMain.handle channel must exist before the renderer can call one
+
+  Menu.setApplicationMenu(buildMenu()); // see buildMenu(): drops the built-in zoom accelerators
 
   // Alerts job (Milestone 9.1 follow-up, later widened from "startup only" to a 15-minute repeat
   // per explicit request — a newly-due cheque/bill was going unnoticed for however long a session

@@ -23,6 +23,7 @@ const FEATURES = [
   'groupAccounts', 'products', 'productColors', 'purchases', 'purchaseReturns', 'receipts',
   'regions', 'reports', 'salaryRuns', 'saleBills', 'saleReturns', 'stages', 'stock', 'stores',
   'subCustomers', 'transfers', 'settlements', 'journalVouchers', 'deposits', 'updates', 'vendors', 'wageRuns',
+  'zoom',
 ] as const;
 
 // window.api.<feature> stays camelCase (normal JS property access); the wire channel name is

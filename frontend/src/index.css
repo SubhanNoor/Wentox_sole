@@ -711,8 +711,16 @@ body {
     display: table-header-group !important;
   }
 
+  /* A <tfoot> defaults to table-footer-group, which in paged media REPEATS at the bottom of every
+     printed page. That is right for a running footer and wrong for what this app actually puts in
+     one: a grand total. On a two-page Cash Book it printed "Totals: 395,000 …" at the foot of page
+     1 as well as page 2 — a figure that is not the total of page 1, on an accounting document
+     someone reconciles by hand. Forcing table-row-group prints it exactly once, at the end, which
+     is where every other report already puts its total (inside <tbody>, as the last row).
+     The <thead> rule above is the opposite case and stays: column headings SHOULD repeat, or page
+     2 is a wall of unlabelled numbers. */
   .excel-print-table tfoot {
-    display: table-footer-group !important;
+    display: table-row-group !important;
   }
 
   .excel-print-table tr {
@@ -743,6 +751,17 @@ body {
   
   .excel-print-double-bottom {
     border-bottom: 3px double #000000 !important;
+  }
+
+  /* The sign-off strip at the foot of every printed report — three ruled signature lines, then the
+     company/printed-at bar. Both are plain divs, so before this a table ending near a page boundary
+     could break straight through them: one signature line on page 1 and two on page 2, or the
+     printed-at bar stranded alone on a near-empty final page. Never reachable while the preview was
+     clipping everything to one page; very reachable now that reports actually flow onto page 2.
+     Each block is kept whole; the two may still land on different pages, which reads fine. */
+  .report-signoff {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
 
   .page-break-before {

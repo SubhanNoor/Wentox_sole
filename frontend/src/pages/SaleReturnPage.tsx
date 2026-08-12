@@ -561,7 +561,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             <img
               src={wentoxLogo}
               alt="Wentox Logo"
-              style={{ height: '180px', width: 'auto', objectFit: 'contain' }}
+              style={{ height: '90px', width: 'auto', objectFit: 'contain' }}
             />
           </div>
           <div style={{ textAlign: 'right' }}>
@@ -685,7 +685,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           </div>
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
+        <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
           <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
         </div>

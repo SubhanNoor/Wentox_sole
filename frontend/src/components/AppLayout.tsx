@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
+import ZoomControl from '@/components/ZoomControl';
 import * as api from '@/lib/api';
 
 interface NavItem {
@@ -510,6 +511,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
           {headerAction && (
             <div>{headerAction}</div>
           )}
+          <ZoomControl />
           <NotificationBell />
         </header>
 

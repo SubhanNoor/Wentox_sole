@@ -44,6 +44,7 @@ const registerDeposits = require('./deposits.ipc');
 const registerUpdates = require('./updates.ipc');
 const registerVendors = require('./vendors.ipc');
 const registerWageRuns = require('./wageRuns.ipc');
+const registerZoom = require('./zoom.ipc');
 
 module.exports = function registerIpcHandlers() {
   registerAccounts();
@@ -89,4 +90,5 @@ module.exports = function registerIpcHandlers() {
   registerUpdates();
   registerVendors();
   registerWageRuns();
+  registerZoom();
 };

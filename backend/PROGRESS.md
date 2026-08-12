@@ -83,6 +83,132 @@ Log every completed task here (newest first within its milestone). Format:
 - **Files:** `backend/src/services/cheques.service.js`,
   `backend/src/db/migrations/019_backfill_cheque_deposit_ledger.sql`
 
+### 2026-08-12 — PDF-backed print preview: built, could not be made reliable, reverted
+- **Goal:** the preview showed one continuous sheet that just grew taller, with no page boundaries,
+  so it could never show where page 2 began. Client asked for real A4 pages. Approach chosen with
+  them: render the window through Chromium's own print engine (`webContents.printToPDF`) and show
+  that PDF, making the preview literally the print output.
+- **It worked in every isolated test and failed in the real app.** Standalone Electron harnesses
+  produced correct multi-page A4 PDFs every time — including one reproducing the modal's exact DOM
+  against the app's real compiled CSS. In the running app the same call returned a **blank document:
+  three A4 pages of correct height with zero text**, ~2KB instead of ~103KB. Not a hang (350ms), not
+  a missing channel (it logged), not the report being absent (the DOM measured 4,304 characters and
+  2,260px of laid-out report at capture time).
+- **Ruled out, each by measurement rather than reasoning:** the entrance animation (identical output
+  captured at 30/150/600ms); `overflow` on the wrapper (3 pages, 120 rows either way); the app DOM's
+  size (`content-visibility` on `#root` made no difference to blankness); webfonts
+  (`document.fonts.ready` did not help); print-media emulation before capturing; settle delays up to
+  two seconds. The same window printed a correct 103KB PDF when driven from the main process a few
+  seconds later, which is what makes it a timing/context problem inside the print engine rather than
+  a document problem.
+- **Two real bugs were found and fixed along the way**, and they stay fixed: the preview state
+  survived a close, so reopening pointed the iframe at a **revoked blob URL** (`ERR_FILE_NOT_FOUND`)
+  while the report sat off-screen — the fresh capture was then taken of an off-screen document; and
+  `[data-no-print]` was being **overridden** by a later `.report-modal-scroll-wrapper` rule of equal
+  specificity, so the preview pane was never actually excluded from printing.
+- **Reverted** to the HTML preview. Kept: the `items-start` fix (without it the sheet is pinned to
+  one page and long reports spill onto the backdrop), the explicit `@page size: A4`, and every
+  page-level print fix from the audit. The printed output was correct the whole time — this only
+  ever affected what the preview showed.
+- **If it is picked up again**, the promising direction is rendering the PDF in a **dedicated
+  offscreen window** containing only the report: every isolated harness did exactly that and never
+  failed. The obstacle is getting the app's CSS and asset URLs into that window (Vite injects styles
+  as JS in dev, so there is no stylesheet to link).
+- **Files:** `frontend/src/components/reports/ReportPrintPreviewModal.tsx`,
+  `frontend/src/index.css`; `backend/src/ipc/print.ipc.js` added then removed.
+
+### 2026-08-12 — Print audit across all 18 reports; grand total was repeating on every page
+- **Why:** user reported "some issue when data expands to two pages". Audited every printable
+  report rather than the one that prompted it — 18 reports, all going through
+  `ReportPrintPreviewModal`.
+- **The defect: `<tfoot>` repeats on every printed page.** That is what
+  `display: table-footer-group` means in paged media, and `index.css` set it for every
+  `.excel-print-table`. Right for a running footer, wrong for what this app actually puts in one —
+  a grand total. On a two-page Cash Book, "Totals : …" printed at the foot of page 1 *and* page 2,
+  and the page-1 figure is not the total of page 1, on a document someone reconciles by hand.
+  **Affected the Cash Book and Bilty & Adda Updation** — the only two reports whose print table uses
+  a real `<tfoot>`; every other one already puts its total in `<tbody>` as the last row. Fixed
+  globally with `display: table-row-group`, since both have `<tfoot>` after `<tbody>` in DOM order
+  and no report here ever wants a repeating footer. The `<thead>` rule is the opposite case and
+  stays: column headings **must** repeat or page 2 is unlabelled numbers.
+- **`@page` now names the paper, not just the orientation** — `size: A4 portrait|landscape`. Without
+  a size the print dialog's default wins (Letter on US-configured Windows), silently reflowing a
+  report whose own toolbar says "A4 (210mm × 297mm)" and moving every page break.
+- **Audited and found sound:** headers repeat on page 2 (every table inside a print preview carries
+  `.excel-print-table` — checked by walking each `renderPrintable*` body); rows never split
+  mid-row; the table itself is free to break; `#root` is hidden so only the modal portal prints;
+  the preview's `transform: scale()` is reset for print, which the CSS itself flags as
+  "CRITICAL: transform scale breaks multi-page breaking"; no `overflow`, `max-height` or fixed
+  height anywhere inside a print body that could clip page 2.
+- **Sign-off block kept whole (done).** `components/reports/ReportFooter.tsx` exists but is **dead
+  code — nothing imports it**, so all 19 reports carry hand-rolled copies of the strip (three ruled
+  signature lines + the company/printed-at bar). The wrapper markup is byte-identical across every
+  file, which made a scripted edit safe: `className="report-signoff"` added to **18 signature rows
+  and 21 printed-at bars across 19 files**, plus one print rule giving them `break-inside: avoid`.
+  Proven rather than assumed — a straddle had to be hunted for, because a page break falls inside
+  the block only within a ~24px window, and stepping by whole table rows kept skipping it. Scanning
+  filler height by 8px found it: at 940px the block **split, TOPMARK landing on page 1 and the
+  signature labels on page 2**; with the class, both move to page 2 together.
+- **Letterhead logo halved.** Note it is in the report *header*, not the footer. It was 160–180px
+  across 20 reports — 180px is 47.6mm at 96dpi, about 17% of A4's 281mm usable height gone before a
+  single row of data. Now a consistent 90px (~24mm), a normal letterhead.
+- **Left alone:** `ReportFooter.tsx` is still unused. It is worth either adopting or deleting, but
+  its wording differs from the copies in use ("Checked By" vs "Audited By", "WENTOX SOLE ERP System
+  Report" vs "WENTOX FOOTWEAR DISTRIBUTION"), so switching to it would change what prints.
+- **The one the user actually saw: the preview sheet stopped at one page.** Screenshot showed the
+  last rows, the subtotal and the GRAND TOTAL rendering *outside* the white paper, on the dark
+  backdrop. Cause is one missing flex property, not print CSS: the scroll wrapper is a row-direction
+  `flex` with no `align-items`, so it defaults to **stretch**, which gives the sheet a DEFINITE
+  height instead of letting `minHeight: 297mm` grow with content. Measured in headless Chrome —
+  sheet **1123px (exactly one A4 page)** against **3186px** of content, so ~2000px hung off the
+  bottom. Adding `items-start` restores height:auto; sheet measures 3186px, nothing spills. Print
+  output was unaffected (the print rules already reset display/height), but the preview looked like
+  a broken document, which is how it was reported.
+- **Both print fixes verified on real PDFs**, not by reasoning — Chrome `--print-to-pdf` over a
+  reduction of the same markup and CSS:
+  | tfoot display | pages | "GRAND TOTAL" prints on | column headers on |
+  |---|---|---|---|
+  | `table-footer-group` (before) | 2 | **pages 1 and 2** | pages 1, 2 |
+  | `table-row-group` (after) | 2 | page 2 only | pages 1, 2 |
+  `pdfinfo` also confirms **594.96 × 841.92 pts = A4**, so the new explicit `size: A4` takes effect
+  and headers still repeat, which was the thing not to break.
+- **Files:** `frontend/src/index.css`, `frontend/src/components/reports/ReportPrintPreviewModal.tsx`
+
+### 2026-08-12 — Zoom in / out for the whole app
+- **What:** a zoom control in the header of every page — `−` / percentage / `+`, with the percentage
+  acting as reset-to-100% — plus Ctrl `+` / Ctrl `−` / Ctrl `0`. The level is remembered per machine
+  and a fresh install starts at **90%**. Asked for because the app renders too large on the client's
+  Windows box: Electron honours the OS display scaling (commonly 125% on Windows) and this UI is
+  built in fixed pixels, so less fits on screen than should.
+- **Native zoom, not CSS.** `webContents.setZoomFactor()` via a new `zoom:` channel, not a CSS
+  transform or the CSS `zoom` property. The app shell is `h-screen` + `overflow-hidden`; CSS zoom
+  scales content while `100vh` carries on measuring the *unzoomed* viewport, so the shell would grow
+  past the window and clip its own bottom edge. Native zoom leaves every layout calculation alone.
+- **The default menu had to go.** Electron's built-in menu carries `zoomIn`/`zoomOut`/`resetZoom` on
+  those exact accelerators. Left in place, one keypress fires both it and our handler: the window
+  moves two steps while the on-screen percentage moves one, and the label stops describing the
+  window. `main.js#buildMenu()` now installs a menu keeping Edit (Ctrl+C/V in inputs), Reload,
+  **Toggle DevTools** and Fullscreen, minus the zoom roles. The alternative — main sending zoom
+  changes back to the renderer — would have meant adding a listener to `preload.js`, the one thing
+  that file deliberately does not do.
+- **No `requireSession()` on `zoom:`,** unlike every other channel, and commented as deliberate: the
+  login screen has to be zoomable, and it is by definition reached before a session exists.
+- **One definition of the level.** `lib/zoom.ts` holds the ladder, the storage key, the 90% default
+  and `readStoredZoom()`; `main.tsx` re-applies it after `installApiBridge()` and **before** the
+  first render, because Electron's zoom factor does not survive a restart — without that, every
+  launch opens at 100% and visibly resizes a moment later. The main process returns the factor it
+  actually applied after its clamp, and that is what gets stored, so the label can never drift from
+  the window.
+- **Verified:** clamp holds (3 → 1.5, 0.1 → 0.5); the ladder keeps 90% and 100% as exact stops and
+  snaps stray values onto it (0.87 → 0.9, 1.4 → 1.5); the renderer→bridge→handler audit passes at
+  262 call sites with `zoom` present in `FEATURES`; all 44 IPC modules still required *and* called;
+  `tsc -b`, lint and the production build clean; suite 113/113. **Not visually verified** — that
+  needs the app running, and the print-at-non-100%-zoom check needs the Windows box.
+- **Files:** `backend/src/ipc/zoom.ipc.js` (new), `backend/src/ipc/index.js`,
+  `backend/electron/main.js`, `frontend/src/lib/zoom.ts` (new),
+  `frontend/src/components/ZoomControl.tsx` (new), `frontend/src/components/AppLayout.tsx`,
+  `frontend/src/lib/{api,ipcBridge}.ts`, `frontend/src/main.tsx`
+
 ### 2026-08-12 — The remaining QA lows, cleared in one pass
 - **post()/unpost() now re-check the restricted-account rule.** The guard only ran on create/update,
   so an ADMIN could leave a draft against a bank or Directors account and a USER could post it —

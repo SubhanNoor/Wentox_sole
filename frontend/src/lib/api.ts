@@ -1699,6 +1699,10 @@ declare global {
         remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
         confirm: (payload: { id: number }) => Promise<ApiResult<ExpenseRow>>;
       };
+      zoom: {
+        set: (payload: { factor: number }) => Promise<ApiResult<{ factor: number }>>;
+        get: () => Promise<ApiResult<{ factor: number }>>;
+      };
       updates: {
         // checkError: the lookup itself failed (private repo / draft release / missing
         // latest.yml / connection dropped mid-check) — distinct from "no update available".
@@ -1800,6 +1804,18 @@ export interface AlertRow {
   target_page: string;
   target_tab: string | null;
 }
+
+/**
+ * Window zoom (ZoomControl.tsx). Returns the factor the main process actually applied after its own
+ * clamp, so a caller storing the result can never drift out of step with the window.
+ *
+ * Outside Electron there is no bridge and nothing to zoom — resolving NO_BRIDGE keeps the control
+ * inert in a plain browser (`npm run dev` without Electron) rather than throwing.
+ */
+export const zoom = {
+  set: (factor: number) => window.api ? window.api.zoom.set({ factor }) : Promise.resolve(NO_BRIDGE),
+  get: () => window.api ? window.api.zoom.get() : Promise.resolve(NO_BRIDGE),
+};
 
 export const alerts = {
   list: () => window.api ? window.api.alerts.list() : Promise.resolve(NO_BRIDGE),
