@@ -1,8 +1,12 @@
-import React, { useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Printer, ZoomIn, ZoomOut, FileDown, FileSpreadsheet } from 'lucide-react';
+import { X, Printer, ZoomIn, ZoomOut, RotateCcw, FileDown, FileSpreadsheet } from 'lucide-react';
 import type { ReportOrientation } from '@/lib/reportConfig';
 import { exportToPDF } from '@/lib/export';
+import { paginateReportContent } from '@/lib/reportPagination';
+
+const PX_PER_MM = 96 / 25.4;
+const SHEET_PADDING_PX = 32; // matches the p-8 padding each sheet renders content with
 
 interface ReportPrintPreviewModalProps {
   isOpen: boolean;
@@ -13,23 +17,6 @@ interface ReportPrintPreviewModalProps {
   children: React.ReactNode;
 }
 
-/**
- * On-screen preview of a report. Printing goes through the browser's own engine (window.print()).
- *
- * A version of this rendered the genuine printed PDF here (webContents.printToPDF) so the preview
- * WOULD BE the print output. Reverted 2026-08-12: the print engine returned a blank document —
- * three A4 pages of correct height with nothing painted on them — when captured from this modal,
- * reproducibly in the real app and never once in isolation. Waiting on document.fonts.ready,
- * delaying up to two seconds, emulating print media first, and taking the app out of the rendering
- * tree all failed to make it deterministic, while the same window printed correctly when driven
- * from the main process moments later. Not worth more of the client's time for a preview, given the
- * PRINTED output was correct throughout.
- *
- * What the experiment left behind is worth keeping: the page-level bugs it exposed are fixed in
- * index.css — the grand total no longer repeats on every page, the sign-off block is kept whole,
- * A4 is declared explicitly — and each was verified against real printed PDFs rather than against
- * this preview.
- */
 export const ReportPrintPreviewModal: React.FC<ReportPrintPreviewModalProps> = ({
   isOpen,
   onClose,
@@ -39,13 +26,63 @@ export const ReportPrintPreviewModal: React.FC<ReportPrintPreviewModalProps> = (
   children,
 }) => {
   const [zoomLevel, setZoomLevel] = useState<number>(100);
-
-  if (!isOpen) return null;
+  const [pageCount, setPageCount] = useState<number>(1);
+  const masterRef = useRef<HTMLDivElement>(null);
+  const previewHostRef = useRef<HTMLDivElement>(null);
 
   const isLandscape = orientation === 'landscape';
 
+  // Re-slice the report into page-sized sheets whenever its content or orientation changes.
+  // Reads real, already-laid-out heights off the hidden master copy (masterRef) — the only
+  // reliable way to know where a page would actually break — then clones the resulting chunks
+  // into previewHostRef as plain DOM (not React-managed) so table headers can be repeated
+  // per-page without fighting React's reconciliation.
+  useLayoutEffect(() => {
+    const master = masterRef.current;
+    const host = previewHostRef.current;
+    if (!isOpen || !master || !host) return;
+
+    const pageHeightMm = isLandscape ? 210 : 297;
+    const pageHeightPx = pageHeightMm * PX_PER_MM - SHEET_PADDING_PX * 2;
+    const pages = paginateReportContent(master, pageHeightPx);
+
+    host.innerHTML = '';
+    pages.forEach((pageEl, idx) => {
+      const sheet = document.createElement('div');
+      sheet.className = 'report-preview-sheet shadow-2xl rounded-sm bg-white border border-slate-300 text-slate-900';
+      sheet.style.width = isLandscape ? '297mm' : '210mm';
+      sheet.style.minHeight = `${pageHeightMm}mm`;
+      sheet.style.padding = `${SHEET_PADDING_PX}px`;
+      sheet.style.boxSizing = 'border-box';
+      sheet.style.position = 'relative';
+      sheet.appendChild(pageEl);
+
+      const badge = document.createElement('div');
+      badge.className = 'report-preview-page-badge';
+      badge.textContent = `Page ${idx + 1} of ${pages.length}`;
+      badge.style.cssText =
+        'position:absolute;top:6px;right:10px;font-size:10px;font-family:monospace;color:#94a3b8;';
+      sheet.appendChild(badge);
+
+      host.appendChild(sheet);
+    });
+    setPageCount(pages.length);
+  }, [children, isLandscape, isOpen]);
+
+  if (!isOpen) return null;
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  const handleExportPDF = async () => {
+    const filename = `${title.replace(/[^a-z0-9]+/gi, '_')}.pdf`;
+    await exportToPDF(filename, { landscape: isLandscape });
+  };
+
   return createPortal(
     <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/90 backdrop-blur-sm animate-in fade-in duration-200 report-modal-container">
+      {/* Dynamic @page orientation rule */}
       <style>{`
         @media print {
           @page {
@@ -67,12 +104,14 @@ export const ReportPrintPreviewModal: React.FC<ReportPrintPreviewModalProps> = (
           <div>
             <h3 className="font-lora font-bold text-base text-white">{title}</h3>
             <p className="text-xs text-slate-400 font-mono">
-              Prints on A4 {isLandscape ? 'Landscape (297mm × 210mm)' : 'Portrait (210mm × 297mm)'} • Scale: {zoomLevel}%
+              Mode: A4 {isLandscape ? 'Landscape (297mm × 210mm)' : 'Portrait (210mm × 297mm)'} • Scale: {zoomLevel}% • {pageCount} page{pageCount === 1 ? '' : 's'}
             </p>
           </div>
         </div>
 
+        {/* Action Controls */}
         <div className="flex items-center gap-3">
+          {/* Zoom Controls */}
           <div className="flex items-center bg-slate-800 rounded-xl p-1 border border-slate-700">
             <button
               onClick={() => setZoomLevel(prev => Math.max(60, prev - 10))}
@@ -91,8 +130,16 @@ export const ReportPrintPreviewModal: React.FC<ReportPrintPreviewModalProps> = (
             >
               <ZoomIn size={16} />
             </button>
+            <button
+              onClick={() => setZoomLevel(100)}
+              title="Reset Zoom"
+              className="p-1.5 hover:bg-slate-700 rounded-lg text-slate-400 transition-colors border-l border-slate-700 ml-1"
+            >
+              <RotateCcw size={14} />
+            </button>
           </div>
 
+          {/* Export & Print Buttons */}
           {onExportExcel && (
             <button
               onClick={onExportExcel}
@@ -103,14 +150,14 @@ export const ReportPrintPreviewModal: React.FC<ReportPrintPreviewModalProps> = (
           )}
 
           <button
-            onClick={() => exportToPDF()}
+            onClick={handleExportPDF}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-all cursor-pointer shadow-xs"
           >
             <FileDown size={15} /> Export PDF
           </button>
 
           <button
-            onClick={() => window.print()}
+            onClick={handlePrint}
             className="flex items-center gap-1.5 px-4 py-1.5 bg-[var(--brand-gold)] hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-xl transition-all cursor-pointer shadow-md transform hover:scale-105"
           >
             <Printer size={16} /> Print Document
@@ -125,23 +172,28 @@ export const ReportPrintPreviewModal: React.FC<ReportPrintPreviewModalProps> = (
         </div>
       </div>
 
-      {/* Paper preview. items-start is load-bearing: without it this row-direction flex container
-          defaults to align-items: stretch, which hands the sheet a DEFINITE height — the height of
-          this scroll area — so `minHeight: 297mm` never gets to grow past one screen and a long
-          report spills its rows off the bottom of the paper onto the backdrop. */}
-      <div className="flex-1 overflow-auto p-8 flex justify-center items-start bg-slate-950/70 report-modal-scroll-wrapper">
+      {/* Hidden master copy: the real, single-flow content. Invisible on screen — it only exists
+          so (a) the pagination effect can measure real laid-out heights off it, and (b) the
+          browser's print engine (window.print / printToPDF) has one continuous document to
+          paginate for real, which is the source of truth for the actual printed/exported output.
+          The visible preview below is a screen-only approximation built from it. */}
+      <div
+        ref={masterRef}
+        className="report-modal-print-source p-8 text-slate-900 report-modal-paper"
+        style={{ width: isLandscape ? '297mm' : '210mm' }}
+        id="report-modal-print-content"
+      >
+        {children}
+      </div>
+
+      {/* Interactive multi-page preview: one stacked sheet per page, built by the pagination
+          effect above so a report that overflows one page visually shows as separate pages. */}
+      <div className="flex-1 overflow-auto p-8 flex justify-center bg-slate-950/70 report-modal-scroll-wrapper" data-no-print>
         <div
-          className="transition-transform duration-200 origin-top shadow-2xl rounded-sm bg-white border border-slate-300 p-8 text-slate-900 report-modal-paper"
-          style={{
-            transform: `scale(${zoomLevel / 100})`,
-            width: isLandscape ? '297mm' : '210mm',
-            minHeight: isLandscape ? '210mm' : '297mm',
-            marginBottom: zoomLevel > 100 ? `${(zoomLevel - 100) * 4}px` : '0px',
-          }}
-          id="report-modal-print-content"
-        >
-          {children}
-        </div>
+          ref={previewHostRef}
+          className="flex flex-col items-center gap-6 transition-transform duration-200 origin-top"
+          style={{ transform: `scale(${zoomLevel / 100})` }}
+        />
       </div>
     </div>,
     document.body

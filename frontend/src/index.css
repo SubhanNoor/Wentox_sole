@@ -608,8 +608,29 @@ body {
   }
 }
 
+/* The report modal's hidden master copy (see ReportPrintPreviewModal.tsx): invisible on screen —
+   the visible multi-page preview is built from it — but must become the actual visible content
+   when printing/exporting, since it's the single continuous document the browser's print engine
+   paginates for real.
+   Positioned off-screen rather than display:none on purpose: the pagination code measures real
+   row/element heights off this element via getBoundingClientRect(), which always returns 0 for
+   anything inside a display:none subtree — that was silently forcing every row to a fake 24px
+   fallback height and packing 2-3x too many rows onto each preview page. Being merely off-screen
+   (still laid out, just not painted where anyone can see it) keeps those measurements real. */
+.report-modal-print-source {
+  position: absolute;
+  top: 0;
+  left: -99999px;
+  pointer-events: none;
+}
+
 /* Print styles */
 @media print {
+  .report-modal-print-source {
+    position: static !important;
+    left: auto !important;
+  }
+
   /* 1. Hide non-printable app UI elements */
   [data-no-print],
   .no-print,
@@ -654,14 +675,14 @@ body {
     z-index: 99999 !important;
   }
 
+  /* This wrapper now holds only the screen-only multi-page preview (the real print/PDF source is
+     .report-modal-print-source, a sibling). It also carries [data-no-print], but that rule and
+     this one are the same specificity — without an explicit display:none here, whichever rule
+     comes later in the stylesheet wins regardless of [data-no-print], which is exactly what caused
+     the preview (and its "Page X of Y" badges) to print a second, duplicate copy of the report
+     alongside the real content. */
   .report-modal-scroll-wrapper {
-    padding: 0 !important;
-    margin: 0 !important;
-    background: #ffffff !important;
-    display: block !important;
-    overflow: visible !important;
-    width: 100% !important;
-    height: auto !important;
+    display: none !important;
   }
 
   /* 5. Paper content box reset - CRITICAL: transform scale breaks multi-page breaking */
@@ -687,16 +708,29 @@ body {
     font-family: 'Calibri', 'Segoe UI', 'Arial', sans-serif !important;
     color: #000000 !important;
     background: #ffffff !important;
-    border: 2px solid #000000 !important;
+    /* No outer border here on purpose: a single border wrapping the whole report doesn't repeat
+       cleanly per page when content spans multiple pages (Chrome only draws it around the first
+       page's fragment), which is what made 2-page prints look broken. Each table already draws
+       its own border below, so the report doesn't need an outer frame. */
     padding: 12px !important;
     box-sizing: border-box !important;
     overflow: visible !important;
   }
-  
+
   .excel-print-header {
     border-bottom: 2px solid #000000 !important;
     margin-bottom: 15px !important;
     padding-bottom: 10px !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* Avoid splitting small summary/info blocks across a page boundary. */
+  .excel-grid-info {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    page-break-after: avoid !important;
+    break-after: avoid !important;
   }
   
   .excel-print-table {
