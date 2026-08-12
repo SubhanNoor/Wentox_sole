@@ -330,9 +330,6 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                             style={{ color: c.closing_balance > 0 ? '#047857' : '#e11d48' }}
                           >
                             {formatCurrency(Math.abs(c.closing_balance))}
-                            <span className="ml-1.5 text-[10px] font-semibold uppercase">
-                              {c.closing_balance > 0 ? 'Dr' : 'Cr'}
-                            </span>
                           </span>
                         )
                       ),

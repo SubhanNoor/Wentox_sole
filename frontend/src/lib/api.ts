@@ -1776,6 +1776,7 @@ declare global {
         'overall-trail': (payload?: { as_of_date?: string }) => Promise<ApiResult<OverallTrailResult>>;
         'overall-search': (payload?: { search?: string; entity_type?: OverallEntityType }) => Promise<ApiResult<OverallDirectoryRow[]>>;
         'overall-search-ledger': (payload: { entity_type: OverallEntityType; ba_id: number | null } & DateRangeFilters) => Promise<ApiResult<OverallSearchLedgerResult>>;
+        'export-pdf': (payload?: { filename?: string; landscape?: boolean }) => Promise<ApiResult<{ canceled: boolean; filePath?: string }>>;
       };
     };
   }

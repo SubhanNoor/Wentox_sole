@@ -840,7 +840,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 >
                   <Printer size={16} /> Print Return
                 </button>
-                <button onClick={exportToPDF} className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5">
+                <button onClick={() => exportToPDF()} className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5">
                   <FileDown size={16} /> Export PDF
                 </button>
                 <button

@@ -1,5 +1,6 @@
 // IPC layer: registers ipcMain.handle channels for reports — no business logic, no SQL.
-const { ipcMain } = require('electron');
+const { ipcMain, dialog, BrowserWindow } = require('electron');
+const fs = require('fs/promises');
 const service = require('../services/reports.service');
 const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
@@ -83,5 +84,28 @@ module.exports = function register() {
   ipcMain.handle('reports:overall-search-ledger', wrap((payload) => {
     const session = requireSession();
     return service.overallSearchLedger(payload.entity_type, payload.ba_id, payload, session);
+  }));
+
+  // Not routed through services/repositories on purpose: this is pure Electron main-process
+  // orchestration (save dialog + webContents.printToPDF), not business logic or SQL, so there's
+  // nothing for a reports.service.js layer to add here.
+  ipcMain.handle('reports:export-pdf', wrap(async (payload, event) => {
+    requireSession();
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: 'Export Report as PDF',
+      defaultPath: (payload && payload.filename) || 'report.pdf',
+      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    });
+    if (canceled || !filePath) return { canceled: true };
+
+    const pdfBuffer = await win.webContents.printToPDF({
+      landscape: !!(payload && payload.landscape),
+      printBackground: true,
+      pageSize: 'A4',
+      margins: { marginType: 'custom', top: 0.3, bottom: 0.3, left: 0.3, right: 0.3 },
+    });
+    await fs.writeFile(filePath, pdfBuffer);
+    return { canceled: false, filePath };
   }));
 };
