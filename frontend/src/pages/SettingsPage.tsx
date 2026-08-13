@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
-import { Save, Lock, User, RefreshCw, Download, CheckCircle2, AlertTriangle, ShieldCheck, Cpu, Sparkles, Server, DatabaseBackup } from 'lucide-react';
+import { Save, Lock, User, RefreshCw, Download, CheckCircle2, AlertTriangle, ShieldCheck, Cpu, Sparkles, Server, DatabaseBackup, HardDrive, FolderOpen } from 'lucide-react';
 
 type SettingsTab = 'credentials' | 'backup' | 'updates';
 type UpdateStatus = 'idle' | 'checking' | 'no-internet' | 'error' | 'up-to-date' | 'update-available' | 'downloading' | 'installed';
@@ -156,6 +156,76 @@ export default function SettingsPage() {
     setBackupMessage('Backup updated — it now matches the live database.');
   };
 
+  // External-drive backup state. Separate from the mirror above in every way that matters: it's a
+  // single .bak file on a drive that comes and goes, written only when someone asks for it.
+  const [externalFolder, setExternalFolder] = useState<string | null>(null);
+  const [externalConnected, setExternalConnected] = useState(false);
+  const [externalLastAt, setExternalLastAt] = useState<string | null>(null);
+  const [externalSize, setExternalSize] = useState<number | null>(null);
+  const [externalRunning, setExternalRunning] = useState(false);
+  const [externalMessage, setExternalMessage] = useState('');
+  const [externalError, setExternalError] = useState('');
+
+  // Reads the saved folder and whether the drive is plugged in right now, so the card can say so
+  // before anything is pressed rather than only as the outcome of a failed attempt. Called when the
+  // Backup tab is opened and after every action — not from an effect, since the tab is only ever
+  // reached by clicking it (admins land on Credentials, non-admins never see this tab at all).
+  const refreshBackupStatus = async () => {
+    if (!window.api?.backup) return;
+    const res = await window.api.backup.status();
+    if (!res.ok || !res.data) return;
+    setBackupLastSync(res.data.lastSyncAt ? new Date(res.data.lastSyncAt).toLocaleString() : null);
+    setExternalFolder(res.data.externalFolder);
+    setExternalConnected(res.data.externalDriveConnected);
+    setExternalLastAt(res.data.lastExternalAt ? new Date(res.data.lastExternalAt).toLocaleString() : null);
+    setExternalSize(res.data.lastExternalSizeBytes);
+  };
+
+  const handleChooseExternalFolder = async () => {
+    setExternalMessage('');
+    setExternalError('');
+    if (!window.api?.backup) {
+      setExternalMessage('Preview mode — choosing a folder works only in the desktop app.');
+      return;
+    }
+    const res = await window.api.backup.chooseExternalFolder();
+    if (!res.ok) {
+      setExternalError(res.error?.message || 'Could not open the folder picker.');
+      return;
+    }
+    if (res.data?.canceled) return;
+    await refreshBackupStatus();
+    setExternalMessage(`Backup folder set to ${res.data?.folder}.`);
+  };
+
+  const handleBackupToExternal = async () => {
+    setExternalRunning(true);
+    setExternalMessage('');
+    setExternalError('');
+
+    if (!window.api?.backup) {
+      setTimeout(() => {
+        setExternalRunning(false);
+        setExternalMessage('Preview mode — backup runs only in the desktop app.');
+      }, 800);
+      return;
+    }
+
+    const res = await window.api.backup.runExternal();
+    setExternalRunning(false);
+    await refreshBackupStatus();
+    if (!res.ok) {
+      // backup.service.js turns every known failure into a readable ApiError, so this message is
+      // the real reason (drive unplugged, folder blocked, disk full) rather than "Internal error".
+      setExternalError(res.error?.message || 'Could not back up to the external drive.');
+      return;
+    }
+    setExternalMessage('Backup written to the external drive and verified. It is safe to unplug.');
+  };
+
+  const formatSize = (bytes: number | null) =>
+    bytes == null ? '' : `${(bytes / 1024 / 1024).toFixed(0)} MB`;
+
   return (
     <AppLayout pageTitle="Settings">
       <div className="mx-auto" style={{ maxWidth: 900 }}>
@@ -172,7 +242,7 @@ export default function SettingsPage() {
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab('backup')}
+              onClick={() => { setActiveTab('backup'); void refreshBackupStatus(); }}
               className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${activeTab === 'backup' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <DatabaseBackup size={14} /> Backup
@@ -313,6 +383,81 @@ export default function SettingsPage() {
               <p className="text-[11px] text-slate-400 font-medium mt-5 leading-relaxed">
                 Every update copies the database in full, so the backup always ends up an exact match of
                 the live one — including every new row, edit and deletion since the last update.
+              </p>
+            </div>
+
+            {/* External drive — the only copy that survives this PC. Deliberately manual: the drive
+                isn't expected to be plugged in most of the time, so nothing here runs on a timer. */}
+            <div className="card-white p-6 md:p-8 bg-white border max-w-xl mx-auto mt-6">
+              <div className="border-b pb-4 mb-6">
+                <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
+                  <HardDrive size={20} className="text-[#B08D57]" /> Backup to External Drive
+                </h3>
+                <p className="text-xs text-slate-500 font-medium">
+                  Writes a complete copy of the database to a USB or external hard drive, so there's a
+                  copy that survives even if this computer is lost or its disk fails. Plug the drive in,
+                  then press the button — it replaces the previous backup on the drive each time.
+                </p>
+              </div>
+
+              {externalMessage && (
+                <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{externalMessage}</div>
+              )}
+              {externalError && (
+                <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{externalError}</div>
+              )}
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 mb-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-400 font-bold mb-1">
+                      Backup folder
+                    </div>
+                    <div className="text-xs font-mono text-slate-700 break-all">
+                      {externalFolder || 'Not set — choose a folder on your external drive'}
+                    </div>
+                    {externalFolder && (
+                      <div className={`text-[11px] font-semibold mt-1.5 flex items-center gap-1.5 ${externalConnected ? 'text-emerald-600' : 'text-amber-600'}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${externalConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                        {externalConnected ? 'Drive connected' : 'Drive not connected'}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleChooseExternalFolder}
+                    className="shrink-0 flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    <FolderOpen size={14} /> {externalFolder ? 'Change' : 'Choose'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="text-xs text-slate-600 font-medium">
+                  Last backup to drive:{' '}
+                  <span className="font-semibold text-slate-800">
+                    {externalLastAt || 'Not yet run'}
+                    {externalLastAt && externalSize ? ` (${formatSize(externalSize)})` : ''}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleBackupToExternal}
+                  disabled={externalRunning || !externalFolder}
+                  title={!externalFolder ? 'Choose a backup folder first' : undefined}
+                  className="btn-gold flex items-center justify-center gap-2 px-6 py-2.5 text-xs font-semibold disabled:opacity-60 cursor-pointer w-full sm:w-auto"
+                >
+                  <HardDrive size={15} className={externalRunning ? 'animate-pulse' : ''} />
+                  {externalRunning ? 'Backing Up…' : 'Back Up to Drive Now'}
+                </button>
+              </div>
+
+              <p className="text-[11px] text-slate-400 font-medium mt-5 leading-relaxed">
+                The backup is checked after writing to confirm the drive holds a complete, readable copy.
+                A file called RESTORE-INSTRUCTIONS.txt is saved next to it explaining how to restore the
+                database from it. Note this drive holds one copy only — the newest — so it protects
+                against losing the computer, not against a mistake made earlier and noticed later.
               </p>
             </div>
           </div>

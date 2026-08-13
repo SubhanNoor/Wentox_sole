@@ -67,6 +67,18 @@ function setBackupDbFolder(folderPath) {
   return writeAppConfig({ backupDbFolder: folderPath });
 }
 
+// Where the "Back Up to External Drive" button writes its .bak. Distinct from backupDbFolder above:
+// that one holds a LIVE mirror database SQL Server keeps attached, so it must always be present —
+// this one is a plain file on a drive that is expected to come and go, and is chosen from Settings
+// rather than by the installer (the drive usually isn't plugged in at install time).
+function getExternalBackupFolder() {
+  return readAppConfig().externalBackupFolder || null;
+}
+
+function setExternalBackupFolder(folderPath) {
+  return writeAppConfig({ externalBackupFolder: folderPath });
+}
+
 // Main DB connection — only present when the NSIS installer's DB-connection page wrote it (a
 // packaged install with no `.env`). Returns null on a dev checkout, where config/index.js falls
 // back to `.env` instead.
@@ -83,5 +95,6 @@ function setDbConnection({ server, port, database, user, password }) {
 module.exports = {
   getConfigPath, readAppConfig, writeAppConfig,
   getBackupDbFolder, setBackupDbFolder,
+  getExternalBackupFolder, setExternalBackupFolder,
   getDbConnection, setDbConnection,
 };

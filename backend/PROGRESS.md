@@ -23,6 +23,60 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Backing the database up to an external drive
+
+### 2026-08-13 — External-drive backup, and a staging path the mirror could never have written on Windows (Milestone 9, follow-up)
+- **What:** a second backup target — a full `.bak` written straight onto a USB/external drive from
+  Settings → Backup. This is the first copy that survives the PC itself: the main database and the
+  live mirror both sit on the same disk, on the same SQL Server instance, so a dead disk took both.
+  **One file, always overwritten, manual only** — decided explicitly with the user. The drive is not
+  expected to be plugged in most of the time, so nothing here runs on a timer, and there is no dated
+  history (so a mistake noticed a week later is still unrecoverable — stated, accepted, not solved).
+- **How:** SQL Server writes to the drive directly (`BACKUP DATABASE ... TO DISK` with
+  `INIT, FORMAT, CHECKSUM`) rather than the app backing up locally and copying the file across —
+  one ~400MB write instead of two, and no staging folder that both the SQL Server service account
+  and the logged-in user must be able to write. `RESTORE VERIFYONLY` runs immediately after, so
+  success means the file **on the drive** was read back and is complete, not merely that a write
+  returned no error. No `WITH COMPRESSION`: unavailable in SQL Server Express, and including it
+  fails the statement outright.
+- **The error messages are the feature.** `ipc/wrap.js` flattens anything that isn't an `ApiError`
+  into `"Internal error"`, which for this is useless — "Operating system error 5 (Access is denied)"
+  is the whole diagnosis. Known failures are mapped to their own codes
+  (`EXTERNAL_NOT_CONFIGURED`, `EXTERNAL_DRIVE_MISSING`, `EXTERNAL_ACCESS_DENIED`,
+  `EXTERNAL_DISK_FULL`) and everything else keeps the raw SQL Server text. **Gotcha found by
+  testing, not by reading:** a failed `BACKUP` raises *two* errors — the real cause, then
+  "BACKUP DATABASE is terminating abnormally." mssql puts the cause in `err.precedingErrors` and the
+  useless one in `err.message`, so the first implementation reported the useless one and the
+  access-denied case fell through to the generic branch. The folder's existence is checked with
+  `fs.existsSync` *before* starting, so an unplugged drive fails instantly rather than after minutes.
+- **Separate latent bug, fixed in the same pass:** `runSyncNow()` staged the mirror's `.bak` through
+  `os.tmpdir()`. On Windows that is the *user's* `%TEMP%`, and SQL Server Express is installed here
+  with no `/SQLSVCACCOUNT` (`build/setup-sqlserver.ps1:168`), so it runs as the virtual account
+  `NT Service\MSSQLSERVER` — which has no rights there. **The existing mirror backup would almost
+  certainly have failed on the client's machine**, and could not have been caught in this sandbox
+  because SQL Server runs in a container and writes to its own `/tmp`. It now stages inside the
+  mirror's own folder, which SQL Server demonstrably can write: the mirror's `.mdf`/`.ldf` live
+  there. Still unproven on real Windows — see below.
+- **`RESTORE-INSTRUCTIONS.txt`** is written next to the `.bak`, containing the actual
+  `RESTORE FILELISTONLY` / `RESTORE DATABASE ... WITH MOVE` commands for that exact file. The drive
+  has to explain itself: whoever holds it in an emergency may have neither this app nor this repo.
+- **Verified:** 17/17 on a purpose-built functional run — the `.bak` lands on the drive,
+  `VERIFYONLY` passes, and it **restores into a scratch database with all six checked tables
+  matching** (`sale_bills` 61, `sale_bill_items` 65, `ledger_entries` 695, `customers` 96,
+  `cheques` 52, `users` 2). All three failure paths produce their own readable message and never
+  `"Internal error"`; two simultaneous presses share one run. The mirror was re-tested after the
+  staging change and still syncs exactly. Full suite 113/113 on a database built from nothing,
+  IPC audit clean (267 channels), `tsc` clean, lint unchanged at the 88/10 baseline, production
+  build clean.
+- **Still to do on Windows:** the permission question is only genuinely answered there — plug in a
+  real drive, run it, unplug and re-run for the "drive not found" message, and restore the `.bak` on
+  a different PC. That same run is what finally confirms the mirror too.
+- **Files:** `backend/src/services/backup.service.js`, `backend/src/ipc/backup.ipc.js`,
+  `backend/src/config/appConfig.js`, `frontend/src/lib/api.ts`,
+  `frontend/src/pages/SettingsPage.tsx`
+
+---
+
 ## QA pass over the whole app, and the cheque-deposit hole it found
 
 ### 2026-08-10 — Full-app QA run; deposited cheques never reached the bank (Milestone 9, verification)

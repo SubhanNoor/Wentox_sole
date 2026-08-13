@@ -1713,7 +1713,22 @@ declare global {
         // backup.ipc.js's runNow resolves service.sync(), which has no explicit return value —
         // wrap.js yields { ok: true, data: undefined } on success, not a real payload.
         runNow: () => Promise<ApiResult<undefined>>;
-        status: () => Promise<ApiResult<{ lastSyncAt: string | null; lastSyncError: string | null; configured: boolean }>>;
+        status: () => Promise<ApiResult<{
+          lastSyncAt: string | null;
+          lastSyncError: string | null;
+          configured: boolean;
+          externalFolder: string | null;
+          externalDriveConnected: boolean;
+          lastExternalAt: string | null;
+          lastExternalError: string | null;
+          lastExternalSizeBytes: number | null;
+        }>>;
+        // Writes a full .bak straight to the external drive, replacing the previous one. Rejects
+        // with a specific code the UI can trust to be readable — EXTERNAL_NOT_CONFIGURED,
+        // EXTERNAL_DRIVE_MISSING, EXTERNAL_ACCESS_DENIED, EXTERNAL_DISK_FULL — never 'INTERNAL'.
+        runExternal: () => Promise<ApiResult<{ path: string; sizeBytes: number | null }>>;
+        // Opens the native folder picker and remembers the choice; { canceled: true } if dismissed.
+        chooseExternalFolder: () => Promise<ApiResult<{ canceled: boolean; folder?: string }>>;
       };
       alerts: {
         list: () => Promise<ApiResult<AlertRow[]>>;
