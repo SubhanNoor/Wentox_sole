@@ -459,18 +459,28 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     if (articleId != null) await fetchVariants(articleId);
   };
 
-  const handleVariantChange = (idx: number, variantIdStr: string) => {
+  // SR-01: prefer the rate this customer actually paid last time for this variant over the
+  // article's current predefined sale_price — only relevant here (not the bill-number prefill
+  // path above, which already copies each line's original rate straight off the source bill).
+  const handleVariantChange = async (idx: number, variantIdStr: string) => {
     const item = items[idx];
     if (item.articleId == null) return;
     const variantId = variantIdStr ? Number(variantIdStr) : null;
     const variant = variantsByArticle[item.articleId]?.find(v => v.variant_id === variantId);
     const product = products.find(p => p.article_id === item.articleId);
+
+    let rate = product?.sale_price ?? item.rate;
+    if (variantId != null && customerId) {
+      const res = await api.saleBills.lastSoldRate(Number(customerId), variantId);
+      if (res.ok && res.data != null) rate = res.data;
+    }
+
     setItems(prev => prev.map((it, i) => i === idx ? recalcItem({
       ...it,
       variantId,
       label: variant ? `${product?.name || ''} — ${variant.color}` : (product?.name || ''),
       packing: variant?.packing ?? product?.packing ?? it.packing,
-      rate: product?.sale_price ?? it.rate
+      rate
     }) : it));
   };
 

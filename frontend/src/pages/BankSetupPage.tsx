@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
@@ -9,6 +9,7 @@ import DataListTable from '@/components/DataListTable';
 export default function BankSetupPage() {
   const { state } = useApp();
 
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [search, setSearch] = useState('');
@@ -75,6 +76,20 @@ export default function BankSetupPage() {
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setSelectedId(null);
+    setName(''); setAccountNo(''); setBranch('');
+    setOpeningBalance(''); setOpeningDate(new Date().toISOString().split('T')[0]);
+    setErrorMsg('');
+  };
+
+  // G-06: after a successful create, the window stays open and clears — ready for the next bank
+  // account — instead of closing. G-04: openingDate is deliberately NOT reset here; it stays
+  // selected for the rest of this window's session and only resets (to today) on handleCloseModal.
+  const resetForNextBank = () => {
+    setSelectedId(null);
+    setName(''); setAccountNo(''); setBranch('');
+    setOpeningBalance('');
+    setErrorMsg('');
+    requestAnimationFrame(() => nameInputRef.current?.focus());
   };
 
   const save = async (e: React.FormEvent) => {
@@ -114,7 +129,7 @@ export default function BankSetupPage() {
         return setErrorMsg(res.error.message);
       }
       flash('Bank account added. It can now be selected on payments and receipts.');
-      handleCloseModal();
+      resetForNextBank();
       loadBanks(showInactive);
     }
   };
@@ -141,7 +156,7 @@ export default function BankSetupPage() {
     setReactivatePrompt(null);
     if (!res.ok) return fail('Failed to reactivate: ' + res.error.message);
     flash('Existing bank account reactivated.');
-    handleCloseModal();
+    resetForNextBank();
     setShowInactive(false);
     loadBanks(false);
   };
@@ -334,7 +349,7 @@ export default function BankSetupPage() {
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">
                       Account Name <span className="text-rose-500">*</span>
                     </label>
-                    <input type="text" value={name} onChange={e => setName(e.target.value)}
+                    <input ref={nameInputRef} type="text" value={name} onChange={e => setName(e.target.value)}
                       placeholder="e.g. Bank Alfalah A/C - 0124" className="soleria-input w-full font-semibold" autoFocus />
                   </div>
 

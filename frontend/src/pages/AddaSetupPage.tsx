@@ -1,18 +1,17 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, X, Truck, MapPin } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
-import SearchableSelect from '@/components/SearchableSelect';
-import { addas as addasApi, listRegions, listCities, type AddaRow, type RegionRow, type CityRow } from '@/lib/api';
+import { addas as addasApi, listCities, type AddaRow, type CityRow } from '@/lib/api';
 
 export default function AddaSetupPage() {
   const [addas, setAddas] = useState<AddaRow[]>([]);
-  const [regions, setRegions] = useState<RegionRow[]>([]);
   const [cities, setCities] = useState<CityRow[]>([]);
   const [addaSearch, setAddaSearch] = useState('');
 
   // Modal State
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedAddaId, setSelectedAddaId] = useState<number | null>(null);
 
@@ -22,29 +21,30 @@ export default function AddaSetupPage() {
 
   // Form State
   const [addaName, setAddaName] = useState('');
-  const [regionId, setRegionId] = useState('');
-  const [cityId, setCityId] = useState('');
+  // AD-01: Route — every city (from Cities setup) this adda serves, checklist-style.
+  const [routeCityIds, setRouteCityIds] = useState<number[]>([]);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
   const loadData = useCallback(async () => {
-    const [aRes, rRes, cRes] = await Promise.all([
+    const [aRes, cRes] = await Promise.all([
       addasApi.list({ includeInactive: true }),
-      listRegions(),
       listCities(),
     ]);
     if (aRes.ok) setAddas(aRes.data);
-    if (rRes.ok) setRegions(rRes.data);
     if (cRes.ok) setCities(cRes.data);
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  const toggleRouteCity = (cityId: number) => {
+    setRouteCityIds(prev => prev.includes(cityId) ? prev.filter(id => id !== cityId) : [...prev, cityId]);
+  };
+
   const handleOpenAddModal = () => {
     setSelectedAddaId(null);
     setAddaName('');
-    setRegionId('');
-    setCityId('');
+    setRouteCityIds([]);
     setErrorMsg('');
     setIsModalOpen(true);
   };
@@ -52,8 +52,7 @@ export default function AddaSetupPage() {
   const handleOpenEditModal = (adda: AddaRow) => {
     setSelectedAddaId(adda.adda_id);
     setAddaName(adda.name);
-    setRegionId(String(adda.region_id));
-    setCityId(adda.city_id ? String(adda.city_id) : '');
+    setRouteCityIds(adda.route_city_ids);
     setErrorMsg('');
     setIsModalOpen(true);
   };
@@ -62,8 +61,7 @@ export default function AddaSetupPage() {
     setIsModalOpen(false);
     setSelectedAddaId(null);
     setAddaName('');
-    setRegionId('');
-    setCityId('');
+    setRouteCityIds([]);
     setErrorMsg('');
   };
 
@@ -73,14 +71,13 @@ export default function AddaSetupPage() {
     if (!typed) {
       return setErrorMsg('Adda name is required.');
     }
-    if (!regionId) {
-      return setErrorMsg('Region selection is required.');
+    if (routeCityIds.length === 0) {
+      return setErrorMsg('Select at least one city for this adda\'s route.');
     }
 
     const payload = {
       name: typed,
-      region_id: Number(regionId),
-      city_id: cityId ? Number(cityId) : undefined,
+      city_ids: routeCityIds,
     };
 
     if (selectedAddaId) {
@@ -90,6 +87,7 @@ export default function AddaSetupPage() {
       }
       setSuccessMsg('Adda details updated successfully.');
       await loadData();
+      handleCloseModal();
     } else {
       const res = await addasApi.create(payload);
       if (!res.ok) {
@@ -103,10 +101,20 @@ export default function AddaSetupPage() {
       }
       setSuccessMsg('New Transport Adda registered successfully.');
       await loadData();
+      resetForNextAdda();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
-    handleCloseModal();
+  };
+
+  // G-06: after a successful create, the window stays open and clears — ready for the next adda —
+  // instead of closing.
+  const resetForNextAdda = () => {
+    setSelectedAddaId(null);
+    setAddaName('');
+    setRouteCityIds([]);
+    setErrorMsg('');
+    requestAnimationFrame(() => nameInputRef.current?.focus());
   };
 
   const handleActivateDuplicate = async (id: string) => {
@@ -118,19 +126,23 @@ export default function AddaSetupPage() {
     }
     setIsDupModalOpen(false);
     setDupMatch(null);
+    resetForNextAdda();
   };
 
+  // AD-02: searching an adda's own name works as before; searching a city/route name now also
+  // matches — "search a route, see every adda serving it" — since route_city_names already
+  // carries every city this adda serves as one comma-joined string.
   const filteredAddas = useMemo(() => {
     const activeAddas = addas.filter(a => a.is_active);
     if (!addaSearch.trim()) return activeAddas;
     const q = addaSearch.toLowerCase();
     return activeAddas.filter(a =>
       a.name.toLowerCase().includes(q) ||
-      String(a.adda_id).includes(q)
+      String(a.adda_id).includes(q) ||
+      a.route_city_names.toLowerCase().includes(q)
     );
   }, [addas, addaSearch]);
 
-  const activeRegions = useMemo(() => regions.filter(r => r.is_active), [regions]);
   const activeCities = useMemo(() => cities.filter(c => c.is_active), [cities]);
 
   return (
@@ -166,7 +178,7 @@ export default function AddaSetupPage() {
             <div className="relative flex-1 max-w-md">
               <input
                 type="text"
-                placeholder="Search adda by name, code..."
+                placeholder="Search adda by name, code, or route city..."
                 value={addaSearch}
                 onChange={e => setAddaSearch(e.target.value)}
                 className="soleria-input w-full py-2 text-xs pr-10 font-semibold"
@@ -203,19 +215,12 @@ export default function AddaSetupPage() {
                 render: adda => <span className="font-semibold text-slate-900">{adda.name}</span>,
               },
               {
-                key: 'region',
-                header: 'Region',
-                render: adda => (
-                  <span className="text-slate-600 font-medium">{adda.region_name || 'N/A'}</span>
-                ),
-              },
-              {
-                key: 'city',
-                header: 'City',
+                key: 'route',
+                header: 'Route',
                 render: adda => (
                   <span className="text-slate-600 font-medium flex items-center gap-1">
-                    <MapPin size={12} className="text-slate-400" />
-                    {adda.city_name || 'N/A'}
+                    <MapPin size={12} className="text-slate-400 shrink-0" />
+                    {adda.route_city_names || <span className="text-slate-400 italic">No route set</span>}
                   </span>
                 ),
               },
@@ -268,6 +273,7 @@ export default function AddaSetupPage() {
                     Transport Adda Name <span className="text-rose-500">*</span>
                   </label>
                   <input
+                    ref={nameInputRef}
                     type="text"
                     value={addaName}
                     onChange={e => setAddaName(e.target.value)}
@@ -277,33 +283,36 @@ export default function AddaSetupPage() {
                   />
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      Region <span className="text-rose-500">*</span>
-                    </label>
-                    <SearchableSelect
-                      options={activeRegions.map(r => ({ value: String(r.region_id), label: r.name }))}
-                      value={regionId}
-                      onChange={setRegionId}
-                      placeholder="Select Region..."
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                      City Location
-                    </label>
-                    <SearchableSelect
-                      options={[
-                        { value: '', label: 'Select City (Optional)' },
-                        ...activeCities.map(c => ({ value: String(c.city_id), label: c.name }))
-                      ]}
-                      value={cityId}
-                      onChange={setCityId}
-                      placeholder="Select City..."
-                    />
-                  </div>
+                {/* AD-01: Route — check every city (from Cities setup) this adda serves. */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                    Route (Cities Served) <span className="text-rose-500">*</span>
+                  </label>
+                  {activeCities.length === 0 ? (
+                    <div className="soleria-input text-slate-400 text-sm flex items-center">
+                      No cities set up yet — add one under City Creation first.
+                    </div>
+                  ) : (
+                    <div className="border rounded-xl max-h-48 overflow-y-auto p-2 grid grid-cols-2 sm:grid-cols-3 gap-1" style={{ borderColor: 'var(--border-color)' }}>
+                      {activeCities.map(c => (
+                        <label
+                          key={c.city_id}
+                          className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs font-medium text-slate-700"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={routeCityIds.includes(c.city_id)}
+                            onChange={() => toggleRouteCity(c.city_id)}
+                            className="rounded border-slate-300"
+                          />
+                          {c.name}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  {routeCityIds.length > 0 && (
+                    <p className="text-[10px] text-slate-400 mt-1">{routeCityIds.length} {routeCityIds.length === 1 ? 'city' : 'cities'} selected</p>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">

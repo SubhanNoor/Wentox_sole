@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
@@ -11,7 +11,16 @@ export default function SettingsPage() {
   const { state, dispatch } = useApp();
   const isAdmin = state.currentUserRole === 'Admin';
 
-  const [activeTab, setActiveTab] = useState<SettingsTab>(isAdmin ? 'credentials' : 'updates');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => {
+    if (state.currentTab === 'backup' || state.currentTab === 'updates') return state.currentTab;
+    return isAdmin ? 'credentials' : 'updates';
+  });
+
+  useEffect(() => {
+    if (state.currentTab === 'credentials' || state.currentTab === 'backup' || state.currentTab === 'updates') {
+      setActiveTab(state.currentTab);
+    }
+  }, [state.currentTab]);
 
   // Credentials State
   const [currentPassword, setCurrentPassword] = useState('');
@@ -227,7 +236,7 @@ export default function SettingsPage() {
     bytes == null ? '' : `${(bytes / 1024 / 1024).toFixed(0)} MB`;
 
   return (
-    <AppLayout pageTitle="Settings">
+    <AppLayout pageTitle="Settings" subTabTitle={activeTab === 'backup' ? 'Backup' : activeTab === 'updates' ? 'Updates' : 'Credentials'} subTabId={activeTab}>
       <div className="mx-auto" style={{ maxWidth: 900 }}>
 
         {/* Subpage Pill-Tabs — non-admins only ever get Check for Updates, no credentials tab at all */}

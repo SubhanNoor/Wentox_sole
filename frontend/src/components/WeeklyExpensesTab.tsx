@@ -3,7 +3,7 @@ import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { ExpenseRow, BusinessAccountRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
-import { Calendar, Search, ArrowRight, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check } from 'lucide-react';
+import { Calendar, Search, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check } from 'lucide-react';
 
 function isChequeMode(mode: ExpenseRow['payment_mode']): boolean {
   return mode === 'CHEQUE_ENDORSED' || mode === 'CHEQUE_ISSUED';
@@ -264,55 +264,58 @@ export default function WeeklyExpensesTab() {
         </div>
       </div>
 
-      {/* Business Account Cards Grid Standard */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {bizCardsData.length === 0 ? (
-          <div className="col-span-full card-white p-12 bg-white border border-slate-200 text-center flex flex-col items-center justify-center text-slate-400 rounded-2xl">
-            <Calendar size={48} className="text-slate-300 mb-3" />
-            <p className="font-lora text-lg font-semibold text-slate-500 mb-1">No Weekly Expenses Found</p>
-            <p className="text-sm max-w-sm">No expenses were logged for this week matching your filters.</p>
-          </div>
-        ) : (
-          bizCardsData.map(data => {
-            return (
-              <div
-                key={data.businessAccount.ba_id}
-                onClick={() => setSelectedBizId(data.businessAccount.ba_id)}
-                className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
-              >
-                <div>
-                  <div className="flex items-start justify-between gap-2 mb-1">
-                    <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
-                      {data.businessAccount.name}
-                    </h4>
-                    {data.businessAccount.ac_code === '210001' && (
-                      <span className="text-[10px] font-semibold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-300 uppercase tracking-wider shrink-0">
-                        Vendor Payment
+      {/* PN-01/RJ-05: business account records as table rows, consistent with the rest of the app. */}
+      <div className="card-white overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border-color)' }}>
+        <table className="w-full text-left border-collapse text-sm">
+          <thead>
+            <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+              <th className="p-3 pl-4">Account</th>
+              <th className="p-3 text-center">Records</th>
+              <th className="p-3 text-right pr-6">Total Expense</th>
+            </tr>
+          </thead>
+          <tbody>
+            {bizCardsData.length === 0 ? (
+              <tr>
+                <td colSpan={3} className="text-center p-12 text-slate-400">
+                  <Calendar size={40} className="text-slate-300 mb-2 mx-auto" />
+                  <p className="font-lora text-base font-semibold text-slate-500 mb-1">No Weekly Expenses Found</p>
+                  <p className="text-xs max-w-sm mx-auto">No expenses were logged for this week matching your filters.</p>
+                </td>
+              </tr>
+            ) : (
+              bizCardsData.map(data => {
+                return (
+                  <tr
+                    key={data.businessAccount.ba_id}
+                    onClick={() => setSelectedBizId(data.businessAccount.ba_id)}
+                    className="border-b hover:bg-slate-50/60 cursor-pointer transition-colors"
+                    style={{ borderColor: 'var(--border-table)' }}
+                  >
+                    <td className="p-3 pl-4">
+                      <div className="flex items-center gap-2">
+                        <span className="font-lora font-bold text-slate-900">{data.businessAccount.name}</span>
+                        {data.businessAccount.ac_code === '210001' && (
+                          <span className="text-[10px] font-semibold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-300 uppercase tracking-wider shrink-0">
+                            Vendor Payment
+                          </span>
+                        )}
+                      </div>
+                      <div className="font-mono text-[11px] text-slate-400">Code: {data.businessAccount.code}</div>
+                    </td>
+                    <td className="p-3 text-center">
+                      <span className="inline-flex items-center gap-1.5 bg-rose-50 text-rose-900 px-2.5 py-1 rounded-full text-xs font-semibold border border-rose-200/80">
+                        <FileText size={13} className="text-rose-600" />
+                        {data.expenses.length} {data.expenses.length === 1 ? 'Record' : 'Records'}
                       </span>
-                    )}
-                  </div>
-
-                  <div className="font-mono text-xs text-slate-400 mb-3">Code: {data.businessAccount.code}</div>
-
-                  <div className="text-xs font-semibold text-slate-700 flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-100 mt-2">
-                    <span>Total Expense:</span>
-                    <span className="font-mono font-bold text-rose-700">{formatCurrency(data.totalAmount)}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
-                  <div className="flex items-center gap-1.5 bg-rose-50 text-rose-900 px-2.5 py-1 rounded-full text-xs font-semibold border border-rose-200/80">
-                    <FileText size={13} className="text-rose-600" />
-                    <span>{data.expenses.length} {data.expenses.length === 1 ? 'Record' : 'Records'}</span>
-                  </div>
-                  <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
-                    View Records <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
-                  </span>
-                </div>
-              </div>
-            );
-          })
-        )}
+                    </td>
+                    <td className="p-3 text-right pr-6 font-mono font-bold text-rose-700">{formatCurrency(data.totalAmount)}</td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );

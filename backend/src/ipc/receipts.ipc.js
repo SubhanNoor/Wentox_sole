@@ -1,6 +1,7 @@
 // IPC layer: registers ipcMain.handle channels for receipts — no business logic, no SQL.
 const { ipcMain } = require('electron');
 const service = require('../services/receipts.service');
+const authService = require('../services/auth.service');
 const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
 
@@ -26,8 +27,10 @@ module.exports = function register() {
     return service.update(payload.id, payload, session.userId, session);
   }));
 
-  ipcMain.handle('receipts:remove', wrap((payload) => {
-    requireSession();
+  // RJ-06: password required — a deletion is irreversible and must be deliberate.
+  ipcMain.handle('receipts:remove', wrap(async (payload) => {
+    const session = requireSession();
+    await authService.verifyPassword(session.userId, payload.password);
     return service.remove(payload.id);
   }));
 

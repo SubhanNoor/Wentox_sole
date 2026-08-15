@@ -492,7 +492,7 @@ export default function ChequesTab() {
                                 onClick={() => openDispose(row.cheque)}
                                 className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 transition-colors"
                               >
-                                Dispose
+                                Issue
                               </button>
                             )}
                             {!receiptPosted && (
@@ -569,7 +569,7 @@ export default function ChequesTab() {
       {disposingRow && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
           <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
-            <h3 className="font-lora font-bold text-lg text-slate-800 mb-1">Dispose of Cheque</h3>
+            <h3 className="font-lora font-bold text-lg text-slate-800 mb-1">Issue Cheque</h3>
             <p className="text-xs text-slate-500 mb-4">
               {disposingRow.cheque.cheque_no} &middot; {disposingRow.customerName} &middot; {formatCurrency(disposingRow.cheque.receipt_amount ?? 0)}
             </p>

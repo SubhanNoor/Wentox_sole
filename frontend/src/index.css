@@ -522,12 +522,12 @@ body {
   box-sizing: border-box;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
+  scrollbar-width: auto;
   scrollbar-color: var(--brand-gold) transparent;
 }
 
 .card-white::-webkit-scrollbar {
-  height: 6px;
+  height: 14px;
 }
 
 .card-white::-webkit-scrollbar-track {

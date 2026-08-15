@@ -72,6 +72,7 @@ async function confirm(draftId, userId) {
 
   const lines = draft.items.map((item) => ({
     material_id: item.material_id,
+    material_name: item.material_name,
     unit: item.unit,
     quantity: item.quantity,
     weight: item.weight,

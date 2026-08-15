@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, X, Globe } from 'lucide-react';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
@@ -10,6 +10,7 @@ export default function RegionSetupPage() {
   const [regionSearch, setRegionSearch] = useState('');
 
   // Modal State
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedRegionId, setSelectedRegionId] = useState<number | null>(null);
 
@@ -50,6 +51,15 @@ export default function RegionSetupPage() {
     setErrorMsg('');
   };
 
+  // G-06: after a successful create, the window stays open and clears — ready for the next
+  // region — instead of closing.
+  const resetForNextRegion = () => {
+    setSelectedRegionId(null);
+    setRegionName('');
+    setErrorMsg('');
+    requestAnimationFrame(() => nameInputRef.current?.focus());
+  };
+
   const handleSaveRegion = async (e: React.FormEvent) => {
     e.preventDefault();
     const typed = regionName.trim();
@@ -64,6 +74,7 @@ export default function RegionSetupPage() {
       }
       setSuccessMsg('Region details updated successfully.');
       await loadData();
+      handleCloseModal();
     } else {
       const res = await regionsApi.create({ name: typed });
       if (!res.ok) {
@@ -77,10 +88,10 @@ export default function RegionSetupPage() {
       }
       setSuccessMsg('New region registered successfully.');
       await loadData();
+      resetForNextRegion();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
-    handleCloseModal();
   };
 
   const handleActivateDuplicate = async (id: string) => {
@@ -92,7 +103,7 @@ export default function RegionSetupPage() {
     }
     setIsDupModalOpen(false);
     setDupMatch(null);
-    handleCloseModal();
+    resetForNextRegion();
   };
 
 
@@ -229,6 +240,7 @@ export default function RegionSetupPage() {
                     Region Name <span className="text-rose-500">*</span>
                   </label>
                   <input
+                    ref={nameInputRef}
                     type="text"
                     value={regionName}
                     onChange={e => setRegionName(e.target.value)}

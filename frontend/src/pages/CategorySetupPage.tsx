@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Edit2, Search, Settings, Save, X, RotateCcw } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
@@ -9,6 +9,7 @@ export default function CategorySetupPage() {
   const [categorySearch, setCategorySearch] = useState('');
 
   // Modal State
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedCatId, setSelectedCatId] = useState<number | null>(null);
 
@@ -58,6 +59,15 @@ export default function CategorySetupPage() {
     setErrorCat('');
   };
 
+  // G-06: after a successful create, the window stays open and clears — ready for the next
+  // category — instead of closing.
+  const resetForNextCategory = () => {
+    setSelectedCatId(null);
+    setCatName('');
+    setErrorCat('');
+    requestAnimationFrame(() => nameInputRef.current?.focus());
+  };
+
   const handleSaveCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     const typed = catName.trim();
@@ -67,6 +77,7 @@ export default function CategorySetupPage() {
       const res = await api.categories.update(selectedCatId, { name: typed });
       if (!res.ok) return setErrorCat(res.error.message);
       flash('Category details updated successfully.');
+      handleCloseModal();
     } else {
       const res = await api.categories.create({ name: typed });
       if (!res.ok) {
@@ -77,9 +88,9 @@ export default function CategorySetupPage() {
         return setErrorCat(res.error.message);
       }
       flash('New product category registered successfully.');
+      resetForNextCategory();
     }
 
-    handleCloseModal();
     loadAll();
   };
 
@@ -89,7 +100,7 @@ export default function CategorySetupPage() {
     setReactivatePrompt(null);
     if (!res.ok) return setErrorCat('Failed to reactivate: ' + res.error.message);
     flash('Existing category reactivated.');
-    handleCloseModal();
+    resetForNextCategory();
     loadAll();
   };
 
@@ -251,6 +262,7 @@ export default function CategorySetupPage() {
                     Category Name <span className="text-rose-500">*</span>
                   </label>
                   <input
+                    ref={nameInputRef}
                     type="text"
                     value={catName}
                     onChange={e => setCatName(e.target.value)}

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, RotateCcw, X, Landmark } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
@@ -32,6 +32,7 @@ export default function BusinessAcSetupPage() {
   const [cities, setCities] = useState<CityRow[]>([]);
 
   // Modal State
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   // Multi-account entry: one parent chart account chosen once, several accounts saved together.
   // Same shape as ProductSetupPage's batch mode, and the same per-row error contract — the backend
@@ -107,7 +108,10 @@ export default function BusinessAcSetupPage() {
       return setErrorMsg(res.error.message);
     }
     setSuccessMsg(`${res.data.length} business accounts registered successfully.`);
-    handleCloseModal();
+    // G-06: stays open, ready for another batch — controlId (the shared parent chart account) and
+    // batchMode itself are deliberately kept, only the row data resets.
+    setBatchRows([emptyBatchRow()]);
+    setBatchErrors({});
     await loadData();
     setTimeout(() => setSuccessMsg(''), 3000);
   };
@@ -188,6 +192,12 @@ export default function BusinessAcSetupPage() {
         return setErrorMsg(res.error.message);
       }
       setSuccessMsg('Business Account registered successfully.');
+      // G-06: stays open, cleared, ready for another — G-04: openingDate deliberately kept.
+      setName('');
+      setRegionId('');
+      setCityId('');
+      setOpeningBalance('');
+      requestAnimationFrame(() => nameInputRef.current?.focus());
       await loadData();
     }
 
@@ -471,6 +481,7 @@ export default function BusinessAcSetupPage() {
                     Account Title / Name <span className="text-rose-500">*</span>
                   </label>
                   <input
+                    ref={nameInputRef}
                     type="text"
                     value={name}
                     onChange={e => setName(e.target.value)}

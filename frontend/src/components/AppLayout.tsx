@@ -2,9 +2,9 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
   ShoppingCart, Receipt, Package, FileText, Layers,
-  Settings, LogOut, Menu, X, ChevronDown, MapPin, Home,
+  Settings, LogOut, Menu, ChevronDown, MapPin, Home,
   Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search, HardHat,
-  BadgeDollarSign, ArrowLeftRight, Landmark, Pin, BookmarkPlus, Trash2, GripHorizontal, ArrowDownToLine, Warehouse, RotateCcw,
+  BadgeDollarSign, ArrowLeftRight, Landmark, Pin, BookmarkPlus, GripHorizontal, ArrowDownToLine, Warehouse, RotateCcw,
   UserCog, UserSearch
 } from 'lucide-react';
 import type { NavPage } from '@/types';
@@ -92,12 +92,13 @@ const navSections: NavSection[] = [
 const DEFAULT_SHORTCUTS: QuickShortcut[] = [
   { id: 'default_sale-bill', label: 'Sale Bill', page: 'sale-bill' },
   { id: 'default_purchase-entry', label: 'Purchase', page: 'purchase-entry' },
-  { id: 'default_receipts-jamma', label: 'Receipts (Jamma)', page: 'receipts-jamma' },
-  { id: 'default_expenses-entry', label: 'Expenses (Kharch)', page: 'expenses-entry' },
+  { id: 'default_receipts-jamma', label: 'Receipts', page: 'receipts-jamma' },
+  { id: 'default_expenses-entry', label: 'Payments', page: 'expenses-entry' },
   { id: 'default_cash-book', label: 'Cash Book', page: 'reports', tab: 'cash-book' },
-  { id: 'default_business-ledger', label: 'Business Ledger', page: 'reports', tab: 'business-ledger' },
-  { id: 'default_report-stock', label: 'Current Stock', page: 'report-stock' },
+  { id: 'default_business-ledger', label: 'Ledger', page: 'reports', tab: 'business-ledger' },
+  { id: 'default_report-stock', label: 'Stock', page: 'report-stock' },
   { id: 'default_search-customer', label: 'Search Customer', page: 'search-customer' },
+  { id: 'default_backup', label: 'Backup', page: 'settings', tab: 'backup' },
 ];
 
 // Where the bar is stored, and which generation of DEFAULT_SHORTCUTS has been published to this
@@ -109,7 +110,7 @@ const DEFAULT_SHORTCUTS: QuickShortcut[] = [
 // it should only be bumped when the defaults themselves change.
 const SHORTCUTS_STORAGE_KEY = 'wento_quick_shortcuts_clean_v3';
 const SHORTCUTS_SEED_KEY = 'wento_quick_shortcuts_seed';
-const SHORTCUTS_SEED_VERSION = '2026-08-10';
+const SHORTCUTS_SEED_VERSION = '2026-08-15';
 
 function loadShortcuts(): QuickShortcut[] {
   if (localStorage.getItem(SHORTCUTS_SEED_KEY) !== SHORTCUTS_SEED_VERSION) {
@@ -158,9 +159,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
   const [isDragging, setIsDragging] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
 
-  // Confirmation modal state for shortcut deletion
-  const [shortcutToDelete, setShortcutToDelete] = useState<QuickShortcut | null>(null);
-
   const popupRef = useRef<HTMLDivElement>(null);
 
   const navRefCallback = (node: HTMLElement | null) => {
@@ -182,6 +180,116 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     }
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
+  }, []);
+
+  // G-09: Alt+V triggers whichever "Show Print Preview" button is on the current page/tab.
+  // Every report page names its own preview button identically, so rather than threading a
+  // shortcut prop through every one of them, this finds the visible one by its label — offsetParent
+  // is null for anything display:none (a hidden tab's own preview button), which keeps this from
+  // firing a preview that isn't actually on screen.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!e.altKey || e.key.toLowerCase() !== 'v') return;
+      const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('button'));
+      const target = buttons.find(
+        (b) => !b.disabled && b.offsetParent !== null && b.textContent?.trim().includes('Show Print Preview')
+      );
+      if (target) {
+        e.preventDefault();
+        target.click();
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  // G-01: auto-focus the first field of any creation window (every one of them is a <form
+  // onSubmit>, so watching for a <form> being added to the DOM covers every modal/page without
+  // threading a ref through each one) the moment it opens.
+  useEffect(() => {
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (!(node instanceof HTMLElement)) continue;
+          const form = node.matches('form') ? node : node.querySelector('form');
+          if (!form) continue;
+          const first = form.querySelector<HTMLElement>(
+            'input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled), button[data-field-nav]:not(:disabled)'
+          );
+          first?.focus();
+          return;
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+
+  // G-01: Enter moves to the next field and, on the last field, clicks the form's primary action
+  // (Create/Save/Confirm — every creation form in this app marks it button[type="submit"] and
+  // marks every other button in the form type="button", so this is a safe, unambiguous lookup).
+  // Left/Right move between fields too, but only where there's no native meaning to preserve:
+  // a text input only hops once the cursor is already at that edge (so typing/editing is
+  // untouched), and number inputs/native <select>s are left alone entirely — Chrome throws
+  // reading selectionStart on a number input, and both types already bind Left/Right/Up/Down to
+  // their own native behavior. Up/Down are deliberately not handled here: native <select>
+  // elements already use them to change value, and the app's own dropdown (SearchableSelect)
+  // implements its own Up/Down to move the highlighted option.
+  useEffect(() => {
+    // [data-field-nav] picks up SearchableSelect's own trigger button (the app's custom dropdown,
+    // used in place of a native <select> almost everywhere) without pulling in every other button
+    // on the form (delete-row icons, Cancel, etc.).
+    const FIELD_SELECTOR = 'input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled), button[data-field-nav]:not(:disabled)';
+
+    function fieldsIn(form: HTMLFormElement): HTMLElement[] {
+      return Array.from(form.querySelectorAll<HTMLElement>(FIELD_SELECTOR)).filter(
+        (el) => el.offsetParent !== null
+      );
+    }
+
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.tagName === 'TEXTAREA') return; // Enter/arrows edit multi-line text as normal
+      const form = target.closest('form');
+      if (!form) return;
+
+      if (e.key === 'Enter') {
+        const fields = fieldsIn(form);
+        const idx = fields.indexOf(target);
+        if (idx === -1) return;
+        e.preventDefault();
+        if (idx < fields.length - 1) {
+          fields[idx + 1].focus();
+        } else {
+          form.querySelector<HTMLButtonElement>('button[type="submit"]:not(:disabled)')?.click();
+        }
+        return;
+      }
+
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        if (target instanceof HTMLInputElement && ['text', 'search', 'tel', 'password'].includes(target.type)) {
+          const atStart = target.selectionStart === 0 && target.selectionEnd === 0;
+          const atEnd = target.selectionStart === target.value.length && target.selectionEnd === target.value.length;
+          if (e.key === 'ArrowRight' && !atEnd) return;
+          if (e.key === 'ArrowLeft' && !atStart) return;
+        } else if (target instanceof HTMLInputElement || target.tagName === 'SELECT') {
+          return; // number inputs and native <select> keep their own native Left/Right behavior
+        }
+
+        const fields = fieldsIn(form);
+        const idx = fields.indexOf(target);
+        if (idx === -1) return;
+        const nextIdx = e.key === 'ArrowRight' ? idx + 1 : idx - 1;
+        if (nextIdx >= 0 && nextIdx < fields.length) {
+          e.preventDefault();
+          fields[nextIdx].focus();
+        }
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
   function navigate(page: string, tab?: string) {
@@ -236,14 +344,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     } catch (err) {
       console.error('Error handling dropped shortcut', err);
     }
-  };
-
-  const confirmDeleteShortcut = () => {
-    if (!shortcutToDelete) return;
-    const updated = shortcuts.filter(s => s.id !== shortcutToDelete.id);
-    setShortcuts(updated);
-    localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(updated));
-    setShortcutToDelete(null);
   };
 
   return (
@@ -571,17 +671,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
                       >
                         {s.label}
                       </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setShortcutToDelete(s);
-                        }}
-                        title="Remove shortcut"
-                        className="p-0.5 rounded-full hover:bg-rose-100 hover:text-rose-600 text-slate-400 transition-colors ml-0.5"
-                      >
-                        <X size={12} />
-                      </button>
                     </div>
                   );
                 })}
@@ -613,53 +702,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
           </div>
         </main>
       </div>
-
-      {/* Confirmation Dialog Modal for Deleting Shortcut */}
-      {shortcutToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-sm w-full overflow-hidden">
-            <div className="bg-[#111c2a] p-4 text-white flex items-center justify-between border-b border-[#B08D57]/40">
-              <div className="flex items-center gap-2">
-                <Trash2 size={18} className="text-rose-400" />
-                <h3 className="font-lora font-bold text-sm text-[#B08D57]">Remove Quick Shortcut?</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShortcutToDelete(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="p-5 text-xs font-inter text-slate-600">
-              <p className="leading-relaxed">
-                Are you sure you want to remove <span className="font-bold text-slate-900 font-lora">"{shortcutToDelete.label}"</span> from your top quick access menu bar?
-              </p>
-              <p className="mt-2 text-[11px] text-slate-400">
-                You can easily re-pin it anytime using drag-and-drop or the <span className="font-semibold text-amber-800">+ Pin Page to Bar</span> button.
-              </p>
-
-              <div className="flex items-center justify-end gap-2 mt-6">
-                <button
-                  type="button"
-                  onClick={() => setShortcutToDelete(null)}
-                  className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-all"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={confirmDeleteShortcut}
-                  className="px-4 py-1.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition-all shadow-xs"
-                >
-                  Confirm Remove
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
     </div>
   );

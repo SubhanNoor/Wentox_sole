@@ -5,11 +5,12 @@ import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow, SettlementRow, SettlementCreateInput } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
-import { Save, Search, Edit } from 'lucide-react';
+import { Save, Edit, Trash2 } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
-import AccountBalancePanel from '@/components/AccountBalancePanel';
+import AccountBalanceTooltip from '@/components/AccountBalanceTooltip';
+import PasswordPromptModal from '@/components/PasswordPromptModal';
 
 // Cheque disposal (deposit/endorse/bounce/return) moved to the consolidated Cheque page's
 // Disposal tab — see ChequePage.tsx. This page keeps only receipt entry/records.
@@ -122,9 +123,20 @@ export default function ReceiptsPage() {
   const [docKind, setDocKind] = useState<'RECEIPT' | 'SETTLEMENT'>('RECEIPT');
   const [settlements, setSettlements] = useState<SettlementRow[]>([]);
 
-  // Dropdown search state
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [accountSearchQuery, setAccountSearchQuery] = useState('');
+  // RJ-02: previewed account while arrow-keying through the dropdown, for the live balance tooltip.
+  const [previewBaId, setPreviewBaId] = useState<number | null>(null);
+  const [previewEndorseBaId, setPreviewEndorseBaId] = useState<number | null>(null);
+
+  // RJ-06: delete a receipt entry, password-gated.
+  const [deleteTarget, setDeleteTarget] = useState<ReceiptRow | null>(null);
+  const handleDeleteConfirmed = async (password: string) => {
+    if (!deleteTarget) return;
+    const res = await api.receipts.remove(deleteTarget.receipt_id, password);
+    setDeleteTarget(null);
+    if (!res.ok) return fail('Failed to delete: ' + res.error.message);
+    flash('Receipt deleted.');
+    refreshReceipts();
+  };
 
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
@@ -152,27 +164,28 @@ export default function ReceiptsPage() {
     [selectedAccount, customers]
   );
 
-  // Dropdown list filter — same Region-then-City ordering the customer picker used; business
-  // accounts carry region_id/city_id of their own, so nothing is lost by widening the list.
-  const filteredDropdownAccounts = useMemo(() => {
+  // Dropdown list — same Region-then-City ordering the customer picker used; business accounts
+  // carry region_id/city_id of their own, so nothing is lost by widening the list. ac_name is
+  // folded into the label so SearchableSelect's own built-in search still matches it.
+  const accountOptions = useMemo(() => {
     const regionName = (id: number | null) => id == null ? '' : regions.find(r => r.region_id === id)?.name || '';
     const cityName = (id: number | null) => id == null ? '' : cities.find(ct => ct.city_id === id)?.name || '';
-    const query = accountSearchQuery.trim().toLowerCase();
-    const list = query
-      ? businessAccounts.filter(b =>
-          b.name.toLowerCase().includes(query) ||
-          b.code.toLowerCase().includes(query) ||
-          (b.ac_name || '').toLowerCase().includes(query)
-        )
-      : businessAccounts;
-    return [...list].sort((a, b) => {
-      const regionCmp = regionName(a.region_id).localeCompare(regionName(b.region_id));
-      if (regionCmp !== 0) return regionCmp;
-      const cityCmp = cityName(a.city_id).localeCompare(cityName(b.city_id));
-      if (cityCmp !== 0) return cityCmp;
-      return a.name.localeCompare(b.name);
-    });
-  }, [accountSearchQuery, businessAccounts, regions, cities]);
+    return [...businessAccounts]
+      .sort((a, b) => {
+        const regionCmp = regionName(a.region_id).localeCompare(regionName(b.region_id));
+        if (regionCmp !== 0) return regionCmp;
+        const cityCmp = cityName(a.city_id).localeCompare(cityName(b.city_id));
+        if (cityCmp !== 0) return cityCmp;
+        return a.name.localeCompare(b.name);
+      })
+      .map(b => {
+        const place = [regionName(b.region_id), cityName(b.city_id)].filter(Boolean).join(' — ');
+        return {
+          value: String(b.ba_id),
+          label: `${b.name} (${b.code})${place ? ` — ${place}` : ''}${b.ac_name ? ` — ${b.ac_name}` : ''}`,
+        };
+      });
+  }, [businessAccounts, regions, cities]);
 
   const bankOptions = useMemo(
     () => banks.filter(b => b.is_active).map(b => ({ value: String(b.bank_id), label: b.name })),
@@ -185,7 +198,7 @@ export default function ReceiptsPage() {
     setReceiptStatus('DRAFT');
     setDate(today());
     setBaId('');
-    setAccountSearchQuery('');
+    setPreviewBaId(null);
     setIsEndorsed(false);
     setEndorseToBaId('');
     setDocKind('RECEIPT');
@@ -636,90 +649,41 @@ export default function ReceiptsPage() {
                   />
                 </div>
 
-                {/* Account Dropdown — any business account, not only customers */}
-                <div className="relative">
+                {/* RJ-02: account picker + a small live balance tooltip next to it, updating as
+                    the user arrow-keys/hovers through the dropdown (falls back to the committed
+                    account once closed). Replaces the old below-the-field balance panel. */}
+                <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
                     Select Account <span className="text-red-500 font-bold">*</span>
                   </label>
-                  <div
-                    onClick={() => !isViewMode && setIsDropdownOpen(!isDropdownOpen)}
-                    className={`soleria-input flex justify-between items-center font-semibold bg-white ${isViewMode ? '' : 'cursor-pointer'}`}
-                  >
-                    <span className={selectedAccount ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
-                      {selectedAccount ? `${selectedAccount.name} (${selectedAccount.code})` : 'Search account...'}
-                    </span>
-                    {!isViewMode && <span className="text-xs text-slate-400">▼</span>}
-                  </div>
-
-                  {isDropdownOpen && !isViewMode && (
-                    <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
-                      <div className="p-2 border-b sticky top-0 bg-white">
-                        <div className="relative">
-                          <input
-                            type="text"
-                            placeholder="Type to search..."
-                            value={accountSearchQuery}
-                            onChange={e => setAccountSearchQuery(e.target.value)}
-                            className="w-full py-1.5 pl-8 pr-3 text-xs border rounded-md font-semibold"
-                            autoFocus
-                          />
-                          <Search size={14} className="absolute left-2.5 top-2.5 text-slate-400" />
-                        </div>
-                      </div>
-                      <div className="py-1">
-                        {filteredDropdownAccounts.length === 0 ? (
-                          <div className="p-3 text-xs text-slate-400 text-center font-medium">No matching accounts</div>
-                        ) : (
-                          filteredDropdownAccounts.map(b => {
-                            const regName = b.region_id != null ? regions.find(r => r.region_id === b.region_id)?.name || '' : '';
-                            const ctName = b.city_id != null ? cities.find(ct => ct.city_id === b.city_id)?.name || '' : '';
-                            // The parent chart account is what tells a customer from a director or a
-                            // bank, so it doubles as the row's secondary label when there is no city.
-                            const place = [regName, ctName].filter(Boolean).join(' — ');
-                            return (
-                              <div
-                                key={b.ba_id}
-                                onClick={() => {
-                                  setBaId(String(b.ba_id));
-                                  setIsDropdownOpen(false);
-                                  setAccountSearchQuery('');
-                                }}
-                                className="px-3 py-2 hover:bg-slate-50 cursor-pointer flex items-center justify-between text-xs gap-3"
-                              >
-                                <div className="min-w-0">
-                                  <span className="font-semibold text-slate-800">{b.name}</span>
-                                  <span className="text-slate-400 text-[10px] ml-2">({b.code})</span>
-                                </div>
-                                <div className="text-[10px] text-slate-500 font-medium text-right shrink-0">
-                                  {place || b.ac_name || ''}
-                                </div>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <SearchableSelect
+                        options={accountOptions}
+                        value={baId}
+                        onChange={setBaId}
+                        onHighlightChange={val => setPreviewBaId(val ? Number(val) : null)}
+                        placeholder="Search account..."
+                        disabled={isViewMode}
+                      />
                     </div>
-                  )}
+                    <AccountBalanceTooltip baId={previewBaId ?? (baId ? Number(baId) : null)} refreshKey={balanceRefreshKey} />
+                  </div>
                 </div>
 
-                {/* A receipt CREDITS the selected account, so both lines push the balance down.
-                    Commission only exists for a customer account (§7), hence the guard. */}
-                <AccountBalancePanel
-                  baId={baId ? Number(baId) : null}
-                  refreshKey={balanceRefreshKey}
-                  lines={[
-                    { label: isEndorsed ? 'Settled by them' : 'This receipt', delta: -amount },
-                    { label: 'Commission', delta: !isEndorsed && selectedCustomer ? -commission : 0 },
-                  ]}
-                />
-                {/* An endorsement DEBITS the account being paid — opposite direction to the payer. */}
-                {isEndorsed && endorseToBaId && (
-                  <AccountBalancePanel
-                    baId={Number(endorseToBaId)}
-                    refreshKey={balanceRefreshKey}
-                    lines={[{ label: 'Settled to them', delta: amount }]}
+                {/* RJ-01: Remarks moved ahead of Amount so it's filled in first. */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
+                  <textarea
+                    value={remarks}
+                    disabled={isViewMode}
+                    onChange={e => setRemarks(e.target.value)}
+                    placeholder="Enter remarks..."
+                    className="soleria-input"
+                    rows={2}
+                    style={{ resize: 'none' }}
                   />
-                )}
+                </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Amount Received (PKR)</label>
@@ -813,14 +777,20 @@ export default function ReceiptsPage() {
                         Pay To <span className="text-red-500 font-bold">*</span>
                         <span className="text-slate-400 font-normal normal-case ml-1">— whoever you owe</span>
                       </label>
-                      <SearchableSelect
-                        options={businessAccounts.filter(a => String(a.ba_id) !== baId)
-                          .map(a => ({ value: String(a.ba_id), label: `${a.name} (${a.code})` }))}
-                        value={endorseToBaId}
-                        onChange={setEndorseToBaId}
-                        placeholder="Search account to pay..."
-                        disabled={isViewMode}
-                      />
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 min-w-0">
+                          <SearchableSelect
+                            options={businessAccounts.filter(a => String(a.ba_id) !== baId)
+                              .map(a => ({ value: String(a.ba_id), label: `${a.name} (${a.code})` }))}
+                            value={endorseToBaId}
+                            onChange={setEndorseToBaId}
+                            onHighlightChange={val => setPreviewEndorseBaId(val ? Number(val) : null)}
+                            placeholder="Search account to pay..."
+                            disabled={isViewMode}
+                          />
+                        </div>
+                        <AccountBalanceTooltip baId={previewEndorseBaId ?? (endorseToBaId ? Number(endorseToBaId) : null)} refreshKey={balanceRefreshKey} />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -914,27 +884,18 @@ export default function ReceiptsPage() {
                   </div>
                 )}
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
-                  <textarea
-                    value={remarks}
-                    disabled={isViewMode}
-                    onChange={e => setRemarks(e.target.value)}
-                    placeholder="Enter remarks..."
-                    className="soleria-input"
-                    rows={2}
-                    style={{ resize: 'none' }}
-                  />
-                </div>
-
+                {/* RJ-04: sticky so the post/save action stays reachable without scrolling back
+                    up or down a long form. */}
                 {!isViewMode && (
-                  <div className="flex gap-3 mt-2">
-                    <button
-                      type="submit"
-                      className="btn-gold w-full flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
-                    >
-                      <Save size={16} /> {mode === 'edit' ? 'Update Receipt' : 'Save Receipt'}
-                    </button>
+                  <div className="sticky bottom-0 z-10 -mx-6 md:-mx-8 px-6 md:px-8 pt-3 pb-4 mt-2 bg-white border-t" style={{ borderColor: 'var(--border-color)' }}>
+                    <div className="flex gap-3">
+                      <button
+                        type="submit"
+                        className="btn-gold w-full flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
+                      >
+                        <Save size={16} /> {mode === 'edit' ? 'Update Receipt' : 'Save Receipt'}
+                      </button>
+                    </div>
                   </div>
                 )}
               </form>
@@ -958,6 +919,7 @@ export default function ReceiptsPage() {
                         <th className="p-3 text-right">Amount</th>
                         <th className="p-3 text-center">Type</th>
                         <th className="p-3 text-center">Status</th>
+                        <th className="p-3 text-center" style={{ width: 50 }} />
                       </tr>
                     </thead>
                     <tbody>
@@ -979,6 +941,18 @@ export default function ReceiptsPage() {
                             }`}>
                               {r.status}
                             </span>
+                          </td>
+                          <td className="p-3 text-center">
+                            {r.status !== 'CONFIRMED' && (
+                              <button
+                                type="button"
+                                onClick={e => { e.stopPropagation(); setDeleteTarget(r); }}
+                                title="Delete"
+                                className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -1007,6 +981,7 @@ export default function ReceiptsPage() {
                               {st.status}
                             </span>
                           </td>
+                          <td className="p-3" />
                         </tr>
                       ))}
                     </tbody>
@@ -1020,6 +995,14 @@ export default function ReceiptsPage() {
 
 
       </div>
+
+      <PasswordPromptModal
+        isOpen={deleteTarget != null}
+        onClose={() => setDeleteTarget(null)}
+        onSuccess={handleDeleteConfirmed}
+        title="Delete Receipt"
+        subtitle={deleteTarget ? `Confirm your password to permanently delete this ${formatCurrency(deleteTarget.amount)} receipt. This cannot be undone.` : undefined}
+      />
     </AppLayout>
   );
 }

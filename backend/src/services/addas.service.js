@@ -2,10 +2,16 @@
 // Throw ApiError for expected failures; use withTransaction for multi-write ops.
 const repository = require('../repositories/addas.repository');
 const ApiError = require('../errors/ApiError');
+const { withTransaction } = require('../db/pool');
 
+// AD-01: region_id/city_id are gone from validation — an adda's coverage area is now city_ids,
+// a Route checklist against dbo.cities. At least one city is required; a route of zero cities
+// isn't a route.
 function validate(payload) {
   if (!payload.name || !payload.name.trim()) throw ApiError.badRequest('name is required');
-  if (!payload.region_id) throw ApiError.badRequest('region_id is required');
+  if (!Array.isArray(payload.city_ids) || payload.city_ids.length === 0) {
+    throw ApiError.badRequest('At least one route city is required');
+  }
 }
 
 function list(filters) {
@@ -37,7 +43,11 @@ async function create(payload) {
     );
   }
 
-  const id = await repository.insert({ ...payload, name });
+  const id = await withTransaction(async (transaction) => {
+    const addaId = await repository.insert(transaction, { ...payload, name });
+    await repository.replaceRoutes(transaction, addaId, payload.city_ids);
+    return addaId;
+  });
   return repository.findById(id);
 }
 
@@ -51,7 +61,10 @@ async function update(addaId, payload) {
     throw ApiError.conflict('An adda with this name already exists', 'DUPLICATE_NAME');
   }
 
-  await repository.update(addaId, { ...payload, name });
+  await withTransaction(async (transaction) => {
+    await repository.update(transaction, addaId, { ...payload, name });
+    await repository.replaceRoutes(transaction, addaId, payload.city_ids);
+  });
   return repository.findById(addaId);
 }
 

@@ -64,7 +64,7 @@ async function resolveLines(stageKey, items) {
 }
 
 function buildTotal(lines) {
-  return lines.reduce((sum, line) => sum + line.rate * line.cartons * line.packing, 0);
+  return lines.reduce((sum, line) => sum + line.rate * line.cartons, 0);
 }
 
 function list(filters) {

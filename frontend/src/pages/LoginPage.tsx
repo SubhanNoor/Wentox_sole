@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import * as api from '@/lib/api';
 
@@ -8,6 +8,19 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const usernameRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    usernameRef.current?.focus();
+  }, []);
+
+  function handleUsernameKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      passwordRef.current?.focus();
+    }
+  }
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -142,9 +155,11 @@ export default function LoginPage() {
                 Username
               </label>
               <input
+                ref={usernameRef}
                 type="text"
                 value={username}
                 onChange={e => { setUsername(e.target.value); setError(''); }}
+                onKeyDown={handleUsernameKeyDown}
                 className="soleria-input w-full"
               />
             </div>
@@ -156,6 +171,7 @@ export default function LoginPage() {
                 Password
               </label>
               <input
+                ref={passwordRef}
                 type="password"
                 value={password}
                 onChange={e => { setPassword(e.target.value); setError(''); }}

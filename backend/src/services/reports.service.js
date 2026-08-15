@@ -141,11 +141,15 @@ function formatLedgerRow(r) {
       type = 'Expense'; narration = r.ex_remarks || r.ex_ba_name || narration;
       break;
     case 'WAGE_RUN':
-      type = 'Wage Run'; narration = `Wage run #${r.wr_id}${r.wr_stage_key ? ` (${r.wr_stage_key})` : ''}`;
+      type = 'Wage Run'; narration = 'HISAB';
       break;
-    case 'SALARY_RUN':
-      type = 'Salary Run'; narration = `Salary run for ${r.sar_period_month}`;
+    case 'SALARY_RUN': {
+      type = 'Salary Run';
+      const pm = new Date(r.sar_period_month);
+      const month = pm.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' });
+      narration = `Salary for ${month} ${pm.getUTCFullYear()}`;
       break;
+    }
     case 'TRANSFER':
       type = 'Transfer'; narration = r.tr_remarks || `${r.tr_from_name || ''} → ${r.tr_to_name || ''}`;
       break;
@@ -487,12 +491,14 @@ async function cashBook(filters = {}) {
     range = { date_from: todayISO(), date_to: todayISO() };
   }
 
-  const [opening, ledgerRaw, nonCashRaw] = await Promise.all([
+  const [opening, ledgerRaw, nonCashRaw, bankTransfersRaw, chequeDepositsRaw] = await Promise.all([
     repository.netBalance({
       ba_id: cashBa.ba_id, ac_id: cash.ac_id, up_to_date: range.date_from, exclusive: true,
     }),
     repository.ledgerRows({ ba_id: cashBa.ba_id, ac_id: cash.ac_id, ...range }),
     repository.cashBookNonCashRows(range),
+    repository.cashBookBankTransfers(cashBa.ba_id, range),
+    repository.cashBookChequeDeposits(range),
   ]);
 
   const cashRows = ledgerRaw.map((r) => {
@@ -544,6 +550,24 @@ async function cashBook(filters = {}) {
   const cashReceived = sum('receipt_cash');
   const cashPaid = sum('payment_cash');
 
+  // CB-01/CB-03: bank-to-bank transfers and cheque deposits, listed for visibility only — neither
+  // is a cash movement, so neither feeds any total above (same "informational, not counted"
+  // treatment cashBookNonCashRows already gives cheque/online receipts and payments).
+  const bankTransfers = bankTransfersRaw.map((r) => ({
+    date: toISODate(r.entry_date),
+    from_name: r.from_name,
+    to_name: r.to_name,
+    amount: Number(r.amount),
+    remarks: r.remarks || '',
+  }));
+  const chequeDeposits = chequeDepositsRaw.map((r) => ({
+    date: toISODate(r.entry_date),
+    cheque_no: r.cheque_no || null,
+    payer_name: r.payer_name,
+    bank_name: r.bank_name || null,
+    amount: Number(r.amount),
+  }));
+
   return {
     opening_cash: opening,
     cash_received: cashReceived,
@@ -557,6 +581,8 @@ async function cashBook(filters = {}) {
       payment_cash: cashPaid,
     },
     rows,
+    bank_transfers: bankTransfers,
+    cheque_deposits: chequeDeposits,
   };
 }
 

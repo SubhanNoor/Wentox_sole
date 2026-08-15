@@ -58,6 +58,7 @@ export default function WageRunPage() {
   const [isStageOpen, setIsStageOpen] = useState(false);
   const [stagePos, setStagePos] = useState<{ top: number; left: number; width: number } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const workerContainerRef = useRef<HTMLDivElement>(null);
   const stagePanelRef = useRef<HTMLDivElement>(null);
 
   // The panel is portaled onto document.body (see SearchableSelect for why:
@@ -137,27 +138,55 @@ export default function WageRunPage() {
 
   const recalc = (it: FormItem): FormItem => ({
     ...it,
-    amount: Number(it.rate) * Number(it.cartons) * Number(it.packing)
+    amount: Number(it.rate) * Number(it.cartons)
   });
+
+  // WR-02: Enter moves article -> rate -> cartons -> next line's article, auto-adding a blank
+  // line when at the end. Never auto-posts — a stray Enter shouldn't pay someone (confirmed with
+  // the client: Post Wage Run stays an explicit button click).
+  const articleContainerRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const rateRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const cartonsRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  function focusArticle(idx: number) {
+    articleContainerRefs.current[idx]?.querySelector<HTMLButtonElement>('button[data-field-nav]')?.focus();
+  }
 
   const pickProduct = (itemKey: string, articleIdStr: string) => {
     const p = products.find(pr => String(pr.article_id) === articleIdStr);
     if (!p || !stageObj) return;
+    const idx = items.findIndex(i => i.key === itemKey);
     setItems(prev => prev.map(it => it.key !== itemKey ? it : recalc({
       ...it,
       articleId: p.article_id,
       articleName: p.name,
       // SNAPSHOTS, both of them. Editing the product later must not rewrite a
-      // wage already paid — and without packing stored, nobody could tell
-      // afterwards whether this article packed 12 or 24.
+      // wage already paid. rate is per carton; packing is kept for
+      // audit/history only (not used in the amount calc, not shown on screen).
       rate: (p as unknown as Record<string, number>)[stageObj.cost_column],
       packing: p.packing
     })));
+    if (idx !== -1) requestAnimationFrame(() => rateRefs.current[idx]?.focus());
   };
 
   const updateItem = (itemKey: string, field: 'cartons' | 'rate', value: number) => {
     setItems(prev => prev.map(it => it.key !== itemKey ? it : recalc({ ...it, [field]: value })));
   };
+
+  function handleRateKeyDown(e: React.KeyboardEvent, idx: number) {
+    if (e.key === 'Enter') { e.preventDefault(); cartonsRefs.current[idx]?.focus(); }
+  }
+
+  function handleCartonsKeyDown(e: React.KeyboardEvent, idx: number) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (idx < items.length - 1) {
+      focusArticle(idx + 1);
+    } else {
+      setItems(prev => [...prev, emptyItem()]);
+      requestAnimationFrame(() => focusArticle(idx + 1));
+    }
+  }
 
   const addRow = () => setItems(prev => [...prev, emptyItem()]);
   const removeRow = (key: string) =>
@@ -256,6 +285,16 @@ export default function WageRunPage() {
     loadAll();
   };
 
+  // WR-04: DRAFT-only, matching the backend guard — a posted run must be unposted first, same
+  // as edit.
+  const deleteRun = async (run: WageRunRow) => {
+    if (!window.confirm(`Delete this unposted wage run for ${nameOf(run.employee_id)}? This cannot be undone.`)) return;
+    const res = await api.wageRuns.remove(run.wage_run_id);
+    if (!res.ok) return fail(res.error.message);
+    flash('Wage run deleted.');
+    loadAll();
+  };
+
 
 
   function nameOf(id: number) {
@@ -263,10 +302,26 @@ export default function WageRunPage() {
   }
   const stageLabel = (k: string) => stageList.find(f => f.stage_key === k)?.worker_label || k;
 
-  const sortedRuns = useMemo(
-    () => [...runs].sort((a, b) => b.run_date.localeCompare(a.run_date)),
-    [runs]
-  );
+  // WR-05: search (worker/stage name) + date filter on the history tab.
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyFromDate, setHistoryFromDate] = useState('');
+  const [historyToDate, setHistoryToDate] = useState('');
+
+  const sortedRuns = useMemo(() => {
+    const q = historySearch.trim().toLowerCase();
+    return [...runs]
+      .filter(r => {
+        if (historyFromDate && r.run_date < historyFromDate) return false;
+        if (historyToDate && r.run_date > historyToDate) return false;
+        if (q) {
+          const workerName = (r.employee_name || nameOf(r.employee_id)).toLowerCase();
+          const stageName = (r.stage_label || stageLabel(r.stage_key)).toLowerCase();
+          if (!workerName.includes(q) && !stageName.includes(q)) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => b.run_date.localeCompare(a.run_date));
+  }, [runs, historySearch, historyFromDate, historyToDate, workers, stageList]);
 
   /* ── render ───────────────────────────────────────────────── */
 
@@ -308,17 +363,22 @@ export default function WageRunPage() {
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Settlement Date</label>
                   <input type="date"
-            value={date} onChange={e => setDate(e.target.value)} className="soleria-input" />
+            value={date} onChange={e => setDate(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); workerContainerRef.current?.querySelector<HTMLButtonElement>('button[data-field-nav]')?.focus(); } }}
+            className="soleria-input" />
                   <p className="text-[10px] text-slate-400 mt-1">The day you settle up — not the day the work was done.</p>
                 </div>
-                <div>
+                <div ref={workerContainerRef}>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
                     Worker <span className="text-red-500 font-bold">*</span>
                   </label>
                   <SearchableSelect
                     options={workerOptions}
                     value={employeeId}
-                    onChange={val => { setEmployeeId(val); setStage(''); setItems([emptyItem()]); }}
+                    onChange={val => {
+                      setEmployeeId(val); setStage(''); setItems([emptyItem()]);
+                      requestAnimationFrame(() => stageRef.current?.querySelector<HTMLButtonElement>('button')?.focus());
+                    }}
                     placeholder="Select worker..."
                   />
                 </div>
@@ -360,7 +420,10 @@ export default function WageRunPage() {
                               const isSelected = stage === f.key;
                               return (
                                 <button key={f.key} type="button"
-                                  onClick={() => { setStage(f.key); setItems([emptyItem()]); setIsStageOpen(false); }}
+                                  onClick={() => {
+                                    setStage(f.key); setItems([emptyItem()]); setIsStageOpen(false);
+                                    requestAnimationFrame(() => focusArticle(0));
+                                  }}
                                   className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between cursor-pointer transition-colors ${isSelected ? 'bg-[var(--brand-gold)] text-white font-semibold' : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'}`}>
                                   <span>{f.label}</span>
                                   {isSelected && <Check size={13} className="text-white flex-shrink-0" />}
@@ -408,8 +471,8 @@ export default function WageRunPage() {
                 <div>
                   <h3 className="font-lora font-semibold text-lg text-slate-800">Articles</h3>
                   <p className="text-xs text-slate-500">
-                    Quantity is in <strong>cartons</strong>; the rate is <strong>per pair</strong>, so the
-                    amount is rate × cartons × packing.
+                    Quantity is in <strong>cartons</strong>; the rate is <strong>per carton</strong>, so the
+                    amount is rate × cartons.
                   </p>
                 </div>
                 <button
@@ -431,25 +494,26 @@ export default function WageRunPage() {
                     <thead>
                       <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                         <th className="p-3 pl-4" style={{ minWidth: 260 }}>Article</th>
-                        <th className="p-3 text-right" style={{ width: 110 }}>Rate / pair</th>
+                        <th className="p-3 text-right" style={{ width: 110 }}>Rate / carton</th>
                         <th className="p-3 text-right" style={{ width: 100 }}>Cartons</th>
-                        <th className="p-3 text-right" style={{ width: 90 }}>Packing</th>
                         <th className="p-3 text-right" style={{ width: 130 }}>Amount</th>
                         <th className="p-3 text-center" style={{ width: 50 }} />
                       </tr>
                     </thead>
                     <tbody>
-                      {items.map(it => {
+                      {items.map((it, idx) => {
                         const zero = it.articleId !== '' && Number(it.rate) === 0;
                         return (
                           <tr key={it.key} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
                             <td className="p-2 pl-4">
-                              <SearchableSelect
-                                options={productOptions}
-                                value={it.articleId === '' ? '' : String(it.articleId)}
-                                onChange={val => pickProduct(it.key, val)}
-                                placeholder="Select article..."
-                              />
+                              <div ref={el => { articleContainerRefs.current[idx] = el; }}>
+                                <SearchableSelect
+                                  options={productOptions}
+                                  value={it.articleId === '' ? '' : String(it.articleId)}
+                                  onChange={val => pickProduct(it.key, val)}
+                                  placeholder="Select article..."
+                                />
+                              </div>
                               {zero && (
                                 <div className="flex items-start gap-1.5 mt-1.5 text-[11px] text-amber-700">
                                   <AlertTriangle size={13} className="mt-0.5 shrink-0" />
@@ -462,24 +526,25 @@ export default function WageRunPage() {
                             </td>
                             <td className="p-2">
                               <input
+                                ref={el => { rateRefs.current[idx] = el; }}
                                 type="number" min={0}
                                 value={it.rate || ''}
                                 onChange={e => updateItem(it.key, 'rate', Number(e.target.value))}
+                                onKeyDown={e => handleRateKeyDown(e, idx)}
                                 disabled={it.articleId === ''}
                                 className={`soleria-input py-1.5 text-right text-sm ${zero ? 'border-amber-400 bg-amber-50' : ''}`}
                               />
                             </td>
                             <td className="p-2">
                               <input
+                                ref={el => { cartonsRefs.current[idx] = el; }}
                                 type="number" min={0}
                                 value={it.cartons || ''}
                                 onChange={e => updateItem(it.key, 'cartons', Number(e.target.value))}
+                                onKeyDown={e => handleCartonsKeyDown(e, idx)}
                                 disabled={it.articleId === ''}
                                 className="soleria-input py-1.5 text-right text-sm font-semibold"
                               />
-                            </td>
-                            <td className="p-2 text-right text-slate-500 font-mono text-sm">
-                              {it.articleId !== '' ? it.packing : '—'}
                             </td>
                             <td className="p-2 text-right font-bold text-slate-800">
                               {it.amount ? formatCurrency(it.amount) : <span className="text-slate-300">—</span>}
@@ -537,9 +602,38 @@ export default function WageRunPage() {
           /* History */
           <div className={`card-white p-6 md:p-8 bg-white border transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`} style={{ borderColor: 'var(--border-color)' }}>
             <h3 className="font-lora font-semibold text-lg text-slate-800 mb-1">Wage Runs</h3>
-            <p className="text-xs text-slate-500 mb-6">
+            <p className="text-xs text-slate-500 mb-4">
               Only posted runs count toward a worker's balance. To correct one: unpost, edit, post again.
             </p>
+
+            {/* WR-05: search by worker/stage name, plus a date filter. */}
+            <div className="flex flex-wrap items-center gap-3 mb-4">
+              <input
+                type="text"
+                value={historySearch}
+                onChange={e => setHistorySearch(e.target.value)}
+                placeholder="Search worker or stage..."
+                className="soleria-input py-1.5 text-xs w-64"
+              />
+              <div className="flex items-center gap-1.5">
+                <label className="text-xs font-semibold text-slate-500">From</label>
+                <input type="date" value={historyFromDate} onChange={e => setHistoryFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <label className="text-xs font-semibold text-slate-500">To</label>
+                <input type="date" value={historyToDate} onChange={e => setHistoryToDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
+              </div>
+              {(historySearch || historyFromDate || historyToDate) && (
+                <button
+                  type="button"
+                  onClick={() => { setHistorySearch(''); setHistoryFromDate(''); setHistoryToDate(''); }}
+                  className="text-xs font-semibold text-slate-500 hover:text-slate-800 underline"
+                >
+                  Clear filters
+                </button>
+              )}
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-sm">
                 <thead>
@@ -559,7 +653,9 @@ export default function WageRunPage() {
                   ) : sortedRuns.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="text-center p-8 text-slate-400">
-                        No wage runs yet. Post one to start accruing what workers are owed.
+                        {runs.length === 0
+                          ? 'No wage runs yet. Post one to start accruing what workers are owed.'
+                          : 'No wage runs match your search/filter.'}
                       </td>
                     </tr>
                   ) : sortedRuns.map(r => (
@@ -586,9 +682,14 @@ export default function WageRunPage() {
                               <Undo2 size={15} />
                             </button>
                           ) : (
-                            <button onClick={() => editRun(r)} title="Edit" className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-800">
-                              <Edit2 size={15} />
-                            </button>
+                            <>
+                              <button onClick={() => editRun(r)} title="Edit" className="p-1.5 rounded hover:bg-slate-100 text-slate-500 hover:text-slate-800">
+                                <Edit2 size={15} />
+                              </button>
+                              <button onClick={() => deleteRun(r)} title="Delete" className="p-1.5 rounded hover:bg-rose-50 text-slate-500 hover:text-rose-700">
+                                <Trash2 size={15} />
+                              </button>
+                            </>
                           )}
                         </div>
                       </td>

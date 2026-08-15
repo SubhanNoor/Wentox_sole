@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, X, Users, MapPin } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
@@ -11,6 +11,7 @@ export default function SubCustomerSetupPage() {
   const [searchQuery, setSearchQuery] = useState('');
 
   // Modal State
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedSubId, setSelectedSubId] = useState<number | null>(null);
 
@@ -77,11 +78,22 @@ export default function SubCustomerSetupPage() {
     setErrorMsg('');
   };
 
+  // G-06: after a successful create, the window stays open and clears — ready for the next sub
+  // customer — instead of closing.
+  const resetForNextSubCustomer = () => {
+    setSelectedSubId(null);
+    setSubName('');
+    setRegionId('');
+    setCityId('');
+    setErrorMsg('');
+    requestAnimationFrame(() => nameInputRef.current?.focus());
+  };
+
   const executeAddSubCustomer = async (data: { name: string; region_id: number; city_id?: number }) => {
     const res = await api.subCustomers.create(data);
     if (!res.ok) return setErrorMsg(res.error.message);
     flash('New Sub Customer registered successfully.');
-    handleCloseModal();
+    resetForNextSubCustomer();
     loadAll();
   };
 
@@ -124,7 +136,7 @@ export default function SubCustomerSetupPage() {
     setPendingSubCustomer(null);
     if (!res.ok) return setErrorMsg('Failed to reactivate: ' + res.error.message);
     flash('Sub Customer reactivated successfully.');
-    handleCloseModal();
+    resetForNextSubCustomer();
     loadAll();
   };
 
@@ -272,6 +284,7 @@ export default function SubCustomerSetupPage() {
                     Sub Customer Name <span className="text-rose-500">*</span>
                   </label>
                   <input
+                    ref={nameInputRef}
                     type="text"
                     value={subName}
                     onChange={e => setSubName(e.target.value)}

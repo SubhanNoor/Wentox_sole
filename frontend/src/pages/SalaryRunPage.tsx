@@ -15,7 +15,6 @@ interface FormLine {
 }
 
 const thisMonth = () => new Date().toISOString().slice(0, 7);   // 'YYYY-MM'
-const today = () => new Date().toISOString().split('T')[0];
 
 const monthLabel = (ym: string) => {
   const [y, m] = ym.split('-').map(Number);
@@ -39,7 +38,6 @@ export default function SalaryRunPage() {
     }, 180);
   };
   const [editingRunId, setEditingRunId] = useState<number | null>(null);
-  const [editingRunDate, setEditingRunDate] = useState<string | null>(null);
   const [periodMonth, setPeriodMonth] = useState(thisMonth());
 
   // A new run's lines are DERIVED from the current roster, never stored — so
@@ -128,7 +126,6 @@ export default function SalaryRunPage() {
 
   const resetForm = () => {
     setEditingRunId(null);
-    setEditingRunDate(null);
     setEditingItems(null);
     setOverrides({});
     setPeriodMonth(thisMonth());
@@ -148,7 +145,6 @@ export default function SalaryRunPage() {
 
     const payload: api.SalaryRunCreateInput = {
       period_month: periodMonth,
-      run_date: editingRunDate || today(),
       overrides: overridesPayload,
     };
 
@@ -177,7 +173,6 @@ export default function SalaryRunPage() {
     if (!res.ok) return fail(res.error.message);
     const full = res.data;
     setEditingRunId(full.salary_run_id);
-    setEditingRunDate(full.run_date);
     setPeriodMonth(full.period_month);
     setEditingItems((full.items || []).map(i => ({
       employee_id: i.employee_id,

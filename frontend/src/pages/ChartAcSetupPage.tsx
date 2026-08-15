@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, RotateCcw, X, BookOpen } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -25,6 +25,7 @@ export default function ChartAcSetupPage() {
   const [sortBy, setSortBy] = useState<'code' | 'name'>('code');
 
   // Modal State
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
@@ -82,6 +83,17 @@ export default function ChartAcSetupPage() {
     setErrorMsg('');
   };
 
+  // G-06: after a successful create, the window stays open and clears — ready for the next
+  // account — instead of closing.
+  const resetForNextChart = () => {
+    setSelectedId(null);
+    setName('');
+    setGroupId('');
+    setLinkCode('');
+    setErrorMsg('');
+    requestAnimationFrame(() => nameInputRef.current?.focus());
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const typed = name.trim();
@@ -95,6 +107,7 @@ export default function ChartAcSetupPage() {
       }
       setSuccessMsg('Account updated successfully.');
       await loadData();
+      handleCloseModal();
     } else {
       const res = await chartAccountsApi.create({ name: typed, group_id: Number(groupId), link_code: linkCode.trim() || undefined });
       if (!res.ok) {
@@ -108,10 +121,10 @@ export default function ChartAcSetupPage() {
       }
       setSuccessMsg('Account registered successfully.');
       await loadData();
+      resetForNextChart();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
-    handleCloseModal();
   };
 
   const handleActivateDuplicate = async (id: string) => {
@@ -123,7 +136,7 @@ export default function ChartAcSetupPage() {
     }
     setIsDupModalOpen(false);
     setDupMatch(null);
-    handleCloseModal();
+    resetForNextChart();
   };
 
 
@@ -455,6 +468,7 @@ export default function ChartAcSetupPage() {
                     Account Name <span className="text-rose-500">*</span>
                   </label>
                   <input
+                    ref={nameInputRef}
                     type="text"
                     value={name}
                     onChange={e => setName(e.target.value)}

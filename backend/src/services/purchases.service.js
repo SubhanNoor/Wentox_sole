@@ -132,6 +132,16 @@ async function unpost(id) {
   return getById(id);
 }
 
+// "[quantity] [unit] [material] @ [price_per_unit]" per line, joined with ", " for a multi-line
+// purchase — e.g. "200 kg MEG @ 230". Number(...).toString() rather than toLocaleString/toFixed
+// so a DECIMAL that came back as 200.000 prints as "200", matching the client's own sheet, not
+// "200.000".
+function buildPurchaseNarration(items) {
+  return items
+    .map((item) => `${Number(item.quantity)} ${item.unit} ${item.material_name} @ ${Number(item.price_per_unit)}`)
+    .join(', ');
+}
+
 // Shared posting logic (schema §7 posting matrix): debit PURCHASES chart account / credit VENDOR
 // BA, positive PURCHASE vendor-stock movement per item. Used by purchases:post and by
 // draftPurchases.confirm (which posts immediately instead of leaving the purchase unposted).
@@ -152,6 +162,8 @@ async function postLedgerAndStock(transaction, {
     throw new Error(`Reserved chart account PURCHASES (code ${CODES.PURCHASES}) not found — run npm run seed`);
   }
 
+  const narration = buildPurchaseNarration(items);
+
   await repository.insertLedgerEntries(transaction, [
     {
       entry_date: purchaseDate,
@@ -160,7 +172,7 @@ async function postLedgerAndStock(transaction, {
       credit: 0,
       source_type: 'PURCHASE',
       source_id: purchaseId,
-      narration: `Purchase #${purchaseId}`,
+      narration,
     },
     {
       entry_date: purchaseDate,
@@ -169,7 +181,7 @@ async function postLedgerAndStock(transaction, {
       credit: totalValue,
       source_type: 'PURCHASE',
       source_id: purchaseId,
-      narration: `Purchase #${purchaseId}`,
+      narration,
     },
   ]);
 

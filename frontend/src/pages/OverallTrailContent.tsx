@@ -491,7 +491,7 @@ export default function OverallTrailContent() {
                                 {row.debit > 0 ? <span className="text-slate-800">{formatCurrency(row.debit)}</span> : <span className="text-slate-300">-</span>}
                               </td>
                               <td className="p-2.5 text-right font-mono border-l border-slate-100 text-[11px]">
-                                {row.credit > 0 ? <span className="text-slate-800">({formatCurrency(row.credit)})</span> : <span className="text-slate-300">-</span>}
+                                {row.credit > 0 ? <span className="text-rose-700">({formatCurrency(row.credit)})</span> : <span className="text-slate-300">-</span>}
                               </td>
                             </tr>
                           ))}
@@ -504,7 +504,7 @@ export default function OverallTrailContent() {
                             <td className="py-2 px-2.5 text-right font-mono font-bold text-slate-800 border-l border-slate-200 text-[11px]">
                               {sectionDebit > 0 ? formatCurrency(sectionDebit) : '-'}
                             </td>
-                            <td className="py-2 px-2.5 text-right font-mono font-bold text-slate-800 border-l border-slate-200 text-[11px]">
+                            <td className="py-2 px-2.5 text-right font-mono font-bold text-rose-700 border-l border-slate-200 text-[11px]">
                               {sectionCredit > 0 ? `(${formatCurrency(sectionCredit)})` : '-'}
                             </td>
                           </tr>
@@ -517,7 +517,7 @@ export default function OverallTrailContent() {
                   <tr className="border-t-2 border-slate-800 bg-[var(--brand-navy)] text-white font-bold text-xs">
                     <td colSpan={2} className="p-3 uppercase tracking-wider text-right" style={{ color: 'var(--brand-gold)' }}>Grand Total Trail Balances</td>
                     <td className="p-3 text-right font-mono border-l border-slate-600">{formatCurrency(filteredTotals.totalDebit)}</td>
-                    <td className="p-3 text-right font-mono border-l border-slate-600">({formatCurrency(filteredTotals.totalCredit)})</td>
+                    <td className="p-3 text-right font-mono border-l border-slate-600 text-rose-700">({formatCurrency(filteredTotals.totalCredit)})</td>
                   </tr>
                 </tfoot>
               </table>
@@ -635,7 +635,7 @@ export default function OverallTrailContent() {
                         <td className="p-3 text-slate-500 font-mono">{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                         <td className="p-3 text-slate-700">{row.narration}</td>
                         <td className="p-3 text-right font-semibold text-slate-900">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-                        <td className="p-3 text-right font-semibold text-slate-900">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
+                        <td className="p-3 text-right font-semibold text-rose-700">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
                         <td className="p-3 text-right font-bold text-amber-900">{formatCurrency(row.balance)}</td>
                       </tr>
                     ))

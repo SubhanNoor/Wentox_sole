@@ -157,13 +157,13 @@ async function remove(salaryRunId) {
 
 // Dr SALARIES EXPENSE (total) / Cr each employee's own ba_id, one credit per line (payroll.md
 // §6/§11) — unlike wage_runs' single Dr/Cr pair, this is 1 + N rows.
-async function insertLedgerEntries(transaction, { salaryRunId, runDate, salariesExpenseAcId, totalAmount, lines }) {
+async function insertLedgerEntries(transaction, { salaryRunId, runDate, narration, salariesExpenseAcId, totalAmount, lines }) {
   const debitRequest = requestWithParams(transaction, {
     entryDate: { type: sql.Date, value: runDate },
     acId: { type: sql.Int, value: salariesExpenseAcId },
     debit: { type: sql.Decimal(14, 2), value: totalAmount },
     sourceId: { type: sql.Int, value: salaryRunId },
-    narration: { type: sql.NVarChar(500), value: `Salary Run #${salaryRunId}` },
+    narration: { type: sql.NVarChar(500), value: narration },
   });
   await debitRequest.query(`
     INSERT INTO dbo.ledger_entries (entry_date, ac_id, debit, credit, source_type, source_id, narration)
@@ -176,7 +176,7 @@ async function insertLedgerEntries(transaction, { salaryRunId, runDate, salaries
       baId: { type: sql.Int, value: line.ba_id },
       credit: { type: sql.Decimal(14, 2), value: line.amount },
       sourceId: { type: sql.Int, value: salaryRunId },
-      narration: { type: sql.NVarChar(500), value: `Salary Run #${salaryRunId}` },
+      narration: { type: sql.NVarChar(500), value: narration },
     });
     await request.query(`
       INSERT INTO dbo.ledger_entries (entry_date, ba_id, debit, credit, source_type, source_id, narration)

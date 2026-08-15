@@ -8,7 +8,7 @@ import type {
   BusinessAccountRow, JournalVoucherRow, JournalVoucherCreateInput, LedgerRow,
 } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
-import { Save, Edit } from 'lucide-react';
+import { Save, Edit, Search } from 'lucide-react';
 
 /**
  * Journal Voucher — goodwill written off a party's balance ("eidi" on what a customer owes, or a
@@ -66,6 +66,10 @@ export default function JournalVoucherPage() {
   const isViewMode = mode === 'view';
   const isPosted = status === 'CONFIRMED';
 
+  // JV-02: search + filter on the journal voucher listing.
+  const [jvSearch, setJvSearch] = useState('');
+  const [jvStatusFilter, setJvStatusFilter] = useState<'all' | 'CONFIRMED' | 'DRAFT'>('all');
+
   // The JV account itself is excluded — both legs would land on it, which the service rejects too.
   const accountOptions = useMemo(
     () => accounts
@@ -77,6 +81,19 @@ export default function JournalVoucherPage() {
     (id: number) => accounts.find(a => a.ba_id === id)?.name || 'Unknown Account',
     [accounts]
   );
+
+  const filteredVouchers = useMemo(() => {
+    return vouchers.filter(v => {
+      if (jvStatusFilter !== 'all' && v.status !== jvStatusFilter) return false;
+      if (jvSearch.trim()) {
+        const q = jvSearch.trim().toLowerCase();
+        const accName = (v.ba_name || accountName(v.ba_id)).toLowerCase();
+        const matches = accName.includes(q) || (v.reason || '').toLowerCase().includes(q) || (v.remarks || '').toLowerCase().includes(q);
+        if (!matches) return false;
+      }
+      return true;
+    });
+  }, [vouchers, jvSearch, jvStatusFilter, accountName]);
 
   const handleNew = () => {
     setMode('new'); setJvId(null); setStatus('DRAFT');
@@ -300,7 +317,31 @@ export default function JournalVoucherPage() {
             </div>
 
             <div className="card-white p-6 bg-white border border-slate-200 rounded-xl shadow-sm">
-              <h3 className="font-lora font-bold text-base text-slate-900 mb-4">Recorded Journal Vouchers</h3>
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <h3 className="font-lora font-bold text-base text-slate-900">Recorded Journal Vouchers</h3>
+                {/* JV-02: search + filter the listing. */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-2.5 text-slate-400" size={14} />
+                    <input
+                      type="text"
+                      value={jvSearch}
+                      onChange={e => setJvSearch(e.target.value)}
+                      placeholder="Search account, reason, remarks..."
+                      className="soleria-input pl-8 py-1.5 text-xs w-64"
+                    />
+                  </div>
+                  <select
+                    value={jvStatusFilter}
+                    onChange={e => setJvStatusFilter(e.target.value as 'all' | 'CONFIRMED' | 'DRAFT')}
+                    className="soleria-input py-1.5 text-xs"
+                  >
+                    <option value="all">All Statuses</option>
+                    <option value="CONFIRMED">Posted</option>
+                    <option value="DRAFT">Not Posted</option>
+                  </select>
+                </div>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-sm">
                   <thead>
@@ -314,9 +355,9 @@ export default function JournalVoucherPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {vouchers.length === 0 ? (
-                      <tr><td colSpan={6} className="text-center p-8 text-slate-400">No journal vouchers recorded yet.</td></tr>
-                    ) : vouchers.map(v => (
+                    {filteredVouchers.length === 0 ? (
+                      <tr><td colSpan={6} className="text-center p-8 text-slate-400">{vouchers.length === 0 ? 'No journal vouchers recorded yet.' : 'No journal vouchers match your search/filter.'}</td></tr>
+                    ) : filteredVouchers.map(v => (
                       <tr key={v.jv_id} onClick={() => loadRow(v)} className="border-b hover:bg-slate-50/50 cursor-pointer" style={{ borderColor: 'var(--border-table)' }}>
                         <td className="p-3 pl-4 text-xs font-mono text-slate-600">{formatDate(v.jv_date)}</td>
                         <td className="p-3 font-semibold text-slate-900">{v.ba_name || accountName(v.ba_id)}</td>

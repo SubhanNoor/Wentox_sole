@@ -266,18 +266,21 @@ export interface StoreCreateInput {
 export interface AddaRow {
   adda_id: number;
   name: string;
-  region_id: number;
+  // Legacy — kept for addas created before AD-01, no longer written by create/update.
+  region_id: number | null;
   city_id: number | null;
   details: string | null;
   is_active: boolean;
   region_name?: string;
   city_name?: string;
+  // AD-01: the adda's Route — every city it serves.
+  route_city_ids: number[];
+  route_city_names: string;
 }
 
 export interface AddaCreateInput {
   name: string;
-  region_id: number;
-  city_id?: number;
+  city_ids: number[];
   details?: string;
 }
 
@@ -1093,7 +1096,6 @@ export interface SalaryRunRow {
 
 export interface SalaryRunCreateInput {
   period_month: string;
-  run_date: string;
   overrides?: { employee_id: number; amount?: number; remarks?: string }[];
 }
 
@@ -1349,6 +1351,22 @@ export interface CashBookRow {
   affects_cash: boolean;
 }
 
+export interface CashBookBankTransferRow {
+  date: string;
+  from_name: string;
+  to_name: string;
+  amount: number;
+  remarks: string;
+}
+
+export interface CashBookChequeDepositRow {
+  date: string;
+  cheque_no: string | null;
+  payer_name: string;
+  bank_name: string | null;
+  amount: number;
+}
+
 export interface CashBookResult {
   opening_cash: number;
   cash_received: number;
@@ -1362,6 +1380,9 @@ export interface CashBookResult {
     payment_cash: number;
   };
   rows: CashBookRow[];
+  // CB-01/CB-03: informational-only — neither is counted in any total above.
+  bank_transfers: CashBookBankTransferRow[];
+  cheque_deposits: CashBookChequeDepositRow[];
 }
 
 // One account's balance right now, for the Receipts/Expenses balance panel. Positive = debit =
@@ -1437,6 +1458,7 @@ declare global {
         unpost: (payload: { id: number }) => Promise<ApiResult<SaleBillRow>>;
         biltySearch: (payload?: SaleBillListFilters) => Promise<ApiResult<SaleBillRow[]>>;
         updateBilty: (payload: { id: number; bilty_no: string; adda_id: number }) => Promise<ApiResult<SaleBillRow>>;
+        lastSoldRate: (payload: { customer_id: number; variant_id: number }) => Promise<ApiResult<number | null>>;
       };
       saleReturns: {
         create: (payload: SaleReturnCreateInput) => Promise<ApiResult<SaleReturnRow>>;
@@ -1503,7 +1525,7 @@ declare global {
         reactivate: (payload: { id: number }) => Promise<ApiResult<StoreRow>>;
       };
       addas: {
-        list: (payload?: { includeInactive?: boolean; is_active?: boolean; region_id?: number }) => Promise<ApiResult<AddaRow[]>>;
+        list: (payload?: { includeInactive?: boolean; is_active?: boolean; region_id?: number; city_id?: number }) => Promise<ApiResult<AddaRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<AddaRow>>;
         create: (payload: AddaCreateInput) => Promise<ApiResult<AddaRow>>;
         update: (payload: { id: number } & AddaCreateInput) => Promise<ApiResult<AddaRow>>;
@@ -1622,7 +1644,7 @@ declare global {
         get: (payload: { id: number }) => Promise<ApiResult<ReceiptRow>>;
         create: (payload: ReceiptCreateInput) => Promise<ApiResult<ReceiptRow>>;
         update: (payload: { id: number } & ReceiptCreateInput) => Promise<ApiResult<ReceiptRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         post: (payload: { id: number }) => Promise<ApiResult<ReceiptRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<ReceiptRow>>;
       };
@@ -1684,7 +1706,7 @@ declare global {
         get: (payload: { id: number }) => Promise<ApiResult<ExpenseRow>>;
         create: (payload: ExpenseCreateInput) => Promise<ApiResult<ExpenseRow>>;
         update: (payload: { id: number } & ExpenseCreateInput) => Promise<ApiResult<ExpenseRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         post: (payload: { id: number }) => Promise<ApiResult<ExpenseRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<ExpenseRow>>;
         bounceIssuedCheque: (payload: { id: number; bounced_date: string }) => Promise<ApiResult<ExpenseRow>>;
@@ -1930,6 +1952,14 @@ function normalizeReturnRow<T extends { return_date: string }>(row: T): T {
   return { ...row, return_date: normalizeDate(row.return_date) };
 }
 
+// AD-01: the backend rides route_city_ids as a comma-joined string (STRING_AGG, same as every
+// other normalize* here patching a raw driver shape into what AddaRow declares) — split into a
+// real number[] here so callers never re-parse it.
+function normalizeAddaRow(row: AddaRow): AddaRow {
+  const raw = row.route_city_ids as unknown as string | null;
+  return { ...row, route_city_ids: raw ? raw.split(',').map(Number) : [] };
+}
+
 function mapResult<T, U>(result: ApiResult<T>, fn: (data: T) => U): ApiResult<U> {
   if (!result.ok) return result;
   return { ok: true, data: fn(result.data) };
@@ -1951,7 +1981,9 @@ export const saleBills = {
   biltySearch: (payload?: SaleBillListFilters) =>
     window.api ? window.api.saleBills.biltySearch(payload).then(r => mapResult(r, rows => rows.map(normalizeBillRow))) : Promise.resolve(NO_BRIDGE),
   updateBilty: (id: number, bilty_no: string, adda_id: number) =>
-    window.api ? window.api.saleBills.updateBilty({ id, bilty_no, adda_id }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.saleBills.updateBilty({ id, bilty_no, adda_id }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
+  lastSoldRate: (customer_id: number, variant_id: number) =>
+    window.api ? window.api.saleBills.lastSoldRate({ customer_id, variant_id }) : Promise.resolve(NO_BRIDGE)
 };
 
 export const saleReturns = {
@@ -2023,7 +2055,7 @@ export async function listStores(): Promise<ApiResult<StoreRow[]>> {
 
 export async function listAddas(): Promise<ApiResult<AddaRow[]>> {
   if (!window.api) return NO_BRIDGE;
-  return window.api.addas.list({ is_active: true });
+  return mapResult(await window.api.addas.list({ is_active: true }), rows => rows.map(normalizeAddaRow));
 }
 
 export async function listCategories(): Promise<ApiResult<CategoryRow[]>> {
@@ -2086,17 +2118,19 @@ export const stores = {
 };
 
 export const addas = {
-  list: (payload?: { includeInactive?: boolean; region_id?: number }) =>
-    window.api ? window.api.addas.list(payload) : Promise.resolve(NO_BRIDGE),
+  // AD-02: city_id filters to addas whose Route includes that city — "search a route, see every
+  // adda serving it".
+  list: (payload?: { includeInactive?: boolean; region_id?: number; city_id?: number }) =>
+    window.api ? window.api.addas.list(payload).then(r => mapResult(r, rows => rows.map(normalizeAddaRow))) : Promise.resolve(NO_BRIDGE),
   get: (id: number) =>
-    window.api ? window.api.addas.get({ id }) : Promise.resolve(NO_BRIDGE),
+    window.api ? window.api.addas.get({ id }).then(r => mapResult(r, normalizeAddaRow)) : Promise.resolve(NO_BRIDGE),
   create: (payload: AddaCreateInput) =>
-    window.api ? window.api.addas.create(payload) : Promise.resolve(NO_BRIDGE),
+    window.api ? window.api.addas.create(payload).then(r => mapResult(r, normalizeAddaRow)) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: AddaCreateInput) =>
-    window.api ? window.api.addas.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+    window.api ? window.api.addas.update({ id, ...payload }).then(r => mapResult(r, normalizeAddaRow)) : Promise.resolve(NO_BRIDGE),
   remove: (id: number) => window.api ? window.api.addas.remove({ id }) : Promise.resolve(NO_BRIDGE),
   reactivate: (id: number) =>
-    window.api ? window.api.addas.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.addas.reactivate({ id }).then(r => mapResult(r, normalizeAddaRow)) : Promise.resolve(NO_BRIDGE)
 };
 
 export async function createCustomer(payload: CustomerCreateInput): Promise<ApiResult<CustomerRow>> {
@@ -2414,7 +2448,7 @@ export const receipts = {
     window.api ? window.api.receipts.create(payload).then(r => mapResult(r, normalizeReceiptRow)) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: ReceiptCreateInput) =>
     window.api ? window.api.receipts.update({ id, ...payload }).then(r => mapResult(r, normalizeReceiptRow)) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.receipts.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) => window.api ? window.api.receipts.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   post: (id: number) =>
     window.api ? window.api.receipts.post({ id }).then(r => mapResult(r, normalizeReceiptRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
@@ -2562,7 +2596,7 @@ export const expenses = {
     window.api ? window.api.expenses.create(payload).then(r => mapResult(r, normalizeExpenseRow)) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: ExpenseCreateInput) =>
     window.api ? window.api.expenses.update({ id, ...payload }).then(r => mapResult(r, normalizeExpenseRow)) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.expenses.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) => window.api ? window.api.expenses.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   post: (id: number) =>
     window.api ? window.api.expenses.post({ id }).then(r => mapResult(r, normalizeExpenseRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
@@ -2698,7 +2732,12 @@ function normalizeBusinessLedgerResult(result: BusinessLedgerResult): BusinessLe
 // they carry is the entry date, so normalizing is a one-field job rather than normalizeLedgerRow's
 // three.
 function normalizeCashBookResult(result: CashBookResult): CashBookResult {
-  return { ...result, rows: result.rows.map(row => ({ ...row, date: normalizeDate(row.date) })) };
+  return {
+    ...result,
+    rows: result.rows.map(row => ({ ...row, date: normalizeDate(row.date) })),
+    bank_transfers: result.bank_transfers.map(row => ({ ...row, date: normalizeDate(row.date) })),
+    cheque_deposits: result.cheque_deposits.map(row => ({ ...row, date: normalizeDate(row.date) })),
+  };
 }
 
 function normalizeOverallTrailResult(result: OverallTrailResult): OverallTrailResult {

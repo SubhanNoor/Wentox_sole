@@ -3,7 +3,7 @@ import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { ReceiptRow, BusinessAccountRow, CityRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
-import { Calendar, Search, ArrowRight, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check, MapPin } from 'lucide-react';
+import { Calendar, Search, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check, MapPin } from 'lucide-react';
 
 export default function OverallReceiptsTab() {
   const [rows, setRows] = useState<ReceiptRow[]>([]);
@@ -333,56 +333,60 @@ export default function OverallReceiptsTab() {
         </div>
       </div>
 
-      {/* Customer Cards Grid Standard */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {accountCardsData.length === 0 ? (
-          <div className="col-span-full card-white p-12 bg-white border border-slate-200 text-center flex flex-col items-center justify-center text-slate-400 rounded-2xl">
-            <Calendar size={48} className="text-slate-300 mb-3" />
-            <p className="font-lora text-lg font-semibold text-slate-500 mb-1">No Receipts Found</p>
-            <p className="text-sm max-w-sm">No receipts were logged matching your search filters.</p>
-          </div>
-        ) : (
-          accountCardsData.map(data => {
-            const city = cities.find(c => c.city_id === data.account.city_id)?.name || 'Local';
+      {/* RJ-05: account records as table rows, consistent with the rest of the app. */}
+      <div className="card-white overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border-color)' }}>
+        <table className="w-full text-left border-collapse text-sm">
+          <thead>
+            <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+              <th className="p-3 pl-4">Account</th>
+              <th className="p-3 text-center">City</th>
+              <th className="p-3 text-center">Receipts</th>
+              <th className="p-3 text-right pr-6">Total Jamma</th>
+            </tr>
+          </thead>
+          <tbody>
+            {accountCardsData.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="text-center p-12 text-slate-400">
+                  <Calendar size={40} className="text-slate-300 mb-2 mx-auto" />
+                  <p className="font-lora text-base font-semibold text-slate-500 mb-1">No Receipts Found</p>
+                  <p className="text-xs max-w-sm mx-auto">No receipts were logged matching your search filters.</p>
+                </td>
+              </tr>
+            ) : (
+              accountCardsData.map(data => {
+                const city = cities.find(c => c.city_id === data.account.city_id)?.name || 'Local';
 
-            return (
-              <div
-                key={data.account.ba_id}
-                onClick={() => setSelectedCustomerId(data.account.ba_id)}
-                className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
-              >
-                <div>
-                  <div className="flex items-start justify-between gap-2 mb-1">
-                    <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors truncate">
-                      {data.account.name}
-                    </h4>
-                    <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider shrink-0 flex items-center gap-1">
-                      <MapPin size={10} className="text-slate-400" />
-                      {city}
-                    </span>
-                  </div>
-
-                  <div className="font-mono text-xs text-slate-400 mb-3">Code: #{data.account.code || data.account.ba_id}</div>
-
-                  <div className="text-xs font-semibold text-slate-700 flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-100 mt-2">
-                    <span>Total Jamma:</span>
-                    <span className="font-mono font-bold text-emerald-700">{formatCurrency(data.totalAmount)}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-3">
-                  <div className="flex items-center gap-1.5 bg-amber-50 text-amber-900 px-2.5 py-1 rounded-full text-xs font-semibold border border-amber-200/80">
-                    <FileText size={13} className="text-amber-600" />
-                    <span>{data.receipts.length} {data.receipts.length === 1 ? 'Receipt' : 'Receipts'}</span>
-                  </div>
-                  <span className="text-[var(--brand-gold)] font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
-                    View Receipts <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
-                  </span>
-                </div>
-              </div>
-            );
-          })
-        )}
+                return (
+                  <tr
+                    key={data.account.ba_id}
+                    onClick={() => setSelectedCustomerId(data.account.ba_id)}
+                    className="border-b hover:bg-slate-50/60 cursor-pointer transition-colors"
+                    style={{ borderColor: 'var(--border-table)' }}
+                  >
+                    <td className="p-3 pl-4">
+                      <div className="font-lora font-bold text-slate-900">{data.account.name}</div>
+                      <div className="font-mono text-[11px] text-slate-400">Code: #{data.account.code || data.account.ba_id}</div>
+                    </td>
+                    <td className="p-3 text-center">
+                      <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider inline-flex items-center gap-1">
+                        <MapPin size={10} className="text-slate-400" />
+                        {city}
+                      </span>
+                    </td>
+                    <td className="p-3 text-center">
+                      <span className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-900 px-2.5 py-1 rounded-full text-xs font-semibold border border-amber-200/80">
+                        <FileText size={13} className="text-amber-600" />
+                        {data.receipts.length} {data.receipts.length === 1 ? 'Receipt' : 'Receipts'}
+                      </span>
+                    </td>
+                    <td className="p-3 text-right pr-6 font-mono font-bold text-emerald-700">{formatCurrency(data.totalAmount)}</td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );

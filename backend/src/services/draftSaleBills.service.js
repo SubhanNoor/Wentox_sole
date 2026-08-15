@@ -2,11 +2,37 @@
 // Throw ApiError for expected failures; use withTransaction for multi-write ops.
 const repository = require('../repositories/draftSaleBills.repository');
 const saleBillsService = require('./saleBills.service');
+const stockService = require('./stock.service');
+const productColorsService = require('./productColors.service');
+const productsService = require('./products.service');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 const {
   buildLine, buildTotals, validateItems, checkKnownVariants, validateDeliveryCustomer,
 } = require('./saleBillMath');
+
+// SB-03: never deduct stock below zero — a draft deducts stock immediately on save (see create()
+// below), so this is the first place a sale can oversell, not just at confirm/post. Requested
+// pairs are summed per variant first since the same article/color can appear on more than one
+// line (SB-02).
+async function assertStockAvailable(lines) {
+  const requestedByVariant = new Map();
+  for (const line of lines) {
+    requestedByVariant.set(line.variant_id, (requestedByVariant.get(line.variant_id) || 0) + line.pairs);
+  }
+  for (const [variantId, requestedPairs] of requestedByVariant) {
+    const onHand = await stockService.pairsOnHand(variantId);
+    if (requestedPairs > onHand) {
+      const variant = await productColorsService.getById(variantId);
+      const article = await productsService.getById(variant.article_id);
+      throw ApiError.conflict(
+        `Not enough stock for ${article.name} (${variant.color}): ${requestedPairs} pairs requested, only ${onHand} on hand.`,
+        'INSUFFICIENT_STOCK',
+        { variant_id: variantId, requested_pairs: requestedPairs, on_hand_pairs: onHand },
+      );
+    }
+  }
+}
 
 // Saving a draft deducts stock immediately (schema §5.6.1) — a negative ADJUSTMENT movement per
 // item, no ledger entry. bill_no/gp_no/bilty_no/adda_id are optional here (nullable on the draft
@@ -22,6 +48,7 @@ async function create(payload, userId) {
 
   const lines = payload.items.map((item) => buildLine(item, packings.get(item.variant_id)));
   const totals = buildTotals(lines, payload.invoice_discount);
+  await assertStockAvailable(lines);
 
   const draft = {
     bill_date: payload.bill_date,

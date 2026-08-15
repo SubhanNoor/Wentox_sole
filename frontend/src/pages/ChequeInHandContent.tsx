@@ -130,7 +130,7 @@ export function ChequeInHandContent({ onGoToDisposal }: { onGoToDisposal?: () =>
                     <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.unallocated)}</td>
                     <td className="p-3 text-center">
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-slate-100 text-slate-700 border-slate-300">
-                        {row.cheque_status === 'PENDING' ? 'Fully in Hand' : 'Partially Disposed'}
+                        {row.cheque_status === 'PENDING' ? 'Fully in Hand' : 'Partially Issued'}
                       </span>
                     </td>
                     {onGoToDisposal && (
@@ -141,7 +141,7 @@ export function ChequeInHandContent({ onGoToDisposal }: { onGoToDisposal?: () =>
                           title="Deposit, endorse, bounce or return this cheque on the Disposal tab"
                           className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 transition-colors cursor-pointer"
                         >
-                          Dispose →
+                          Issue →
                         </button>
                       </td>
                     )}

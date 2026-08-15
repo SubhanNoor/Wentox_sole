@@ -138,8 +138,7 @@ async function seedMaster() {
     () => repository.addas.findByName('Badami Bagh Adda'),
     () => addasService.create({
       name: 'Badami Bagh Adda',
-      region_id: geo.Punjab.region.region_id,
-      city_id: geo.Punjab.city.city_id,
+      city_ids: [geo.Punjab.city.city_id],
     }),
     'adda Badami Bagh Adda'
   );
@@ -147,8 +146,7 @@ async function seedMaster() {
     () => repository.addas.findByName('Karachi Goods Adda'),
     () => addasService.create({
       name: 'Karachi Goods Adda',
-      region_id: geo.Sindh.region.region_id,
-      city_id: geo.Sindh.city.city_id,
+      city_ids: [geo.Sindh.city.city_id],
     }),
     'adda Karachi Goods Adda'
   );

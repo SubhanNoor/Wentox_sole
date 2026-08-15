@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import OpeningBalanceFields from '@/components/OpeningBalanceFields';
@@ -40,6 +40,7 @@ export default function CustomerSetupPage() {
   useEffect(() => { loadAll(); }, [loadAll]);
 
   // Modal state
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCustomerId, setEditingCustomerId] = useState<number | null>(null);
   const [newCustomerName, setNewCustomerName] = useState('');
@@ -117,11 +118,24 @@ export default function CustomerSetupPage() {
     setErrorMsg('');
   };
 
+  // G-06: after a successful create, the window stays open and clears — ready for the next
+  // customer — instead of closing. G-04: the opening date is deliberately NOT reset here; it
+  // stays selected for the rest of this window's session and only clears on handleCloseModal.
+  const resetForNextCustomer = () => {
+    setEditingCustomerId(null);
+    setNewCustomerName('');
+    setNewCustomerRegionId('');
+    setNewCustomerCityId('');
+    setOpeningBalance('');
+    setErrorMsg('');
+    requestAnimationFrame(() => nameInputRef.current?.focus());
+  };
+
   const executeAddCustomer = async (data: api.CustomerCreateInput) => {
     const res = await api.customers.create(data);
     if (!res.ok) return setErrorMsg(res.error.message);
     flash('New customer added successfully.');
-    handleCloseModal();
+    resetForNextCustomer();
     loadAll();
   };
 
@@ -165,7 +179,7 @@ export default function CustomerSetupPage() {
     setPendingCustomer(null);
     if (!res.ok) return setErrorMsg('Failed to reactivate: ' + res.error.message);
     flash('Customer reactivated successfully.');
-    handleCloseModal();
+    resetForNextCustomer();
     loadAll();
   };
 
@@ -523,7 +537,7 @@ export default function CustomerSetupPage() {
                           <td className="p-3 text-slate-500 font-mono">{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                           <td className="p-3 text-slate-600">{row.narration || '-'}</td>
                           <td className="p-3 text-right font-semibold text-slate-900">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-                          <td className="p-3 text-right font-semibold text-slate-900">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
+                          <td className="p-3 text-right font-semibold text-rose-700">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
                           <td className="p-3 text-right font-bold text-amber-800">{formatCurrency(row.balance)}</td>
                         </tr>
                       ))
@@ -533,7 +547,7 @@ export default function CustomerSetupPage() {
                     <tr className="bg-slate-900 text-white font-bold text-xs">
                       <td colSpan={4} className="p-3 text-right uppercase tracking-wider text-[#B08D57]">Totals</td>
                       <td className="p-3 text-right">{formatCurrency(ledger?.total_debit || 0)}</td>
-                      <td className="p-3 text-right">{formatCurrency(ledger?.total_credit || 0)}</td>
+                      <td className="p-3 text-right text-rose-700">{formatCurrency(ledger?.total_credit || 0)}</td>
                       <td className="p-3 text-right text-[#B08D57]">{formatCurrency(ledger?.closing_balance || 0)}</td>
                     </tr>
                   </tfoot>
@@ -570,6 +584,7 @@ export default function CustomerSetupPage() {
                     Customer Name <span className="text-rose-500">*</span>
                   </label>
                   <input
+                    ref={nameInputRef}
                     type="text"
                     required
                     value={newCustomerName}

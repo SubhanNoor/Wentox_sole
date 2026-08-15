@@ -1249,6 +1249,7 @@ export function useApp() {
 /* ──────────────────── Helper Functions ──────────────────── */
 
 export function formatCurrency(value: number): string {
+  if (value < 0) return `(Rs ${Math.abs(value).toLocaleString('en-US')})`;
   return 'Rs ' + value.toLocaleString('en-US');
 }
 

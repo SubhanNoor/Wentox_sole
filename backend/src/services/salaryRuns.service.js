@@ -18,8 +18,23 @@ function normalizeMonth(dateStr) {
   return first.toISOString().slice(0, 10);
 }
 
-function validateHeader(payload) {
-  if (!payload.run_date) throw ApiError.badRequest('run_date is required');
+// Salary is always FOR the current month, so its posted/ledger date is always the LAST calendar
+// day of period_month — never "today" (a run created on the 3rd and posted on the 8th must still
+// read as the 30th/31st) and never client-supplied. period_month is already UTC-normalized by
+// normalizeMonth(), so this stays in UTC to match (see the note on dates.js — that local-date
+// helper is deliberately NOT used for this table).
+function lastDayOfMonth(periodMonthISO) {
+  const d = new Date(periodMonthISO);
+  const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+  return last.toISOString().slice(0, 10);
+}
+
+// "Salary for [Month] [Year]" — the fixed narration for every salary-run ledger entry. UTC to
+// match period_month's own UTC normalization, same reasoning as lastDayOfMonth().
+function salaryNarration(periodMonthISO) {
+  const d = new Date(periodMonthISO);
+  const month = d.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' });
+  return `Salary for ${month} ${d.getUTCFullYear()}`;
 }
 
 // Builds one line per ACTIVE salaried employee, server-authoritative — the caller never has to
@@ -80,7 +95,6 @@ async function assertMonthNotConfirmed(periodMonth) {
 // employee gets a line automatically; a normal month needs no `overrides` at all.
 async function create(payload, userId) {
   const periodMonth = normalizeMonth(payload.period_month);
-  validateHeader(payload);
   await assertMonthNotConfirmed(periodMonth);
 
   const lines = await buildLines(payload.overrides);
@@ -90,7 +104,7 @@ async function create(payload, userId) {
   const id = await withTransaction(async (transaction) => {
     const salaryRunId = await repository.insert(transaction, {
       period_month: periodMonth,
-      run_date: payload.run_date,
+      run_date: lastDayOfMonth(periodMonth),
       total_amount: totalAmount,
       created_by: userId,
     });
@@ -111,7 +125,6 @@ async function update(salaryRunId, payload, userId) {
   }
 
   const periodMonth = normalizeMonth(payload.period_month);
-  validateHeader(payload);
   if (periodMonth !== existing.period_month.toISOString().slice(0, 10)) {
     await assertMonthNotConfirmed(periodMonth);
   }
@@ -123,7 +136,7 @@ async function update(salaryRunId, payload, userId) {
   await withTransaction(async (transaction) => {
     await repository.updateHeader(transaction, salaryRunId, {
       period_month: periodMonth,
-      run_date: payload.run_date,
+      run_date: lastDayOfMonth(periodMonth),
       total_amount: totalAmount,
       updated_by: userId,
     });
@@ -171,6 +184,7 @@ async function post(salaryRunId, userId) {
     await repository.insertLedgerEntries(transaction, {
       salaryRunId,
       runDate: run.run_date,
+      narration: salaryNarration(run.period_month.toISOString().slice(0, 10)),
       salariesExpenseAcId: salariesExpenseAccount.ac_id,
       totalAmount: run.total_amount,
       lines: run.items.map((item) => ({ ba_id: item.employee_ba_id, amount: item.amount })),

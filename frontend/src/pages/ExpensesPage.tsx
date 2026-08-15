@@ -8,11 +8,12 @@ import type {
   ExpenseRow, ExpenseCreateInput, DraftExpenseRow, ExpensePaymentMode
 } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
-import { Save, Wallet, Edit } from 'lucide-react';
+import { Save, Wallet, Edit, Trash2 } from 'lucide-react';
+import PasswordPromptModal from '@/components/PasswordPromptModal';
 import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
 import MonthlyExpensesTab from '@/components/MonthlyExpensesTab';
 import OverallExpensesTab from '@/components/OverallExpensesTab';
-import AccountBalancePanel from '@/components/AccountBalancePanel';
+import AccountBalanceTooltip from '@/components/AccountBalanceTooltip';
 
 const today = () => new Date().toISOString().split('T')[0];
 
@@ -84,6 +85,19 @@ export default function ExpensesPage() {
   const [expenseStatus, setExpenseStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
   const [date, setDate] = useState(today());
   const [baId, setBaId] = useState('');
+  // RJ-02/PN-01: previewed account while arrow-keying through the dropdown, for the live balance tooltip.
+  const [previewBaId, setPreviewBaId] = useState<number | null>(null);
+
+  // PN-01/RJ-06: delete an expense entry, password-gated.
+  const [deleteTarget, setDeleteTarget] = useState<ExpenseRow | null>(null);
+  const handleDeleteConfirmed = async (password: string) => {
+    if (!deleteTarget) return;
+    const res = await api.expenses.remove(deleteTarget.expense_id, password);
+    setDeleteTarget(null);
+    if (!res.ok) return fail('Failed to delete: ' + res.error.message);
+    flash('Expense deleted.');
+    refreshExpenses();
+  };
   // Bumped after anything that posts, so the balance panel re-reads instead of showing a stale figure.
   const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
   const [amount, setAmount] = useState<number>(0);
@@ -547,18 +561,26 @@ export default function ExpensesPage() {
                   />
                 </div>
 
-                {/* Business Account Dropdown */}
+                {/* RJ-02/PN-01: account picker + a small live balance tooltip next to it,
+                    updating as the user arrow-keys/hovers through the dropdown (falls back to
+                    the committed account once closed). Replaces the old below-the-field panel. */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
                     Select Account (Who to Pay) <span className="text-red-500 font-bold">*</span>
                   </label>
-                  <SearchableSelect
-                    options={accountOptions}
-                    value={baId}
-                    onChange={setBaId}
-                    placeholder="Search account by name..."
-                    disabled={isViewMode}
-                  />
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <SearchableSelect
+                        options={accountOptions}
+                        value={baId}
+                        onChange={setBaId}
+                        onHighlightChange={val => setPreviewBaId(val ? Number(val) : null)}
+                        placeholder="Search account by name..."
+                        disabled={isViewMode}
+                      />
+                    </div>
+                    <AccountBalanceTooltip baId={previewBaId ?? (baId ? Number(baId) : null)} refreshKey={balanceRefreshKey} />
+                  </div>
                 </div>
 
                 {/* Display Parent Account Group */}
@@ -571,13 +593,19 @@ export default function ExpensesPage() {
                   </div>
                 )}
 
-                {/* An expense DEBITS the selected account, the opposite direction to a receipt —
-                    paying a vendor moves a payable balance back toward zero. */}
-                <AccountBalancePanel
-                  baId={baId ? Number(baId) : null}
-                  refreshKey={balanceRefreshKey}
-                  lines={[{ label: 'This payment', delta: amount }]}
-                />
+                {/* PN-01: Remarks moved ahead of Amount so it's filled in first. */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
+                  <textarea
+                    value={remarks}
+                    disabled={isViewMode}
+                    onChange={e => setRemarks(e.target.value)}
+                    placeholder="Enter remarks..."
+                    className="soleria-input"
+                    rows={2}
+                    style={{ resize: 'none' }}
+                  />
+                </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Amount Paid (PKR)</label>
@@ -718,27 +746,18 @@ export default function ExpensesPage() {
                   </div>
                 )}
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
-                  <textarea
-                    value={remarks}
-                    disabled={isViewMode}
-                    onChange={e => setRemarks(e.target.value)}
-                    placeholder="Enter remarks..."
-                    className="soleria-input"
-                    rows={2}
-                    style={{ resize: 'none' }}
-                  />
-                </div>
-
+                {/* RJ-04/PN-01: sticky so the post/save action stays reachable without
+                    scrolling back up or down a long form. */}
                 {!isViewMode && (
-                  <div className="flex gap-3 mt-2">
-                    <button
-                      type="submit"
-                      className="btn-gold w-full flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
-                    >
-                      <Save size={16} /> {mode === 'edit' ? 'Update Expense' : 'Save Expense'}
-                    </button>
+                  <div className="sticky bottom-0 z-10 -mx-6 md:-mx-8 px-6 md:px-8 pt-3 pb-4 mt-2 bg-white border-t" style={{ borderColor: 'var(--border-color)' }}>
+                    <div className="flex gap-3">
+                      <button
+                        type="submit"
+                        className="btn-gold w-full flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
+                      >
+                        <Save size={16} /> {mode === 'edit' ? 'Update Expense' : 'Save Expense'}
+                      </button>
+                    </div>
                   </div>
                 )}
               </form>
@@ -761,6 +780,7 @@ export default function ExpensesPage() {
                         <th className="p-3 text-center">Mode</th>
                         <th className="p-3 text-right">Amount</th>
                         <th className="p-3 text-center">Status</th>
+                        <th className="p-3 text-center" style={{ width: 50 }} />
                       </tr>
                     </thead>
                     <tbody>
@@ -782,6 +802,18 @@ export default function ExpensesPage() {
                               {r.status}
                             </span>
                           </td>
+                          <td className="p-3 text-center">
+                            {r.status !== 'CONFIRMED' && (
+                              <button
+                                type="button"
+                                onClick={e => { e.stopPropagation(); setDeleteTarget(r); }}
+                                title="Delete"
+                                className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -795,6 +827,14 @@ export default function ExpensesPage() {
 
 
       </div>
+
+      <PasswordPromptModal
+        isOpen={deleteTarget != null}
+        onClose={() => setDeleteTarget(null)}
+        onSuccess={handleDeleteConfirmed}
+        title="Delete Expense"
+        subtitle={deleteTarget ? `Confirm your password to permanently delete this ${formatCurrency(deleteTarget.amount)} expense. This cannot be undone.` : undefined}
+      />
     </AppLayout>
   );
 }

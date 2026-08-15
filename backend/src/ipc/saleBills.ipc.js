@@ -89,4 +89,14 @@ module.exports = function register() {
       return service.updateBiltyInfo(payload.id, payload);
     }),
   );
+
+  // SR-01: Sale Return prefills a line's rate from this instead of the article's current
+  // predefined sale_price.
+  ipcMain.handle(
+    'sale-bills:lastSoldRate',
+    wrap((payload) => {
+      requireSession();
+      return service.lastSoldRate(payload.customer_id, payload.variant_id);
+    }),
+  );
 };

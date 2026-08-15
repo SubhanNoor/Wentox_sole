@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, X, ListCollapse } from 'lucide-react';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
@@ -22,6 +22,7 @@ export default function GroupAcSetupPage() {
   const [sortBy, setSortBy] = useState<'code' | 'name'>('code');
 
   // Modal State
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
@@ -90,6 +91,7 @@ export default function GroupAcSetupPage() {
       }
       setSuccessMsg('Group Account updated successfully.');
       await loadData();
+      handleCloseModal();
     } else {
       const res = await groupAccountsApi.create({ name: typed, class_id: classId });
       if (!res.ok) {
@@ -103,10 +105,15 @@ export default function GroupAcSetupPage() {
       }
       setSuccessMsg('Group Account registered successfully.');
       await loadData();
+      // G-06: stays open, cleared, ready for another — class_id deliberately kept, same as it
+      // already survives handleCloseModal today.
+      setSelectedId(null);
+      setName('');
+      setErrorMsg('');
+      requestAnimationFrame(() => nameInputRef.current?.focus());
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
-    handleCloseModal();
   };
 
   const handleActivateDuplicate = async (id: string) => {
@@ -118,7 +125,10 @@ export default function GroupAcSetupPage() {
     }
     setIsDupModalOpen(false);
     setDupMatch(null);
-    handleCloseModal();
+    setSelectedId(null);
+    setName('');
+    setErrorMsg('');
+    requestAnimationFrame(() => nameInputRef.current?.focus());
   };
 
 
@@ -376,6 +386,7 @@ export default function GroupAcSetupPage() {
                     Account Title <span className="text-rose-500">*</span>
                   </label>
                   <input
+                    ref={nameInputRef}
                     type="text"
                     value={name}
                     onChange={e => setName(e.target.value)}

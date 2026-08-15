@@ -587,6 +587,53 @@ async function cashBookNonCashRows({ date_from, date_to }) {
   return result.recordset;
 }
 
+// CB-01 — bank-to-bank transfers, shown on the Cash Book as informational-only rows (never
+// counted in the cash totals, same treatment as cashBookNonCashRows' cheque/online rows): a
+// transfer where NEITHER side is the cash business account never touches CASH IN HAND, so
+// ledgerRows() correctly never surfaces it, but the client still wants it visible for the day.
+async function cashBookBankTransfers(cashBaId, { date_from, date_to }) {
+  const result = await query(
+    `SELECT t.transfer_id, t.transfer_date AS entry_date, t.amount, t.remarks,
+            fba.name AS from_name, tba.name AS to_name
+     FROM dbo.transfers t
+     JOIN dbo.business_accounts fba ON fba.ba_id = t.from_ba_id
+     JOIN dbo.business_accounts tba ON tba.ba_id = t.to_ba_id
+     WHERE t.status = 'CONFIRMED' AND t.from_ba_id <> @cashBaId AND t.to_ba_id <> @cashBaId
+       AND t.transfer_date >= @dateFrom AND t.transfer_date <= @dateTo
+     ORDER BY t.transfer_date, t.transfer_id`,
+    {
+      cashBaId: { type: sql.Int, value: cashBaId },
+      dateFrom: { type: sql.Date, value: date_from },
+      dateTo: { type: sql.Date, value: date_to },
+    },
+  );
+  return result.recordset;
+}
+
+// CB-03 — a cheque being DEPOSITED (banked), shown as its own informational-only Cash Book event
+// alongside Issued/Endorsed/Received (which cashBookNonCashRows already covers). Deliberately
+// excluded from cash totals — depositing a cheque already on CHEQUES IN HAND isn't new money, it's
+// the same reasoning cashBookNonCashRows' own comment gives for skipping DEPOSIT there.
+async function cashBookChequeDeposits({ date_from, date_to }) {
+  const result = await query(
+    `SELECT ca.allocation_id, ca.allocation_date AS entry_date, ca.amount,
+            ch.cheque_no, rc_ba.name AS payer_name, bank.name AS bank_name
+     FROM dbo.cheque_allocations ca
+     JOIN dbo.receipts rc ON rc.receipt_id = ca.receipt_id
+     JOIN dbo.business_accounts rc_ba ON rc_ba.ba_id = rc.ba_id
+     LEFT JOIN dbo.cheques ch ON ch.cheque_id = rc.cheque_id
+     LEFT JOIN dbo.bank_accounts bank ON bank.bank_id = ch.bank_id
+     WHERE ca.status = 'ACTIVE' AND ca.disposition_type = 'DEPOSIT'
+       AND ca.allocation_date >= @dateFrom AND ca.allocation_date <= @dateTo
+     ORDER BY ca.allocation_date, ca.allocation_id`,
+    {
+      dateFrom: { type: sql.Date, value: date_from },
+      dateTo: { type: sql.Date, value: date_to },
+    },
+  );
+  return result.recordset;
+}
+
 // New "Overall Searching" (UC-none — user-requested) — backed by the migration 008 VIEW so it
 // stays current with customers/vendors/employees/sub_customers/business_accounts automatically,
 // no app-side UNION to keep in sync by hand.
@@ -621,5 +668,7 @@ module.exports = {
   chartAccountsWithActivity,
   cashBookRows,
   cashBookNonCashRows,
+  cashBookBankTransfers,
+  cashBookChequeDeposits,
   overallDirectory,
 };

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import OpeningBalanceFields from '@/components/OpeningBalanceFields';
@@ -14,6 +14,7 @@ export default function VendorSetupPage() {
   const [selectedCityFilter, setSelectedCityFilter] = useState('all');
 
   // Modal State
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedVendorId, setSelectedVendorId] = useState<number | null>(null);
 
@@ -92,7 +93,22 @@ export default function VendorSetupPage() {
     setVendorPhone('');
     setVendorRegionId('');
     setVendorCityId('');
+    setOpeningDate('');
     setErrorMsg('');
+  };
+
+  // G-06: after a successful create, the window stays open and clears — ready for the next
+  // vendor — instead of closing. G-04: the opening date is deliberately NOT reset here; it stays
+  // selected for the rest of this window's session and only clears on handleCloseModal.
+  const resetForNextVendor = () => {
+    setSelectedVendorId(null);
+    setVendorName('');
+    setVendorPhone('');
+    setVendorRegionId('');
+    setVendorCityId('');
+    setOpeningBalance('');
+    setErrorMsg('');
+    requestAnimationFrame(() => nameInputRef.current?.focus());
   };
 
   const handleSaveVendor = async (e: React.FormEvent) => {
@@ -114,6 +130,7 @@ export default function VendorSetupPage() {
       const res = await api.vendors.update(selectedVendorId, payload);
       if (!res.ok) return setErrorMsg(res.error.message);
       flash('Vendor details updated successfully.');
+      handleCloseModal();
     } else {
       const res = await api.vendors.create(payload);
       if (!res.ok) {
@@ -124,9 +141,9 @@ export default function VendorSetupPage() {
         return setErrorMsg(res.error.message);
       }
       flash('New vendor registered successfully.');
+      resetForNextVendor();
     }
 
-    handleCloseModal();
     loadAll();
   };
 
@@ -136,7 +153,7 @@ export default function VendorSetupPage() {
     setReactivatePrompt(null);
     if (!res.ok) return setErrorMsg('Failed to reactivate: ' + res.error.message);
     flash('Existing vendor reactivated.');
-    handleCloseModal();
+    resetForNextVendor();
     loadAll();
   };
 
@@ -344,6 +361,7 @@ export default function VendorSetupPage() {
                       Vendor Partner Name <span className="text-rose-500">*</span>
                     </label>
                     <input
+                      ref={nameInputRef}
                       type="text"
                       value={vendorName}
                       onChange={e => setVendorName(e.target.value)}

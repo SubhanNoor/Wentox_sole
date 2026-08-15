@@ -381,7 +381,7 @@ export function VendorReportContent() {
                           <td className="p-3 font-semibold text-slate-800">{row.type}</td>
                           <td className="p-3 text-center font-mono text-xs">{row.ref}</td>
                           <td className="p-3 text-right font-bold text-rose-700">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-                          <td className="p-3 text-right font-bold text-emerald-700">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
+                          <td className="p-3 text-right font-bold text-rose-700">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
                           <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(Math.abs(row.balance))}</td>
                         </tr>
                       ))

@@ -490,7 +490,7 @@ export default function OverallSearchPage() {
                             <td className="p-3 text-right font-semibold text-slate-900">
                               {row.debit > 0 ? formatCurrency(row.debit) : '-'}
                             </td>
-                            <td className="p-3 text-right font-semibold text-slate-900">
+                            <td className="p-3 text-right font-semibold text-rose-700">
                               {row.credit > 0 ? formatCurrency(row.credit) : '-'}
                             </td>
                             <td className="p-3 text-right font-bold text-amber-900">
@@ -507,7 +507,7 @@ export default function OverallSearchPage() {
                           Totals for Selected Period
                         </td>
                         <td className="p-3 text-right">{formatCurrency(totalDebit)}</td>
-                        <td className="p-3 text-right">{formatCurrency(totalCredit)}</td>
+                        <td className="p-3 text-right text-rose-700">{formatCurrency(totalCredit)}</td>
                         <td className="p-3 text-right text-[#B08D57]">{formatCurrency(endingBalance)}</td>
                       </tr>
                     </tfoot>

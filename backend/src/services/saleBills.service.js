@@ -3,6 +3,9 @@
 const repository = require('../repositories/saleBills.repository');
 const chartAccountsRepository = require('../repositories/chartAccounts.repository');
 const customersService = require('./customers.service');
+const stockService = require('./stock.service');
+const productColorsService = require('./productColors.service');
+const productsService = require('./products.service');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 const {
@@ -183,6 +186,27 @@ async function postLedgerAndStock(transaction, { billId, customerId, netValue, b
     throw new Error(`Reserved chart account SALES (code ${CODES.SALES}) not found — run npm run seed`);
   }
 
+  // SB-03: never post a sale that would take a variant's stock negative. Requested pairs are
+  // summed per variant first — the same article/color can legitimately appear on more than one
+  // line (SB-02) — then checked against what's on hand before any of this bill's own movements
+  // are written.
+  const requestedByVariant = new Map();
+  for (const item of items) {
+    requestedByVariant.set(item.variant_id, (requestedByVariant.get(item.variant_id) || 0) + item.pairs);
+  }
+  for (const [variantId, requestedPairs] of requestedByVariant) {
+    const onHand = await stockService.pairsOnHand(variantId);
+    if (requestedPairs > onHand) {
+      const variant = await productColorsService.getById(variantId);
+      const article = await productsService.getById(variant.article_id);
+      throw ApiError.conflict(
+        `Not enough stock for ${article.name} (${variant.color}): ${requestedPairs} pairs requested, only ${onHand} on hand.`,
+        'INSUFFICIENT_STOCK',
+        { variant_id: variantId, requested_pairs: requestedPairs, on_hand_pairs: onHand },
+      );
+    }
+  }
+
   await repository.insertLedgerEntries(transaction, [
     {
       entry_date: billDate,
@@ -227,6 +251,12 @@ async function insertConfirmed(transaction, bill, lines) {
   return id;
 }
 
+// SR-01: rate this customer last paid for this variant, for Sale Return to prefill from instead
+// of the article's current predefined sale_price.
+function lastSoldRate(customerId, variantId) {
+  return repository.lastSoldRate(customerId, variantId);
+}
+
 async function getById(billId) {
   const bill = await repository.findById(billId);
   if (!bill) throw ApiError.notFound('Sale bill not found');
@@ -257,5 +287,5 @@ async function updateBiltyInfo(billId, payload) {
 
 module.exports = {
   create, list, getById, update, post, unpost, postLedgerAndStock, insertConfirmed,
-  biltySearch, updateBiltyInfo,
+  biltySearch, updateBiltyInfo, lastSoldRate,
 };

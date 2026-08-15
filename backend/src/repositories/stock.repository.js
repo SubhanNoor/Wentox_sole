@@ -119,6 +119,17 @@ async function currentStock(filters = {}) {
   return result.recordset;
 }
 
+// SB-03 — current pairs on hand for one finished-goods variant, so the service can reject a sale
+// that would take it negative before writing the SALE row. Same rollup as currentStock(), scoped
+// to a single variant rather than the whole catalog.
+async function pairsOnHand(variantId) {
+  const result = await query(
+    `SELECT ISNULL(SUM(qty_pairs), 0) AS on_hand FROM dbo.stock_movements WHERE variant_id = @variantId`,
+    { variantId: { type: sql.Int, value: variantId } },
+  );
+  return Number(result.recordset[0].on_hand);
+}
+
 // UC-30's manual reduction — current on-hand for one vendor+material+unit, so the service can
 // reject a reduction that would take it negative before writing the CONSUMPTION row.
 async function vendorMaterialOnHand(vendorId, materialId, unit) {
@@ -161,6 +172,7 @@ module.exports = {
   insertMovement,
   movements,
   currentStock,
+  pairsOnHand,
   vendorMaterialOnHand,
   insertVendorStockConsumption,
 };

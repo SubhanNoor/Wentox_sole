@@ -364,7 +364,7 @@ export default function BiltyUpdatePage() {
               </div>
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">Bill Number</label>
-                <input type="text" placeholder="Bill No..." value={billNoQuery} onChange={e => setBillNoQuery(e.target.value)} className="soleria-input py-1.5" />
+                <input type="text" placeholder="Manual or system Inv #..." value={billNoQuery} onChange={e => setBillNoQuery(e.target.value)} className="soleria-input py-1.5" />
               </div>
               <div className="md:col-span-2">
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">Customer Name</label>

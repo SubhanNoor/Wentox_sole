@@ -38,7 +38,7 @@ export function ReportCashBookContent() {
   const [result, setResult] = useState<CashBookResult>({
     opening_cash: 0, cash_received: 0, total_cash: 0, cash_paid: 0, cash_in_hand: 0,
     totals: { receipt_bank: 0, payment_bank: 0, receipt_cash: 0, payment_cash: 0 },
-    rows: [],
+    rows: [], bank_transfers: [], cheque_deposits: [],
   });
   const [loading, setLoading] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -373,6 +373,70 @@ export function ReportCashBookContent() {
               </div>
             ))}
           </div>
+
+          {/* CB-01: bank-to-bank transfers, informational only — no cash moved, so they change
+              nothing above. */}
+          {result.bank_transfers.length > 0 && (
+            <div className="mt-8">
+              <h3 className="font-lora font-semibold text-sm text-slate-700 mb-2 uppercase tracking-wide">Bank Transfers</h3>
+              <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border-color)' }}>
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                      {showDate && <th className="p-3 pl-4">Date</th>}
+                      <th className="p-3">From</th>
+                      <th className="p-3">To</th>
+                      <th className="p-3">Remarks</th>
+                      <th className="p-3 text-right pr-4">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.bank_transfers.map((t, idx) => (
+                      <tr key={idx} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
+                        {showDate && <td className="p-3 pl-4 text-xs font-mono text-slate-600">{formatDate(t.date)}</td>}
+                        <td className="p-3 font-semibold text-slate-800">{t.from_name}</td>
+                        <td className="p-3 font-semibold text-slate-800">{t.to_name}</td>
+                        <td className="p-3 text-xs text-slate-500">{t.remarks || '-'}</td>
+                        <td className="p-3 text-right pr-4 font-mono font-semibold text-slate-700">{formatCurrency(t.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* CB-03: cheques deposited/banked that day — informational only, alongside the
+              Issued/Endorsed/Received cheque events already in the main grid above. */}
+          {result.cheque_deposits.length > 0 && (
+            <div className="mt-8">
+              <h3 className="font-lora font-semibold text-sm text-slate-700 mb-2 uppercase tracking-wide">Cheques Deposited</h3>
+              <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border-color)' }}>
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                      {showDate && <th className="p-3 pl-4">Date</th>}
+                      <th className="p-3">Cheque No</th>
+                      <th className="p-3">From</th>
+                      <th className="p-3">Deposited To</th>
+                      <th className="p-3 text-right pr-4">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.cheque_deposits.map((d, idx) => (
+                      <tr key={idx} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
+                        {showDate && <td className="p-3 pl-4 text-xs font-mono text-slate-600">{formatDate(d.date)}</td>}
+                        <td className="p-3 text-xs font-mono text-slate-500">{d.cheque_no || '-'}</td>
+                        <td className="p-3 font-semibold text-slate-800">{d.payer_name}</td>
+                        <td className="p-3 text-slate-700">{d.bank_name || '-'}</td>
+                        <td className="p-3 text-right pr-4 font-mono font-semibold text-slate-700">{formatCurrency(d.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
         </div>
 

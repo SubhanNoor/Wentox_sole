@@ -14,6 +14,10 @@ interface SearchableSelectProps {
   placeholder?: string;
   searchPlaceholder?: string;
   disabled?: boolean;
+  /** RJ-02: fires with the currently arrow-key-highlighted option's value while the panel is
+   * open (null once closed), so a caller can live-preview something about it — e.g. an account's
+   * balance — before the user commits to a selection. */
+  onHighlightChange?: (value: string | null) => void;
 }
 
 /** Roughly the tallest the panel gets: search row + max-h-60 list. */
@@ -25,13 +29,17 @@ export default function SearchableSelect({
   onChange,
   placeholder = 'Select option...',
   searchPlaceholder = 'Search...',
-  disabled = false
+  disabled = false,
+  onHighlightChange
 }: SearchableSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
   const [pos, setPos] = useState<{ top: number; left: number; width: number; flip: boolean } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   /**
    * The panel is rendered through a PORTAL onto document.body rather than as an
@@ -94,6 +102,33 @@ export default function SearchableSelect({
     opt.value.toLowerCase().includes(search.toLowerCase())
   );
 
+  // Keyboard highlight resets to the current value (if it's in the filtered list) whenever the
+  // list changes — typing a search or reopening shouldn't leave the highlight pointing at
+  // whatever index happened to be highlighted before.
+  useEffect(() => {
+    if (!isOpen) return;
+    const selectedIdx = filteredOptions.findIndex(opt => opt.value === value);
+    setHighlightedIndex(selectedIdx >= 0 ? selectedIdx : 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, search]);
+
+  useEffect(() => {
+    optionRefs.current[highlightedIndex]?.scrollIntoView({ block: 'nearest' });
+  }, [highlightedIndex]);
+
+  useEffect(() => {
+    if (!onHighlightChange) return;
+    onHighlightChange(isOpen ? filteredOptions[highlightedIndex]?.value ?? null : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, highlightedIndex, filteredOptions.length]);
+
+  const open = () => {
+    if (disabled || isOpen) return;
+    place();
+    setIsOpen(true);
+    setSearch('');
+  };
+
   const toggle = () => {
     if (disabled) return;
     if (!isOpen) place();   // measured on open, not in an effect
@@ -101,12 +136,47 @@ export default function SearchableSelect({
     setSearch('');
   };
 
+  function handleTriggerKeyDown(e: React.KeyboardEvent) {
+    if (!isOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault();
+      open();
+    }
+  }
+
+  function commitHighlighted() {
+    const opt = filteredOptions[highlightedIndex];
+    if (!opt) return;
+    onChange(opt.value);
+    setIsOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  function handleSearchKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightedIndex(i => Math.min(i + 1, filteredOptions.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightedIndex(i => Math.max(i - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      commitHighlighted();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setIsOpen(false);
+      triggerRef.current?.focus();
+    }
+  }
+
   return (
     <div className="relative" ref={containerRef}>
       <button
+        ref={triggerRef}
         type="button"
+        data-field-nav="true"
         disabled={disabled}
         onClick={toggle}
+        onKeyDown={handleTriggerKeyDown}
         className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
       >
         <span className={selectedOption ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
@@ -134,6 +204,7 @@ export default function SearchableSelect({
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
               placeholder={searchPlaceholder}
               className="w-full bg-transparent border-none outline-none text-xs font-semibold text-slate-800 placeholder-slate-400 p-1"
               autoFocus
@@ -145,19 +216,25 @@ export default function SearchableSelect({
                 No matching options
               </div>
             ) : (
-              filteredOptions.map(opt => {
+              filteredOptions.map((opt, idx) => {
                 const isSelected = opt.value === value;
+                const isHighlighted = idx === highlightedIndex;
                 return (
                   <button
                     key={opt.value}
+                    ref={el => { optionRefs.current[idx] = el; }}
                     type="button"
+                    onMouseEnter={() => setHighlightedIndex(idx)}
                     onClick={() => {
                       onChange(opt.value);
                       setIsOpen(false);
+                      triggerRef.current?.focus();
                     }}
                     className={`w-full text-left px-3.5 py-2 text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
                       isSelected
                         ? 'bg-[var(--brand-gold)] text-white font-semibold'
+                        : isHighlighted
+                        ? 'bg-[#fbf7f0] text-[var(--brand-navy)]'
                         : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'
                     }`}
                   >

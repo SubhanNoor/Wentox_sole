@@ -179,10 +179,14 @@ GO
 ---------------------------------------------------------------------------- */
 -- POST-v4.3: region_id (required) added, per client instruction, so the Sale Bill/Sale Return
 -- adda dropdown/filter can be scoped the same way sub_customers' region filtering works.
+-- region_id/city_id are legacy — kept nullable for historical/audit continuity on addas created
+-- before migration 021 (AD-01), but the creation/edit screen no longer populates either. An adda's
+-- actual coverage area is now dbo.adda_routes (below): a checklist of every city it serves, not
+-- one city.
 CREATE TABLE dbo.addas (
   adda_id    INT IDENTITY(1,1) NOT NULL,
   name       NVARCHAR(100) NOT NULL,
-  region_id  INT          NOT NULL,
+  region_id  INT          NULL,
   city_id    INT          NULL,
   details    NVARCHAR(200) NULL,
   is_active  BIT          NOT NULL CONSTRAINT DF_addas_active  DEFAULT (1),
@@ -199,6 +203,28 @@ GO
 -- USED BY: Adda dropdown on Sale Bill / Sale Return forms; TASK-09's Search &
 -- Bilty Adda Updation screen (adda_id can still be changed after a bill is
 -- CONFIRMED, since it is non-financial dispatch metadata, §4.7).
+
+/* ----------------------------------------------------------------------------
+   dbo.adda_routes
+   WHAT:  Which cities a given adda serves — a plain many-to-many junction, one
+          row per (adda, city). AD-01: replaces the old single region_id/city_id
+          on dbo.addas, since a transport adda's actual route is several towns,
+          not one.
+   WHY:   A checklist against dbo.cities (Cities setup), not free text — same
+          "pick from what's already set up" convention as every other lookup.
+---------------------------------------------------------------------------- */
+CREATE TABLE dbo.adda_routes (
+  adda_id    INT NOT NULL,
+  city_id    INT NOT NULL,
+  created_at DATETIME2(0) NOT NULL CONSTRAINT DF_adda_routes_created DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_adda_routes      PRIMARY KEY (adda_id, city_id),
+  CONSTRAINT FK_adda_routes_adda FOREIGN KEY (adda_id) REFERENCES dbo.addas(adda_id) ON DELETE CASCADE,
+  CONSTRAINT FK_adda_routes_city FOREIGN KEY (city_id) REFERENCES dbo.cities(city_id)
+);
+CREATE INDEX IX_adda_routes_city ON dbo.adda_routes(city_id);
+GO
+-- USED BY: Adda Setup's Route checklist and AD-02's two-way search (search an
+-- adda to see its routes; search a city to see every adda serving it).
 
 /* ----------------------------------------------------------------------------
    dbo.materials
@@ -617,10 +643,9 @@ CREATE TABLE dbo.articles (
   -- replace the legacy set (which included p1/p2/na, meaning unknown). They are
   -- entered by hand and deliberately NEVER aggregated -- no total-cost column
   -- anywhere -- because they are piece rates, consumed individually when a
-  -- worker's wage is calculated. The rate is PER PAIR and wage quantity is in
-  -- CARTONS, so a wage line is rate x cartons x packing -- see dbo.wage_run_items,
-  -- which snapshots both the rate and the packing so editing an article later
-  -- cannot rewrite a wage already paid.
+  -- worker's wage is calculated. The rate is PER CARTON, so a wage line is
+  -- rate x cartons -- see dbo.wage_run_items, which snapshots the rate so
+  -- editing an article later cannot rewrite a wage already paid.
   cutting       DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_cut    DEFAULT (0),
   edging        DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_edge   DEFAULT (0),
   up_stitch     DECIMAL(12,2) NOT NULL CONSTRAINT DF_articles_upst   DEFAULT (0),
@@ -2081,16 +2106,20 @@ GO
 
 /* ----------------------------------------------------------------------------
    dbo.wage_run_items
-   WHAT:  One article on a wage run: rate x cartons x packing.
-   WHY:   The client's sheet reads RATE x QUANTITY = TOTAL, which does not
-          compute -- RATE x QUANTITY x 12 does, on every row. QUANTITY is
-          CARTONS, RATE is PER PAIR, and 12 is the ARTICLE'S OWN PACKING (a
-          24-pair article multiplies by 24).
-   NOTE:  rate and packing are SNAPSHOTS, deliberately duplicating
-          dbo.articles. The whole point is that they STOP matching when the
-          article is edited -- without them, changing one stage cost would
-          rewrite every wage ever paid at that rate, with no record of what
-          the worker actually received.
+   WHAT:  One article on a wage run: rate x cartons. RATE is PER CARTON (as of
+          migration 020 -- was previously per pair, multiplied by the
+          article's packing to convert cartons to pairs; the client now wants
+          stage rates entered/read directly per carton, so that conversion is
+          gone).
+   NOTE:  packing is still SNAPSHOTTED from dbo.articles per line (same as
+          rate) even though it no longer feeds the amount calculation -- kept
+          for historical/audit reference on old lines, not shown on the Wage
+          Run screen.
+   NOTE:  rate is a SNAPSHOT, deliberately duplicating dbo.articles. The whole
+          point is that it STOPS matching when the article is edited --
+          without it, changing one stage cost would rewrite every wage ever
+          paid at that rate, with no record of what the worker actually
+          received.
    NOTE:  amount is a PERSISTED COMPUTED column -- the first in this schema.
           Everywhere else (sale_bill_items.value, purchase_items.total_price)
           the extension is a plain column that CAN silently disagree with its
@@ -2104,10 +2133,10 @@ CREATE TABLE dbo.wage_run_items (
   item_id     INT IDENTITY(1,1) NOT NULL,
   wage_run_id INT           NOT NULL,
   article_id  INT           NOT NULL,
-  rate        DECIMAL(12,2) NOT NULL,               -- SNAPSHOT of the article's stage cost
+  rate        DECIMAL(12,2) NOT NULL,               -- SNAPSHOT of the article's stage cost, per carton
   cartons     INT           NOT NULL,               -- QUANTITY as entered on the sheet
-  packing     INT           NOT NULL,               -- SNAPSHOT of dbo.articles.packing
-  amount      AS (rate * cartons * packing) PERSISTED NOT NULL,
+  packing     INT           NOT NULL,               -- SNAPSHOT of dbo.articles.packing (audit only, not used in amount)
+  amount      AS (rate * cartons) PERSISTED NOT NULL,
   line_no     INT           NOT NULL CONSTRAINT DF_wri_line    DEFAULT (1),
   created_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_wri_created DEFAULT (SYSUTCDATETIME()),
   updated_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_wri_updated DEFAULT (SYSUTCDATETIME()),

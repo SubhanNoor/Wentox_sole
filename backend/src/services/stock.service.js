@@ -93,6 +93,12 @@ async function currentStock(filters = {}) {
 // UC-30 step 2 — records that some quantity of a vendor's material has been used, as a negative
 // CONSUMPTION row (source_type NULL — manual, not tied to a purchase/return document). Rejected
 // if it would take on-hand negative, same guard a real stock count would need.
+// SB-03 — current pairs on hand for one finished-goods variant; saleBills.service.js checks this
+// before posting a sale so a bill can never write stock negative.
+function pairsOnHand(variantId) {
+  return repository.pairsOnHand(variantId);
+}
+
 async function reduceVendorStock(payload, userId) {
   if (!payload.vendor_id) throw ApiError.badRequest('vendor_id is required');
   if (!payload.material_id) throw ApiError.badRequest('material_id is required');
@@ -120,4 +126,4 @@ async function reduceVendorStock(payload, userId) {
   return { movement_id: movementId };
 }
 
-module.exports = { logProduction, adjust, movements, currentStock, reduceVendorStock };
+module.exports = { logProduction, adjust, movements, currentStock, pairsOnHand, reduceVendorStock };

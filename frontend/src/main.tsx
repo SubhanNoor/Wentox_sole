@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
+import ErrorBoundary from '@/components/ErrorBoundary'
 import { AppProvider } from '@/context/AppContext'
 import { installApiBridge } from '@/lib/ipcBridge'
 import { readStoredZoom } from '@/lib/zoom'
@@ -21,9 +22,11 @@ api.zoom.set(readStoredZoom()).catch(() => {});
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
-      <AppProvider>
-        <App />
-      </AppProvider>
+      <ErrorBoundary>
+        <AppProvider>
+          <App />
+        </AppProvider>
+      </ErrorBoundary>
     </BrowserRouter>
   </StrictMode>,
 )

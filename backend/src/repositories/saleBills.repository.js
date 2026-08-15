@@ -268,8 +268,15 @@ async function biltySearch(filters = {}) {
     params.subCustomerId = { type: sql.Int, value: filters.sub_customer_id };
   }
   if (filters.bill_no) {
-    conditions.push('sb.bill_no = @billNo');
-    params.billNo = { type: sql.VarChar(30), value: filters.bill_no };
+    // BA-01: search by either bill number — the manual one (bill_no, client-typed) or the
+    // system-generated one (bill_id, the IDENTITY "Inv #"). A numeric query might be either, so
+    // both sides of the OR are checked; billId is null (never matches) when the query isn't a
+    // plain integer.
+    const trimmed = String(filters.bill_no).trim();
+    const asBillId = /^\d+$/.test(trimmed) ? Number(trimmed) : null;
+    conditions.push('(sb.bill_no = @billNo OR sb.bill_id = @billId)');
+    params.billNo = { type: sql.VarChar(30), value: trimmed };
+    params.billId = { type: sql.Int, value: asBillId };
   }
   if (filters.date_from) {
     conditions.push('sb.bill_date >= @dateFrom');
@@ -307,8 +314,27 @@ async function updateBiltyInfo(billId, { bilty_no, adda_id }) {
   );
 }
 
+// SR-01: the rate this customer actually paid last time for this variant, across every POSTED
+// bill (not drafts — a draft's rate was never confirmed as real). Most recent by bill_date, then
+// bill_id as the tiebreak for same-day bills. Null when there's no prior posted sale to go on.
+async function lastSoldRate(customerId, variantId) {
+  const result = await query(
+    `SELECT TOP 1 sbi.rate
+     FROM dbo.sale_bill_items sbi
+     JOIN dbo.sale_bills sb ON sb.bill_id = sbi.bill_id
+     WHERE sb.customer_id = @customerId AND sbi.variant_id = @variantId
+       AND EXISTS (SELECT 1 FROM dbo.ledger_entries le WHERE le.source_type = 'SALE_BILL' AND le.source_id = sb.bill_id)
+     ORDER BY sb.bill_date DESC, sb.bill_id DESC`,
+    {
+      customerId: { type: sql.Int, value: customerId },
+      variantId: { type: sql.Int, value: variantId },
+    },
+  );
+  return result.recordset[0] ? Number(result.recordset[0].rate) : null;
+}
+
 module.exports = {
   getVariantPackings, insert, insertItems, findById, isPosted, insertLedgerEntries,
   insertStockMovements, deleteItems, updateHeader, deleteLedgerAndStock, list,
-  biltySearch, updateBiltyInfo,
+  biltySearch, updateBiltyInfo, lastSoldRate,
 };

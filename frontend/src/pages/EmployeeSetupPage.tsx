@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { EmployeeRow, EmployeeType, StageRow, CityRow, WageRunRow, ExpenseRow } from '@/lib/api';
@@ -35,6 +35,7 @@ export default function EmployeeSetupPage() {
   const [cityFilter, setCityFilter] = useState('all');
 
   // Modal State
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
@@ -133,7 +134,24 @@ export default function EmployeeSetupPage() {
     setCityId('');
     setSelectedStages([]);
     setSalary('');
+    setOpeningBalance('');
+    setOpeningDate('');
     setErrorMsg('');
+  };
+
+  // G-06: after a successful create, the window stays open and clears — ready for the next
+  // employee — instead of closing. G-04: openingDate is deliberately NOT reset here; it stays
+  // selected for the rest of this window's session and only clears on handleCloseModal.
+  const resetForNextEmployee = () => {
+    setSelectedId(null);
+    setName('');
+    setPhone('');
+    setCityId('');
+    setSelectedStages([]);
+    setSalary('');
+    setOpeningBalance('');
+    setErrorMsg('');
+    requestAnimationFrame(() => nameInputRef.current?.focus());
   };
 
   const toggleStage = (key: string) => {
@@ -169,6 +187,7 @@ export default function EmployeeSetupPage() {
       const res = await api.employees.update(selectedId, payload);
       if (!res.ok) return setErrorMsg(res.error.message);
       flash('Employee details updated successfully.');
+      handleCloseModal();
     } else {
       const res = await api.employees.create(payload);
       if (!res.ok) {
@@ -179,9 +198,9 @@ export default function EmployeeSetupPage() {
         return setErrorMsg(res.error.message);
       }
       flash(`${empType === 'WORKER' ? 'Worker' : 'Salaried employee'} added successfully.`);
+      resetForNextEmployee();
     }
 
-    handleCloseModal();
     loadAll();
   };
 
@@ -191,7 +210,7 @@ export default function EmployeeSetupPage() {
     setReactivatePrompt(null);
     if (!res.ok) return fail('Failed to reactivate: ' + res.error.message);
     flash('Existing employee reactivated.');
-    handleCloseModal();
+    resetForNextEmployee();
     loadAll();
   };
 
@@ -460,6 +479,7 @@ export default function EmployeeSetupPage() {
                       Name <span className="text-rose-500 font-bold">*</span>
                     </label>
                     <input
+                      ref={nameInputRef}
                       type="text"
                       value={name}
                       onChange={e => setName(e.target.value)}

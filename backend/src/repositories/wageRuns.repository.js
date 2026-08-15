@@ -119,7 +119,7 @@ async function updateHeader(transaction, wageRunId, wageRun) {
   `);
 }
 
-// amount is a computed column (rate * cartons * packing PERSISTED) — never in this INSERT list.
+// amount is a computed column (rate * cartons PERSISTED) — never in this INSERT list.
 async function insertItems(transaction, wageRunId, items) {
   for (const [index, item] of items.entries()) {
     const request = requestWithParams(transaction, {
@@ -189,11 +189,11 @@ async function insertLedgerEntries(transaction, { wageRunId, runDate, wagesExpen
   const rows = [
     {
       entry_date: runDate, ac_id: wagesExpenseAcId, debit: amount, credit: 0,
-      source_type: 'WAGE_RUN', source_id: wageRunId, narration: `Wage Run #${wageRunId}`,
+      source_type: 'WAGE_RUN', source_id: wageRunId, narration: 'HISAB',
     },
     {
       entry_date: runDate, ba_id: workerBaId, debit: 0, credit: amount,
-      source_type: 'WAGE_RUN', source_id: wageRunId, narration: `Wage Run #${wageRunId}`,
+      source_type: 'WAGE_RUN', source_id: wageRunId, narration: 'HISAB',
     },
   ];
   for (const row of rows) {

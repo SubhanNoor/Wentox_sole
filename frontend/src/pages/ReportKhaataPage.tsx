@@ -3,6 +3,7 @@ import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Search, Eye } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
+import SearchableSelect from '@/components/SearchableSelect';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
 import * as api from '@/lib/api';
@@ -72,6 +73,13 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
   }, [isAllScope]);
 
   const selectedAccount = useMemo(() => directory.find(c => c.ba_id === accountBaId), [accountBaId, directory]);
+
+  // BL-01: search bar inside the detail view to jump straight to another account's ledger,
+  // without going back to the directory first.
+  const switcherOptions = useMemo(
+    () => directory.map(a => ({ value: String(a.ba_id), label: a.code ? `${a.name} (${a.code})` : a.name })),
+    [directory]
+  );
 
   const loadLedger = useCallback(async () => {
     if (!accountBaId) return;
@@ -382,6 +390,22 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                 </div>
               </div>
 
+              {/* BL-01: switch directly to another account's ledger without leaving this view. */}
+              <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
+                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider shrink-0 flex items-center gap-1">
+                  <Search size={13} className="text-slate-400" /> Switch Account:
+                </span>
+                <div className="w-full max-w-sm">
+                  <SearchableSelect
+                    options={switcherOptions}
+                    value={accountBaId != null ? String(accountBaId) : ''}
+                    onChange={val => setAccountBaId(Number(val))}
+                    placeholder="Search accounts..."
+                    searchPlaceholder="Type a name..."
+                  />
+                </div>
+              </div>
+
               {/* ROW 2: Date Filters (Left), Print & Export Buttons (Right) */}
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex flex-wrap items-center gap-3">
@@ -497,7 +521,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                             <td className="p-3 text-right text-rose-700 font-bold">
                               {row.debit > 0 ? formatCurrency(row.debit) : '-'}
                             </td>
-                            <td className="p-3 text-right text-emerald-700 font-bold">
+                            <td className="p-3 text-right text-rose-700 font-bold">
                               {row.credit > 0 ? formatCurrency(row.credit) : '-'}
                             </td>
                             <td className="p-3 text-right font-bold text-slate-800">
@@ -512,7 +536,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                     <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
                       <td colSpan={6} className="p-4 text-left font-lora">TOTAL</td>
                       <td className="p-4 text-right text-rose-800">{formatCurrency(ledger?.total_debit || 0)}</td>
-                      <td className="p-4 text-right text-emerald-800">{formatCurrency(ledger?.total_credit || 0)}</td>
+                      <td className="p-4 text-right text-rose-800">{formatCurrency(ledger?.total_credit || 0)}</td>
                       <td className="p-4 text-right" style={{ color: 'var(--brand-gold)' }}>
                         {formatCurrency(Math.abs(runningKhaata[runningKhaata.length - 1]?.balance || 0))}
                       </td>
