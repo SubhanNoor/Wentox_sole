@@ -230,7 +230,11 @@ export default function SalaryRunPage() {
         </div>
 
         {tab === 'entry' ? (
-          <div className={`card-white p-8 md:p-10 bg-white border min-h-[480px] transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`} style={{ borderColor: 'var(--border-color)' }}>
+          <form
+            onSubmit={e => e.preventDefault()}
+            className={`card-white p-8 md:p-10 bg-white border min-h-[480px] transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}
+            style={{ borderColor: 'var(--border-color)' }}
+          >
 
             <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
               <div>
@@ -260,6 +264,7 @@ export default function SalaryRunPage() {
                   <strong>{monthLabel(periodMonth)} has already been posted</strong> —{' '}
                   {formatCurrency(existingPosted.total_amount)} across {existingPosted.item_count ?? '—'} employee(s).
                   <button
+                    type="button"
                     onClick={() => { switchTab('history'); }}
                     className="ml-2 underline font-semibold hover:text-amber-900"
                   >
@@ -316,6 +321,7 @@ export default function SalaryRunPage() {
                             <td className="p-2 text-center">
                               {changed && (
                                 <button
+                                  type="button"
                                   onClick={() => resetLine(l.employee_id)}
                                   title="Reset to full salary"
                                   className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700"
@@ -352,10 +358,11 @@ export default function SalaryRunPage() {
                 )}
 
                 <div className="flex gap-3 justify-end border-t pt-4 mt-6">
-                  <button onClick={() => save(false)} className="px-5 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
+                  <button type="button" onClick={() => save(false)} className="px-5 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
                     Save as Unposted
                   </button>
                   <button
+                    type="submit"
                     onClick={() => save(true)}
                     disabled={!!existingPosted}
                     className="btn-gold flex items-center gap-1.5 px-5 py-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
@@ -365,7 +372,7 @@ export default function SalaryRunPage() {
                 </div>
               </>
             )}
-          </div>
+          </form>
         ) : (
           /* History */
           <div className={`card-white p-6 md:p-8 bg-white border transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`} style={{ borderColor: 'var(--border-color)' }}>

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { formatCurrency } from '@/context/AppContext';
+import { formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Search, Eye } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
@@ -330,16 +330,12 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                       width: '160px',
                       align: 'right',
                       render: c => (
-                        c.closing_balance === 0 ? (
-                          <span className="text-xs font-mono text-slate-400">—</span>
-                        ) : (
-                          <span
-                            className="text-xs font-mono font-bold"
-                            style={{ color: c.closing_balance > 0 ? '#047857' : '#e11d48' }}
-                          >
-                            {formatCurrency(Math.abs(c.closing_balance))}
-                          </span>
-                        )
+                        <span
+                          className="text-xs font-mono font-bold"
+                          style={{ color: balanceColor(c.closing_balance) }}
+                        >
+                          {formatCurrency(Math.abs(c.closing_balance))}
+                        </span>
                       ),
                     },
                     {
@@ -384,7 +380,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
 
                 <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
                   <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Opening Balance:</span>
-                  <span className="font-bold font-mono text-sm text-[var(--brand-gold)]">
+                  <span className="font-bold font-mono text-sm" style={{ color: balanceColor(runningKhaata[0]?.balance || 0) }}>
                     {formatCurrency(Math.abs(runningKhaata[0]?.balance || 0))}
                   </span>
                 </div>
@@ -524,7 +520,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                             <td className="p-3 text-right text-rose-700 font-bold">
                               {row.credit > 0 ? formatCurrency(row.credit) : '-'}
                             </td>
-                            <td className="p-3 text-right font-bold text-slate-800">
+                            <td className="p-3 text-right font-bold font-mono" style={{ color: balanceColor(row.balance) }}>
                               {formatCurrency(displayBal)}
                             </td>
                           </tr>
@@ -537,7 +533,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                       <td colSpan={6} className="p-4 text-left font-lora">TOTAL</td>
                       <td className="p-4 text-right text-rose-800">{formatCurrency(ledger?.total_debit || 0)}</td>
                       <td className="p-4 text-right text-rose-800">{formatCurrency(ledger?.total_credit || 0)}</td>
-                      <td className="p-4 text-right" style={{ color: 'var(--brand-gold)' }}>
+                      <td className="p-4 text-right" style={{ color: balanceColor(runningKhaata[runningKhaata.length - 1]?.balance || 0) }}>
                         {formatCurrency(Math.abs(runningKhaata[runningKhaata.length - 1]?.balance || 0))}
                       </td>
                     </tr>

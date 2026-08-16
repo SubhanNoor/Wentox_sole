@@ -36,7 +36,11 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
   const [toDate, setToDate]                 = useState(getTodayDate());
   const [customerQuery, setCustomerQuery]   = useState('');
   const [subCustomerQuery, setSubCustomerQuery] = useState('');
+  // BA-01: manual (client-typed) and system-generated (IDENTITY return_id) bill numbers are
+  // separate fields, both filtered client-side against their own column — same pattern used on
+  // Search Customer, Search & Bilty Adda Updation, and Sale Bill's own Find & Update tab.
   const [returnNoQuery, setReturnNoQuery]   = useState('');
+  const [systemReturnNoQuery, setSystemReturnNoQuery] = useState('');
   const [biltyNoQuery, setBiltyNoQuery]     = useState('');
   const [gpNoQuery, setGpNoQuery]           = useState('');
   const [articleFilter, setArticleFilter]   = useState('');
@@ -61,14 +65,23 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
       const res = await api.saleReturns.list({
         date_from: fromDate || undefined,
         date_to: toDate || undefined,
-        bill_no: returnNoQuery.trim() || undefined
       });
       if (res.ok) setReturns(res.data);
     })();
-  }, [fromDate, toDate, returnNoQuery]);
+  }, [fromDate, toDate]);
 
   const filteredReturns = useMemo(() => {
     let result = [...returns];
+
+    if (returnNoQuery.trim()) {
+      const q = returnNoQuery.trim().toLowerCase();
+      result = result.filter(r => r.bill_no.toLowerCase().includes(q));
+    }
+
+    if (systemReturnNoQuery.trim()) {
+      const q = systemReturnNoQuery.trim();
+      result = result.filter(r => String(r.return_id).includes(q));
+    }
 
     if (biltyNoQuery.trim()) {
       const q = biltyNoQuery.trim().toLowerCase();
@@ -106,7 +119,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
 
     result.sort((a, b) => b.return_date.localeCompare(a.return_date));
     return result;
-  }, [returns, customers, subCustomers, biltyNoQuery, gpNoQuery, customerQuery, subCustomerQuery, articleFilter, itemsCache, products]);
+  }, [returns, customers, subCustomers, returnNoQuery, systemReturnNoQuery, biltyNoQuery, gpNoQuery, customerQuery, subCustomerQuery, articleFilter, itemsCache, products]);
 
   const { totalCartons, totalPairs, totalValue } = useMemo(() => {
     let cartons = 0;
@@ -129,10 +142,10 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
     exportRowsToExcel('sale-returns-search', headers, rows);
   };
 
-  const hasFilters = fromDate || toDate || returnNoQuery || biltyNoQuery || gpNoQuery || customerQuery || subCustomerQuery || articleFilter;
+  const hasFilters = fromDate || toDate || returnNoQuery || systemReturnNoQuery || biltyNoQuery || gpNoQuery || customerQuery || subCustomerQuery || articleFilter;
 
   const clearAllFilters = () => {
-    setFromDate(getThreeMonthsAgoDate()); setToDate(getTodayDate()); setReturnNoQuery(''); setBiltyNoQuery('');
+    setFromDate(getThreeMonthsAgoDate()); setToDate(getTodayDate()); setReturnNoQuery(''); setSystemReturnNoQuery(''); setBiltyNoQuery('');
     setGpNoQuery(''); setCustomerQuery(''); setSubCustomerQuery(''); setArticleFilter('');
   };
 
@@ -151,11 +164,12 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
           <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
             Date of Print: {formatDate(new Date())}
           </p>
-          {(customerQuery || returnNoQuery || biltyNoQuery || gpNoQuery || subCustomerQuery) && (
+          {(customerQuery || returnNoQuery || systemReturnNoQuery || biltyNoQuery || gpNoQuery || subCustomerQuery) && (
             <div style={{ marginTop: '6px', fontSize: '10.5px', color: '#444444' }}>
               {customerQuery && <span style={{ marginRight: '10px' }}><strong>Customer:</strong> {customerQuery}</span>}
               {subCustomerQuery && <span style={{ marginRight: '10px' }}><strong>Sub-Customer:</strong> {subCustomerQuery}</span>}
-              {returnNoQuery && <span style={{ marginRight: '10px' }}><strong>Return #:</strong> {returnNoQuery}</span>}
+              {returnNoQuery && <span style={{ marginRight: '10px' }}><strong>Manual Return #:</strong> {returnNoQuery}</span>}
+              {systemReturnNoQuery && <span style={{ marginRight: '10px' }}><strong>System Return #:</strong> {systemReturnNoQuery}</span>}
               {biltyNoQuery && <span style={{ marginRight: '10px' }}><strong>Bilty #:</strong> {biltyNoQuery}</span>}
               {gpNoQuery && <span style={{ marginRight: '10px' }}><strong>GP #:</strong> {gpNoQuery}</span>}
             </div>
@@ -263,8 +277,8 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
             )}
           </div>
 
-          {/* Row 1 — Date range, Return No., Bilty No., GP No. */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+          {/* Row 1 — Date range, Return Nos., Bilty No. */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 mb-3">
             <div>
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
                 <Calendar size={12} /> From Date
@@ -281,11 +295,21 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
             </div>
             <div>
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
-                <FileText size={12} /> By Return No.
+                <FileText size={12} /> Manual Return No.
               </label>
               <input
-                type="text" placeholder="e.g. 10046"
+                type="text" placeholder="Client-typed return no..."
                 value={returnNoQuery} onChange={e => setReturnNoQuery(e.target.value)}
+                className="soleria-input text-xs font-mono"
+              />
+            </div>
+            <div>
+              <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
+                <FileText size={12} /> System Return No. (Inv #)
+              </label>
+              <input
+                type="text" placeholder="System-generated Inv #..."
+                value={systemReturnNoQuery} onChange={e => setSystemReturnNoQuery(e.target.value)}
                 className="soleria-input text-xs font-mono"
               />
             </div>

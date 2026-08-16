@@ -15,7 +15,11 @@ export default function BiltyUpdatePage() {
   const [endDate, setEndDate] = useState('');
   const [customerQuery, setCustomerQuery] = useState('');
   const [subCustomerQuery, setSubCustomerQuery] = useState('');
-  const [billNoQuery, setBillNoQuery] = useState('');
+  // BA-01: manual (client-typed) and system-generated (IDENTITY bill_id) bill numbers are
+  // separate fields — each filters client-side against its own column, same pattern as
+  // customerQuery/subCustomerQuery below, rather than one combined field guessing which is meant.
+  const [manualBillNoQuery, setManualBillNoQuery] = useState('');
+  const [systemBillNoQuery, setSystemBillNoQuery] = useState('');
 
   // Radio Filters State
   const [biltyStatusFilter, setBiltyStatusFilter] = useState<'all' | 'no-bilty' | 'no-adda' | 'has-bilty'>('all');
@@ -43,11 +47,10 @@ export default function BiltyUpdatePage() {
     const res = await api.saleBills.biltySearch({
       date_from: startDate || undefined,
       date_to: endDate || undefined,
-      bill_no: billNoQuery.trim() || undefined,
     });
     if (res.ok) setInvoices(res.data);
     setLoading(false);
-  }, [startDate, endDate, billNoQuery]);
+  }, [startDate, endDate]);
 
   useEffect(() => { loadInvoices(); }, [loadInvoices]);
 
@@ -120,6 +123,16 @@ export default function BiltyUpdatePage() {
       result = result.filter(b => (b.sub_customer_name || '').toLowerCase().includes(q));
     }
 
+    if (manualBillNoQuery.trim()) {
+      const q = manualBillNoQuery.trim().toLowerCase();
+      result = result.filter(b => b.bill_no.toLowerCase().includes(q));
+    }
+
+    if (systemBillNoQuery.trim()) {
+      const q = systemBillNoQuery.trim();
+      result = result.filter(b => String(b.bill_id).includes(q));
+    }
+
     if (biltyStatusFilter === 'no-bilty') {
       result = result.filter(b => !b.bilty_no || b.bilty_no.trim() === '');
     } else if (biltyStatusFilter === 'no-adda') {
@@ -137,7 +150,7 @@ export default function BiltyUpdatePage() {
     });
 
     return result;
-  }, [invoices, customerQuery, subCustomerQuery, biltyStatusFilter, sortBy]);
+  }, [invoices, customerQuery, subCustomerQuery, manualBillNoQuery, systemBillNoQuery, biltyStatusFilter, sortBy]);
 
   // Count summary helpers
   const missingBilty = filteredInvoices.filter(b => !b.bilty_no || !b.bilty_no.trim()).length;
@@ -170,12 +183,13 @@ export default function BiltyUpdatePage() {
       </div>
 
       {/* Active Filters summary */}
-      {(customerQuery || subCustomerQuery || billNoQuery || biltyStatusFilter !== 'all') && (
+      {(customerQuery || subCustomerQuery || manualBillNoQuery || systemBillNoQuery || biltyStatusFilter !== 'all') && (
         <p style={{ fontSize: '10px', color: '#555', marginBottom: '10px', fontStyle: 'italic' }}>
           Filters applied —
           {customerQuery ? ` Customer: "${customerQuery}"` : ''}
           {subCustomerQuery ? ` Sub-Customer: "${subCustomerQuery}"` : ''}
-          {billNoQuery ? ` Bill No: "${billNoQuery}"` : ''}
+          {manualBillNoQuery ? ` Manual Bill No: "${manualBillNoQuery}"` : ''}
+          {systemBillNoQuery ? ` System Bill No: "${systemBillNoQuery}"` : ''}
           {biltyStatusFilter !== 'all' ? ` Status: ${biltyStatusFilter}` : ''}
         </p>
       )}
@@ -363,10 +377,14 @@ export default function BiltyUpdatePage() {
             value={endDate} onChange={e => setEndDate(e.target.value)} className="soleria-input py-1.5" />
               </div>
               <div>
-                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Bill Number</label>
-                <input type="text" placeholder="Manual or system Inv #..." value={billNoQuery} onChange={e => setBillNoQuery(e.target.value)} className="soleria-input py-1.5" />
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Manual Bill No.</label>
+                <input type="text" placeholder="Client-typed bill no..." value={manualBillNoQuery} onChange={e => setManualBillNoQuery(e.target.value)} className="soleria-input py-1.5" />
               </div>
-              <div className="md:col-span-2">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">System Bill No. (Inv #)</label>
+                <input type="text" placeholder="System-generated Inv #..." value={systemBillNoQuery} onChange={e => setSystemBillNoQuery(e.target.value)} className="soleria-input py-1.5" />
+              </div>
+              <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">Customer Name</label>
                 <input type="text" placeholder="Search customer..." value={customerQuery} onChange={e => setCustomerQuery(e.target.value)} className="soleria-input py-1.5" />
               </div>

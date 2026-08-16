@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { formatCurrency } from '@/context/AppContext';
+import { formatCurrency, balanceColor } from '@/context/AppContext';
 import * as api from '@/lib/api';
 
 /**
@@ -9,10 +9,12 @@ import * as api from '@/lib/api';
  * updates in real time as the user arrow-keys through the list, before they commit to one.
  */
 
+// G-05: red for negative (payable), green for zero or positive (receivable/settled) — color comes
+// from the shared balanceColor() rule, only the label text varies by which side of zero we're on.
 function balanceTone(value: number): { label: string; color: string } {
-  if (value > 0) return { label: 'Receivable', color: '#047857' };
-  if (value < 0) return { label: 'Payable', color: '#e11d48' };
-  return { label: 'Settled', color: '#64748b' };
+  if (value > 0) return { label: 'Receivable', color: balanceColor(value) };
+  if (value < 0) return { label: 'Payable', color: balanceColor(value) };
+  return { label: 'Settled', color: balanceColor(value) };
 }
 
 interface AccountBalanceTooltipProps {

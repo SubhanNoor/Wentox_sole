@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { useApp, formatCurrency } from '@/context/AppContext';
+import { useApp, formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
 import type { BankAccountRow } from '@/lib/api';
@@ -280,7 +280,7 @@ export default function BankSetupPage() {
                   return (
                     <span
                       className="font-mono text-xs font-bold"
-                      style={{ color: bal < 0 ? '#e11d48' : '#047857' }}
+                      style={{ color: balanceColor(bal) }}
                     >
                       {formatCurrency(Math.abs(bal))}
                       <span className="ml-1.5 text-[10px] font-semibold uppercase">{bal < 0 ? 'Cr' : 'Dr'}</span>
@@ -320,7 +320,9 @@ export default function BankSetupPage() {
 
         {/* Add/Edit Bank Account — Modal Dialogue Box Pop-up */}
         {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}
+            onKeyDown={e => { if (e.key === 'Escape') { (handleCloseModal)(); } }}
+            tabIndex={-1}>
             <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
                 <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">

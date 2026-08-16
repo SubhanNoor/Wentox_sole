@@ -39,7 +39,11 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
   const [toDate, setToDate]                 = useState(getTodayDate());
   const [customerQuery, setCustomerQuery]   = useState('');
   const [subCustomerQuery, setSubCustomerQuery] = useState('');
+  // BA-01: manual (client-typed) and system-generated (IDENTITY bill_id) bill numbers are
+  // separate fields, both filtered client-side against their own column — same pattern used on
+  // the Search Customer and Search & Bilty Adda Updation pages.
   const [billNoQuery, setBillNoQuery]       = useState('');
+  const [systemBillNoQuery, setSystemBillNoQuery] = useState('');
   const [biltyNoQuery, setBiltyNoQuery]     = useState('');
   const [addaFilter, setAddaFilter]         = useState('');
   const [articleFilter, setArticleFilter]   = useState('');
@@ -65,14 +69,23 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
       const res = await api.saleBills.list({
         date_from: fromDate || undefined,
         date_to: toDate || undefined,
-        bill_no: billNoQuery.trim() || undefined
       });
       if (res.ok) setBills(res.data);
     })();
-  }, [fromDate, toDate, billNoQuery]);
+  }, [fromDate, toDate]);
 
   const filteredInvoices = useMemo(() => {
     let result = [...bills];
+
+    if (billNoQuery.trim()) {
+      const q = billNoQuery.trim().toLowerCase();
+      result = result.filter(b => b.bill_no.toLowerCase().includes(q));
+    }
+
+    if (systemBillNoQuery.trim()) {
+      const q = systemBillNoQuery.trim();
+      result = result.filter(b => String(b.bill_id).includes(q));
+    }
 
     if (biltyNoQuery.trim()) {
       const q = biltyNoQuery.trim().toLowerCase();
@@ -115,7 +128,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
 
     result.sort((a, b) => b.bill_date.localeCompare(a.bill_date));
     return result;
-  }, [bills, customers, subCustomers, biltyNoQuery, customerQuery, subCustomerQuery, addaFilter, articleFilter, missingFilter, itemsCache, products]);
+  }, [bills, customers, subCustomers, billNoQuery, systemBillNoQuery, biltyNoQuery, customerQuery, subCustomerQuery, addaFilter, articleFilter, missingFilter, itemsCache, products]);
 
   const { totalCartons, totalPairs, totalValue } = useMemo(() => {
     let cartons = 0;
@@ -138,10 +151,10 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
     exportRowsToExcel('sale-bills-search', headers, rows);
   };
 
-  const hasFilters = fromDate || toDate || billNoQuery || biltyNoQuery || customerQuery || subCustomerQuery || addaFilter || articleFilter || missingFilter !== 'all';
+  const hasFilters = fromDate || toDate || billNoQuery || systemBillNoQuery || biltyNoQuery || customerQuery || subCustomerQuery || addaFilter || articleFilter || missingFilter !== 'all';
 
   const clearAllFilters = () => {
-    setFromDate(getThreeMonthsAgoDate()); setToDate(getTodayDate()); setBillNoQuery(''); setBiltyNoQuery('');
+    setFromDate(getThreeMonthsAgoDate()); setToDate(getTodayDate()); setBillNoQuery(''); setSystemBillNoQuery(''); setBiltyNoQuery('');
     setCustomerQuery(''); setSubCustomerQuery(''); setAddaFilter(''); setArticleFilter('');
     setMissingFilter('all');
   };
@@ -161,12 +174,14 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
           <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
             Date of Print: {formatDate(new Date())}
           </p>
-          {(customerQuery || addaFilter || articleFilter || subCustomerQuery || biltyNoQuery || missingFilter !== 'all') && (
+          {(customerQuery || addaFilter || articleFilter || subCustomerQuery || billNoQuery || systemBillNoQuery || biltyNoQuery || missingFilter !== 'all') && (
             <div style={{ marginTop: '6px', fontSize: '10.5px', color: '#444444' }}>
               {customerQuery && <span style={{ marginRight: '10px' }}><strong>Customer:</strong> {customerQuery}</span>}
               {subCustomerQuery && <span style={{ marginRight: '10px' }}><strong>Sub-Customer:</strong> {subCustomerQuery}</span>}
               {addaFilter && <span style={{ marginRight: '10px' }}><strong>Adda:</strong> {addas.find(a => a.adda_id === Number(addaFilter))?.name}</span>}
               {articleFilter && <span style={{ marginRight: '10px' }}><strong>Article:</strong> {products.find(p => p.article_id === Number(articleFilter))?.name}</span>}
+              {billNoQuery && <span style={{ marginRight: '10px' }}><strong>Manual Bill No:</strong> {billNoQuery}</span>}
+              {systemBillNoQuery && <span style={{ marginRight: '10px' }}><strong>System Bill No:</strong> {systemBillNoQuery}</span>}
               {biltyNoQuery && <span style={{ marginRight: '10px' }}><strong>Bilty #:</strong> {biltyNoQuery}</span>}
             </div>
           )}
@@ -274,8 +289,8 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
             )}
           </div>
 
-          {/* Row 1 — Date range, Bill No., Bilty No. */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+          {/* Row 1 — Date range, Bill Nos., Bilty No. */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 mb-3">
             <div>
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
                 <Calendar size={12} /> From Date
@@ -292,11 +307,21 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
             </div>
             <div>
               <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
-                <FileText size={12} /> By Bill No.
+                <FileText size={12} /> Manual Bill No.
               </label>
               <input
-                type="text" placeholder="e.g. 10046"
+                type="text" placeholder="Client-typed bill no..."
                 value={billNoQuery} onChange={e => setBillNoQuery(e.target.value)}
+                className="soleria-input text-xs font-mono"
+              />
+            </div>
+            <div>
+              <label className="flex items-center gap-1 text-xs font-semibold text-slate-600 mb-1">
+                <FileText size={12} /> System Bill No. (Inv #)
+              </label>
+              <input
+                type="text" placeholder="System-generated Inv #..."
+                value={systemBillNoQuery} onChange={e => setSystemBillNoQuery(e.target.value)}
                 className="soleria-input text-xs font-mono"
               />
             </div>

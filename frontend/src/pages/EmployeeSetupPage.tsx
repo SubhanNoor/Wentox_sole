@@ -3,6 +3,7 @@ import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { EmployeeRow, EmployeeType, StageRow, CityRow, WageRunRow, ExpenseRow } from '@/lib/api';
 import { getEmployeeBalance, type FlatSalaryItem } from '@/lib/payroll';
+import { getTodayDate } from '@/lib/utils';
 import AppLayout from '@/components/AppLayout';
 import OpeningBalanceFields from '@/components/OpeningBalanceFields';
 import { Plus, Search, Settings, Save, Edit2, Phone, MapPin, HardHat, BadgeDollarSign, X, RotateCcw } from 'lucide-react';
@@ -49,7 +50,7 @@ export default function EmployeeSetupPage() {
   // The opening balance lives on the auto-created business account, not on this row — the service
   // forwards it there (same route bankAccounts.service.js has always used).
   const [openingBalance, setOpeningBalance] = useState('');
-  const [openingDate, setOpeningDate] = useState('');
+  const [openingDate, setOpeningDate] = useState(getTodayDate());
 
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -135,7 +136,7 @@ export default function EmployeeSetupPage() {
     setSelectedStages([]);
     setSalary('');
     setOpeningBalance('');
-    setOpeningDate('');
+    setOpeningDate(getTodayDate());
     setErrorMsg('');
   };
 
@@ -419,7 +420,9 @@ export default function EmployeeSetupPage() {
 
         {/* Modal Dialogue Box Pop-up */}
         {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}
+            onKeyDown={e => { if (e.key === 'Escape') { (handleCloseModal)(); } }}
+            tabIndex={-1}>
             <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
                 <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
@@ -591,7 +594,9 @@ export default function EmployeeSetupPage() {
 
         {/* Reactivate-inactive-duplicate prompt */}
         {reactivatePrompt && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setReactivatePrompt(null)}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setReactivatePrompt(null)}
+            onKeyDown={e => { if (e.key === 'Escape') { (() => setReactivatePrompt(null))(); } }}
+            tabIndex={-1}>
             <div className="bg-white rounded-2xl border-2 border-amber-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
               <h3 className="font-lora font-bold text-base text-slate-900 mb-2 flex items-center gap-2">
                 <RotateCcw size={18} className="text-amber-500" /> Inactive Employee Found

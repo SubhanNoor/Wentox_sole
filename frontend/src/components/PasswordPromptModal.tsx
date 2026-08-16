@@ -50,7 +50,17 @@ export default function PasswordPromptModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
+      onKeyDown={e => {
+        if (e.key === 'Escape') {
+          setPassword('');
+          setErrorMsg('');
+          onClose();
+        }
+      }}
+      tabIndex={-1}
+    >
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden">
         {/* Header Banner in Wentox Deep Navy */}
         <div className="bg-[#111c2a] p-5 text-white flex items-center justify-between border-b border-[#B08D57]/40">

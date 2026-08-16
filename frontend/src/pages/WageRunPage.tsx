@@ -355,7 +355,10 @@ export default function WageRunPage() {
         </div>
 
         {tab === 'entry' ? (
-          <div className={`flex flex-col gap-5 transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
+          <form
+            onSubmit={e => e.preventDefault()}
+            className={`flex flex-col gap-5 transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}
+          >
 
             {/* Header */}
             <div className="card-white p-6 bg-white border" style={{ borderColor: 'var(--border-color)' }}>
@@ -476,6 +479,7 @@ export default function WageRunPage() {
                   </p>
                 </div>
                 <button
+                  type="button"
                   onClick={addRow}
                   disabled={!stage}
                   className="btn-gold flex items-center gap-1.5 px-3 py-1.5 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
@@ -550,7 +554,7 @@ export default function WageRunPage() {
                               {it.amount ? formatCurrency(it.amount) : <span className="text-slate-300">—</span>}
                             </td>
                             <td className="p-2 text-center">
-                              <button onClick={() => removeRow(it.key)} className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600" title="Remove line">
+                              <button type="button" onClick={() => removeRow(it.key)} className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600" title="Remove line">
                                 <Trash2 size={15} />
                               </button>
                             </td>
@@ -588,16 +592,16 @@ export default function WageRunPage() {
                 )}
 
                 <div className="flex gap-3 justify-end border-t pt-4 mt-4">
-                  <button onClick={() => save(false)} className="px-5 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
+                  <button type="button" onClick={() => save(false)} className="px-5 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
                     Save as Unposted
                   </button>
-                  <button onClick={() => save(true)} className="btn-gold flex items-center gap-1.5 px-5 py-2 text-sm">
+                  <button type="submit" onClick={() => save(true)} className="btn-gold flex items-center gap-1.5 px-5 py-2 text-sm">
                     <Save size={16} /> {editingRunId ? 'Save & Post' : 'Post Wage Run'}
                   </button>
                 </div>
               </div>
             )}
-          </div>
+          </form>
         ) : (
           /* History */
           <div className={`card-white p-6 md:p-8 bg-white border transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`} style={{ borderColor: 'var(--border-color)' }}>

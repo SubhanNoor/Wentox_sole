@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { formatCurrency } from '@/context/AppContext';
+import { formatCurrency, balanceColor } from '@/context/AppContext';
 import * as api from '@/lib/api';
 
 /**
@@ -38,15 +38,18 @@ interface AccountBalancePanelProps {
 // 'Receivable' / 'Payable' rather than Dr / Cr: the people using this screen think in who-owes-whom,
 // and the Naam/Jamma columns elsewhere already carry the accounting vocabulary. Same sign
 // convention either way — positive is a debit balance — only the words change.
+// G-05: red for negative, green for zero or positive — color comes from the shared balanceColor()
+// rule, only the label text varies by variant/sign.
 function balanceTone(value: number, variant: 'party' | 'money'): { label: string; color: string } {
+  const color = balanceColor(value);
   if (variant === 'money') {
-    if (value > 0) return { label: 'In Hand', color: '#047857' };
-    if (value < 0) return { label: 'Overdrawn', color: '#e11d48' };
-    return { label: 'Empty', color: '#64748b' };
+    if (value > 0) return { label: 'In Hand', color };
+    if (value < 0) return { label: 'Overdrawn', color };
+    return { label: 'Empty', color };
   }
-  if (value > 0) return { label: 'Receivable', color: '#047857' };
-  if (value < 0) return { label: 'Payable', color: '#e11d48' };
-  return { label: 'Settled', color: '#64748b' };
+  if (value > 0) return { label: 'Receivable', color };
+  if (value < 0) return { label: 'Payable', color };
+  return { label: 'Settled', color };
 }
 
 export default function AccountBalancePanel({ baId, lines, refreshKey = 0, variant = 'party', className = '' }: AccountBalancePanelProps) {

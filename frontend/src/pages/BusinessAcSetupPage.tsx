@@ -11,9 +11,10 @@ interface BatchRow {
   openingDate: string;
 }
 
-const emptyBatchRow = (): BatchRow => ({ name: '', regionId: '', cityId: '', openingBalance: '', openingDate: '' });
+const emptyBatchRow = (): BatchRow => ({ name: '', regionId: '', cityId: '', openingBalance: '', openingDate: getTodayDate() });
 import SearchableSelect from '@/components/SearchableSelect';
 import OpeningBalanceFields from '@/components/OpeningBalanceFields';
+import { getTodayDate } from '@/lib/utils';
 import {
   businessAccounts as businessAccountsApi,
   chartAccounts as chartAccountsApi,
@@ -48,7 +49,7 @@ export default function BusinessAcSetupPage() {
   const [regionId, setRegionId] = useState('');
   const [cityId, setCityId] = useState('');
   const [openingBalance, setOpeningBalance] = useState('');
-  const [openingDate, setOpeningDate] = useState('');
+  const [openingDate, setOpeningDate] = useState(getTodayDate());
 
   // Search and Sort State
   const [searchQuery, setSearchQuery] = useState('');
@@ -123,7 +124,7 @@ export default function BusinessAcSetupPage() {
     setRegionId('');
     setCityId('');
     setOpeningBalance('');
-    setOpeningDate('');
+    setOpeningDate(getTodayDate());
     setErrorMsg('');
     resetBatch();
     setIsModalOpen(true);
@@ -152,7 +153,7 @@ export default function BusinessAcSetupPage() {
     setRegionId('');
     setCityId('');
     setOpeningBalance('');
-    setOpeningDate('');
+    setOpeningDate(getTodayDate());
     setErrorMsg('');
   };
 
@@ -422,7 +423,9 @@ export default function BusinessAcSetupPage() {
 
         {/* Modal Dialogue Box Pop-up */}
         {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}
+            onKeyDown={e => { if (e.key === 'Escape') { (handleCloseModal)(); } }}
+            tabIndex={-1}>
             <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
                 <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">

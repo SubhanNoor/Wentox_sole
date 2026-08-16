@@ -4,7 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { VendorRow, CityRow, PurchaseRow, PurchaseReturnRow, PurchaseReturnCreateInput, PurchaseReturnItemInput } from '@/lib/api';
-import { formatDate } from '@/lib/utils';
+import { formatDate, getTodayDate } from '@/lib/utils';
 import { Plus, Trash2, Save, Undo2, Edit } from 'lucide-react';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
@@ -60,7 +60,7 @@ export default function PurchaseReturnPage() {
 
   const [returnId, setReturnId] = useState<number | null>(null);
   const [currentIsPosted, setCurrentIsPosted] = useState(false);
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(getTodayDate());
   const [vendorId, setVendorId] = useState('');
   const [billNo, setBillNo] = useState('');
   const [remarks, setRemarks] = useState('');
@@ -148,7 +148,7 @@ export default function PurchaseReturnPage() {
     setMode('new');
     setReturnId(null);
     setCurrentIsPosted(false);
-    setDate(new Date().toISOString().split('T')[0]);
+    setDate(getTodayDate());
     setVendorId('');
     setBillNo('');
     setRemarks('');

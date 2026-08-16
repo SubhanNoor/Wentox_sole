@@ -614,7 +614,9 @@ export default function ProductSetupPage() {
 
         {/* Confirm category change when unsaved articles exist */}
         {pendingCategoryChange !== null && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setPendingCategoryChange(null)}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setPendingCategoryChange(null)}
+            onKeyDown={e => { if (e.key === 'Escape') { (() => setPendingCategoryChange(null))(); } }}
+            tabIndex={-1}>
             <div className="bg-white rounded-2xl border-2 border-amber-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
               <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Unsaved Articles</h3>
               <p className="text-xs text-slate-600 mb-4">
@@ -631,7 +633,9 @@ export default function ProductSetupPage() {
 
         {/* Reactivate-inactive-duplicate prompt */}
         {reactivatePrompt && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setReactivatePrompt(null)}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setReactivatePrompt(null)}
+            onKeyDown={e => { if (e.key === 'Escape') { (() => setReactivatePrompt(null))(); } }}
+            tabIndex={-1}>
             <div className="bg-white rounded-2xl border-2 border-amber-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
               <h3 className="font-lora font-bold text-base text-slate-900 mb-2 flex items-center gap-2">
                 <RotateCcw size={18} className="text-amber-500" /> Inactive Product Found
@@ -650,7 +654,9 @@ export default function ProductSetupPage() {
 
         {/* Delete confirmation */}
         {deletingProduct && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setDeletingProduct(null)}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setDeletingProduct(null)}
+            onKeyDown={e => { if (e.key === 'Escape') { (() => setDeletingProduct(null))(); } }}
+            tabIndex={-1}>
             <div className="bg-white rounded-2xl border-2 border-rose-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
               <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Delete Product</h3>
               <p className="text-xs text-slate-600 mb-4">

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { formatCurrency } from '@/context/AppContext';
+import { formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import AccountBalancePanel from '@/components/AccountBalancePanel';
@@ -419,7 +419,7 @@ export default function JournalVoucherPage() {
                       <td className="p-3 text-xs text-slate-700">{row.narration}</td>
                       <td className="p-3 text-right font-bold text-emerald-700">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
                       <td className="p-3 text-right font-bold text-rose-700">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
-                      <td className="p-3 text-right font-bold font-mono text-slate-800">{formatCurrency(row.balance)}</td>
+                      <td className="p-3 text-right font-bold font-mono" style={{ color: balanceColor(row.balance) }}>{formatCurrency(row.balance)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -429,7 +429,7 @@ export default function JournalVoucherPage() {
                       <td colSpan={2} className="p-4 text-right font-lora">TOTAL</td>
                       <td className="p-4 text-right text-emerald-800">{formatCurrency(ledgerReady.total_debit)}</td>
                       <td className="p-4 text-right text-rose-800">{formatCurrency(ledgerReady.total_credit)}</td>
-                      <td className="p-4 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(ledgerReady.closing_balance)}</td>
+                      <td className="p-4 text-right" style={{ color: balanceColor(ledgerReady.closing_balance) }}>{formatCurrency(ledgerReady.closing_balance)}</td>
                     </tr>
                   </tfoot>
                 )}

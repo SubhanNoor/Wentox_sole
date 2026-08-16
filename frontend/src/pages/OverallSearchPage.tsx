@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { formatCurrency } from '@/context/AppContext';
+import { formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Search, ArrowLeft, Users, User, Truck, HardHat, Landmark, BookOpen, Eye } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
@@ -417,7 +417,7 @@ export default function OverallSearchPage() {
               {/* Net Balance Status Pill */}
               <div className="px-3.5 py-1.5 bg-slate-900 text-white rounded-xl flex items-center gap-2 text-xs font-semibold">
                 <span className="text-slate-400">Net Ending Balance:</span>
-                <span className="text-[var(--brand-gold)] font-bold font-mono text-sm">{formatCurrency(endingBalance)}</span>
+                <span className="font-bold font-mono text-sm" style={{ color: balanceColor(endingBalance) }}>{formatCurrency(endingBalance)}</span>
               </div>
             </div>
 
@@ -493,7 +493,7 @@ export default function OverallSearchPage() {
                             <td className="p-3 text-right font-semibold text-rose-700">
                               {row.credit > 0 ? formatCurrency(row.credit) : '-'}
                             </td>
-                            <td className="p-3 text-right font-bold text-amber-900">
+                            <td className="p-3 text-right font-bold" style={{ color: balanceColor(row.balance) }}>
                               {formatCurrency(row.balance)}
                             </td>
                           </tr>
@@ -508,7 +508,7 @@ export default function OverallSearchPage() {
                         </td>
                         <td className="p-3 text-right">{formatCurrency(totalDebit)}</td>
                         <td className="p-3 text-right text-rose-700">{formatCurrency(totalCredit)}</td>
-                        <td className="p-3 text-right text-[#B08D57]">{formatCurrency(endingBalance)}</td>
+                        <td className="p-3 text-right" style={{ color: balanceColor(endingBalance) }}>{formatCurrency(endingBalance)}</td>
                       </tr>
                     </tfoot>
                   </table>

@@ -27,6 +27,11 @@ export default function SearchCustomerPage() {
   const [dateFrom, setDateFrom] = useState(getThreeMonthsAgoDate());
   const [dateTo, setDateTo] = useState(getTodayDate());
   const [quickFilter, setQuickFilter] = useState<QuickFilter>('all');
+  // BA-01: manual (client-typed) and system-generated (IDENTITY bill_id) bill numbers are
+  // separate fields, filtered client-side against their own column — same pattern used on
+  // the Search & Bilty Adda Updation page.
+  const [manualBillNoQuery, setManualBillNoQuery] = useState('');
+  const [systemBillNoQuery, setSystemBillNoQuery] = useState('');
 
   const [bills, setBills] = useState<SaleBillRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -53,14 +58,26 @@ export default function SearchCustomerPage() {
   useEffect(() => { loadBills(); }, [loadBills]);
 
   const filteredBills = useMemo(() => {
-    switch (quickFilter) {
-      case 'no-adda': return bills.filter(b => !b.adda_id);
-      case 'no-bilty': return bills.filter(b => isMissing(b.bilty_no));
-      case 'no-gp': return bills.filter(b => isMissing(b.gp_no));
-      case 'complete': return bills.filter(b => b.adda_id && !isMissing(b.bilty_no) && !isMissing(b.gp_no));
-      default: return bills;
+    let result = bills;
+
+    if (manualBillNoQuery.trim()) {
+      const q = manualBillNoQuery.trim().toLowerCase();
+      result = result.filter(b => b.bill_no.toLowerCase().includes(q));
     }
-  }, [bills, quickFilter]);
+
+    if (systemBillNoQuery.trim()) {
+      const q = systemBillNoQuery.trim();
+      result = result.filter(b => String(b.bill_id).includes(q));
+    }
+
+    switch (quickFilter) {
+      case 'no-adda': return result.filter(b => !b.adda_id);
+      case 'no-bilty': return result.filter(b => isMissing(b.bilty_no));
+      case 'no-gp': return result.filter(b => isMissing(b.gp_no));
+      case 'complete': return result.filter(b => b.adda_id && !isMissing(b.bilty_no) && !isMissing(b.gp_no));
+      default: return result;
+    }
+  }, [bills, quickFilter, manualBillNoQuery, systemBillNoQuery]);
 
   const selectedCustomer = useMemo(
     () => customers.find(c => c.customer_id === Number(customerId)),
@@ -189,6 +206,26 @@ export default function SearchCustomerPage() {
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1">To Date</label>
               <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="soleria-input" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Manual Bill No.</label>
+              <input
+                type="text"
+                placeholder="Client-typed bill no..."
+                value={manualBillNoQuery}
+                onChange={e => setManualBillNoQuery(e.target.value)}
+                className="soleria-input"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">System Bill No. (Inv #)</label>
+              <input
+                type="text"
+                placeholder="System-generated Inv #..."
+                value={systemBillNoQuery}
+                onChange={e => setSystemBillNoQuery(e.target.value)}
+                className="soleria-input"
+              />
             </div>
           </div>
 

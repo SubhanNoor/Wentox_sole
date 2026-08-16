@@ -568,7 +568,7 @@ export default function ChequesTab() {
       {/* ── Dispose dialog ── */}
       {disposingRow && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
+          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-1">Issue Cheque</h3>
             <p className="text-xs text-slate-500 mb-4">
               {disposingRow.cheque.cheque_no} &middot; {disposingRow.customerName} &middot; {formatCurrency(disposingRow.cheque.receipt_amount ?? 0)}
@@ -686,26 +686,28 @@ export default function ChequesTab() {
 
             <div className="flex justify-end gap-2 mt-5">
               <button
+                type="button"
                 onClick={() => setDisposingCheque(null)}
                 className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
               >
                 Close
               </button>
               <button
+                type="submit"
                 onClick={saveAllocation}
                 className="px-4 py-2 text-sm rounded-lg bg-[#111c2a] text-[#B08D57] hover:opacity-90"
               >
                 Save Allocation
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
 
       {/* ── Bounce confirmation ── */}
       {bouncingCheque && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
               <AlertTriangle size={18} className="text-rose-600" /> Mark Cheque Bounced
             </h3>
@@ -729,26 +731,28 @@ export default function ChequesTab() {
 
             <div className="flex justify-end gap-2">
               <button
+                type="button"
                 onClick={() => setBouncingCheque(null)}
                 className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
               >
                 Cancel
               </button>
               <button
+                type="submit"
                 onClick={confirmBounce}
                 className="px-4 py-2 text-sm rounded-lg bg-rose-600 text-white hover:bg-rose-700"
               >
                 Confirm Bounce
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
 
       {/* ── Return-to-sender confirmation ── */}
       {returningCheque && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
               <AlertTriangle size={18} className="text-slate-600" /> Return Cheque to Sender
             </h3>
@@ -773,19 +777,21 @@ export default function ChequesTab() {
 
             <div className="flex justify-end gap-2">
               <button
+                type="button"
                 onClick={() => setReturningCheque(null)}
                 className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
               >
                 Cancel
               </button>
               <button
+                type="submit"
                 onClick={confirmReturn}
                 className="px-4 py-2 text-sm rounded-lg bg-slate-700 text-white hover:bg-slate-800"
               >
                 Confirm Return
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
 

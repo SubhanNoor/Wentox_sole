@@ -7,7 +7,7 @@ import OverallReturnTab from '@/components/OverallReturnTab';
 import FindReturnTab from '@/components/FindReturnTab';
 import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
-import { formatDate } from '@/lib/utils';
+import { formatDate, getTodayDate } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
@@ -105,7 +105,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // Form State
   const [returnId, setReturnId] = useState<number | null>(null);
   const [currentReturnIsPosted, setCurrentReturnIsPosted] = useState(false);
-  const [date, setDate] = useState('');
+  const [date, setDate] = useState(getTodayDate());
   const [storeId, setStoreId] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [subCustomerId, setSubCustomerId] = useState('');
@@ -234,6 +234,16 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   const pendingEditRow = useRef<SaleReturnRow | null>(null);
 
+  // G-01: auto-focus the first field (Date) whenever the return tab becomes the active view and
+  // is editable — this page's entry area isn't wrapped in a <form>, so AppLayout's global
+  // auto-focus mechanism (which only looks inside <form> elements) has nothing to find here.
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (activeTab === 'return' && mode !== 'view') {
+      requestAnimationFrame(() => firstFieldRef.current?.focus());
+    }
+  }, [activeTab, mode]);
+
   const handleEditSpecificReturn = async (ret: SaleReturnRow) => {
     setPasswordActionType('edit_return');
     setIsPasswordModalOpen(true);
@@ -269,7 +279,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setSelectedDraftId(null);
     setReturnId(null);
     setCurrentReturnIsPosted(false);
-    setDate(new Date().toISOString().split('T')[0]);
+    setDate(getTodayDate());
     setStoreId(stores[0] ? String(stores[0].store_id) : '');
     setCustomerId('');
     setSubCustomerId('');
@@ -759,7 +769,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           {activeTab === 'find' && <FindReturnTab onEditReturn={handleEditSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
         </div>
 
-        <div className={activeTab === 'return' ? 'block' : 'hidden'}>
+        <form onSubmit={e => e.preventDefault()} className={activeTab === 'return' ? 'block' : 'hidden'}>
 
         {/* Banner Messages */}
         {lookupError && (
@@ -842,6 +852,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             {mode === 'view' ? (
               <>
                 <button
+                  type="button"
                   onClick={() => {
                     setIsPrintingSingle(true);
                     setTimeout(() => { window.print(); setIsPrintingSingle(false); }, 100);
@@ -850,10 +861,11 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 >
                   <Printer size={16} /> Print Return
                 </button>
-                <button onClick={() => exportToPDF()} className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5">
+                <button type="button" onClick={() => exportToPDF()} className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5">
                   <FileDown size={16} /> Export PDF
                 </button>
                 <button
+                  type="button"
                   onClick={() => {
                     const headers = ['Article', 'Packing', 'Cartons', 'Pairs', 'Rate', 'D%', 'D. Value', 'Total Value'];
                     const rows = items.map(it => [it.label, it.packing, it.cartons, it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
@@ -864,28 +876,30 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   <FileSpreadsheet size={16} /> Export Excel
                 </button>
                 <button
+                  type="button"
                   onClick={handleEditCurrentReturn}
                   className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
                 >
                   <Edit size={16} /> Edit Return
                 </button>
                 {returnId != null && !currentReturnIsPosted && (
-                  <button onClick={handlePostCurrentReturn} className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all">
+                  <button type="button" onClick={handlePostCurrentReturn} className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all">
                     Post Return
                   </button>
                 )}
                 {returnId != null && currentReturnIsPosted && (
-                  <button onClick={handleUnpostCurrentReturn} className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all">
+                  <button type="button" onClick={handleUnpostCurrentReturn} className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all">
                     Unpost Return
                   </button>
                 )}
-                <button onClick={handleNew} className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all">
+                <button type="button" onClick={handleNew} className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all">
                   Create New Return
                 </button>
               </>
             ) : (
               <>
                 <button
+                  type="submit"
                   onClick={handleSave}
                   className="px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-sm font-inter hover:opacity-90"
                   style={{
@@ -899,6 +913,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 </button>
                 {!currentReturnIsPosted && (
                   <button
+                    type="button"
                     onClick={handleSaveAndPost}
                     disabled={!isNecessaryFieldsFilled}
                     className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-50"
@@ -907,11 +922,11 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   </button>
                 )}
                 {mode === 'edit' ? (
-                  <button onClick={() => setMode('view')} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
+                  <button type="button" onClick={() => setMode('view')} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
                     Cancel Edit
                   </button>
                 ) : (
-                  <button onClick={handleNew} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
+                  <button type="button" onClick={handleNew} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
                     Clear Form
                   </button>
                 )}
@@ -960,7 +975,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
-              <input type="date"
+              <input type="date" ref={firstFieldRef}
             value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
             </div>
             <div>
@@ -1216,7 +1231,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                       {/* Delete Action */}
                       {!isViewMode && (
                         <td className="p-3 text-center">
-                          <button onClick={() => handleRemoveItemRow(idx)} className="text-red-500 hover:text-red-700 p-1" disabled={items.length <= 1}>
+                          <button type="button" onClick={() => handleRemoveItemRow(idx)} className="text-red-500 hover:text-red-700 p-1" disabled={items.length <= 1}>
                             <Trash2 size={16} />
                           </button>
                         </td>
@@ -1231,7 +1246,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           {/* Add Row Button */}
           {!isViewMode && (
             <div className="flex flex-wrap items-center gap-3 mb-6">
-              <button onClick={handleAddItemRow} className="btn-dashed flex items-center gap-1 px-3 py-1.5">
+              <button type="button" onClick={handleAddItemRow} className="btn-dashed flex items-center gap-1 px-3 py-1.5">
                 <Plus size={14} /> Add Item Row
               </button>
               <span className="text-xs text-slate-400">
@@ -1302,7 +1317,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
         </div>
 
-      </div>
+      </form>
       </div>
 
       {/* Add New Sub-Customer Modal */}

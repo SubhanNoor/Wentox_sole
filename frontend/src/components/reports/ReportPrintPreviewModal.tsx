@@ -81,7 +81,11 @@ export const ReportPrintPreviewModal: React.FC<ReportPrintPreviewModalProps> = (
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/90 backdrop-blur-sm animate-in fade-in duration-200 report-modal-container">
+    <div
+      className="fixed inset-0 z-50 flex flex-col bg-slate-900/90 backdrop-blur-sm animate-in fade-in duration-200 report-modal-container"
+      onKeyDown={e => { if (e.key === 'Escape') onClose(); }}
+      tabIndex={-1}
+    >
       {/* Dynamic @page orientation rule */}
       <style>{`
         @media print {

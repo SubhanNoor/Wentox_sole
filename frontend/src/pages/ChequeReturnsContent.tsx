@@ -253,7 +253,7 @@ export function ChequeReturnsContent() {
       {/* ── Return confirmation (endorsed) ── */}
       {returningAlloc && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
               <AlertTriangle size={18} className="text-slate-600" /> Return This Endorsement
             </h3>
@@ -287,26 +287,28 @@ export function ChequeReturnsContent() {
 
             <div className="flex justify-end gap-2">
               <button
+                type="button"
                 onClick={() => setReturningAlloc(null)}
                 className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
               >
                 Cancel
               </button>
               <button
+                type="submit"
                 onClick={confirmReturn}
                 className="px-4 py-2 text-sm rounded-lg bg-slate-700 text-white hover:bg-slate-800"
               >
                 Confirm Return
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
 
       {/* ── Bounce/Return confirmation (issued) ── */}
       {issuedAction && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
               <AlertTriangle size={18} className={issuedAction.mode === 'BOUNCED' ? 'text-rose-600' : 'text-slate-600'} />
               {issuedAction.mode === 'BOUNCED' ? 'Mark This Issued Cheque Bounced' : 'Mark This Issued Cheque Returned'}
@@ -345,19 +347,21 @@ export function ChequeReturnsContent() {
 
             <div className="flex justify-end gap-2">
               <button
+                type="button"
                 onClick={() => setIssuedAction(null)}
                 className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
               >
                 Cancel
               </button>
               <button
+                type="submit"
                 onClick={confirmIssuedAction}
                 className={`px-4 py-2 text-sm rounded-lg text-white ${issuedAction.mode === 'BOUNCED' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-slate-700 hover:bg-slate-800'}`}
               >
                 {issuedAction.mode === 'BOUNCED' ? 'Confirm Bounce' : 'Confirm Return'}
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
     </div>

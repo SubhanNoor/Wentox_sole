@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { formatCurrency } from '@/context/AppContext';
+import { formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import OpeningBalanceFields from '@/components/OpeningBalanceFields';
 import { Plus, Search, MapPin, Edit2, ArrowLeft, Settings, X, UserCheck, Eye } from 'lucide-react';
@@ -49,7 +49,7 @@ export default function CustomerSetupPage() {
   // The opening balance lives on the auto-created business account, not on this row — the service
   // forwards it there (same route bankAccounts.service.js has always used).
   const [openingBalance, setOpeningBalance] = useState('');
-  const [openingDate, setOpeningDate] = useState('');
+  const [openingDate, setOpeningDate] = useState(getTodayDate());
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3000); };
@@ -114,7 +114,7 @@ export default function CustomerSetupPage() {
     setNewCustomerRegionId('');
     setNewCustomerCityId('');
     setOpeningBalance('');
-    setOpeningDate('');
+    setOpeningDate(getTodayDate());
     setErrorMsg('');
   };
 
@@ -538,7 +538,7 @@ export default function CustomerSetupPage() {
                           <td className="p-3 text-slate-600">{row.narration || '-'}</td>
                           <td className="p-3 text-right font-semibold text-slate-900">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
                           <td className="p-3 text-right font-semibold text-rose-700">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
-                          <td className="p-3 text-right font-bold text-amber-800">{formatCurrency(row.balance)}</td>
+                          <td className="p-3 text-right font-bold" style={{ color: balanceColor(row.balance) }}>{formatCurrency(row.balance)}</td>
                         </tr>
                       ))
                     )}
@@ -548,7 +548,7 @@ export default function CustomerSetupPage() {
                       <td colSpan={4} className="p-3 text-right uppercase tracking-wider text-[#B08D57]">Totals</td>
                       <td className="p-3 text-right">{formatCurrency(ledger?.total_debit || 0)}</td>
                       <td className="p-3 text-right text-rose-700">{formatCurrency(ledger?.total_credit || 0)}</td>
-                      <td className="p-3 text-right text-[#B08D57]">{formatCurrency(ledger?.closing_balance || 0)}</td>
+                      <td className="p-3 text-right" style={{ color: balanceColor(ledger?.closing_balance || 0) }}>{formatCurrency(ledger?.closing_balance || 0)}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -559,7 +559,9 @@ export default function CustomerSetupPage() {
 
         {/* Modal Dialogue Box Pop-up */}
         {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}
+            onKeyDown={e => { if (e.key === 'Escape') { (handleCloseModal)(); } }}
+            tabIndex={-1}>
             <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
                 <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">

@@ -206,16 +206,39 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
   // G-01: auto-focus the first field of any creation window (every one of them is a <form
   // onSubmit>, so watching for a <form> being added to the DOM covers every modal/page without
   // threading a ref through each one) the moment it opens.
+  //
+  // AppLayout is rendered per-page (every page does `<AppLayout>...</AppLayout>` itself, it's not
+  // one shell that stays mounted across navigation) — so this component, and this effect, remounts
+  // on every page switch. That made the MutationObserver-only version below miss most pages: React
+  // commits the whole new page (AppLayout + its <form>) to the DOM in one synchronous flush, and
+  // this effect only runs *after* that commit — so by the time `observer.observe()` starts
+  // watching, the form has already been inserted and there's no further mutation left to catch.
+  // It only ever "worked" by accident, on whichever page happened to render its form fields in a
+  // later pass (e.g. gated behind an async fetch) instead of the initial commit.
+  // The fix: also try focusing synchronously on mount, against whatever's already in the DOM —
+  // the observer stays too, to catch a form that opens later (a modal, or a genuinely async page).
   useEffect(() => {
+    const FIELD_SELECTOR =
+      'input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled), button[data-field-nav]:not(:disabled)';
+
+    function focusFirstField(root: ParentNode): boolean {
+      const form = root.querySelector('form');
+      if (!form) return false;
+      const first = form.querySelector<HTMLElement>(FIELD_SELECTOR);
+      if (!first) return false;
+      first.focus();
+      return true;
+    }
+
+    if (focusFirstField(document)) return;
+
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
           if (!(node instanceof HTMLElement)) continue;
           const form = node.matches('form') ? node : node.querySelector('form');
           if (!form) continue;
-          const first = form.querySelector<HTMLElement>(
-            'input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled), button[data-field-nav]:not(:disabled)'
-          );
+          const first = form.querySelector<HTMLElement>(FIELD_SELECTOR);
           first?.focus();
           return;
         }
@@ -231,10 +254,16 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
   // Left/Right move between fields too, but only where there's no native meaning to preserve:
   // a text input only hops once the cursor is already at that edge (so typing/editing is
   // untouched), and number inputs/native <select>s are left alone entirely — Chrome throws
-  // reading selectionStart on a number input, and both types already bind Left/Right/Up/Down to
-  // their own native behavior. Up/Down are deliberately not handled here: native <select>
-  // elements already use them to change value, and the app's own dropdown (SearchableSelect)
-  // implements its own Up/Down to move the highlighted option.
+  // reading selectionStart on a number input, and both types already bind Left/Right to their own
+  // native behavior.
+  // Up/Down also move between fields (same "hop to the next field" behavior as Enter) — with two
+  // deliberate exceptions where Up/Down already has a native meaning worth keeping: native
+  // <select> elements use them to cycle the selected option, and the app's own dropdown
+  // (SearchableSelect, the button[data-field-nav] trigger) uses them to open the panel / move the
+  // highlighted option — both keep their own handling untouched. Everywhere else — text inputs
+  // and, importantly, number inputs — Up/Down is always prevented from reaching the browser's
+  // native spinner (which would silently increment/decrement a price/quantity field) and instead
+  // just moves focus, exactly like Tab/Shift+Tab.
   useEffect(() => {
     // [data-field-nav] picks up SearchableSelect's own trigger button (the app's custom dropdown,
     // used in place of a native <select> almost everywhere) without pulling in every other button
@@ -282,6 +311,25 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
         if (idx === -1) return;
         const nextIdx = e.key === 'ArrowRight' ? idx + 1 : idx - 1;
         if (nextIdx >= 0 && nextIdx < fields.length) {
+          e.preventDefault();
+          fields[nextIdx].focus();
+        }
+        return;
+      }
+
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        // Native <select> keeps cycling its own options, and SearchableSelect's trigger button
+        // keeps opening/highlighting via its own onKeyDown — don't fight either one.
+        if (target.tagName === 'SELECT' || (target instanceof HTMLButtonElement && target.dataset.fieldNav)) {
+          return;
+        }
+        const fields = fieldsIn(form);
+        const idx = fields.indexOf(target);
+        if (idx === -1) return;
+        const nextIdx = e.key === 'ArrowDown' ? idx + 1 : idx - 1;
+        if (nextIdx >= 0 && nextIdx < fields.length) {
+          // Always prevented here (unlike Left/Right) — a number input's native Up/Down spinner
+          // would otherwise silently increment/decrement a price/quantity instead of navigating.
           e.preventDefault();
           fields[nextIdx].focus();
         }

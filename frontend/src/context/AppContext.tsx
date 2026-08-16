@@ -1253,6 +1253,17 @@ export function formatCurrency(value: number): string {
   return 'Rs ' + value.toLocaleString('en-US');
 }
 
+/**
+ * G-05: the app-wide debit/credit color convention — red for a negative (credit/payable) balance,
+ * green for zero or positive (debit/receivable). Pair with `formatCurrency(Math.abs(value))` so
+ * the sign is carried by color alone, never a leading "-" (formatCurrency itself already swaps a
+ * raw negative for parentheses, but every balance display should use this instead of its own
+ * red/green/gray ternary so the rule stays one place).
+ */
+export function balanceColor(value: number): string {
+  return value < 0 ? '#e11d48' : '#047857';
+}
+
 export function isDateInCurrentWeek(dateStr: string): boolean {
   const date = new Date(dateStr);
   const now = new Date();
