@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -103,14 +103,20 @@ export default function PurchaseReturnPage() {
     }
     const purchase = res.data;
     setVendorId(String(purchase.vendor_id));
-    setItems(purchase.items.map(it => ({
+    const copied = purchase.items.map(it => ({
       uid: 'pri_' + Date.now() + Math.random().toString(36).slice(2, 7),
       materialName: it.material_name || '',
       unit: it.unit,
       quantity: it.quantity,
       pricePerUnit: it.price_per_unit,
       totalPrice: it.total_price
-    })));
+    }));
+    setItems(copied);
+    // PR-01: these lines are copied straight off the source purchase, so they already carry that
+    // purchase's own rates — which beats "the last posted purchase of this material" when the two
+    // differ. Mark them resolved so tabbing through the name fields doesn't re-look-up and
+    // replace a rate taken from the very document being returned.
+    resolvedNames.current = Object.fromEntries(copied.map(it => [it.uid, it.materialName.trim()]));
   };
 
   const updateItem = (uid: string, field: keyof UiItem, value: string | number) => {
@@ -122,6 +128,37 @@ export default function PurchaseReturnPage() {
       }
       return updated;
     }));
+  };
+
+  // PR-01: a return must credit the vendor at the price actually paid, not at whatever the user
+  // happens to type. When a line's material name is finished (blur), look up what this vendor was
+  // last paid for it on a POSTED purchase and fill in that price and its unit.
+  //
+  // Keyed off blur rather than every keystroke: the name is free text, so mid-typing it names
+  // nothing. `resolvedNames` remembers the name each row was last filled from, so re-blurring an
+  // unchanged field never overwrites a price the user has since edited by hand — while genuinely
+  // changing the material does refill. Cleared when the vendor changes, since the same material
+  // has a different price per vendor.
+  const resolvedNames = useRef<Record<string, string>>({});
+
+  const fillRateFromLastPurchase = async (uid: string, rawName: string) => {
+    const name = rawName.trim();
+    if (!name || !vendorId) return;
+    if (resolvedNames.current[uid] === name) return;
+    resolvedNames.current[uid] = name;
+
+    const res = await api.purchases.lastPurchasedRate(Number(vendorId), name);
+    // No prior posted purchase (data === null) leaves the line exactly as typed — a first-time
+    // material legitimately has no history, and guessing a price would be worse than leaving it.
+    if (!res.ok || !res.data) return;
+    const { price_per_unit, unit } = res.data;
+
+    setItems(prev => prev.map(it => it.uid === uid
+      ? { ...it, pricePerUnit: price_per_unit, unit, totalPrice: Number(it.quantity) * price_per_unit }
+      : it));
+    // Keep the unit control in sync: a fetched unit outside the presets needs the free-text box
+    // showing, or the select would silently snap the line back to a preset.
+    setCustomUnitRows(prev => ({ ...prev, [uid]: !UNIT_PRESETS.includes(unit) }));
   };
 
   const addItemRow = () => setItems(prev => [...prev, emptyItem()]);
@@ -222,7 +259,7 @@ export default function PurchaseReturnPage() {
     setBillNo(row.bill_no || '');
     setRemarks(row.remarks || '');
     setCopyFromPurchaseId('');
-    setItems(row.items.length
+    const loaded = row.items.length
       ? row.items.map(it => ({
           uid: 'pri_' + it.item_id,
           materialName: it.material_name || '',
@@ -231,7 +268,10 @@ export default function PurchaseReturnPage() {
           pricePerUnit: it.price_per_unit,
           totalPrice: it.total_price
         }))
-      : [emptyItem()]);
+      : [emptyItem()];
+    setItems(loaded);
+    // PR-01: an existing return's saved rates are the record — never re-priced on open/edit.
+    resolvedNames.current = Object.fromEntries(loaded.map(it => [it.uid, it.materialName.trim()]));
     setErrorMsg('');
     setMode('view');
   };
@@ -347,7 +387,9 @@ export default function PurchaseReturnPage() {
               <SearchableSelect
                 options={vendorOptions}
                 value={vendorId}
-                onChange={val => { setVendorId(val); setCopyFromPurchaseId(''); }}
+                // PR-01: forget which names were already priced — the same material has a
+                // different last-paid price under a different vendor, so every line re-looks-up.
+                onChange={val => { setVendorId(val); setCopyFromPurchaseId(''); resolvedNames.current = {}; }}
                 placeholder="Select vendor..."
                 searchPlaceholder="Search vendors..."
                 disabled={isViewMode}
@@ -424,6 +466,9 @@ export default function PurchaseReturnPage() {
                         value={item.materialName}
                         disabled={isViewMode}
                         onChange={e => updateItem(item.uid, 'materialName', e.target.value)}
+                        // PR-01: fill the price/unit from this vendor's last posted purchase of
+                        // this material once the name is finished.
+                        onBlur={e => fillRateFromLastPurchase(item.uid, e.target.value)}
                         placeholder="e.g. PU Sheet Roll"
                         className="soleria-input font-semibold"
                         style={{ fontSize: '13px' }}

@@ -119,6 +119,49 @@ async function post(id) {
   return getById(id);
 }
 
+// P-03: every purchase still awaiting posting, oldest first.
+function listUnposted() {
+  return repository.listUnposted();
+}
+
+// P-03: post a run of purchases in one action. Same contract as saleBills.service#postAll — each
+// purchase keeps its own transaction so one failure never rolls back the ones that already posted,
+// and this RESOLVES with { posted, failed, attempted } rather than throwing on the first failure.
+// Sequential for the same reason as the sale-bill version: posting reads live state, so concurrent
+// posts could race each other.
+async function postAll(ids) {
+  const targets = Array.isArray(ids) && ids.length
+    ? ids.map((id) => ({ purchase_id: id }))
+    : await repository.listUnposted();
+
+  const posted = [];
+  const failed = [];
+
+  for (const target of targets) {
+    const purchaseId = target.purchase_id;
+    try {
+      const purchase = await post(purchaseId);
+      posted.push({
+        purchase_id: purchaseId,
+        bill_no: purchase.bill_no,
+        total_value: purchase.total_value,
+      });
+    } catch (err) {
+      // Already posted by someone else meets the user's intent — not reported as a failure.
+      if (err.code === 'ALREADY_POSTED') continue;
+      if (!err.status) console.error(`postAll: unexpected failure on purchase ${purchaseId}:`, err);
+      failed.push({
+        purchase_id: purchaseId,
+        bill_no: target.bill_no ?? null,
+        message: err.status ? err.message : 'Unexpected error while posting this purchase.',
+        code: err.code || 'INTERNAL',
+      });
+    }
+  }
+
+  return { posted, failed, attempted: targets.length };
+}
+
 async function unpost(id) {
   const purchase = await getById(id);
   if (!purchase.is_posted) {
@@ -216,6 +259,16 @@ async function getById(purchaseId) {
   return purchase;
 }
 
+// PR-01: the price this vendor was last paid for this material on a posted purchase, for Purchase
+// Return to prefill instead of leaving the line at zero. Guards the empty/blank name here so a
+// half-typed line doesn't reach SQL as a `name = ''` lookup on every keystroke.
+function lastPurchasedRate(vendorId, materialName) {
+  const name = (materialName ?? '').trim();
+  if (!vendorId || !name) return Promise.resolve(null);
+  return repository.lastPurchasedRate(vendorId, name);
+}
+
 module.exports = {
   create, list, getById, update, post, unpost, postLedgerAndStock, insertConfirmed,
+  lastPurchasedRate, listUnposted, postAll,
 };

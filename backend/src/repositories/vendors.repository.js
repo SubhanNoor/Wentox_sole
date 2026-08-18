@@ -13,16 +13,19 @@ async function list(filters = {}) {
   if (!filters.includeSystem) conditions.push('v.is_system = 0');
 
   if (filters.search) {
-    conditions.push('v.name LIKE @search');
+    // C-01: match the account code as well as the name — the code shown on screen is now the one
+    // the user reads off a ledger, so it has to be the one they can type back in here.
+    conditions.push('(v.name LIKE @search OR ba.code LIKE @search)');
     params.search = { type: sql.NVarChar(100), value: `%${filters.search}%` };
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT v.*, r.name AS region_name, c.name AS city_name
+    `SELECT v.*, r.name AS region_name, c.name AS city_name, ba.code AS account_code
      FROM dbo.vendors v
      LEFT JOIN dbo.regions r ON r.region_id = v.region_id
      LEFT JOIN dbo.cities c ON c.city_id = v.city_id
+     LEFT JOIN dbo.business_accounts ba ON ba.ba_id = v.ba_id
      ${where}
      ORDER BY v.name`,
     params,
@@ -32,10 +35,11 @@ async function list(filters = {}) {
 
 async function findById(vendorId) {
   const result = await query(
-    `SELECT v.*, r.name AS region_name, c.name AS city_name
+    `SELECT v.*, r.name AS region_name, c.name AS city_name, ba.code AS account_code
      FROM dbo.vendors v
      LEFT JOIN dbo.regions r ON r.region_id = v.region_id
      LEFT JOIN dbo.cities c ON c.city_id = v.city_id
+     LEFT JOIN dbo.business_accounts ba ON ba.ba_id = v.ba_id
      WHERE v.vendor_id = @vendorId`,
     { vendorId: { type: sql.Int, value: vendorId } },
   );

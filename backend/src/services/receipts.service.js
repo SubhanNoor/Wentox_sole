@@ -39,6 +39,9 @@ function buildFields(payload) {
     details: payload.details,
     bank_id: payload.payment_mode === 'ONLINE' ? payload.bank_id : null,
     remarks: payload.remarks,
+    // RJ-03: which voucher this entry belongs to. Only insert() reads it — updateHeader
+    // deliberately does not, so editing a line can never move it to another voucher.
+    voucher_id: payload.voucher_id,
   };
 }
 

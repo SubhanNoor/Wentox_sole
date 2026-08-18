@@ -182,7 +182,58 @@ async function list(filters = {}) {
   return result.recordset;
 }
 
+// P-03: every purchase still awaiting posting, oldest first — the order they were entered is the
+// order they should post. "Unposted" is the absence of ledger entries, the same definition
+// isPosted() uses. Only the display fields the Post All confirmation/result list needs.
+async function listUnposted() {
+  const result = await query(
+    `SELECT p.purchase_id, p.bill_no, p.purchase_date, p.total_value, v.name AS vendor_name
+     FROM dbo.purchases p
+     LEFT JOIN dbo.vendors v ON v.vendor_id = p.vendor_id
+     WHERE NOT EXISTS (
+       SELECT 1 FROM dbo.ledger_entries le
+       WHERE le.source_type = 'PURCHASE' AND le.source_id = p.purchase_id
+     )
+     ORDER BY p.purchase_date ASC, p.purchase_id ASC`,
+  );
+  return result.recordset;
+}
+
+// PR-01: what this vendor was actually last paid for this material, across every POSTED purchase
+// (not drafts — a draft's price was never confirmed as real). Most recent by purchase_date, then
+// purchase_id as the tiebreak for same-day purchases. Null when there's no prior posted purchase
+// to go on, and the caller falls back to whatever it already had.
+//
+// Keyed on the material NAME, not material_id, because that is what the Purchase/Purchase Return
+// screens hold — a line is typed free-text and only resolved to a material_id at save time by
+// materials.repository#resolveOrCreate. Matching here is a plain `=` on name, relying on the same
+// case-insensitive default collation resolveOrCreate relies on, so 'pu sheet roll' finds
+// 'PU Sheet Roll'. Deliberately a read-only lookup: it never registers a material, so typing an
+// unknown name into the return form returns null rather than quietly creating a materials row.
+//
+// Returns the unit alongside the price because, unlike a sale (where the rate is per pair and the
+// unit is implicit), a purchase line's unit is self-assigned per line — "200 kg @ 230" and
+// "200 meters @ 230" are different purchases, so a price copied without its unit is meaningless.
+// Mirror of saleBills.repository.js#lastSoldRate — same posted-only rule, same ordering.
+async function lastPurchasedRate(vendorId, materialName) {
+  const result = await query(
+    `SELECT TOP 1 pi.price_per_unit, pi.unit
+     FROM dbo.purchase_items pi
+     JOIN dbo.purchases p ON p.purchase_id = pi.purchase_id
+     JOIN dbo.materials m ON m.material_id = pi.material_id
+     WHERE p.vendor_id = @vendorId AND m.name = @materialName
+       AND EXISTS (SELECT 1 FROM dbo.ledger_entries le WHERE le.source_type = 'PURCHASE' AND le.source_id = p.purchase_id)
+     ORDER BY p.purchase_date DESC, p.purchase_id DESC`,
+    {
+      vendorId: { type: sql.Int, value: vendorId },
+      materialName: { type: sql.NVarChar(150), value: materialName },
+    },
+  );
+  const row = result.recordset[0];
+  return row ? { price_per_unit: Number(row.price_per_unit), unit: row.unit } : null;
+}
+
 module.exports = {
   insert, insertItems, findById, isPosted, insertLedgerEntries, insertVendorStockMovements,
-  deleteItems, updateHeader, deleteLedgerAndStock, list,
+  deleteItems, updateHeader, deleteLedgerAndStock, list, lastPurchasedRate, listUnposted,
 };

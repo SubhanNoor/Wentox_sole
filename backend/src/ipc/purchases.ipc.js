@@ -54,4 +54,33 @@ module.exports = function register() {
       return service.unpost(payload.id);
     }),
   );
+
+  // P-03: the purchases still awaiting posting, for the Post All confirmation list.
+  ipcMain.handle(
+    'purchases:listUnposted',
+    wrap(() => {
+      requireSession();
+      return service.listUnposted();
+    }),
+  );
+
+  // P-03: post a run of purchases in one action. Resolves { posted, failed, attempted } — a partial
+  // failure is a SUCCESSFUL result carrying a failure list, so the caller must read `failed`.
+  ipcMain.handle(
+    'purchases:postAll',
+    wrap((payload) => {
+      requireSession();
+      return service.postAll(payload?.ids);
+    }),
+  );
+
+  // PR-01: Purchase Return prefills a line's price from this instead of the material's current
+  // price. Mirrors 'sale-bills:lastSoldRate'.
+  ipcMain.handle(
+    'purchases:lastPurchasedRate',
+    wrap((payload) => {
+      requireSession();
+      return service.lastPurchasedRate(payload.vendor_id, payload.material_name);
+    }),
+  );
 };

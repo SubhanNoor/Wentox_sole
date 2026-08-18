@@ -83,8 +83,11 @@ export default function CustomerSetupPage() {
   const filteredCustomers = useMemo(() => {
     if (!searchQuery.trim()) return customerList;
     const q = searchQuery.toLowerCase();
+    // C-01: match the account code (what the Customer Code column now shows) as well as the raw
+    // customer_id — anyone who has learned the old number can still type it and find the row.
     return customerList.filter(c =>
       c.name.toLowerCase().includes(q) ||
+      (c.account_code ?? '').toLowerCase().includes(q) ||
       String(c.customer_id).includes(q)
     );
   }, [customerList, searchQuery]);
@@ -223,7 +226,9 @@ export default function CustomerSetupPage() {
               CUSTOMER FINANCIAL LEDGER STATEMENT
             </h2>
             <p style={{ margin: '4px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>
-              Customer: {selectedCustomer.name} (Code: {selectedCustomer.customer_id})
+              {/* C-01: account code — this is a printed ledger statement, so it must carry the
+                  same code that appears on the ledger itself. */}
+              Customer: {selectedCustomer.name} (Code: {selectedCustomer.account_code ?? '—'})
             </p>
             <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
               Period: {fromDate ? formatDate(fromDate) : 'Beginning'} to {toDate ? formatDate(toDate) : 'Present'}
@@ -338,7 +343,7 @@ export default function CustomerSetupPage() {
         </ReportPrintPreviewModal>
       )}
 
-      <div className="mx-auto" style={{ maxWidth: 1400 }}>
+      <div className="mx-auto" style={{ maxWidth: 1750 }}>
 
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
@@ -399,10 +404,14 @@ export default function CustomerSetupPage() {
                 columns={[
                   {
                     key: 'code',
-                    header: 'Customer ID',
+                    header: 'Customer Code',
                     width: '140px',
+                    // C-01: the linked business account's code, not customer_id — see the same
+                    // column on VendorSetupPage for why the IDENTITY value isn't shown.
                     render: c => (
-                      <span className="font-mono font-semibold text-slate-600 text-xs">#{c.customer_id}</span>
+                      <span className="font-mono font-semibold text-slate-600 text-xs">
+                        {c.account_code ?? '—'}
+                      </span>
                     ),
                   },
                   {
@@ -464,7 +473,8 @@ export default function CustomerSetupPage() {
                   <h2 className="font-lora font-bold text-xl text-slate-900">
                     Ledger: {selectedCustomer?.name}
                   </h2>
-                  <p className="text-xs text-slate-500 font-medium mt-0.5">Code: {selectedCustomer?.customer_id}</p>
+                  {/* C-01: account code, matching the Customer Code column and the printed statement. */}
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">Code: {selectedCustomer?.account_code ?? '—'}</p>
                 </div>
               </div>
 

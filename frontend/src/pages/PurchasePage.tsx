@@ -1,9 +1,12 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
-import type { VendorRow, RegionRow, CityRow, PurchaseRow, PurchaseCreateInput, PurchaseItemInput } from '@/lib/api';
+import type {
+  VendorRow, RegionRow, CityRow, PurchaseRow, PurchaseCreateInput, PurchaseItemInput,
+  UnpostedPurchaseRow, PostAllResult
+} from '@/lib/api';
 import { formatDate, getTodayDate } from '@/lib/utils';
 import { Plus, Trash2, Save, ShoppingBag, Edit } from 'lucide-react';
 
@@ -43,6 +46,17 @@ export default function PurchasePage() {
     else setLookupError('Failed to load purchases: ' + res.error.message);
   }, []);
 
+  // P-03: purchases saved but not yet in the ledger, so a run can be entered first and posted in
+  // one action at the end. Mirrors SB-06 on SaleBillPage.
+  const [unpostedPurchases, setUnpostedPurchases] = useState<UnpostedPurchaseRow[]>([]);
+  const [postAllBusy, setPostAllBusy] = useState(false);
+  const [postAllResult, setPostAllResult] = useState<PostAllResult<'purchase_id'> | null>(null);
+
+  const refreshUnposted = useCallback(async () => {
+    const res = await api.purchases.listUnposted();
+    if (res.ok) setUnpostedPurchases(res.data);
+  }, []);
+
   useEffect(() => {
     (async () => {
       const [v, rg, ct] = await Promise.all([api.listVendors(), api.listRegions(), api.listCities()]);
@@ -53,7 +67,8 @@ export default function PurchasePage() {
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
     refreshPurchases();
-  }, [refreshPurchases]);
+    refreshUnposted();
+  }, [refreshPurchases, refreshUnposted]);
 
   // Mode: 'view' | 'edit' | 'new'
   const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');
@@ -154,8 +169,16 @@ export default function PurchasePage() {
 
   const isViewMode = mode === 'view';
 
+  // P-02: "was the purchase now on screen created in this run?" — the difference between finishing
+  // one you were entering (clear and move to the next) and posting one you deliberately opened
+  // from the list (stay on it). Set when create() succeeds, cleared by handleNew() and by loading
+  // any existing purchase. Same rule as SaleBillPage's SB-05.
+  const createdInThisRun = useRef(false);
+
   const handleNew = () => {
     setMode('new');
+    // P-02: a blank form has nothing saved in it yet, so nothing to clear on post.
+    createdInThisRun.current = false;
     setPurchaseId(null);
     setCurrentIsPosted(false);
     setDate(getTodayDate());
@@ -165,6 +188,16 @@ export default function PurchasePage() {
     setItems([emptyItem()]);
     setCustomUnitRows({});
     setErrorMsg('');
+  };
+
+  // P-02: a finished purchase clears straight back to a blank one so the next can be typed
+  // immediately. Reuses handleNew() so "a blank purchase" stays defined once, then restores the
+  // working date — handleNew() snaps to today, and a run of purchases entered for an earlier date
+  // would otherwise reset on every one. Cursor returns to the first field via the G-01 rule.
+  const readyForNextPurchase = () => {
+    const workingDate = date;
+    handleNew();
+    setDate(workingDate);
   };
 
   const buildPayload = (): PurchaseCreateInput | null => {
@@ -204,16 +237,23 @@ export default function PurchasePage() {
 
     setPurchaseId(result.data.purchase_id);
     setCurrentIsPosted(result.data.is_posted);
+    // P-02: only a freshly created purchase counts as "part of this run" — an edit of an existing
+    // one must not clear the form out from under the user when it posts.
+    if (mode !== 'edit') createdInThisRun.current = true;
     setErrorMsg('');
     setSuccessMsg(mode === 'edit' ? 'Purchase updated successfully.' : 'Purchase recorded successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     setMode('view');
     refreshPurchases();
+    refreshUnposted(); // P-03: a newly saved purchase joins the pending-posting list immediately.
   };
 
   const loadPurchaseRow = async (rowIn: PurchaseRow) => {
     // list() rows never carry items/an accurate is_posted (plain SELECT * — only get()/create()/
     // update()/post()/unpost() compute those) — re-fetch the full record whenever items are missing.
+    // P-02: this purchase came from the list, not from this run — posting it must not clear the form.
+    createdInThisRun.current = false;
+
     let row = rowIn;
     if (!row.items) {
       const res = await api.purchases.get(row.purchase_id);
@@ -246,15 +286,47 @@ export default function PurchasePage() {
 
   const handlePost = async () => {
     if (purchaseId == null) return;
+    const postedBillNo = billNo.trim();
     const res = await api.purchases.post(purchaseId);
     if (!res.ok) {
       setErrorMsg('Failed to post purchase: ' + res.error.message);
       return;
     }
     setCurrentIsPosted(true);
-    setSuccessMsg('Purchase posted successfully.');
+    // P-02: clear for the next purchase only if this one was entered in this run — one opened
+    // from the list and posted there stays on screen. The message names the document, because
+    // once the form empties the clearing is otherwise the only sign anything was saved.
+    if (createdInThisRun.current) {
+      setSuccessMsg(`Purchase ${postedBillNo || `#${purchaseId}`} posted. Ready for the next one.`);
+      readyForNextPurchase();
+    } else {
+      setSuccessMsg('Purchase posted successfully.');
+    }
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshPurchases();
+    refreshUnposted(); // P-03: it just left the pending list.
+  };
+
+  // P-03: post the whole run. Each purchase posts in its own transaction on the backend, so one
+  // that can't post leaves the rest posted — hence reading `failed` rather than treating a
+  // resolved call as "all done".
+  const handlePostAll = async () => {
+    setPostAllBusy(true);
+    setPostAllResult(null);
+    const res = await api.purchases.postAll();
+    setPostAllBusy(false);
+
+    if (!res.ok) {
+      setErrorMsg('Failed to post purchases: ' + res.error.message);
+      return;
+    }
+    setPostAllResult(res.data);
+    if (res.data.failed.length === 0) {
+      setSuccessMsg(`${res.data.posted.length} purchase(s) posted.`);
+      setTimeout(() => setSuccessMsg(''), 3000);
+    }
+    await Promise.all([refreshUnposted(), refreshPurchases()]);
+    if (purchaseId != null && res.data.posted.some(p => p.purchase_id === purchaseId)) setCurrentIsPosted(true);
   };
 
   const handleUnpost = async () => {
@@ -286,6 +358,75 @@ export default function PurchasePage() {
         )}
         {errorMsg && (
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
+        )}
+
+        {/* P-03: Pending Posting panel — enter a run of purchases, then post them all at the end
+            instead of one at a time. Mirrors SB-06 on the Sale Bill screen. */}
+        {(unpostedPurchases.length > 0 || postAllResult) && (
+          <div className="mb-6 p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm" data-no-print>
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-700">Pending Posting:</span>
+                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
+                  {unpostedPurchases.length} purchase(s)
+                </span>
+                <span className="text-xs text-slate-500">
+                  {unpostedPurchases.length > 0 && `Total ${formatCurrency(unpostedPurchases.reduce((s, p) => s + Number(p.total_value), 0))}`}
+                </span>
+              </div>
+              {unpostedPurchases.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handlePostAll}
+                  disabled={postAllBusy}
+                  className="px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                >
+                  {postAllBusy ? 'Posting…' : `Post All (${unpostedPurchases.length})`}
+                </button>
+              )}
+            </div>
+
+            {unpostedPurchases.length > 0 && (
+              <ul className="mt-3 space-y-0.5 max-h-32 overflow-y-auto">
+                {unpostedPurchases.map(p => (
+                  <li key={p.purchase_id} className="text-xs text-slate-600 flex gap-2">
+                    <span className="font-mono font-semibold">{p.bill_no || `#${p.purchase_id}`}</span>
+                    <span className="text-slate-400">{formatDate(p.purchase_date)}</span>
+                    <span className="truncate">{p.vendor_name || 'Unnamed Vendor'}</span>
+                    <span className="ml-auto font-mono">{formatCurrency(Number(p.total_value))}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {/* Stays until dismissed — a run can post 18 of 20, and the two that failed are the
+                whole point of the message. Never auto-hidden on a timer. */}
+            {postAllResult && (
+              <div className="mt-3 pt-3 border-t border-amber-200">
+                <p className="text-xs font-semibold text-slate-700">
+                  {postAllResult.posted.length} of {postAllResult.attempted} posted
+                  {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
+                </p>
+                {postAllResult.failed.length > 0 && (
+                  <ul className="mt-1.5 space-y-1">
+                    {postAllResult.failed.map(f => (
+                      <li key={f.purchase_id} className="text-xs text-rose-700">
+                        <span className="font-mono font-semibold">{f.bill_no || `#${f.purchase_id}`}</span>
+                        {' — '}{f.message}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setPostAllResult(null)}
+                  className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+          </div>
         )}
 
         <form onSubmit={handleSave} className="card-white p-6 bg-white border mb-8" data-no-print>

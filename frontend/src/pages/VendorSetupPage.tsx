@@ -178,8 +178,11 @@ export default function VendorSetupPage() {
       if (vendorSearch.trim()) {
         const q = vendorSearch.toLowerCase();
         const cityName = cities.find(c => c.city_id === v.city_id)?.name || '';
+        // C-01: match the account code (what the Vendor Code column now shows) as well as the raw
+        // vendor_id — anyone who has learned the old number can still type it and find the row.
         const matchesQuery =
           v.name.toLowerCase().includes(q) ||
+          (v.account_code ?? '').toLowerCase().includes(q) ||
           String(v.vendor_id).includes(q) ||
           (v.phone && v.phone.toLowerCase().includes(q)) ||
           cityName.toLowerCase().includes(q);
@@ -194,7 +197,7 @@ export default function VendorSetupPage() {
 
   return (
     <AppLayout pageTitle="Vendor Setup">
-      <div className="mx-auto" style={{ maxWidth: 1400 }}>
+      <div className="mx-auto" style={{ maxWidth: 1750 }}>
 
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
@@ -266,10 +269,17 @@ export default function VendorSetupPage() {
             columns={[
               {
                 key: 'code',
-                header: 'Vendor ID',
+                header: 'Vendor Code',
                 width: '130px',
+                // C-01: the linked business account's code, not vendor_id. vendor_id is an
+                // IDENTITY value — it skips whenever a create rolls back partway (this page's own
+                // create wraps the vendor and its account in one transaction) or a vendor is
+                // deactivated, which reads as a fault to the user. The account code is the number
+                // that already appears on the ledger and the voucher for this same vendor.
                 render: vendor => (
-                  <span className="font-mono font-semibold text-slate-600 text-xs">#{vendor.vendor_id}</span>
+                  <span className="font-mono font-semibold text-slate-600 text-xs">
+                    {vendor.account_code ?? '—'}
+                  </span>
                 ),
               },
               {
@@ -468,7 +478,8 @@ export default function VendorSetupPage() {
                 <div>
                   <h3 className="font-lora font-bold text-lg text-slate-800">{vendor.name}</h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Code: {vendor.vendor_id} · {cityName(vendor.city_id)} · {viewingPurchases.length} purchase{viewingPurchases.length !== 1 ? 's' : ''}
+                    {/* C-01: account code, matching the Vendor Code column on the list. */}
+                    Code: {vendor.account_code ?? '—'} · {cityName(vendor.city_id)} · {viewingPurchases.length} purchase{viewingPurchases.length !== 1 ? 's' : ''}
                   </p>
                 </div>
                 <button

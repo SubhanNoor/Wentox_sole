@@ -17,16 +17,19 @@ async function insert(transaction, expense) {
     issuedChequeDate: { type: sql.Date, value: expense.issued_cheque_date ?? null },
     remarks: { type: sql.NVarChar(500), value: expense.remarks ?? null },
     createdBy: { type: sql.Int, value: expense.created_by ?? null },
+    // PN-01: the voucher this entry belongs to. Nullable in the column so migration 022's backfill
+    // could populate it, but every line written through here carries one.
+    voucherId: { type: sql.Int, value: expense.voucher_id ?? null },
   });
   const result = await request.query(`
     INSERT INTO dbo.expenses (
       expense_date, ba_id, amount, payment_mode, details, cheque_id, bank_id,
-      issued_cheque_no, issued_cheque_date, remarks, status, created_by
+      issued_cheque_no, issued_cheque_date, remarks, status, created_by, voucher_id
     )
     OUTPUT inserted.expense_id
     VALUES (
       @expenseDate, @baId, @amount, @paymentMode, @details, @chequeId, @bankId,
-      @issuedChequeNo, @issuedChequeDate, @remarks, 'DRAFT', @createdBy
+      @issuedChequeNo, @issuedChequeDate, @remarks, 'DRAFT', @createdBy, @voucherId
     )
   `);
   return result.recordset[0].expense_id;

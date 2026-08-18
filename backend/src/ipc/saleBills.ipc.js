@@ -90,6 +90,26 @@ module.exports = function register() {
     }),
   );
 
+  // SB-06: the bills still awaiting posting, for the Post All confirmation list.
+  ipcMain.handle(
+    'sale-bills:listUnposted',
+    wrap(() => {
+      requireSession();
+      return service.listUnposted();
+    }),
+  );
+
+  // SB-06: post a run of bills in one action. Resolves { posted, failed, attempted } — a partial
+  // failure is a SUCCESSFUL result carrying a failure list, not a rejection, so the caller must
+  // read `failed` rather than treating ok:true as "everything posted".
+  ipcMain.handle(
+    'sale-bills:postAll',
+    wrap((payload) => {
+      requireSession();
+      return service.postAll(payload?.ids);
+    }),
+  );
+
   // SR-01: Sale Return prefills a line's rate from this instead of the article's current
   // predefined sale_price.
   ipcMain.handle(

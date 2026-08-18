@@ -15,17 +15,20 @@ async function list(filters = {}) {
     params.cityId = { type: sql.Int, value: filters.city_id };
   }
   if (filters.search) {
-    conditions.push('c.name LIKE @search');
+    // C-01: match the account code as well as the name — the code shown on screen is now the one
+    // the user reads off a ledger, so it has to be the one they can type back in here.
+    conditions.push('(c.name LIKE @search OR ba.code LIKE @search)');
     params.search = { type: sql.NVarChar(150), value: `%${filters.search}%` };
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   // Region first, City second (§11 primary/secondary search key — UC-09).
   const result = await query(
-    `SELECT c.*, r.name AS region_name, ci.name AS city_name
+    `SELECT c.*, r.name AS region_name, ci.name AS city_name, ba.code AS account_code
      FROM dbo.customers c
      JOIN dbo.regions r ON r.region_id = c.region_id
      LEFT JOIN dbo.cities ci ON ci.city_id = c.city_id
+     LEFT JOIN dbo.business_accounts ba ON ba.ba_id = c.ba_id
      ${where}
      ORDER BY r.name, ci.name, c.name`,
     params,
@@ -35,10 +38,11 @@ async function list(filters = {}) {
 
 async function findById(customerId) {
   const result = await query(
-    `SELECT c.*, r.name AS region_name, ci.name AS city_name
+    `SELECT c.*, r.name AS region_name, ci.name AS city_name, ba.code AS account_code
      FROM dbo.customers c
      JOIN dbo.regions r ON r.region_id = c.region_id
      LEFT JOIN dbo.cities ci ON ci.city_id = c.city_id
+     LEFT JOIN dbo.business_accounts ba ON ba.ba_id = c.ba_id
      WHERE c.customer_id = @customerId`,
     { customerId: { type: sql.Int, value: customerId } },
   );

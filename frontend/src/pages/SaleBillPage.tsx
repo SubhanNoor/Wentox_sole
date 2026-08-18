@@ -14,7 +14,8 @@ import PasswordPromptModal from '@/components/PasswordPromptModal';
 import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
-  RegionRow, CityRow, SaleBillRow, SaleBillCreateInput, SaleBillItemInput, StockRow
+  RegionRow, CityRow, SaleBillRow, SaleBillCreateInput, SaleBillItemInput, StockRow,
+  UnpostedBillRow, PostAllResult
 } from '@/lib/api';
 
 interface UiItem {
@@ -186,7 +187,45 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     if (res.ok) setDrafts(res.data);
   }, []);
 
-  useEffect(() => { refreshDrafts(); }, [refreshDrafts]);
+  // SB-06: bills that are saved but not yet in the ledger, so a run can be entered first and
+  // posted in one action at the end. Distinct from `drafts` above: a draft is an incomplete bill
+  // that isn't a sale_bills row yet, whereas these are real, complete bills simply awaiting posting.
+  const [unpostedBills, setUnpostedBills] = useState<UnpostedBillRow[]>([]);
+  const [postAllBusy, setPostAllBusy] = useState(false);
+  const [postAllResult, setPostAllResult] = useState<PostAllResult<'bill_id'> | null>(null);
+
+  const refreshUnposted = useCallback(async () => {
+    const res = await api.saleBills.listUnposted();
+    if (res.ok) setUnpostedBills(res.data);
+  }, []);
+
+  // One mount effect for both lists rather than one each — they load together and nothing reads
+  // either before the other.
+  useEffect(() => { refreshDrafts(); refreshUnposted(); }, [refreshDrafts, refreshUnposted]);
+
+  // SB-06: post the whole run. Each bill posts in its own transaction on the backend, so one that
+  // can't post leaves the rest posted — which is why this reads `failed` instead of treating a
+  // resolved call as "all done". Failures stay unposted and can be fixed and posted again.
+  const handlePostAll = async () => {
+    setPostAllBusy(true);
+    setPostAllResult(null);
+    const res = await api.saleBills.postAll();
+    setPostAllBusy(false);
+
+    if (!res.ok) {
+      setErrorMsg('Failed to post bills: ' + res.error.message);
+      return;
+    }
+    setPostAllResult(res.data);
+    if (res.data.failed.length === 0) {
+      setSuccessMsg(`${res.data.posted.length} bill(s) posted.`);
+      setTimeout(() => setSuccessMsg(''), 3000);
+    }
+    // Stock moved and the pending list shrank — both have to catch up, and a bill currently open
+    // on screen may have just been posted by this run.
+    await Promise.all([refreshUnposted(), refreshStock(), refreshDrafts()]);
+    if (billId != null && res.data.posted.some(p => p.bill_id === billId)) setCurrentBillIsPosted(true);
+  };
 
   // Customer search: Primary = Region, Secondary = City
   const customerOptions = useMemo(() => {
@@ -274,6 +313,9 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       row = res.data;
     }
 
+    // SB-05: this bill came from the list, not from this run — posting it must not clear the form.
+    createdInThisRun.current = false;
+
     setBillId(row.bill_id);
     setCurrentBillIsPosted(row.is_posted);
     setDate(row.bill_date.slice(0, 10));
@@ -344,8 +386,16 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   const finalTotalValue = useMemo(() => Math.max(0, itemsTotalValue - invoiceDiscount), [itemsTotalValue, invoiceDiscount]);
 
   // Toolbar Actions
+  // SB-05: "was the bill now on screen created in this run?" — the difference between finishing a
+  // bill you were entering (clear and move to the next) and posting one you deliberately opened
+  // from the list (stay on it; you navigated here to look at it). Set when create() succeeds,
+  // cleared by handleNew() and by loading any existing bill.
+  const createdInThisRun = useRef(false);
+
   const handleNew = () => {
     setMode('new');
+    // SB-05: a blank form has nothing saved in it yet, so nothing to clear on post.
+    createdInThisRun.current = false;
     setSelectedDraftId(null);
     setBillId(null);
     setCurrentBillIsPosted(false);
@@ -366,6 +416,17 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setInvoiceDiscount(0);
     setItems([newUiItem()]);
     setErrorMsg('');
+  };
+
+  // SB-05: a finished bill clears straight back to a blank one so the next can be typed
+  // immediately. Reuses handleNew() rather than repeating its field list, so "a blank bill" stays
+  // defined in exactly one place — then puts the working date back, since handleNew() snaps to
+  // today and a run of bills entered for an earlier date would otherwise reset on every one.
+  // The cursor returns to the first field on its own via the app-wide G-01 auto-focus rule.
+  const readyForNextBill = () => {
+    const workingDate = date;
+    handleNew();
+    setDate(workingDate);
   };
 
   const buildPayload = (): SaleBillCreateInput | null => {
@@ -432,12 +493,16 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
     setBillId(result.data.bill_id);
     setCurrentBillIsPosted(result.data.is_posted);
+    // SB-05: only a freshly created bill counts as "part of this run" — an edit of an existing
+    // bill must not clear the form out from under the user when it posts.
+    if (mode !== 'edit') createdInThisRun.current = true;
     setSuccessMsg(mode === 'edit' ? 'Sale bill updated successfully.' : 'New sale bill saved successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     setMode('view');
     setErrorMsg('');
     refreshDrafts();
     refreshStock();
+    refreshUnposted(); // SB-06: a newly saved bill joins the pending-posting list immediately.
     return result.data;
   };
 
@@ -450,28 +515,61 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     }
   };
 
+  // SB-01: the whole save-and-post path is wrapped, because this is the button that "did nothing" on
+  // one laptop. Every failure the API *reports* was already handled below; what wasn't was a failure
+  // that THROWS — a rejected promise, or a TypeError from an undefined `window.api.<feature>` — which
+  // unwound this handler silently and left the button looking dead. Now it names itself in the banner.
+  // (main.tsx also catches this class globally; this is the local, specific message.)
   const handleSaveAndPost = async () => {
+    try {
+      await saveAndPost();
+    } catch (err) {
+      console.error('[Wentox] Save & Post threw:', err);
+      setErrorMsg(
+        'Save & Post failed unexpectedly: ' +
+        (err instanceof Error ? `${err.name}: ${err.message}` : String(err)) +
+        ' — please screenshot this.'
+      );
+    }
+  };
+
+  const saveAndPost = async () => {
     const saved = await executeSave();
     if (saved) {
       const postRes = await api.saleBills.post(saved.bill_id);
       if (!postRes.ok) {
+        // Saved but not posted: the bill exists and must stay on screen, so no reset here — the
+        // user needs to see which bill failed and press Post again once it's fixed.
         setErrorMsg('Bill was saved, but posting failed: ' + postRes.error.message);
       } else {
         setCurrentBillIsPosted(true);
-        setSuccessMsg('Bill saved & posted successfully.');
+        // SB-05: name the bill in the message, because the form is about to empty — otherwise the
+        // screen clearing is the only feedback that anything was saved at all.
+        setSuccessMsg(`Bill ${saved.bill_no} saved & posted. Ready for the next one.`);
         setTimeout(() => setSuccessMsg(''), 3000);
+        refreshUnposted(); // SB-06: it just left the pending list.
+        if (createdInThisRun.current) readyForNextBill();
       }
     }
   };
 
   const handlePostCurrentBill = async () => {
     if (billId != null) {
+      const postedBillNo = billNo;
       const res = await api.saleBills.post(billId);
       if (!res.ok) {
         setErrorMsg('Failed to post bill: ' + res.error.message);
       } else {
         setCurrentBillIsPosted(true);
-        setSuccessMsg('Bill posted successfully.');
+        refreshUnposted(); // SB-06: it just left the pending list.
+        // SB-05: clear for the next bill only if this one was entered in this run. A bill opened
+        // from the Find tab and posted there stays on screen — the user went to it deliberately.
+        if (createdInThisRun.current) {
+          setSuccessMsg(`Bill ${postedBillNo} posted. Ready for the next one.`);
+          readyForNextBill();
+        } else {
+          setSuccessMsg('Bill posted successfully.');
+        }
         setTimeout(() => setSuccessMsg(''), 3000);
       }
     }
@@ -961,6 +1059,77 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 Delete Selected Draft
               </button>
             </div>
+          </div>
+        )}
+
+        {/* SB-06: Pending Posting panel — enter a run of bills, then post them all at the end
+            instead of one at a time. Shown whenever anything is awaiting posting, including bills
+            entered in an earlier session. */}
+        {(unpostedBills.length > 0 || postAllResult) && (
+          <div className="mb-6 p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm" data-no-print>
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-700">Pending Posting:</span>
+                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
+                  {unpostedBills.length} bill(s)
+                </span>
+                <span className="text-xs text-slate-500">
+                  {unpostedBills.length > 0 && `Total ${formatCurrency(unpostedBills.reduce((s, b) => s + Number(b.net_value), 0))}`}
+                </span>
+              </div>
+              {unpostedBills.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handlePostAll}
+                  disabled={postAllBusy}
+                  className="px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                >
+                  {postAllBusy ? 'Posting…' : `Post All (${unpostedBills.length})`}
+                </button>
+              )}
+            </div>
+
+            {unpostedBills.length > 0 && (
+              <ul className="mt-3 space-y-0.5 max-h-32 overflow-y-auto">
+                {unpostedBills.map(b => (
+                  <li key={b.bill_id} className="text-xs text-slate-600 flex gap-2">
+                    <span className="font-mono font-semibold">{b.bill_no || `#${b.bill_id}`}</span>
+                    <span className="text-slate-400">{formatDate(b.bill_date)}</span>
+                    <span className="truncate">{b.customer_name || 'Unnamed Customer'}</span>
+                    <span className="ml-auto font-mono">{formatCurrency(Number(b.net_value))}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {/* The result stays on screen until dismissed — a run can post 18 of 20 bills, and the
+                two that failed are the whole point of the message. Never auto-hidden on a timer
+                like the ordinary success banner. */}
+            {postAllResult && (
+              <div className="mt-3 pt-3 border-t border-amber-200">
+                <p className="text-xs font-semibold text-slate-700">
+                  {postAllResult.posted.length} of {postAllResult.attempted} posted
+                  {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
+                </p>
+                {postAllResult.failed.length > 0 && (
+                  <ul className="mt-1.5 space-y-1">
+                    {postAllResult.failed.map(f => (
+                      <li key={f.bill_id} className="text-xs text-rose-700">
+                        <span className="font-mono font-semibold">{f.bill_no || `#${f.bill_id}`}</span>
+                        {' — '}{f.message}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setPostAllResult(null)}
+                  className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
           </div>
         )}
 

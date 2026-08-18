@@ -252,6 +252,25 @@ async function list(filters = {}) {
   return result.recordset;
 }
 
+// SB-06: every bill still awaiting posting, oldest first — the order they were entered is the
+// order they should post, so a run of bills lands in the ledger in the sequence the user typed
+// them. "Unposted" is the absence of ledger entries, the same definition isPosted() uses; there is
+// no status column on sale_bills to read instead (it was removed — see database_schema_v4.3.md).
+// Only the display fields the confirm/result list needs, not SELECT * — nothing here renders a bill.
+async function listUnposted() {
+  const result = await query(
+    `SELECT sb.bill_id, sb.bill_no, sb.bill_date, sb.net_value, c.name AS customer_name
+     FROM dbo.sale_bills sb
+     LEFT JOIN dbo.customers c ON c.customer_id = sb.customer_id
+     WHERE NOT EXISTS (
+       SELECT 1 FROM dbo.ledger_entries le
+       WHERE le.source_type = 'SALE_BILL' AND le.source_id = sb.bill_id
+     )
+     ORDER BY sb.bill_date ASC, sb.bill_id ASC`,
+  );
+  return result.recordset;
+}
+
 // UC-20: Search & Bilty/Adda Updation — same filter set as list() but with the display fields
 // that screen needs (customer/sub-customer/adda names), so results are readable without a
 // separate lookup per row.
@@ -336,5 +355,5 @@ async function lastSoldRate(customerId, variantId) {
 module.exports = {
   getVariantPackings, insert, insertItems, findById, isPosted, insertLedgerEntries,
   insertStockMovements, deleteItems, updateHeader, deleteLedgerAndStock, list,
-  biltySearch, updateBiltyInfo, lastSoldRate,
+  biltySearch, updateBiltyInfo, lastSoldRate, listUnposted,
 };

@@ -165,6 +165,10 @@ export interface CustomerRow {
   is_active: boolean;
   region_name?: string;
   city_name?: string;
+  /** C-01: the linked business account's code — what the screen shows as the customer's code,
+   *  in place of the raw customer_id (an IDENTITY value, which legitimately skips). Null only if
+   *  the customer somehow has no linked account. */
+  account_code?: string | null;
 }
 
 export interface SubCustomerRow {
@@ -364,6 +368,10 @@ export interface VendorRow {
   is_system?: boolean;
   region_name?: string;
   city_name?: string;
+  /** C-01: the linked business account's code — what the screen shows as the vendor's code, in
+   *  place of the raw vendor_id (an IDENTITY value, which legitimately skips). Null only if the
+   *  vendor somehow has no linked account. */
+  account_code?: string | null;
 }
 
 export interface VendorListFilters {
@@ -471,6 +479,42 @@ export interface PurchaseReturnCreateInput {
   bill_no?: string;
   remarks?: string;
   items: PurchaseReturnItemInput[];
+}
+
+/** SB-06: a sale bill awaiting posting, for the Post All confirmation list. */
+export interface UnpostedBillRow {
+  bill_id: number;
+  bill_no: string;
+  bill_date: string;
+  net_value: number;
+  customer_name: string | null;
+}
+
+/** P-03: a purchase awaiting posting, for the Post All confirmation list. */
+export interface UnpostedPurchaseRow {
+  purchase_id: number;
+  bill_no: string | null;
+  purchase_date: string;
+  total_value: number;
+  vendor_name: string | null;
+}
+
+/** SB-06/P-03: the outcome of posting a run of documents. Each document posts in its own
+ *  transaction, so a partial failure is a SUCCESSFUL result carrying a failure list — `ok: true`
+ *  does NOT mean everything posted. Always read `failed`.
+ *  `K` names the id field, which differs per document type ('bill_id' / 'purchase_id'). */
+export type PostAllResult<K extends string> = {
+  posted: ({ bill_no: string | null } & Record<K, number>)[];
+  failed: ({ bill_no: string | null; message: string; code: string } & Record<K, number>)[];
+  attempted: number;
+};
+
+/** PR-01: the price/unit this vendor was last paid for a material on a posted purchase. The unit
+ *  travels with the price because a purchase line's unit is self-assigned — "200 kg @ 230" and
+ *  "200 meters @ 230" are different purchases, so the price alone is ambiguous. */
+export interface LastPurchasedRate {
+  price_per_unit: number;
+  unit: string;
 }
 
 export interface PurchaseReturnListFilters {
@@ -664,6 +708,43 @@ export interface ReceiptRow {
   cheque_received_date?: string | null;
   cheque_status?: ChequeStatus;
   cheque_bank_id?: number | null;
+  /** RJ-03: the voucher this entry belongs to. Every receipt written by the app has one — migration
+   *  022 backfilled every pre-existing receipt into a one-line voucher of its own. */
+  voucher_id?: number | null;
+  /** RJ-03: only populated when read as a voucher line (listLines' join). */
+  account_code?: string;
+}
+
+/** RJ-03/PN-01: a voucher's derived state. Never stored — posting is per line, so a voucher can
+ *  legitimately sit half-posted and a stored column would be a second source of truth. */
+export type VoucherStatus = 'UNPOSTED' | 'PARTIAL' | 'POSTED';
+
+/** RJ-03: a receipt voucher — the header plus, when fetched by id, its entry lines and totals. */
+export interface ReceiptVoucherRow {
+  voucher_id: number;
+  voucher_no: number;
+  voucher_date: string;
+  remarks: string | null;
+  status: VoucherStatus;
+  total_amount: number;
+  total_cash: number;
+  total_cheque: number;
+  total_online: number;
+  /** Present on get(), absent on list(). list() carries line_count/confirmed_lines instead. */
+  lines?: ReceiptRow[];
+  line_count?: number;
+  confirmed_lines?: number;
+}
+
+/** RJ-03/PN-01: the outcome of posting or unposting a whole voucher. Each line acts in its own
+ *  transaction, so this is a SUCCESSFUL result that may carry failures — `ok: true` does NOT mean
+ *  the whole voucher posted. Always read `failed`. `K` names the line's id field. */
+export interface VoucherActionResult<K extends string, V> {
+  voucher: V;
+  posted?: ({ amount: number } & Record<K, number>)[];
+  unposted?: ({ amount: number } & Record<K, number>)[];
+  failed: ({ amount: number; account_name?: string; message: string; code: string } & Record<K, number>)[];
+  attempted?: number;
 }
 
 // dbo.draft_receipts has its own PK (draft_id, not receipt_id) and no status column (existence =
@@ -914,6 +995,33 @@ export interface ExpenseRow {
   // Only populated by get() (findById's join) — never by list().
   cheque_no?: string;
   cheque_status?: ChequeStatus;
+  /** PN-01: the voucher this entry belongs to. Every expense written by the app has one — migration
+   *  022 backfilled every pre-existing expense into a one-line voucher of its own. */
+  voucher_id?: number | null;
+  /** PN-01: only populated when read as a voucher line (listLines' join). */
+  account_name?: string;
+  account_code?: string;
+  /** PN-01: voucher-line join — the endorsed cheque (one we received and handed on), named
+   *  distinctly from issued_cheque_no (one we wrote) because a line can only ever be one of them. */
+  endorsed_cheque_no?: string;
+}
+
+/** PN-01: a payment (Naam) voucher — the header plus, when fetched by id, its lines and totals.
+ *  total_cheque covers BOTH cheque modes: one we issued and one we endorsed onward. */
+export interface ExpenseVoucherRow {
+  voucher_id: number;
+  voucher_no: number;
+  voucher_date: string;
+  remarks: string | null;
+  status: VoucherStatus;
+  total_amount: number;
+  total_cash: number;
+  total_cheque: number;
+  total_online: number;
+  /** Present on get(), absent on list(). list() carries line_count/confirmed_lines instead. */
+  lines?: ExpenseRow[];
+  line_count?: number;
+  confirmed_lines?: number;
 }
 
 // "Cheque Return" page's issued-cheque list — a cheque WE wrote from our own bank (payment_mode
@@ -1459,6 +1567,8 @@ declare global {
         biltySearch: (payload?: SaleBillListFilters) => Promise<ApiResult<SaleBillRow[]>>;
         updateBilty: (payload: { id: number; bilty_no: string; adda_id: number }) => Promise<ApiResult<SaleBillRow>>;
         lastSoldRate: (payload: { customer_id: number; variant_id: number }) => Promise<ApiResult<number | null>>;
+        listUnposted: () => Promise<ApiResult<UnpostedBillRow[]>>;
+        postAll: (payload?: { ids?: number[] }) => Promise<ApiResult<PostAllResult<'bill_id'>>>;
       };
       saleReturns: {
         create: (payload: SaleReturnCreateInput) => Promise<ApiResult<SaleReturnRow>>;
@@ -1571,6 +1681,9 @@ declare global {
         update: (payload: { id: number } & Partial<PurchaseCreateInput>) => Promise<ApiResult<PurchaseRow>>;
         post: (payload: { id: number }) => Promise<ApiResult<PurchaseRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<PurchaseRow>>;
+        lastPurchasedRate: (payload: { vendor_id: number; material_name: string }) => Promise<ApiResult<LastPurchasedRate | null>>;
+        listUnposted: () => Promise<ApiResult<UnpostedPurchaseRow[]>>;
+        postAll: (payload?: { ids?: number[] }) => Promise<ApiResult<PostAllResult<'purchase_id'>>>;
       };
       purchaseReturns: {
         create: (payload: PurchaseReturnCreateInput) => Promise<ApiResult<PurchaseReturnRow>>;
@@ -1648,6 +1761,15 @@ declare global {
         post: (payload: { id: number }) => Promise<ApiResult<ReceiptRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<ReceiptRow>>;
       };
+      receiptVouchers: {
+        list: (payload?: { date_from?: string; date_to?: string; voucher_no?: number }) => Promise<ApiResult<ReceiptVoucherRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<ReceiptVoucherRow>>;
+        create: (payload: { voucher_date: string; remarks?: string }) => Promise<ApiResult<ReceiptVoucherRow>>;
+        update: (payload: { id: number; voucher_date: string; remarks?: string }) => Promise<ApiResult<ReceiptVoucherRow>>;
+        post: (payload: { id: number }) => Promise<ApiResult<VoucherActionResult<'receipt_id', ReceiptVoucherRow>>>;
+        unpost: (payload: { id: number }) => Promise<ApiResult<VoucherActionResult<'receipt_id', ReceiptVoucherRow>>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
+      };
       draftReceipts: {
         list: (payload?: ReceiptListFilters) => Promise<ApiResult<DraftReceiptRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<DraftReceiptRow>>;
@@ -1713,6 +1835,15 @@ declare global {
         returnIssuedCheque: (payload: { id: number; returned_date: string; reason?: string }) => Promise<ApiResult<ExpenseRow>>;
         returnableIssuedCheques: (payload?: { date_from?: string; date_to?: string }) => Promise<ApiResult<IssuedChequeRow[]>>;
         issuedCheques: (payload?: { date_from?: string; date_to?: string }) => Promise<ApiResult<IssuedChequeRow[]>>;
+      };
+      expenseVouchers: {
+        list: (payload?: { date_from?: string; date_to?: string; voucher_no?: number }) => Promise<ApiResult<ExpenseVoucherRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<ExpenseVoucherRow>>;
+        create: (payload: { voucher_date: string; remarks?: string }) => Promise<ApiResult<ExpenseVoucherRow>>;
+        update: (payload: { id: number; voucher_date: string; remarks?: string }) => Promise<ApiResult<ExpenseVoucherRow>>;
+        post: (payload: { id: number }) => Promise<ApiResult<VoucherActionResult<'expense_id', ExpenseVoucherRow>>>;
+        unpost: (payload: { id: number }) => Promise<ApiResult<VoucherActionResult<'expense_id', ExpenseVoucherRow>>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
       };
       draftExpenses: {
         list: (payload?: ExpenseListFilters) => Promise<ApiResult<DraftExpenseRow[]>>;
@@ -1983,7 +2114,14 @@ export const saleBills = {
   updateBilty: (id: number, bilty_no: string, adda_id: number) =>
     window.api ? window.api.saleBills.updateBilty({ id, bilty_no, adda_id }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
   lastSoldRate: (customer_id: number, variant_id: number) =>
-    window.api ? window.api.saleBills.lastSoldRate({ customer_id, variant_id }) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.saleBills.lastSoldRate({ customer_id, variant_id }) : Promise.resolve(NO_BRIDGE),
+  // SB-06: bills awaiting posting, and posting a whole run of them at once.
+  listUnposted: () =>
+    window.api ? window.api.saleBills.listUnposted() : Promise.resolve(NO_BRIDGE),
+  // Omit `ids` to post every unposted bill. Resolving ok does NOT mean everything posted — read
+  // `data.failed`.
+  postAll: (ids?: number[]) =>
+    window.api ? window.api.saleBills.postAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE)
 };
 
 export const saleReturns = {
@@ -2204,7 +2342,18 @@ export const purchases = {
   post: (id: number) =>
     window.api ? window.api.purchases.post({ id }).then(r => mapResult(r, normalizePurchaseRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
-    window.api ? window.api.purchases.unpost({ id }).then(r => mapResult(r, normalizePurchaseRow)) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.purchases.unpost({ id }).then(r => mapResult(r, normalizePurchaseRow)) : Promise.resolve(NO_BRIDGE),
+  // PR-01: what this vendor was last paid for this material on a posted purchase. Keyed on the
+  // material name because that is what the line holds before save. Null when there is no prior
+  // posted purchase, in which case the caller leaves the line as the user typed it.
+  lastPurchasedRate: (vendor_id: number, material_name: string) =>
+    window.api ? window.api.purchases.lastPurchasedRate({ vendor_id, material_name }) : Promise.resolve(NO_BRIDGE),
+  // P-03: purchases awaiting posting, and posting a whole run of them at once. Resolving ok does
+  // NOT mean everything posted — read `data.failed`.
+  listUnposted: () =>
+    window.api ? window.api.purchases.listUnposted() : Promise.resolve(NO_BRIDGE),
+  postAll: (ids?: number[]) =>
+    window.api ? window.api.purchases.postAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE)
 };
 
 export const purchaseReturns = {
@@ -2455,6 +2604,34 @@ export const receipts = {
     window.api ? window.api.receipts.unpost({ id }).then(r => mapResult(r, normalizeReceiptRow)) : Promise.resolve(NO_BRIDGE)
 };
 
+// RJ-03: dates come back from SQL Server as full timestamps; normalise the header's own date and
+// every line's, so the page never has to think about which shape it got.
+function normalizeVoucher(row: ReceiptVoucherRow): ReceiptVoucherRow {
+  return {
+    ...row,
+    voucher_date: normalizeDate(row.voucher_date),
+    lines: row.lines ? row.lines.map(normalizeReceiptRow) : undefined,
+  };
+}
+
+export const receiptVouchers = {
+  list: (payload?: { date_from?: string; date_to?: string; voucher_no?: number }) =>
+    window.api ? window.api.receiptVouchers.list(payload).then(r => mapResult(r, rows => rows.map(normalizeVoucher))) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.receiptVouchers.get({ id }).then(r => mapResult(r, normalizeVoucher)) : Promise.resolve(NO_BRIDGE),
+  create: (payload: { voucher_date: string; remarks?: string }) =>
+    window.api ? window.api.receiptVouchers.create(payload).then(r => mapResult(r, normalizeVoucher)) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: { voucher_date: string; remarks?: string }) =>
+    window.api ? window.api.receiptVouchers.update({ id, ...payload }).then(r => mapResult(r, normalizeVoucher)) : Promise.resolve(NO_BRIDGE),
+  // Resolving ok does NOT mean every line posted — read `data.failed`.
+  post: (id: number) =>
+    window.api ? window.api.receiptVouchers.post({ id }).then(r => mapResult(r, d => ({ ...d, voucher: normalizeVoucher(d.voucher) }))) : Promise.resolve(NO_BRIDGE),
+  unpost: (id: number) =>
+    window.api ? window.api.receiptVouchers.unpost({ id }).then(r => mapResult(r, d => ({ ...d, voucher: normalizeVoucher(d.voucher) }))) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.receiptVouchers.remove({ id, password }) : Promise.resolve(NO_BRIDGE)
+};
+
 function normalizeDraftReceiptRow(row: DraftReceiptRow): DraftReceiptRow {
   return { ...row, receipt_date: normalizeDate(row.receipt_date) };
 }
@@ -2613,6 +2790,33 @@ export const expenses = {
     window.api ? window.api.expenses.returnableIssuedCheques(payload).then(r => mapResult(r, rows => rows.map(normalizeIssuedChequeRow))) : Promise.resolve(NO_BRIDGE),
   issuedCheques: (payload?: { date_from?: string; date_to?: string }) =>
     window.api ? window.api.expenses.issuedCheques(payload).then(r => mapResult(r, rows => rows.map(normalizeIssuedChequeRow))) : Promise.resolve(NO_BRIDGE)
+};
+
+// PN-01: same shape and same caveats as receiptVouchers — post/unpost RESOLVE with a per-line
+// breakdown, so `ok: true` does not mean every line acted. Always read `data.failed`.
+function normalizeExpenseVoucher(row: ExpenseVoucherRow): ExpenseVoucherRow {
+  return {
+    ...row,
+    voucher_date: normalizeDate(row.voucher_date),
+    lines: row.lines ? row.lines.map(normalizeExpenseRow) : undefined,
+  };
+}
+
+export const expenseVouchers = {
+  list: (payload?: { date_from?: string; date_to?: string; voucher_no?: number }) =>
+    window.api ? window.api.expenseVouchers.list(payload).then(r => mapResult(r, rows => rows.map(normalizeExpenseVoucher))) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.expenseVouchers.get({ id }).then(r => mapResult(r, normalizeExpenseVoucher)) : Promise.resolve(NO_BRIDGE),
+  create: (payload: { voucher_date: string; remarks?: string }) =>
+    window.api ? window.api.expenseVouchers.create(payload).then(r => mapResult(r, normalizeExpenseVoucher)) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: { voucher_date: string; remarks?: string }) =>
+    window.api ? window.api.expenseVouchers.update({ id, ...payload }).then(r => mapResult(r, normalizeExpenseVoucher)) : Promise.resolve(NO_BRIDGE),
+  post: (id: number) =>
+    window.api ? window.api.expenseVouchers.post({ id }).then(r => mapResult(r, d => ({ ...d, voucher: normalizeExpenseVoucher(d.voucher) }))) : Promise.resolve(NO_BRIDGE),
+  unpost: (id: number) =>
+    window.api ? window.api.expenseVouchers.unpost({ id }).then(r => mapResult(r, d => ({ ...d, voucher: normalizeExpenseVoucher(d.voucher) }))) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.expenseVouchers.remove({ id, password }) : Promise.resolve(NO_BRIDGE)
 };
 
 export const draftExpenses = {

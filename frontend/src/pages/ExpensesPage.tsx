@@ -1,11 +1,12 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type {
   VendorRow, BankAccountRow, BusinessAccountRow, ChequeRow, ChequeAllocationRow,
-  ExpenseRow, ExpenseCreateInput, DraftExpenseRow, ExpensePaymentMode
+  ExpenseRow, ExpenseCreateInput, DraftExpenseRow, ExpensePaymentMode,
+  ExpenseVoucherRow, VoucherActionResult
 } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { Save, Wallet, Edit, Trash2 } from 'lucide-react';
@@ -82,7 +83,6 @@ export default function ExpensesPage() {
   // ── Real-expense form (mirrors ReceiptsPage.tsx's mode structure) ──
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
   const [expenseId, setExpenseId] = useState<number | null>(null);
-  const [expenseStatus, setExpenseStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
   const [date, setDate] = useState(today());
   const [baId, setBaId] = useState('');
   // RJ-02/PN-01: previewed account while arrow-keying through the dropdown, for the live balance tooltip.
@@ -115,6 +115,17 @@ export default function ExpensesPage() {
   const [loadedDraftId, setLoadedDraftId] = useState<number | null>(null);
   const [selectedDraftPick, setSelectedDraftPick] = useState('');
 
+  // ── PN-01: the open voucher ──────────────────────────────────────────────────────────────────
+  // A run of payments is entered as ONE voucher with many entry lines, each line free to name its
+  // own account, posted in a single action. Mirrors RJ-03 on the Receipts screen.
+  //
+  // Created LAZILY, on the first Done — voucher_no ("C.Book No") is allocated MAX+1, so creating one
+  // when the page opens would burn a number every time somebody merely visited and walked away.
+  const [voucher, setVoucher] = useState<ExpenseVoucherRow | null>(null);
+  const [voucherRemarks, setVoucherRemarks] = useState('');
+  const [voucherBusy, setVoucherBusy] = useState(false);
+  const [voucherResult, setVoucherResult] = useState<VoucherActionResult<'expense_id', ExpenseVoucherRow> | null>(null);
+
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -124,7 +135,24 @@ export default function ExpensesPage() {
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
 
   const isViewMode = mode === 'view';
-  const isPosted = expenseStatus === 'CONFIRMED';
+  const voucherLines = voucher?.lines ?? [];
+
+  // PN-01: ref target for the post-Done cursor return — the first field of the entry row. The form
+  // never unmounts between lines, so the app-wide G-01 auto-focus never re-fires and focus has to be
+  // asked for. SearchableSelect renders its trigger as button[data-field-nav].
+  const firstEntryFieldWrapRef = useRef<HTMLDivElement>(null);
+  const focusFirstEntryField = () => requestAnimationFrame(() => {
+    firstEntryFieldWrapRef.current?.querySelector<HTMLElement>('button[data-field-nav]')?.focus();
+  });
+
+  const refreshVoucher = async (voucherId: number) => {
+    // Re-read rather than patching local state: the derived status and per-mode totals are computed
+    // on the server from the lines, so a local edit would duplicate that arithmetic and could
+    // disagree with it.
+    const res = await api.expenseVouchers.get(voucherId);
+    if (res.ok) setVoucher(res.data);
+    else fail('Failed to reload voucher: ' + res.error.message);
+  };
 
   const bankOptions = useMemo(
     () => banks.filter(b => b.is_active).map(b => ({ value: String(b.bank_id), label: b.name })),
@@ -205,7 +233,6 @@ export default function ExpensesPage() {
   const handleNew = () => {
     setMode('new');
     setExpenseId(null);
-    setExpenseStatus('DRAFT');
     setDate(today());
     setBaId('');
     setAmount(0);
@@ -255,34 +282,139 @@ export default function ExpensesPage() {
     };
   };
 
-  const handleSaveExpense = async (e: React.FormEvent) => {
+  // PN-01: clears the entry row only — the voucher, its committed lines and the header date stay
+  // put, because the next thing typed is the next line of the SAME voucher. Distinct from
+  // handleNew(), which abandons the whole voucher.
+  const clearEntryRow = () => {
+    setMode('new');
+    setExpenseId(null);
+    setBaId('');
+    setPreviewBaId(null);
+    setAmount(0);
+    setPaymentMode('CASH');
+    resetModeFields();
+    setDetails('');
+    setRemarks('');
+    setErrorMsg('');
+    focusFirstEntryField();
+  };
+
+  // PN-01: "Done" — commit the entry row as a line of the open voucher and re-arm the form.
+  // Creates the voucher on first use (see the `voucher` state note).
+  const handleDone = async (e: React.FormEvent) => {
     e.preventDefault();
     const payload = buildPayload();
     if (!payload) return;
 
-    const result = mode === 'edit' && expenseId != null
-      ? await api.expenses.update(expenseId, payload)
-      : await api.expenses.create(payload);
+    let openVoucher = voucher;
+    if (!openVoucher) {
+      const created = await api.expenseVouchers.create({ voucher_date: date, remarks: voucherRemarks.trim() || undefined });
+      if (!created.ok) { fail('Failed to open voucher: ' + created.error.message); return; }
+      openVoucher = created.data;
+    }
 
-    if (!result.ok) { fail('Failed to save expense: ' + result.error.message); return; }
+    // Every line carries the voucher's own date — the header owns the date on this screen.
+    const linePayload = { ...payload, expense_date: openVoucher.voucher_date, voucher_id: openVoucher.voucher_id };
+
+    const result = mode === 'edit' && expenseId != null
+      ? await api.expenses.update(expenseId, linePayload)
+      : await api.expenses.create(linePayload);
+
+    if (!result.ok) { fail('Failed to save entry: ' + result.error.message); return; }
 
     // A confirmed real expense supersedes whatever draftExpenses entry it came from.
     if (loadedDraftId != null) {
       await api.draftExpenses.remove(loadedDraftId);
       refreshDrafts();
     }
-
-    setExpenseId(result.data.expense_id);
-    setExpenseStatus(result.data.status);
     setLoadedDraftId(null);
-    setErrorMsg('');
+
+    const wasEdit = mode === 'edit';
+    const paidVendor = isVendorPayment ? linkedVendor?.name : null;
+    await refreshVoucher(openVoucher.voucher_id);
+    clearEntryRow();
     flash(
-      isVendorPayment
-        ? `Vendor payment of ${formatCurrency(amount)} recorded against ${linkedVendor?.name || 'vendor'}.`
-        : (mode === 'edit' ? 'Expense updated successfully.' : 'Expense recorded successfully.')
+      wasEdit ? 'Entry updated.'
+        : paidVendor ? `Payment to ${paidVendor} added to the voucher.`
+        : 'Entry added to the voucher.'
     );
-    setMode('view');
     refreshExpenses();
+    setBalanceRefreshKey(k => k + 1);
+    refreshCheques();
+  };
+
+  // PN-01: post every line of the voucher in one action. Each line posts in its own transaction on
+  // the backend, so this can come back partly done — `failed` is read and shown per line rather than
+  // treating a resolved call as success.
+  const handlePostVoucher = async () => {
+    if (!voucher) return;
+    setVoucherBusy(true);
+    setVoucherResult(null);
+    const res = await api.expenseVouchers.post(voucher.voucher_id);
+    setVoucherBusy(false);
+
+    if (!res.ok) { fail('Failed to post voucher: ' + res.error.message); return; }
+    setVoucherResult(res.data);
+    setVoucher(res.data.voucher);
+    refreshExpenses();
+    setBalanceRefreshKey(k => k + 1);
+    // A CHEQUE_ENDORSED line allocates against a received cheque when it posts, so the endorsement
+    // picker has to re-read or it keeps offering value that is already spent.
+    refreshCheques();
+
+    if (res.data.failed.length === 0) {
+      flash(`Voucher ${voucher.voucher_no} posted — ${res.data.posted?.length ?? 0} entr${(res.data.posted?.length ?? 0) === 1 ? 'y' : 'ies'}. Ready for the next voucher.`);
+      startNewVoucher();
+    }
+  };
+
+  const handleUnpostVoucher = async () => {
+    if (!voucher) return;
+    setVoucherBusy(true);
+    setVoucherResult(null);
+    const res = await api.expenseVouchers.unpost(voucher.voucher_id);
+    setVoucherBusy(false);
+
+    if (!res.ok) { fail('Failed to unpost voucher: ' + res.error.message); return; }
+    setVoucherResult(res.data);
+    setVoucher(res.data.voucher);
+    refreshExpenses();
+    setBalanceRefreshKey(k => k + 1);
+    refreshCheques(); // unposting releases any cheque allocation the lines held
+    if (res.data.failed.length === 0) flash(`Voucher ${voucher.voucher_no} unposted.`);
+  };
+
+  // PN-01: abandon the voucher on screen and start a blank one. Nothing is deleted — an unposted
+  // voucher with lines still exists and is reachable from the records list.
+  const startNewVoucher = () => {
+    setVoucher(null);
+    setVoucherRemarks('');
+    setVoucherResult(null);
+    handleNew(); // one definition of "a blank entry row", and it resets the date too
+    focusFirstEntryField();
+  };
+
+  // PN-01: pull a committed line back into the entry row to correct it. Unposted lines only — a
+  // posted line has ledger entries and expenses:update rejects it outright.
+  const handleEditLine = (line: ExpenseRow) => {
+    if (line.status === 'CONFIRMED') {
+      fail('Unpost this voucher before editing that entry.');
+      return;
+    }
+    setMode('edit');
+    setExpenseId(line.expense_id);
+    setBaId(String(line.ba_id));
+    setPreviewBaId(line.ba_id);
+    setAmount(Number(line.amount));
+    setPaymentMode(line.payment_mode);
+    setBankId(line.bank_id != null ? String(line.bank_id) : '');
+    setChequeId(line.cheque_id != null ? String(line.cheque_id) : '');
+    setIssuedChequeNo(line.issued_cheque_no || '');
+    setIssuedChequeDate(line.issued_cheque_date ? line.issued_cheque_date.slice(0, 10) : '');
+    setDetails(line.details || '');
+    setRemarks(line.remarks || '');
+    setErrorMsg('');
+    focusFirstEntryField();
   };
 
   const loadExpenseRow = async (rowIn: ExpenseRow) => {
@@ -296,7 +428,6 @@ export default function ExpensesPage() {
     }
 
     setExpenseId(row.expense_id);
-    setExpenseStatus(row.status);
     setDate(row.expense_date.slice(0, 10));
     setBaId(String(row.ba_id));
     setAmount(row.amount);
@@ -311,34 +442,18 @@ export default function ExpensesPage() {
     setSelectedDraftPick('');
     setErrorMsg('');
     setMode('view');
+
+    // PN-01: opening an expense from the records list also opens the voucher it belongs to, so its
+    // sibling entries, the per-mode totals and the voucher's Post/Un Post are all on screen.
+    if (row.voucher_id != null) await refreshVoucher(row.voucher_id);
+    else setVoucher(null);
+    setVoucherResult(null);
   };
 
-  const handlePost = async () => {
-    if (expenseId == null) return;
-    const res = await api.expenses.post(expenseId);
-    if (!res.ok) { fail('Failed to post expense: ' + res.error.message); return; }
-    setExpenseStatus(res.data.status);
-    flash('Expense posted successfully.');
-    refreshExpenses();
-    setBalanceRefreshKey(k => k + 1);
-    refreshCheques();
-  };
-
-  // unpost() rejects CHEQUE_ENDORSED with USE_CHEQUE_REVERSAL — that error surfaces
-  // as-is through the banner below rather than hiding/disabling the button, matching
-  // how ReceiptsPage.tsx handles CHEQUE_IN_USE on its own unpost.
-  const handleUnpost = async () => {
-    if (expenseId == null) return;
-    const res = await api.expenses.unpost(expenseId);
-    if (!res.ok) { fail('Failed to unpost expense: ' + res.error.message); return; }
-    setExpenseStatus(res.data.status);
-    flash('Expense unposted successfully.');
-    refreshExpenses();
-    setBalanceRefreshKey(k => k + 1);
-    refreshCheques();
-  };
-
-
+  // PN-01: the per-expense handlePost/handleUnpost that used to live here are gone — posting is a
+  // voucher-level action now (handlePostVoucher/handleUnpostVoucher above), and this screen has no
+  // second document type that posts on its own. Their refreshCheques() call moved into those two,
+  // since a CHEQUE_ENDORSED line's allocation still changes when it posts.
 
   // ── draftExpenses (server-side, all 4 payment modes draftable) ──
   /*
@@ -350,7 +465,6 @@ export default function ExpensesPage() {
   const loadDraft = (row: DraftExpenseRow) => {
     setMode('new');
     setExpenseId(null);
-    setExpenseStatus('DRAFT');
     setDate(row.expense_date.slice(0, 10));
     setBaId(String(row.ba_id));
     setAmount(row.amount || 0);
@@ -507,56 +621,118 @@ export default function ExpensesPage() {
             {/* Entry Form Card */}
             <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print>
               <div className="flex items-center justify-between border-b pb-3 mb-5">
+                {/* PN-01: the card is now the head of a VOUCHER, not one payment. Post/Un Post act
+                    on the whole voucher; per-line status moved into the grid below. */}
                 <h3 className="font-lora font-semibold text-xl text-slate-800 flex items-center gap-2">
-                  <Wallet size={20} className="text-[#B08D57]" /> Expense / Payment Entry (Kharch)
-                </h3>
-                {mode === 'view' && (
-                  <div className="flex items-center gap-2">
-                    {!isPosted && (
-                      <button
-                        type="button"
-                        onClick={() => setMode('edit')}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
+                  <Wallet size={20} className="text-[#B08D57]" />
+                  {voucher ? `Payment Voucher — C.Book No ${voucher.voucher_no}` : 'New Payment Voucher (Naam)'}
+                  {voucher && (
+                    voucher.status === 'POSTED' ? (
+                      <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Posted</span>
+                    ) : voucher.status === 'PARTIAL' ? (
+                      <span
+                        className="px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-900"
+                        title="Some entries on this voucher are in the ledger and some are not — post it again to finish, or unpost to back it all out."
                       >
-                        <Edit size={13} /> Edit
-                      </button>
-                    )}
-                    {!isPosted ? (
-                      <button
-                        type="button"
-                        onClick={handlePost}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
-                      >
-                        Post
-                      </button>
+                        Partly Posted
+                      </span>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={handleUnpost}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
+                      <span
+                        className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-900"
+                        title="Saved but not yet in the ledger — Post it to affect any balance or report."
                       >
-                        Unpost
-                      </button>
-                    )}
+                        Not Posted
+                      </span>
+                    )
+                  )}
+                  {mode === 'edit' && expenseId != null && (
+                    <span className="px-2 py-0.5 rounded text-xs font-semibold bg-sky-100 text-sky-800">
+                      Editing entry #{expenseId}
+                    </span>
+                  )}
+                </h3>
+                <div className="flex items-center gap-2">
+                  {voucher && voucherLines.length > 0 && voucher.status !== 'UNPOSTED' && (
                     <button
                       type="button"
-                      onClick={handleNew}
-                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
+                      onClick={handleUnpostVoucher}
+                      disabled={voucherBusy}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 text-white shadow-sm transition-all"
                     >
-                      New Expense
+                      {voucherBusy ? 'Working…' : 'Un Post'}
                     </button>
-                  </div>
-                )}
+                  )}
+                  {voucher && voucherLines.length > 0 && voucher.status !== 'POSTED' && (
+                    <button
+                      type="button"
+                      onClick={handlePostVoucher}
+                      disabled={voucherBusy}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white shadow-sm transition-all"
+                    >
+                      {voucherBusy ? 'Posting…' : `Post Voucher (${voucherLines.length})`}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={startNewVoucher}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
+                  >
+                    New Voucher
+                  </button>
+                </div>
               </div>
 
-              <form onSubmit={handleSaveExpense} className="flex flex-col gap-4">
+              {/* PN-01: head-level Remarks. Editable only while the voucher is entirely unposted —
+                  once a line is in the ledger the header is locked server-side (POSTED_LOCK), so
+                  offering the field would be a lie. */}
+              <div className="mb-4">
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Voucher Remarks</label>
+                <input
+                  type="text"
+                  value={voucher ? (voucher.remarks ?? '') : voucherRemarks}
+                  disabled={!!voucher && voucher.status !== 'UNPOSTED'}
+                  onChange={e => {
+                    if (!voucher) { setVoucherRemarks(e.target.value); return; }
+                    setVoucher({ ...voucher, remarks: e.target.value });
+                  }}
+                  onBlur={async e => {
+                    // Persisted on blur, not per keystroke. Before the first Done there is no row to
+                    // write to, so the value is held locally and passed to create().
+                    if (!voucher || voucher.status !== 'UNPOSTED') return;
+                    const res = await api.expenseVouchers.update(voucher.voucher_id, {
+                      voucher_date: voucher.voucher_date,
+                      remarks: e.target.value.trim() || undefined,
+                    });
+                    if (res.ok) setVoucher(res.data);
+                  }}
+                  placeholder="Applies to the whole voucher (each entry has its own narration below)"
+                  className="soleria-input"
+                />
+              </div>
+
+              {/* PN-01: submitting the form is "Done" — commits the entry row as a line of the
+                  voucher and re-arms for the next. G-01's Enter-on-last-field rule fires the form's
+                  submit button, so Enter through the row ends in Done with no mouse. */}
+              <form onSubmit={handleDone} className="flex flex-col gap-4">
+                {/* PN-01: the Date is head-level — one date for the whole voucher. Editing it goes
+                    through the header update so every line is carried with it. */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
                   <input
                     type="date"
-                    value={date}
-                    disabled={isViewMode}
-                    onChange={e => setDate(e.target.value)}
+                    value={voucher ? voucher.voucher_date : date}
+                    disabled={!!voucher && voucher.status !== 'UNPOSTED'}
+                    onChange={async e => {
+                      const next = e.target.value;
+                      setDate(next);
+                      if (!voucher || voucher.status !== 'UNPOSTED') return;
+                      const res = await api.expenseVouchers.update(voucher.voucher_id, {
+                        voucher_date: next,
+                        remarks: voucher.remarks ?? undefined,
+                      });
+                      if (res.ok) setVoucher(res.data);
+                      else fail('Failed to change the voucher date: ' + res.error.message);
+                    }}
                     className="soleria-input font-semibold"
                   />
                 </div>
@@ -751,16 +927,139 @@ export default function ExpensesPage() {
                 {!isViewMode && (
                   <div className="sticky bottom-0 z-10 -mx-6 md:-mx-8 px-6 md:px-8 pt-3 pb-4 mt-2 bg-white border-t" style={{ borderColor: 'var(--border-color)' }}>
                     <div className="flex gap-3">
+                      {/* PN-01: "Done" — the client's own word. Commits this entry to the voucher
+                          and clears for the next; Post (in the header) is the separate, later action
+                          that puts the whole voucher in the ledger. */}
                       <button
                         type="submit"
                         className="btn-gold w-full flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
                       >
-                        <Save size={16} /> {mode === 'edit' ? 'Update Expense' : 'Save Expense'}
+                        <Save size={16} /> {mode === 'edit' ? 'Update Entry' : 'Done — Add to Voucher'}
                       </button>
                     </div>
                   </div>
                 )}
               </form>
+
+              {/* ── PN-01: the voucher's committed entry lines ──────────────────────────────────
+                  Rows, not cards — the same grid shape as the Receipts screen. */}
+              {voucherLines.length > 0 && (
+                <div className="mt-6 pt-5 border-t" style={{ borderColor: 'var(--border-color)' }}>
+                  <h4 className="font-lora font-semibold text-slate-800 mb-3">
+                    Entries in this Voucher
+                    <span className="ml-2 text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
+                      {voucherLines.length}
+                    </span>
+                  </h4>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                          <th className="p-2.5 pl-3">A/C Code</th>
+                          <th className="p-2.5">Account Description</th>
+                          <th className="p-2.5">Narration</th>
+                          <th className="p-2.5">Cheque No</th>
+                          <th className="p-2.5 text-center">Type</th>
+                          <th className="p-2.5 text-right">Rs. (Naam)</th>
+                          <th className="p-2.5 text-center">Status</th>
+                          <th className="p-2.5 text-center" data-no-print>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {voucherLines.map(line => (
+                          <tr key={line.expense_id} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                            <td className="p-2.5 pl-3 font-mono text-xs text-slate-600">{line.account_code || '—'}</td>
+                            <td className="p-2.5 font-semibold text-slate-800">{line.account_name || accountName(line.ba_id)}</td>
+                            <td className="p-2.5 text-slate-600 text-xs">{line.remarks || '—'}</td>
+                            {/* A line is paid by a cheque WE wrote (issued_cheque_no) or one we
+                                received and handed on (endorsed_cheque_no) — never both. */}
+                            <td className="p-2.5 font-mono text-xs text-slate-600">
+                              {line.issued_cheque_no || line.endorsed_cheque_no || '—'}
+                            </td>
+                            <td className="p-2.5 text-center text-xs font-semibold text-slate-700">{line.payment_mode}</td>
+                            <td className="p-2.5 text-right font-mono font-semibold text-slate-900">
+                              {formatCurrency(Number(line.amount))}
+                            </td>
+                            <td className="p-2.5 text-center">
+                              {line.status === 'CONFIRMED' ? (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-100 text-emerald-800">Posted</span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-100 text-amber-900">Pending</span>
+                              )}
+                            </td>
+                            <td className="p-2.5 text-center" data-no-print>
+                              <div className="flex items-center justify-center gap-1.5">
+                                {/* Unposted-only: the backend rejects editing or deleting a posted
+                                    line, so showing the buttons would only produce an error. */}
+                                {line.status === 'DRAFT' && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleEditLine(line)}
+                                      title="Pull this entry back into the form to correct it"
+                                      className="text-slate-500 hover:text-slate-800 transition-colors"
+                                    >
+                                      <Edit size={14} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setDeleteTarget(line)}
+                                      title="Delete this entry (asks for your password)"
+                                      className="text-rose-500 hover:text-rose-700 transition-colors"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 bg-slate-50/70 font-semibold" style={{ borderColor: 'var(--border-color)' }}>
+                          <td className="p-2.5 pl-3 text-xs uppercase tracking-wider text-slate-500" colSpan={4}>
+                            Total Cheque {formatCurrency(Number(voucher?.total_cheque ?? 0))}
+                            {'  ·  '}Total Online {formatCurrency(Number(voucher?.total_online ?? 0))}
+                            {'  ·  '}Total Cash {formatCurrency(Number(voucher?.total_cash ?? 0))}
+                          </td>
+                          <td className="p-2.5 text-right text-xs uppercase tracking-wider text-slate-500">Voucher Total</td>
+                          <td className="p-2.5 text-right font-mono text-slate-900">
+                            {formatCurrency(Number(voucher?.total_amount ?? 0))}
+                          </td>
+                          <td colSpan={2} />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+
+                  {/* Per-line outcome of the last Post/Un Post. Not auto-hidden on a timer: a voucher
+                      can post 8 of 10 lines, and the two that failed are the point of the message. */}
+                  {voucherResult && voucherResult.failed.length > 0 && (
+                    <div className="mt-4 p-3 rounded-lg bg-rose-50 border border-rose-200">
+                      <p className="text-xs font-bold text-rose-900">
+                        {voucherResult.failed.length} entr{voucherResult.failed.length === 1 ? 'y' : 'ies'} could not be posted — the rest went through.
+                      </p>
+                      <ul className="mt-1.5 space-y-1">
+                        {voucherResult.failed.map(f => (
+                          <li key={f.expense_id} className="text-xs text-rose-800">
+                            <span className="font-semibold">{f.account_name || `#${f.expense_id}`}</span>
+                            {' '}({formatCurrency(Number(f.amount))}){' — '}{f.message}
+                          </li>
+                        ))}
+                      </ul>
+                      <button
+                        type="button"
+                        onClick={() => setVoucherResult(null)}
+                        className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Recorded Expenses */}

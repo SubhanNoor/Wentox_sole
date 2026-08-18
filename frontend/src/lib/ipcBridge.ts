@@ -19,8 +19,9 @@
 const FEATURES = [
   'auth', 'accountClasses', 'addas', 'alerts', 'backup', 'bankAccounts', 'businessAccounts', 'categories', 'chartAccounts', 'cheques',
   'cities', 'customers', 'draftExpenses', 'draftPurchases', 'draftPurchaseReturns', 'draftReceipts',
-  'draftSaleBills', 'draftSaleReturns', 'employees', 'expenses',
+  'draftSaleBills', 'draftSaleReturns', 'employees', 'expenses', 'expenseVouchers',
   'groupAccounts', 'products', 'productColors', 'purchases', 'purchaseReturns', 'receipts',
+  'receiptVouchers',
   'regions', 'reports', 'salaryRuns', 'saleBills', 'saleReturns', 'stages', 'stock', 'stores',
   'subCustomers', 'transfers', 'settlements', 'journalVouchers', 'deposits', 'updates', 'vendors', 'wageRuns',
   'zoom',

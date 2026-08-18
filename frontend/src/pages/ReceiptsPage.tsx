@@ -1,9 +1,9 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
-import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow, SettlementRow, SettlementCreateInput } from '@/lib/api';
+import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow, SettlementRow, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { Save, Edit, Trash2 } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
@@ -136,7 +136,23 @@ export default function ReceiptsPage() {
     if (!res.ok) return fail('Failed to delete: ' + res.error.message);
     flash('Receipt deleted.');
     refreshReceipts();
+    // RJ-03: the deleted row may have been a line of the voucher on screen — re-read it so the grid
+    // and the per-mode totals lose it too, instead of showing an entry that no longer exists.
+    if (voucher && deleteTarget.voucher_id === voucher.voucher_id) await refreshVoucher(voucher.voucher_id);
+    setBalanceRefreshKey(k => k + 1);
   };
+
+  // ── RJ-03: the open voucher ──────────────────────────────────────────────────────────────────
+  // A day's takings are entered as ONE voucher with many entry lines, each line free to name its
+  // own account, posted in a single action at the end.
+  //
+  // The voucher is created LAZILY, on the first Done — not when the page opens. voucher_no is the
+  // client's "C.Book No" and is allocated MAX+1, so creating one eagerly would burn a number every
+  // time somebody merely visited the screen and walked away.
+  const [voucher, setVoucher] = useState<ReceiptVoucherRow | null>(null);
+  const [voucherRemarks, setVoucherRemarks] = useState('');
+  const [voucherBusy, setVoucherBusy] = useState(false);
+  const [voucherResult, setVoucherResult] = useState<VoucherActionResult<'receipt_id', ReceiptVoucherRow> | null>(null);
 
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
@@ -145,6 +161,20 @@ export default function ReceiptsPage() {
 
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
+
+  const voucherLines = voucher?.lines ?? [];
+
+  // RJ-03: wraps the first entry field (the account picker) so Done can put the cursor back on it.
+  // The form does not unmount between lines, so the app-wide G-01 auto-focus never re-fires and the
+  // focus has to be asked for. SearchableSelect renders its trigger as button[data-field-nav] — the
+  // same hook G-01's own field walker uses — so this finds it without SearchableSelect needing to
+  // forward a ref.
+  const firstEntryFieldWrapRef = useRef<HTMLDivElement>(null);
+  const firstEntryFieldRef = {
+    get current() {
+      return firstEntryFieldWrapRef.current?.querySelector<HTMLElement>('button[data-field-nav]') ?? null;
+    },
+  };
 
   const isViewMode = mode === 'view';
   const isPosted = receiptStatus === 'CONFIRMED';
@@ -280,33 +310,161 @@ export default function ReceiptsPage() {
     setBalanceRefreshKey(k => k + 1);
   };
 
-  const handleSaveReceipt = async (e: React.FormEvent) => {
+  // RJ-03: clears the entry row only — the voucher, its committed lines and the header date all
+  // stay put, because the next thing the user types is the next line of the SAME voucher. This is
+  // what "Done" leaves behind. Distinct from handleNew(), which abandons the whole voucher.
+  const clearEntryRow = () => {
+    setMode('new');
+    setReceiptId(null);
+    setReceiptStatus('DRAFT');
+    setBaId('');
+    setPreviewBaId(null);
+    setIsEndorsed(false);
+    setEndorseToBaId('');
+    setDocKind('RECEIPT');
+    setAmount(0);
+    setCommission(0);
+    setPaymentMode('CASH');
+    setBankId('');
+    setDetails('');
+    setChequeNo('');
+    setChequeDate('');
+    setChequeReceivedDate('');
+    setRemarks('');
+    setErrorMsg('');
+    // Cursor back to the first entry field, ready to type — the client's flow is Done → type →
+    // Done → type, with no mouse. The app-wide G-01 rule focuses a form's first field on mount, but
+    // this form never unmounts between lines, so the focus has to be asked for explicitly.
+    requestAnimationFrame(() => firstEntryFieldRef.current?.focus());
+  };
+
+  // RJ-03: "Done" — commit the entry row as a line of the open voucher and re-arm the form.
+  //
+  // Creates the voucher on first use (see the `voucher` state note). An endorsement is NOT a
+  // receipt — it lives in dbo.settlements, has no cash/bank leg and no voucher_id — so it still
+  // saves through its own path and never joins the grid.
+  const handleDone = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isEndorsed) { await handleSaveSettlement(); return; }
     const payload = buildPayload();
     if (!payload) return;
 
-    const result = mode === 'edit' && receiptId != null
-      ? await api.receipts.update(receiptId, payload)
-      : await api.receipts.create(payload);
+    let openVoucher = voucher;
+    if (!openVoucher) {
+      const created = await api.receiptVouchers.create({ voucher_date: date, remarks: voucherRemarks.trim() || undefined });
+      if (!created.ok) { fail('Failed to open voucher: ' + created.error.message); return; }
+      openVoucher = created.data;
+    }
 
-    if (!result.ok) { fail('Failed to save receipt: ' + result.error.message); return; }
+    // Every line carries the voucher's own date, not whatever the entry row happens to hold — the
+    // header owns the date on this screen (there is one Date field, on the head).
+    const linePayload = { ...payload, receipt_date: openVoucher.voucher_date, voucher_id: openVoucher.voucher_id };
+
+    const result = mode === 'edit' && receiptId != null
+      ? await api.receipts.update(receiptId, linePayload)
+      : await api.receipts.create(linePayload);
+
+    if (!result.ok) { fail('Failed to save entry: ' + result.error.message); return; }
 
     // A confirmed real receipt supersedes whatever draftReceipts entry it came from.
     if (loadedDraftId != null) {
       await api.draftReceipts.remove(loadedDraftId);
       refreshDrafts();
     }
-
-    setDocKind('RECEIPT');
-    setReceiptId(result.data.receipt_id);
-    setReceiptStatus(result.data.status);
     setLoadedDraftId(null);
-    setErrorMsg('');
-    flash(mode === 'edit' ? 'Receipt updated successfully.' : 'Receipt recorded successfully.');
-    setMode('view');
+
+    const wasEdit = mode === 'edit';
+    await refreshVoucher(openVoucher.voucher_id);
+    clearEntryRow();
+    flash(wasEdit ? 'Entry updated.' : 'Entry added to the voucher.');
     refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
+  };
+
+  // Re-reads the whole voucher rather than patching the line into local state: the header's derived
+  // status and the per-mode totals are computed on the server from the lines, so a local edit would
+  // have to duplicate that arithmetic and could disagree with it.
+  const refreshVoucher = async (voucherId: number) => {
+    const res = await api.receiptVouchers.get(voucherId);
+    if (res.ok) setVoucher(res.data);
+    else fail('Failed to reload voucher: ' + res.error.message);
+  };
+
+  // RJ-03: post every line of the voucher in one action.
+  //
+  // Each line posts in its own transaction on the backend, so this can come back partly done —
+  // `failed` is read and shown per line rather than treating a resolved call as success. When
+  // everything posts, the screen moves straight on to a fresh voucher, which is the client's flow.
+  const handlePostVoucher = async () => {
+    if (!voucher) return;
+    setVoucherBusy(true);
+    setVoucherResult(null);
+    const res = await api.receiptVouchers.post(voucher.voucher_id);
+    setVoucherBusy(false);
+
+    if (!res.ok) { fail('Failed to post voucher: ' + res.error.message); return; }
+    setVoucherResult(res.data);
+    setVoucher(res.data.voucher);
+    refreshReceipts();
+    setBalanceRefreshKey(k => k + 1);
+
+    if (res.data.failed.length === 0) {
+      flash(`Voucher ${voucher.voucher_no} posted — ${res.data.posted?.length ?? 0} entr${(res.data.posted?.length ?? 0) === 1 ? 'y' : 'ies'}. Ready for the next voucher.`);
+      startNewVoucher();
+    }
+  };
+
+  const handleUnpostVoucher = async () => {
+    if (!voucher) return;
+    setVoucherBusy(true);
+    setVoucherResult(null);
+    const res = await api.receiptVouchers.unpost(voucher.voucher_id);
+    setVoucherBusy(false);
+
+    if (!res.ok) { fail('Failed to unpost voucher: ' + res.error.message); return; }
+    setVoucherResult(res.data);
+    setVoucher(res.data.voucher);
+    refreshReceipts();
+    setBalanceRefreshKey(k => k + 1);
+    if (res.data.failed.length === 0) flash(`Voucher ${voucher.voucher_no} unposted.`);
+  };
+
+  // RJ-03: abandon the voucher on screen and start a blank one. Nothing is deleted — an unposted
+  // voucher with lines still exists and is reachable from the records list; this just stops
+  // pointing at it. The next Done allocates a new C.Book No.
+  const startNewVoucher = () => {
+    setVoucher(null);
+    setVoucherRemarks('');
+    setVoucherResult(null);
+    handleNew(); // resets every entry field and the date — one definition of "a blank entry row"
+    requestAnimationFrame(() => firstEntryFieldRef.current?.focus());
+  };
+
+  // RJ-03: pull a committed line back into the entry row to correct it. Only while the line itself
+  // is unposted — a posted line has ledger entries, and receipts:update rejects it outright.
+  const handleEditLine = (line: ReceiptRow) => {
+    if (line.status === 'CONFIRMED') {
+      fail('Unpost this voucher before editing that entry.');
+      return;
+    }
+    setMode('edit');
+    setDocKind('RECEIPT');
+    setReceiptId(line.receipt_id);
+    setReceiptStatus(line.status);
+    setBaId(String(line.ba_id));
+    setPreviewBaId(line.ba_id);
+    setAmount(Number(line.amount));
+    setCommission(Number(line.commission) || 0);
+    setPaymentMode(line.payment_mode);
+    setBankId(line.bank_id != null ? String(line.bank_id) : '');
+    setDetails(line.details || '');
+    setChequeNo(line.cheque_no || '');
+    setChequeDate(line.cheque_date ? line.cheque_date.slice(0, 10) : '');
+    setChequeReceivedDate(line.cheque_received_date ? line.cheque_received_date.slice(0, 10) : '');
+    setRemarks(line.remarks || '');
+    setIsEndorsed(false);
+    setErrorMsg('');
+    requestAnimationFrame(() => firstEntryFieldRef.current?.focus());
   };
 
   // Receipts are created DRAFT; only post() writes ledger_entries, so until this runs the receipt
@@ -371,6 +529,15 @@ export default function ReceiptsPage() {
     setSelectedDraftPick('');
     setErrorMsg('');
     setMode('view');
+
+    // RJ-03: opening a receipt from the records list also opens the voucher it belongs to, so its
+    // sibling entries, the per-mode totals and the voucher's Post/Un Post are all on screen —
+    // otherwise the user is looking at one line of a document with no way to reach the rest of it.
+    // Every receipt has a voucher (migration 022 backfilled the old ones), but voucher_id is
+    // nullable in the column, so this stays guarded rather than assuming.
+    if (row.voucher_id != null) await refreshVoucher(row.voucher_id);
+    else setVoucher(null);
+    setVoucherResult(null);
   };
 
 
@@ -576,17 +743,27 @@ export default function ReceiptsPage() {
               </div>
             )}
 
-            {/* Entry Form Card */}
+            {/* RJ-03: Entry Form Card — now the head of a VOUCHER, not a single receipt. Post and
+                Unpost act on the whole voucher; the per-line status badge moved into the grid. */}
             <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print>
               <div className="flex items-center justify-between border-b pb-3 mb-5">
                 <div className="flex items-center gap-2">
                   <span className="font-lora font-bold text-lg text-slate-900">
-                    {mode === 'edit' ? `Editing Receipt #${receiptId}` : mode === 'view' ? `Receipt #${receiptId}` : 'New Receipt Voucher'}
+                    {voucher
+                      ? `Receipt Voucher — C.Book No ${voucher.voucher_no}`
+                      : 'New Receipt Voucher'}
                   </span>
-                  {receiptId != null && (
-                    isPosted ? (
+                  {voucher && (
+                    voucher.status === 'POSTED' ? (
                       <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">
                         Posted
+                      </span>
+                    ) : voucher.status === 'PARTIAL' ? (
+                      <span
+                        className="px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-900"
+                        title="Some entries on this voucher are in the ledger and some are not — post it again to finish, or unpost to back it all out."
+                      >
+                        Partly Posted
                       </span>
                     ) : (
                       <span
@@ -597,25 +774,30 @@ export default function ReceiptsPage() {
                       </span>
                     )
                   )}
+                  {mode === 'edit' && receiptId != null && docKind === 'RECEIPT' && (
+                    <span className="px-2 py-0.5 rounded text-xs font-semibold bg-sky-100 text-sky-800">
+                      Editing entry #{receiptId}
+                    </span>
+                  )}
+                  {/* An endorsement is not a voucher line — it lives in dbo.settlements, has no
+                      cash/bank leg and no voucher_id — so it keeps its own document-level badge and
+                      its own Post/Unpost on the right. */}
+                  {docKind === 'SETTLEMENT' && receiptId != null && (
+                    <span className="px-2 py-0.5 rounded text-xs font-semibold bg-violet-100 text-violet-800">
+                      Endorsement #{receiptId} · {isPosted ? 'Posted' : 'Not Posted'}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
-                  {mode === 'view' && !isPosted && (
-                    <button
-                      type="button"
-                      onClick={() => setMode('edit')}
-                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all flex items-center gap-1"
-                    >
-                      <Edit size={14} /> Edit
-                    </button>
-                  )}
-                  {mode === 'view' && receiptId != null && (
+                  {/* Endorsements post on their own, not with a voucher. */}
+                  {docKind === 'SETTLEMENT' && mode === 'view' && receiptId != null && (
                     isPosted ? (
                       <button
                         type="button"
                         onClick={handleUnpost}
                         className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
                       >
-                        Unpost
+                        Unpost Endorsement
                       </button>
                     ) : (
                       <button
@@ -623,28 +805,97 @@ export default function ReceiptsPage() {
                         onClick={handlePost}
                         className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
                       >
-                        Post
+                        Post Endorsement
                       </button>
                     )
                   )}
+                  {/* Post/Unpost are voucher-level. Post needs at least one committed line; an empty
+                      voucher has nothing to post (the backend rejects it with EMPTY_VOUCHER). */}
+                  {voucher && voucherLines.length > 0 && voucher.status !== 'UNPOSTED' && (
+                    <button
+                      type="button"
+                      onClick={handleUnpostVoucher}
+                      disabled={voucherBusy}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 text-white shadow-sm transition-all"
+                    >
+                      {voucherBusy ? 'Working…' : 'Un Post'}
+                    </button>
+                  )}
+                  {voucher && voucherLines.length > 0 && voucher.status !== 'POSTED' && (
+                    <button
+                      type="button"
+                      onClick={handlePostVoucher}
+                      disabled={voucherBusy}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white shadow-sm transition-all"
+                    >
+                      {voucherBusy ? 'Posting…' : `Post Voucher (${voucherLines.length})`}
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={handleNew}
+                    onClick={startNewVoucher}
                     className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
                   >
-                    New Receipt
+                    New Voucher
                   </button>
                 </div>
               </div>
 
-              <form onSubmit={handleSaveReceipt} className="flex flex-col gap-4">
+              {/* RJ-03: head-level Remarks, alongside the Date field below. Editable only while the
+                  voucher is entirely unposted — once a line is in the ledger the header is locked
+                  server-side (POSTED_LOCK), so offering the field would be a lie. */}
+              <div className="mb-4">
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Voucher Remarks</label>
+                <input
+                  type="text"
+                  value={voucher ? (voucher.remarks ?? '') : voucherRemarks}
+                  disabled={!!voucher && voucher.status !== 'UNPOSTED'}
+                  onChange={e => {
+                    if (!voucher) { setVoucherRemarks(e.target.value); return; }
+                    setVoucher({ ...voucher, remarks: e.target.value });
+                  }}
+                  onBlur={async e => {
+                    // Persisted on blur rather than per keystroke. Only meaningful once the voucher
+                    // exists — before the first Done there is no row to write to, so the value is
+                    // held locally and passed to create().
+                    if (!voucher || voucher.status !== 'UNPOSTED') return;
+                    const res = await api.receiptVouchers.update(voucher.voucher_id, {
+                      voucher_date: voucher.voucher_date,
+                      remarks: e.target.value.trim() || undefined,
+                    });
+                    if (res.ok) setVoucher(res.data);
+                  }}
+                  placeholder="Applies to the whole voucher (each entry has its own narration below)"
+                  className="soleria-input"
+                />
+              </div>
+
+              {/* RJ-03: submitting the form is "Done" — it commits the entry row as a line of the
+                  voucher and re-arms for the next one. G-01's Enter-on-last-field rule fires the
+                  form's submit button, so Enter through the row ends in Done with no mouse. */}
+              <form onSubmit={handleDone} className="flex flex-col gap-4">
+                {/* RJ-03: the Date is head-level — one date for the whole voucher, as on the
+                    client's screen. Locked once the voucher has a line, because every line already
+                    carries this date and moving it means moving them all (which the backend does,
+                    but only while nothing is posted). Editing it goes through the header update so
+                    the lines are carried with it. */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
                   <input
                     type="date"
-                    value={date}
-                    disabled={isViewMode}
-                    onChange={e => setDate(e.target.value)}
+                    value={voucher ? voucher.voucher_date : date}
+                    disabled={!!voucher && voucher.status !== 'UNPOSTED'}
+                    onChange={async e => {
+                      const next = e.target.value;
+                      setDate(next);
+                      if (!voucher || voucher.status !== 'UNPOSTED') return;
+                      const res = await api.receiptVouchers.update(voucher.voucher_id, {
+                        voucher_date: next,
+                        remarks: voucher.remarks ?? undefined,
+                      });
+                      if (res.ok) setVoucher(res.data);
+                      else fail('Failed to change the voucher date: ' + res.error.message);
+                    }}
                     className="soleria-input font-semibold"
                   />
                 </div>
@@ -657,7 +908,9 @@ export default function ReceiptsPage() {
                     Select Account <span className="text-red-500 font-bold">*</span>
                   </label>
                   <div className="flex items-center gap-2">
-                    <div className="flex-1 min-w-0">
+                    {/* RJ-03: ref target for the post-Done cursor return — this is the first field
+                        of the entry row. */}
+                    <div className="flex-1 min-w-0" ref={firstEntryFieldWrapRef}>
                       <SearchableSelect
                         options={accountOptions}
                         value={baId}
@@ -889,16 +1142,141 @@ export default function ReceiptsPage() {
                 {!isViewMode && (
                   <div className="sticky bottom-0 z-10 -mx-6 md:-mx-8 px-6 md:px-8 pt-3 pb-4 mt-2 bg-white border-t" style={{ borderColor: 'var(--border-color)' }}>
                     <div className="flex gap-3">
+                      {/* RJ-03: "Done" — the client's own word for it. Commits this entry to the
+                          voucher and clears for the next; Post (in the header) is the separate,
+                          later action that puts the whole voucher in the ledger. */}
                       <button
                         type="submit"
                         className="btn-gold w-full flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold"
                       >
-                        <Save size={16} /> {mode === 'edit' ? 'Update Receipt' : 'Save Receipt'}
+                        <Save size={16} /> {mode === 'edit' ? 'Update Entry' : 'Done — Add to Voucher'}
                       </button>
                     </div>
                   </div>
                 )}
               </form>
+
+              {/* ── RJ-03: the voucher's committed entry lines ──────────────────────────────────
+                  Rows, not cards — the same grid the client's screen shows beneath the entry
+                  fields, so a voucher can be read back at a glance before posting. */}
+              {voucherLines.length > 0 && (
+                <div className="mt-6 pt-5 border-t" style={{ borderColor: 'var(--border-color)' }}>
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-lora font-semibold text-slate-800">
+                      Entries in this Voucher
+                      <span className="ml-2 text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
+                        {voucherLines.length}
+                      </span>
+                    </h4>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                          <th className="p-2.5 pl-3">A/C Code</th>
+                          <th className="p-2.5">Account Description</th>
+                          <th className="p-2.5">Narration</th>
+                          <th className="p-2.5">Cheque No</th>
+                          <th className="p-2.5 text-center">Type</th>
+                          <th className="p-2.5 text-right">Rs. (Jamma)</th>
+                          <th className="p-2.5 text-center">Status</th>
+                          <th className="p-2.5 text-center" data-no-print>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {voucherLines.map(line => (
+                          <tr key={line.receipt_id} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                            <td className="p-2.5 pl-3 font-mono text-xs text-slate-600">{line.account_code || '—'}</td>
+                            <td className="p-2.5 font-semibold text-slate-800">{line.account_name}</td>
+                            <td className="p-2.5 text-slate-600 text-xs">{line.remarks || '—'}</td>
+                            <td className="p-2.5 font-mono text-xs text-slate-600">{line.cheque_no || '—'}</td>
+                            <td className="p-2.5 text-center text-xs font-semibold text-slate-700">{line.payment_mode}</td>
+                            <td className="p-2.5 text-right font-mono font-semibold text-slate-900">
+                              {formatCurrency(Number(line.amount))}
+                            </td>
+                            <td className="p-2.5 text-center">
+                              {line.status === 'CONFIRMED' ? (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-100 text-emerald-800">Posted</span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-100 text-amber-900">Pending</span>
+                              )}
+                            </td>
+                            <td className="p-2.5 text-center" data-no-print>
+                              <div className="flex items-center justify-center gap-1.5">
+                                {/* Both actions are unposted-only. A posted line has ledger entries;
+                                    the backend rejects editing or deleting it, so showing the
+                                    buttons would only produce an error. */}
+                                {line.status === 'DRAFT' && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleEditLine(line)}
+                                      title="Pull this entry back into the form to correct it"
+                                      className="text-slate-500 hover:text-slate-800 transition-colors"
+                                    >
+                                      <Edit size={14} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setDeleteTarget(line)}
+                                      title="Delete this entry (asks for your password)"
+                                      className="text-rose-500 hover:text-rose-700 transition-colors"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      {/* RJ-03: the client's own footer — totals split by how the money arrived. */}
+                      <tfoot>
+                        <tr className="border-t-2 bg-slate-50/70 font-semibold" style={{ borderColor: 'var(--border-color)' }}>
+                          <td className="p-2.5 pl-3 text-xs uppercase tracking-wider text-slate-500" colSpan={4}>
+                            Total Cheque {formatCurrency(Number(voucher?.total_cheque ?? 0))}
+                            {'  ·  '}Total Online {formatCurrency(Number(voucher?.total_online ?? 0))}
+                            {'  ·  '}Total Cash {formatCurrency(Number(voucher?.total_cash ?? 0))}
+                          </td>
+                          <td className="p-2.5 text-right text-xs uppercase tracking-wider text-slate-500">Voucher Total</td>
+                          <td className="p-2.5 text-right font-mono text-slate-900">
+                            {formatCurrency(Number(voucher?.total_amount ?? 0))}
+                          </td>
+                          <td colSpan={2} />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+
+                  {/* Per-line outcome of the last Post/Un Post. Deliberately NOT auto-hidden on a
+                      timer like the ordinary banner: a voucher can post 8 of 10 lines, and the two
+                      that failed are the entire point of the message. */}
+                  {voucherResult && voucherResult.failed.length > 0 && (
+                    <div className="mt-4 p-3 rounded-lg bg-rose-50 border border-rose-200">
+                      <p className="text-xs font-bold text-rose-900">
+                        {voucherResult.failed.length} entr{voucherResult.failed.length === 1 ? 'y' : 'ies'} could not be posted — the rest went through.
+                      </p>
+                      <ul className="mt-1.5 space-y-1">
+                        {voucherResult.failed.map(f => (
+                          <li key={f.receipt_id} className="text-xs text-rose-800">
+                            <span className="font-semibold">{f.account_name || `#${f.receipt_id}`}</span>
+                            {' '}({formatCurrency(Number(f.amount))}){' — '}{f.message}
+                          </li>
+                        ))}
+                      </ul>
+                      <button
+                        type="button"
+                        onClick={() => setVoucherResult(null)}
+                        className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Recorded Receipts */}

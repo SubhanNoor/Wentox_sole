@@ -1225,9 +1225,48 @@ CREATE INDEX IX_cheques_endorsable  ON dbo.cheques(cheque_status)           -- E
 CREATE INDEX IX_cheques_due         ON dbo.cheques(cheque_date)             -- §12 cheque-due alerts
        WHERE cheque_status IN ('PENDING','PARTIALLY_ENDORSED');
 
+-- POST-v4.3 (migration 022, RJ-03/PN-01): receipts and expenses are now ENTRY LINES under a
+-- voucher, not standalone documents. A day's takings are entered at the end of the day, all at
+-- once, and they are not one customer's — so one voucher carries a date/C.Book No/Remarks and many
+-- lines, each line naming its own account, posted with a single action.
+--
+-- dbo.expense_vouchers is the identical shape for Payments (Naam).
+--
+-- There is deliberately NO status column on either header. Posting is per line — each line gets its
+-- own transaction, so a line that cannot post never rolls back the lines that already did (decided
+-- explicitly with the client) — which means a voucher can legitimately sit half-posted. A stored
+-- header status would be a second source of truth that is wrong the moment that happens. Status is
+-- derived from the lines instead: no line CONFIRMED -> UNPOSTED, all CONFIRMED -> POSTED, otherwise
+-- PARTIAL. See receiptVouchers.service.js#deriveStatus.
+--
+-- The per-line receipt_date/expense_date was NOT removed — the ledger, the Cash Book and every
+-- report read it. The service writes the header's date down onto its lines so the two cannot
+-- disagree (repository#syncLineDates).
+CREATE TABLE dbo.receipt_vouchers (
+  voucher_id   INT IDENTITY(1,1) NOT NULL,
+  voucher_no   INT           NOT NULL,               -- "C.Book No"; MAX+1, allocated by the service
+  voucher_date DATE          NOT NULL,
+  remarks      NVARCHAR(500) NULL,                   -- head-level; lines keep their own narration
+  created_by   INT           NULL,
+  updated_by   INT           NULL,
+  created_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_rv_created DEFAULT (SYSUTCDATETIME()),
+  updated_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_rv_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_receipt_vouchers      PRIMARY KEY (voucher_id),
+  CONSTRAINT UQ_receipt_vouchers_no   UNIQUE (voucher_no),
+  CONSTRAINT FK_receipt_vouchers_user FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_receipt_vouchers_upd  FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id)
+);
+CREATE INDEX IX_receipt_vouchers_date ON dbo.receipt_vouchers(voucher_date);
+
 CREATE TABLE dbo.receipts (                                   -- Jamma
   receipt_id   INT IDENTITY(1,1) NOT NULL,
   receipt_date DATE          NOT NULL,
+  -- POST-v4.3 (migration 022, RJ-03): the voucher this entry belongs to. NULLable in the column so
+  -- the migration's backfill could populate it (every pre-existing receipt became a one-line
+  -- voucher of its own), but every line written by the app carries one — enforced at the service
+  -- layer, same discipline as cheque_id's "eventually not null" below. The FK is deliberately NOT
+  -- ON DELETE CASCADE: a cascade would silently delete posted lines and strand their ledger rows.
+  voucher_id   INT           NULL,
   -- POST-v4.3 (migration 014): was `customer_id NOT NULL` FK to dbo.customers, which meant Jamma
   -- could only ever name a customer -- money back from a director, an employee, a vendor or a bank
   -- had nowhere to go. Now any business account, exactly like dbo.expenses.ba_id has always been.
@@ -1303,9 +1342,31 @@ CREATE TABLE dbo.draft_receipts (
 CREATE INDEX IX_draft_receipts_date     ON dbo.draft_receipts(receipt_date);
 CREATE INDEX IX_draft_receipts_account  ON dbo.draft_receipts(ba_id, receipt_date);
 
+-- POST-v4.3 (migration 022, PN-01): the Payments (Naam) voucher header — identical in shape and
+-- rules to dbo.receipt_vouchers above, including the deliberate absence of a status column.
+-- Numbered independently of receipt vouchers: they are different documents on different screens.
+CREATE TABLE dbo.expense_vouchers (
+  voucher_id   INT IDENTITY(1,1) NOT NULL,
+  voucher_no   INT           NOT NULL,               -- "C.Book No"; MAX+1, allocated by the service
+  voucher_date DATE          NOT NULL,
+  remarks      NVARCHAR(500) NULL,
+  created_by   INT           NULL,
+  updated_by   INT           NULL,
+  created_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_ev_created DEFAULT (SYSUTCDATETIME()),
+  updated_at   DATETIME2(0)  NOT NULL CONSTRAINT DF_ev_updated DEFAULT (SYSUTCDATETIME()),
+  CONSTRAINT PK_expense_vouchers      PRIMARY KEY (voucher_id),
+  CONSTRAINT UQ_expense_vouchers_no   UNIQUE (voucher_no),
+  CONSTRAINT FK_expense_vouchers_user FOREIGN KEY (created_by) REFERENCES dbo.users(user_id),
+  CONSTRAINT FK_expense_vouchers_upd  FOREIGN KEY (updated_by) REFERENCES dbo.users(user_id)
+);
+CREATE INDEX IX_expense_vouchers_date ON dbo.expense_vouchers(voucher_date);
+
 CREATE TABLE dbo.expenses (                                   -- Kharch; also the vendor-payment path (§10 gap 2)
   expense_id   INT IDENTITY(1,1) NOT NULL,
   expense_date DATE          NOT NULL,
+  -- POST-v4.3 (migration 022, PN-01): the voucher this entry belongs to — same rules as
+  -- dbo.receipts.voucher_id above (nullable for the backfill, always set by the app, no cascade).
+  voucher_id   INT           NULL,
   ba_id        INT           NOT NULL,                        -- expense head / vendor account
   amount       DECIMAL(14,2) NOT NULL,
   -- VARCHAR(20), not (10) — 'CHEQUE_ENDORSED'/'CHEQUE_ISSUED' are 15/13 chars, wider than the old

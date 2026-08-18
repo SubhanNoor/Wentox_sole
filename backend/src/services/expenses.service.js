@@ -63,6 +63,9 @@ function buildFields(payload, baId) {
     issued_cheque_no: payload.payment_mode === 'CHEQUE_ISSUED' ? payload.issued_cheque_no : null,
     issued_cheque_date: payload.payment_mode === 'CHEQUE_ISSUED' ? payload.issued_cheque_date : null,
     remarks: payload.remarks,
+    // PN-01: which voucher this entry belongs to. Only insert() reads it — updateHeader
+    // deliberately does not, so editing a line can never move it to another voucher.
+    voucher_id: payload.voucher_id,
   };
 }
 

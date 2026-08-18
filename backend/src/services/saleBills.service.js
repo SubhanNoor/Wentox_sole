@@ -156,6 +156,56 @@ async function post(id) {
   return getById(id);
 }
 
+// SB-06: every bill still awaiting posting, oldest first.
+function listUnposted() {
+  return repository.listUnposted();
+}
+
+// SB-06: post a whole run of bills in one action instead of one at a time.
+//
+// Each bill keeps its OWN transaction (post() already wraps one) rather than the batch sharing a
+// single one — a decision made explicitly with the user: one bill that can't post must not roll
+// back the bills that already did. So this resolves normally with a per-bill breakdown instead of
+// throwing on the first failure, unlike products/businessAccounts createBatch which reject the
+// whole batch. Callers must read `failed`, not just assume success.
+//
+// **Sequential, deliberately.** Two unposted bills can each pass the SB-03 stock check on their
+// own yet not together — postLedgerAndStock() reads pairsOnHand() live, so posting them one after
+// another is what makes the second one correctly fail. Running these concurrently would let both
+// read the same pre-sale stock and oversell. Do not turn this loop into a Promise.all.
+async function postAll(ids) {
+  // No explicit list = every unposted bill, in entry order.
+  const targets = Array.isArray(ids) && ids.length
+    ? ids.map((id) => ({ bill_id: id }))
+    : await repository.listUnposted();
+
+  const posted = [];
+  const failed = [];
+
+  for (const target of targets) {
+    const billId = target.bill_id;
+    try {
+      const bill = await post(billId);
+      posted.push({ bill_id: billId, bill_no: bill.bill_no, net_value: bill.net_value });
+    } catch (err) {
+      // A bill that someone else posted in the meantime is not a failure worth reporting as one —
+      // the user's intent ("get these posted") is satisfied either way.
+      if (err.code === 'ALREADY_POSTED') continue;
+      // Non-ApiError failures keep their message here (the batch summary is the only place the
+      // user will ever see which bill broke), but are still logged so the stack isn't lost.
+      if (!err.status) console.error(`postAll: unexpected failure on bill ${billId}:`, err);
+      failed.push({
+        bill_id: billId,
+        bill_no: target.bill_no ?? null,
+        message: err.status ? err.message : 'Unexpected error while posting this bill.',
+        code: err.code || 'INTERNAL',
+      });
+    }
+  }
+
+  return { posted, failed, attempted: targets.length };
+}
+
 async function unpost(id) {
   const bill = await getById(id);
   if (!bill.is_posted) {
@@ -287,5 +337,5 @@ async function updateBiltyInfo(billId, payload) {
 
 module.exports = {
   create, list, getById, update, post, unpost, postLedgerAndStock, insertConfirmed,
-  biltySearch, updateBiltyInfo, lastSoldRate,
+  biltySearch, updateBiltyInfo, lastSoldRate, listUnposted, postAll,
 };
