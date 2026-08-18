@@ -911,7 +911,7 @@ const initialState: State = {
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'LOGIN_SUCCESS':
-      localStorage.setItem('wento_sidebar_hidden', 'true');
+      // (the 'wento_sidebar_hidden' write that used to sit here went with the sidebar itself)
       return {
         ...state,
         isLoggedIn: true,
@@ -921,7 +921,6 @@ function reducer(state: State, action: Action): State {
         homeAlertsCardClosed: false
       };
     case 'LOGOUT':
-      localStorage.setItem('wento_sidebar_hidden', 'true');
       return { ...state, isLoggedIn: false, currentUserRole: null, currentUsername: null, currentPage: 'login' };
     case 'RENAME_CURRENT_USER':
       return { ...state, currentUsername: action.username };

@@ -1,28 +1,17 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
-  ShoppingCart, Receipt, Package, FileText, Layers,
-  Settings, LogOut, Menu, ChevronDown, MapPin, Home,
-  Users, Folder, BookOpen, DollarSign, ListCollapse, Wallet, Truck, Milestone, ShoppingBag, Undo2, Search, HardHat,
-  BadgeDollarSign, ArrowLeftRight, Landmark, Pin, BookmarkPlus, GripHorizontal, ArrowDownToLine, Warehouse, RotateCcw,
-  UserCog, UserSearch
+  Settings, LogOut, ChevronDown, Home,
+  Pin, BookmarkPlus, GripHorizontal, ArrowDownToLine
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
 import ZoomControl from '@/components/ZoomControl';
+import MenuBar from '@/components/MenuBar';
 import * as api from '@/lib/api';
 
-interface NavItem {
-  page: NavPage;
-  label: string;
-  icon: React.ComponentType<{ size: number; className?: string }>;
-  adminOnly?: boolean;
-}
-
-interface NavSection {
-  title: string;
-  items: NavItem[];
-}
+// Navigation moved out of this file entirely: the five hover menus and their page mapping live in
+// MenuBar.tsx as MENU_GROUPS. The sidebar's NavItem/NavSection/navSections went with it.
 
 interface QuickShortcut {
   id: string;
@@ -30,60 +19,6 @@ interface QuickShortcut {
   page: NavPage;
   tab?: string;
 }
-
-const navSections: NavSection[] = [
-  {
-    title: 'Transactions',
-    items: [
-      { page: 'sale-bill', label: 'Sale Bill', icon: ShoppingCart },
-      { page: 'sale-return', label: 'Sale Return', icon: Receipt },
-      { page: 'purchase-entry', label: 'Purchase', icon: ShoppingBag },
-      { page: 'purchase-return', label: 'Purchase Return', icon: Undo2 },
-      { page: 'receipts-jamma', label: 'Receipts (Jamma)', icon: DollarSign },
-      { page: 'expenses-entry', label: 'Expenses (Kharch)', icon: Wallet },
-      { page: 'wage-run', label: 'Wage Run (Piece Rate)', icon: HardHat },
-      { page: 'salary-run', label: 'Salary Run (Monthly)', icon: BadgeDollarSign },
-      { page: 'transfer', label: 'Transfer (Cash ↔ Bank)', icon: ArrowLeftRight, adminOnly: true },
-      { page: 'journal-voucher', label: 'Journal Voucher', icon: BookmarkPlus },
-      { page: 'cheque-return', label: 'Cheque', icon: RotateCcw },
-    ]
-  },
-  {
-    title: 'Reports',
-    items: [
-      { page: 'report-stock', label: 'Current Stock', icon: Package },
-      { page: 'reports', label: 'Reports Hub & Ledger', icon: FileText },
-      { page: 'bilty-update', label: 'Search & Bilty Adda Updation', icon: Search },
-      { page: 'overall-search', label: 'Overall Searching', icon: Users },
-      { page: 'search-customer', label: 'Search Customer', icon: UserSearch },
-    ]
-  },
-  {
-    title: 'System Setup',
-    items: [
-      { page: 'setup-product', label: 'Product Details', icon: Folder },
-      { page: 'setup-category', label: 'Categories', icon: Layers },
-      { page: 'setup-vendor', label: 'Vendors', icon: Truck },
-      { page: 'setup-employee', label: 'Employees', icon: HardHat },
-      { page: 'setup-bank', label: 'Bank Accounts', icon: Landmark, adminOnly: true },
-      { page: 'setup-customer', label: 'Customers', icon: Users },
-      { page: 'setup-sub-cust', label: 'Sub Customers', icon: Users },
-      { page: 'setup-city', label: 'City Creation', icon: MapPin },
-      { page: 'setup-region', label: 'Regions', icon: MapPin },
-      { page: 'setup-adda', label: 'Transport Addas', icon: Milestone },
-      { page: 'setup-store', label: 'Store Setup', icon: Warehouse },
-      { page: 'setup-users', label: 'Manage Users', icon: UserCog, adminOnly: true },
-    ]
-  },
-  {
-    title: 'Accounting Setup',
-    items: [
-      { page: 'setup-group-ac', label: 'Group Accounts', icon: ListCollapse },
-      { page: 'setup-chart-ac', label: 'Chart of Accounts', icon: BookOpen },
-      { page: 'setup-business-ac', label: 'Business Accounts', icon: Settings },
-    ]
-  }
-];
 
 // Pre-seeded Quick Menu shortcuts for a first-ever launch (empty localStorage) — the pages/tabs
 // used often enough day-to-day to be worth one click from anywhere. Cash Book and Business Ledger
@@ -130,7 +65,6 @@ function loadShortcuts(): QuickShortcut[] {
   }
 }
 
-let savedSidebarScrollTop = 0;
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -144,12 +78,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
   const { state, dispatch } = useApp();
   const [showAdminPopup, setShowAdminPopup] = useState(false);
 
-  // Sidebar toggle state (desktop collapse & mobile drawer) - Default is HIDDEN on fresh login, persists across page navigation
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isSidebarHidden, setIsSidebarHidden] = useState<boolean>(() => {
-    return localStorage.getItem('wento_sidebar_hidden') !== 'false';
-  });
-
   // Top Menu Bar Shortcuts State — seeded with the everyday-use pages the first time an install
   // sees this generation of the defaults (see loadShortcuts above); after that the user's own bar
   // wins from then on.
@@ -161,16 +89,9 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
 
   const popupRef = useRef<HTMLDivElement>(null);
 
-  const navRefCallback = (node: HTMLElement | null) => {
-    if (node) node.scrollTop = savedSidebarScrollTop;
-  };
-
-  const visibleNavSections = useMemo(() => {
-    if (state.currentUserRole !== 'User') return navSections;
-    return navSections
-      .map(section => ({ ...section, items: section.items.filter(item => !item.adminOnly) }))
-      .filter(section => section.items.length > 0);
-  }, [state.currentUserRole]);
+  // The sidebar's scroll-position restore and its adminOnly section filter both went with it —
+  // MenuBar does its own role filtering, and a dropdown that opens fresh each time has no scroll
+  // position to remember.
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -345,13 +266,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     setShowAdminPopup(false);
   }
 
-  const toggleSidebar = () => {
-    const nextHidden = !isSidebarHidden;
-    setIsSidebarHidden(nextHidden);
-    setSidebarOpen(!sidebarOpen);
-    localStorage.setItem('wento_sidebar_hidden', String(nextHidden));
-  };
-
   const currentPage = state.currentPage;
 
   const isCurrentPagePinned = useMemo(() => {
@@ -396,174 +310,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
 
   return (
     <div className="flex h-screen w-full overflow-hidden" style={{ background: 'var(--app-bg)' }}>
-      {/* Mobile overlay */}
-      {sidebarOpen && (
-        <div
-          className="app-sidebar-overlay"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* Hideable Animated Sidebar */}
-      <aside
-        data-no-print
-        className={`app-sidebar flex flex-col flex-shrink-0 transition-all duration-300 ease-in-out transform ${
-          isSidebarHidden ? '-translate-x-full w-0 opacity-0 overflow-hidden pointer-events-none' : 'translate-x-0 w-64 opacity-100'
-        }${sidebarOpen ? ' app-sidebar-open' : ''}`}
-        style={{ background: 'var(--brand-navy)' }}
-      >
-        {/* Logo Block (Clean — 3 lines button removed from inside sidebar) */}
-        <div className="px-4 pt-6 pb-4">
-          <div className="flex items-center justify-between">
-            <button
-              onClick={() => navigate('home')}
-              className="flex items-center gap-2.5 min-w-0 text-left"
-              title="Home"
-            >
-              <div
-                className="flex items-center justify-center flex-shrink-0"
-                style={{
-                  width: 36, height: 36, borderRadius: 8,
-                  background: 'var(--brand-gold)'
-                }}
-              >
-                <span className="font-lora font-bold text-lg" style={{ color: 'var(--brand-navy)' }}>W</span>
-              </div>
-              <div className="min-w-0">
-                <div
-                  className="font-lora font-bold tracking-wide text-white truncate"
-                  style={{ fontSize: '14.5px', lineHeight: '1.2' }}
-                >
-                  WENTOX WAREHOUSE
-                </div>
-                <div
-                  className="font-inter tracking-widest uppercase font-semibold"
-                  style={{ color: 'var(--brand-gold)', letterSpacing: '1.1px', fontSize: '9px', marginTop: '1px' }}
-                >
-                  Footwear Distribution
-                </div>
-              </div>
-            </button>
-          </div>
-        </div>
-
-        {/* Navigation - Items are Draggable to Top Quick Access Menu Bar */}
-        <nav
-          className="flex-1 overflow-y-auto py-2.5 px-3 scrollbar-thin"
-          ref={navRefCallback}
-          onScroll={(e) => { savedSidebarScrollTop = e.currentTarget.scrollTop; }}
-        >
-          {visibleNavSections.map((section, sIdx) => (
-            <div key={sIdx} className="mb-4">
-              <div
-                className="px-3 mb-1.5 text-xs font-semibold uppercase tracking-wider"
-                style={{ color: 'var(--brand-gold)', opacity: 0.9, letterSpacing: '1.2px' }}
-              >
-                {section.title}
-              </div>
-              <div className="flex flex-col gap-0.5">
-                {section.items.map(item => {
-                  const isActive = currentPage === item.page;
-                  const Icon = item.icon;
-                  return (
-                    <button
-                      key={item.page}
-                      draggable={true}
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData('text/plain', JSON.stringify({ page: item.page, label: item.label }));
-                        setIsDragging(true);
-                      }}
-                      onDragEnd={() => {
-                        setIsDragging(false);
-                        setIsDragOver(false);
-                      }}
-                      onClick={() => navigate(item.page)}
-                      className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-sm transition-colors text-left cursor-grab active:cursor-grabbing group relative"
-                      style={{
-                        background: isActive ? 'var(--brand-gold)' : 'transparent',
-                        color: isActive ? 'var(--brand-navy)' : 'rgba(250,248,243,0.72)',
-                        fontWeight: isActive ? 600 : 500,
-                      }}
-                      title="Drag to top Quick Access Menu Bar to pin"
-                    >
-                      <Icon size={16} />
-                      <span style={{ fontSize: '13px' }} className="flex-1 truncate">{item.label}</span>
-                      <GripHorizontal size={12} className="opacity-0 group-hover:opacity-60 transition-opacity text-slate-400" />
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </nav>
-
-        {/* Admin Footer */}
-        <div
-          className="relative px-3.5 pt-3.5 pb-4"
-          style={{ borderTop: '1px solid var(--sidebar-sep)' }}
-        >
-          {/* Admin Popup */}
-          {showAdminPopup && (
-            <div
-              ref={popupRef}
-              className="absolute left-3 right-3 rounded-lg overflow-hidden"
-              style={{
-                bottom: 'calc(100% + 8px)',
-                background: '#22344f',
-                border: '1px solid rgba(176,141,87,0.35)',
-                boxShadow: '0 14px 34px rgba(0,0,0,0.35)',
-              }}
-            >
-              <button
-                onClick={() => navigate('settings')}
-                className="flex items-center gap-2 w-full px-3.5 py-3 text-sm transition-colors hover:bg-white/5 cursor-pointer"
-                style={{ color: 'rgba(250,248,243,0.85)' }}
-              >
-                <Settings size={14} />
-                <span>{state.currentUserRole === 'Admin' ? 'Settings & Updates' : 'Check for Updates'}</span>
-              </button>
-              <div style={{ borderTop: '1px solid var(--sidebar-sep)' }} />
-              <button
-                onClick={() => { void api.logout(); dispatch({ type: 'LOGOUT' }); }}
-                className="flex items-center gap-2 w-full px-3.5 py-3 text-sm transition-colors hover:bg-white/5"
-                style={{ color: '#d99a86' }}
-              >
-                <LogOut size={14} />
-                <span>Log out</span>
-              </button>
-            </div>
-          )}
-
-          <button
-            onClick={() => setShowAdminPopup(!showAdminPopup)}
-            className="flex items-center gap-3 w-full rounded-lg px-2 py-2 transition-colors hover:bg-white/5"
-          >
-            <div
-              className="flex items-center justify-center rounded-full flex-shrink-0"
-              style={{ width: 36, height: 36, background: 'var(--brand-gold)' }}
-            >
-              <span className="font-inter font-semibold text-xs" style={{ color: 'var(--brand-navy)' }}>
-                {state.currentUserRole === 'User' ? 'US' : 'WA'}
-              </span>
-            </div>
-            <div className="flex-1 text-left">
-              <div className="text-white font-semibold text-sm">
-                {state.currentUserRole === 'User' ? 'Wentox User' : 'Wentox Admin'}
-              </div>
-              <div style={{ color: 'var(--brand-gold)', fontSize: '11px' }}>
-                {state.currentUserRole || 'Administrator'}
-              </div>
-            </div>
-            <ChevronDown
-              size={12}
-              className="transition-transform"
-              style={{ color: 'rgba(255,255,255,0.5)', transform: showAdminPopup ? 'rotate(180deg)' : 'none' }}
-            />
-          </button>
-        </div>
-      </aside>
-
-      {/* Main Content */}
+      {/* Main Content — the sidebar is gone; navigation lives in <MenuBar> below the header. */}
       <div className="flex flex-col flex-1 min-w-0">
         {/* Top Header */}
         <header
@@ -575,16 +322,8 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
             borderBottom: '1px solid var(--border-color)'
           }}
         >
-          {/* Three Lines (Hamburger) Button to Toggle Sidebar */}
-          <button
-            onClick={toggleSidebar}
-            className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 transition-colors text-slate-800 flex items-center justify-center shadow-2xs cursor-pointer"
-            aria-label="Toggle Sidebar"
-            title={isSidebarHidden ? "Show Sidebar" : "Hide Sidebar"}
-          >
-            <Menu size={22} color="var(--dark-heading)" />
-          </button>
-
+          {/* The sidebar toggle used to live here. There is no sidebar to toggle now — navigation is
+              the menu bar below this header — so the space goes to the Home button and brand. */}
           <button
             onClick={() => navigate('home')}
             className="flex items-center justify-center rounded-lg transition-colors flex-shrink-0"
@@ -661,7 +400,82 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
           )}
           <ZoomControl />
           <NotificationBell />
+
+          {/* The user chip — and with it Settings and Log out — used to sit in the sidebar footer.
+              Removing the sidebar without moving it would have taken the only way to log out with
+              it, so it lives in the header now. Same popup, same two actions. */}
+          <div className="relative flex-shrink-0" ref={popupRef}>
+            <button
+              onClick={() => setShowAdminPopup(!showAdminPopup)}
+              className="flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-slate-100 cursor-pointer"
+              title="Account"
+            >
+              <div
+                className="flex items-center justify-center rounded-full flex-shrink-0"
+                style={{ width: 30, height: 30, background: 'var(--brand-gold)' }}
+              >
+                <span className="font-inter font-semibold text-[10px]" style={{ color: 'var(--brand-navy)' }}>
+                  {state.currentUserRole === 'User' ? 'US' : 'WA'}
+                </span>
+              </div>
+              <div className="text-left hidden md:block">
+                <div className="font-semibold text-[12px]" style={{ color: 'var(--dark-heading)' }}>
+                  {state.currentUserRole === 'User' ? 'Wentox User' : 'Wentox Admin'}
+                </div>
+                <div style={{ color: 'var(--brand-gold)', fontSize: '10px' }}>
+                  {state.currentUserRole || 'Administrator'}
+                </div>
+              </div>
+              <ChevronDown
+                size={12}
+                className="transition-transform"
+                style={{ color: 'rgba(17,28,42,0.45)', transform: showAdminPopup ? 'rotate(180deg)' : 'none' }}
+              />
+            </button>
+
+            {showAdminPopup && (
+              <div
+                className="absolute right-0 rounded-lg overflow-hidden z-50"
+                style={{
+                  top: 'calc(100% + 6px)',
+                  minWidth: 210,
+                  background: '#22344f',
+                  border: '1px solid rgba(176,141,87,0.35)',
+                  boxShadow: '0 14px 34px rgba(0,0,0,0.35)',
+                }}
+              >
+                <button
+                  onClick={() => { setShowAdminPopup(false); navigate('settings'); }}
+                  className="flex items-center gap-2 w-full px-3.5 py-3 text-sm transition-colors hover:bg-white/5 cursor-pointer"
+                  style={{ color: 'rgba(250,248,243,0.85)' }}
+                >
+                  <Settings size={14} />
+                  <span>{state.currentUserRole === 'Admin' ? 'Settings & Updates' : 'Check for Updates'}</span>
+                </button>
+                <div style={{ borderTop: '1px solid var(--sidebar-sep)' }} />
+                <button
+                  onClick={() => { void api.logout(); dispatch({ type: 'LOGOUT' }); }}
+                  className="flex items-center gap-2 w-full px-3.5 py-3 text-sm transition-colors hover:bg-white/5"
+                  style={{ color: '#d99a86' }}
+                >
+                  <LogOut size={14} />
+                  <span>Log out</span>
+                </button>
+              </div>
+            )}
+          </div>
         </header>
+
+        {/* The classic menu bar from the client's previous software — five hover menus, directly
+            above the Quick Menu row, replacing the sidebar. */}
+        <MenuBar
+          currentPage={currentPage}
+          subTabId={subTabId}
+          isAdmin={state.currentUserRole !== 'User'}
+          onNavigate={(page, tab) => navigate(page, tab)}
+          onDragStart={() => setIsDragging(true)}
+          onDragEnd={() => { setIsDragging(false); setIsDragOver(false); }}
+        />
 
         {/* Top Quick Access Shortcut Drop Zone / Menu Bar */}
         <div
