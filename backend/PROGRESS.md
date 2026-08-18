@@ -23,6 +23,395 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Navigation
+
+### 2026-08-18 — Reclaiming the sidebar's space: wider list pages, last card grids to rows
+- **What:** two follow-ups to removing the sidebar, so the pages actually grow into the ~256px it was
+  taking. (1) The wide page-width cap goes from 1400 to 1750. (2) The last six card grids become row
+  tables.
+- **Why these two and not a redesign:** the question asked was whether to switch cards from vertical
+  to horizontal. Checking the tree answered it differently: **19 pages already use row tables**
+  (`DataListTable`), and only 6 components still used the 3-column card grid — precisely the Sale Bill
+  and Sale Return Weekly/Monthly/Overall tabs. The Receipts and Expenses equivalents had already been
+  converted, because the client asked for exactly this in **RJ-05** ("change the display from cards to
+  rows — consistent with other pages in the app"). So this is not a new design direction, it is
+  finishing one the client already chose on the six screens RJ-05 did not reach. Inventing a third
+  "horizontal card" idiom would have left the app in three states instead of one.
+- **Width:** 28 occurrences of `maxWidth: 1400` → `1750`. That number was chosen when a 256px sidebar
+  was eating the left of the screen; with it gone a 1400 cap left ~260px of dead margin each side at
+  1920px. **Deliberately NOT applied to the 1000/1100/1150/1200/1250 caps** (29 more occurrences):
+  those are on forms, and a form field stretched to 1750px is harder to read, not easier — the eye
+  loses the line. Only the wide list/table tier moved.
+- **Cards → rows:** the six tabs now use the same table shape as the already-converted
+  `WeeklyReceiptsTab`, so all records screens read alike. A row is ~40px against a 190px card
+  three-across, so roughly four times as many customers fit without scrolling. The conversion also
+  **recovered data the cards were discarding**: every one of these tabs already computed
+  `totalCartons`, `totalPairs` and `totalValue` per customer and displayed none of them — the card had
+  room only for a bill count. The row shows all three. Customer code now renders `account_code`
+  (C-01) rather than the raw IDENTITY, matching the setup screens.
+  Each file kept its own empty-state wording ("No Monthly Records Found", "No Weekly Returns Found",
+  …) and its own collection name — the Sale tabs group `data.bills`, the Return tabs `data.returns` —
+  rather than being flattened to one generic string.
+- **Files:** 28 files for the width change; `frontend/src/components/{Weekly,Monthly,Overall}Tab.tsx`
+  and `{Weekly,Monthly,Overall}ReturnTab.tsx` for the conversion
+- **Verified:** `tsc -b` clean, `npm run build` clean, ESLint at exactly the project baseline (102
+  problems before and after). Counted mechanically: 0 occurrences of `maxWidth: 1400` remain and 28 of
+  `1750`; the form-tier caps are untouched at their original counts; **0 card grids remain** in
+  `src/pages` or `src/components`. Each converted tab reports a 6-column header row and a matching
+  `colSpan={6}` empty state.
+- **Not verified:** appearance in the running app. Worth an eye on `TransferPage` in particular — it is
+  the one page in the 1400 tier whose wrapper holds a form as well as a list, so it is the most likely
+  place a widened container looks stretched.
+
+### 2026-08-18 — Sidebar replaced by the legacy-style menu bar (`ref-pics/`)
+- **What:** the left sidebar is gone. Navigation is now five hover menus across the top —
+  **1.SETUP · 2.DATA ENTRY · 3.ACCOUNT REPORTS · 4.STOCK REPORTS · 5.SALE REPORTS** — sitting
+  directly above the Quick Menu row, reproducing the client's previous software (photographed in
+  `ref-pics/`). Pages get the full window width back.
+- **Decisions taken with the user:** legacy names AND legacy numbering (`1.1 GROUP ACCOUNTS`,
+  `3.16 CASH BOOK SUMMARY`); legacy items this app has no page for are left out rather than shown
+  greyed; the sidebar is removed outright and dropdown items become the drag source for pinning.
+- **How, and what the numbering means:** the numbers keep their original gaps. The old menu already
+  skipped (2.1, 2.3, 2.4, 2.13 — no 2.2), and omitting unbuilt items adds more. That is deliberate:
+  staff navigate by "3.16" the way they navigate by name, so a renumbered-but-tidy menu would be
+  worse than a gappy faithful one. Pages this app has that the old menu never listed are appended
+  inside the matching group with fresh numbers (1.11+, 2.14+, 3.23+) so none collides with a number
+  somebody already knows.
+  Menu data lives in `frontend/src/lib/menu.ts`, not in the component — exporting `MENU_GROUPS`
+  alongside the component tripped `react-refresh/only-export-components`, and `lib/` is already where
+  this codebase keeps non-component modules.
+  Hover behaviour: opening is immediate, closing is delayed ~180ms so the diagonal pointer path from
+  a menu button into its own dropdown doesn't cross dead space and shut it. Click toggles too (hover
+  alone is unusable on a touch screen), and both Escape and an outside click close.
+  Role filtering is applied inside `MenuBar`, and separators left leading/trailing/doubled by that
+  filter are collapsed — otherwise hiding an admin-only item strands a rule at the foot of the menu.
+- **Two things that had to move, or they would have been lost with the sidebar:**
+  1. **Log out.** The user chip carrying Settings and Log out lived in the sidebar footer. It is now
+     in the header, same popup and same two actions. Deleting the sidebar without moving it would
+     have removed the only way to log out.
+  2. **Pinning.** The Quick Menu was populated by dragging a sidebar nav item onto it. Dropdown items
+     are now the drag source, carrying the same `{page, tab, label}` payload, so pinning still works;
+     the "+ Pin Page to Bar" button was already independent and is untouched.
+- **Also removed as dead:** `toggleSidebar`, the sidebar open/hidden state, the module-level nav
+  scroll-position memo, the `.app-sidebar*` CSS rules, and the `wento_sidebar_hidden` localStorage
+  writes in `AppContext`'s LOGIN_SUCCESS/LOGOUT (nothing reads that key any more).
+- **Files:** `frontend/src/lib/menu.ts` (new), `frontend/src/components/MenuBar.tsx` (new),
+  `frontend/src/components/AppLayout.tsx`, `frontend/src/context/AppContext.tsx`,
+  `frontend/src/index.css`
+- **Verified:** `tsc -b` clean, `npm run build` clean, ESLint back to exactly the project baseline
+  (102 problems before and after; both new files are lint-clean). **Coverage checked mechanically
+  rather than by eye:** the set of `page:` targets in the old sidebar was diffed against the new menu
+  — 32 pages each, **zero orphaned**, so nothing the sidebar could reach became unreachable. The menu
+  was then rendered from its real data for both roles: admin-only items (1.14 Bank Accounts,
+  1.17 Manage Users, 2.20 Transfer) correctly vanish for a `User`, with no stray separators left.
+- **Not verified:** appearance and hover feel in the running app — no way to click an Electron window
+  from here. Worth checking: that the dropdown sits correctly over page content, that the ~180ms
+  close delay feels right, and that the menu bar doesn't crowd the Quick Menu on a 1366px laptop.
+- **Open questions flagged to the user:** 1.2 CONTROL ACCOUNTS is mapped to this app's Chart of
+  Accounts page (`database_schema_v4.3.md` records `ac_id` as "was control_id", so chart accounts ARE
+  the control level; `project_overview.md` says otherwise — the schema was followed). Legacy 1.3 MAIN
+  ACCOUNTS, 2.13 DAY BOOK ENTRY and 5.4 CUSTOMER WISE SALES ANALYSIS are omitted — see `lib/menu.ts`
+  for the reason at each site.
+
+## Change requests — `System_architecture/changes-15-08-26.md`
+
+### 2026-08-17 — SB-01: make a silent failure name itself (Change request SB-01)
+- **What:** "Save and Post did nothing on one laptop", with no error shown and nothing in any log.
+  This does **not** fix that laptop — the cause is still unknown and unreproduced. It makes the class
+  of failure that matches the symptom impossible to miss next time.
+- **Why this and not a fix:** every failure the API *reports* was already surfaced in the page's
+  banner, so a reported error cannot be the explanation. What was NOT covered is a failure that
+  **throws**: a rejected promise inside the click handler, or a `TypeError` from reading a property of
+  an undefined `window.api.<feature>` — the exact trap `backend/CLAUDE.md` warns about, where a
+  channel added without its feature name in `ipcBridge.ts`'s FEATURES array throws instead of
+  returning a failed ApiResult. Either unwinds the handler silently, leaving the button genuinely
+  looking dead. `ErrorBoundary` (added earlier for CH-02) cannot catch these — it only catches errors
+  thrown while rendering.
+- **How:** two layers. `main.tsx` registers `unhandledrejection` and `error` listeners that log with
+  a `[Wentox]` prefix and show the error on screen in a dismissible banner, asking for a screenshot.
+  Built with plain DOM rather than React state deliberately: it has to survive a React tree that is
+  already in trouble and must not depend on any component being mounted. Second layer:
+  `handleSaveAndPost` on `SaleBillPage` is wrapped in its own try/catch so that specific button also
+  reports locally — the body moved to `saveAndPost()` and the handler is now the guard.
+- **Files:** `frontend/src/main.tsx`, `frontend/src/pages/SaleBillPage.tsx`
+- **Verified:** the diagnostic was extracted and exercised against a DOM stub, since a *broken*
+  diagnostic is worse than none. Confirmed: it renders for the exact SB-01 shape (a TypeError from an
+  undefined `window.api.saleBills`) and reports it as `TypeError: Cannot read properties of undefined
+  (reading 'post')`; an error message containing markup goes through `textContent`, never `innerHTML`,
+  so it cannot inject; repeated reports replace rather than stack; the dismiss button is wired.
+  **The test found a real weakness and it was fixed:** a non-Error rejection (a plain object, which is
+  exactly what a rejected ApiResult looks like) rendered as the useless `"[object Object]"`. It now
+  JSON-serialises objects, falling back to `[object Object]` only for circular ones — verified both.
+  `tsc -b`, `npm run build` and ESLint all clean, lint identical to baseline (102 problems before and
+  after, whole `src` tree).
+- **Still open:** SB-01 is recorded as diagnosed-but-unresolved, not done. Closing it needs the actual
+  laptop: reproduce the click, and the banner will name the cause.
+
+### 2026-08-17 — RJ-03 / PN-01: the voucher screens (Change requests RJ-03, PN-01)
+- **What:** `ReceiptsPage.tsx` and `ExpensesPage.tsx` now drive the voucher model built in the entry
+  above. Fill the entry row → **Done** commits it as a line and re-arms the form with the cursor back
+  in the first field → repeat → **Post Voucher** posts the lot. A grid of committed lines sits under
+  the form with the client's own columns (A/C Code, Account Description, Narration, Cheque No, Type,
+  Rs.) and a footer of Total Cash / Cheque / Online plus the voucher total.
+- **Scope decided with the user:** only the entry form was rebuilt. The Weekly/Monthly/Overall record
+  tabs, the RJ-02 balance tooltip, cheque handling and the RJ-06 password-gated delete all stay as
+  they were, and the record lists still show **individual lines**, not grouped vouchers — a voucher is
+  an entry convenience; the ledger and every report still read per-receipt.
+- **How, and the decisions inside it:**
+  **The voucher is created lazily, on the first Done** — not when the page opens. `voucher_no` is the
+  client's "C.Book No", allocated MAX+1, so creating one eagerly would burn a number every time
+  somebody merely opened the screen and walked away.
+  **Date and Remarks are head-level**, matching the client's screen — one Date for the whole voucher.
+  Editing either goes through `receipt-vouchers:update`, which carries the change down onto every
+  line in the same transaction; both fields lock as soon as anything is posted, because the backend
+  refuses the edit then (POSTED_LOCK) and offering the field would be a lie. Remarks persist on blur,
+  not per keystroke.
+  **Done ≠ Post.** Done is the client's word for committing a line; the line is created DRAFT and has
+  no effect on any balance until the voucher is posted. The submit button says so.
+  **The cursor is put back explicitly.** The app-wide G-01 auto-focus fires when a form mounts, but
+  this form never unmounts between lines — so Done re-focuses the first entry field itself, finding
+  it via `button[data-field-nav]`, the same hook G-01's own field walker uses (no ref forwarding
+  needed through SearchableSelect).
+  **The post-result panel is never auto-hidden**, unlike the ordinary success banner: a voucher can
+  post 8 of 10 lines and the two that failed are the entire point of the message.
+  **Per-line Edit/Delete are unposted-only** — the backend rejects both on a posted line, so showing
+  the buttons would only manufacture an error.
+  **Opening a receipt/expense from the records list now opens its whole voucher**, so its sibling
+  entries, the totals and Post/Un Post are all on screen — otherwise the user is looking at one line
+  of a document with no way to reach the rest of it.
+- **Two regressions caught and fixed while doing this:**
+  1. An **endorsement is not a voucher line** — it lives in `dbo.settlements`, has no cash/bank leg
+     and no `voucher_id`. Replacing the Receipts header's Post/Unpost with voucher-level buttons
+     would have left endorsements with no way to post at all. They keep their own badge and their own
+     Post/Unpost, shown only when `docKind === 'SETTLEMENT'`.
+  2. `ExpensesPage`'s now-dead per-expense `handlePost`/`handleUnpost` also called
+     `refreshCheques()`. A CHEQUE_ENDORSED line's allocation against a received cheque changes when
+     it posts, so deleting them as-is would have left the endorsement picker offering value that was
+     already spent. That refresh moved into the voucher handlers before the dead code went.
+- **Files:** `frontend/src/pages/ReceiptsPage.tsx`, `frontend/src/pages/ExpensesPage.tsx`,
+  `frontend/src/lib/api.ts` (`ReceiptVoucherRow`, `ExpenseVoucherRow`, `VoucherStatus`,
+  `VoucherActionResult`, `voucher_id`/`account_code` on the row types, both bridge blocks and both
+  `receiptVouchers`/`expenseVouchers` export objects with date normalisation)
+- **Verified:** `tsc -b` clean, `npm run build` clean, and ESLint **identical to baseline across the
+  whole `src` tree** — 102 problems before, 102 after (nothing added; the pre-existing ones are
+  untouched). Two behaviours that looked risky were checked live against `wentox_db` rather than
+  reasoned about: editing a line through `receipts.update` / `expenses.update` **keeps its
+  `voucher_id`** (the repositories' `updateHeader` deliberately doesn't touch the column, so a line
+  cannot be moved between vouchers by an edit), and `account_code` is populated on voucher lines so
+  the grid's A/C Code column is not blank. Both passed; test rows deleted afterwards.
+- **Not verified:** the screens have not been driven in the running app — no way to click an Electron
+  window from this environment. Everything statically checkable passes and every backend call the
+  pages make is individually proven against the live database, but the rendering and the
+  Done→Done→Post rhythm need a real run. Specifically worth checking: that the cursor genuinely lands
+  back in the account picker after Done, and that the head Date/Remarks lock at the right moment.
+
+### 2026-08-17 — RJ-03 / PN-01: receipt & payment vouchers — database and backend (Change requests RJ-03, PN-01)
+- **What:** receipts and expenses were standalone documents, each posted on its own. They are now
+  **entry lines under a voucher**: one header (date, C.Book No, remarks) over many lines, each line
+  naming its own account, posted with a single action. Backend and schema only — the screens come
+  next.
+- **Client's actual requirement** (confirmed from a photo of their previous software plus an explicit
+  clarification): a day's takings are entered at the END of the day and they are **not one
+  customer's** — "records maybe for different customer". So this is a header with **any party per
+  row**, not a per-customer grouping. Fill an entry, press Done, it drops into a grid, cursor
+  returns ready for the next; Post posts the lot; Un Post reverses. Footer totals per Cash / Cheque
+  / Online.
+- **How:** migration `022_receipt_and_expense_vouchers.sql` adds `dbo.receipt_vouchers` and
+  `dbo.expense_vouchers` plus a `voucher_id` on `receipts`/`expenses`. Three decisions worth
+  recording:
+  **1. Status is derived, never stored.** Posting is per line (each line keeps its own transaction,
+  so one that cannot post never rolls back the lines that already did — the client's explicit
+  choice), which means a voucher can legitimately sit half-posted. A stored header status would be a
+  second source of truth that is wrong the moment that happens. `deriveStatus()` reads it off the
+  lines: none confirmed → UNPOSTED, all → POSTED, otherwise → PARTIAL. An **empty** voucher reads
+  UNPOSTED, not POSTED — "every line is confirmed" is vacuously true of no lines.
+  **2. The per-line date stays.** The ledger, Cash Book and every report read `receipt_date` /
+  `expense_date`; dropping it was out of scope. `syncLineDates()` writes the header's date down onto
+  its lines in the same transaction, so the two cannot disagree.
+  **3. Every existing row was backfilled into a one-line voucher of its own.** Not left NULL — that
+  would mean a permanent "voucher_id IS NULL means legacy" branch in every query. Each pre-existing
+  receipt genuinely WAS its own document, so a one-line voucher is the honest representation. The
+  backfill uses an INSERT-only `MERGE ... ON 1=0` with `OUTPUT inserted.voucher_id, src.receipt_id`
+  to map new headers back to their lines — IDENTITY order is not guaranteed to match insertion
+  order, so pairing them by id sequence would have been a silent corruption risk.
+  Header edits and deletes are blocked once anything on the voucher is posted (`POSTED_LOCK`): a
+  posted line has `ledger_entries` stamped with its date, so moving the header would leave the
+  ledger disagreeing with the document. The FK on `voucher_id` is deliberately **not** ON DELETE
+  CASCADE — a cascade would silently delete posted lines and strand their ledger rows.
+  `expenseVouchers.*` is a separate file rather than a shared generic voucher service: expenses
+  carry four payment modes (two unrelated cheque mechanics) and `expenses.service#post` takes a
+  `userId` that `receipts.service#post` does not, so a shared abstraction would branch on document
+  type in every method. Both cheque modes total together as `total_cheque` on the footer.
+- **Files:** `backend/src/db/migrations/022_receipt_and_expense_vouchers.sql`,
+  `backend/src/repositories/{receiptVouchers,expenseVouchers}.repository.js`,
+  `backend/src/services/{receiptVouchers,expenseVouchers}.service.js`,
+  `backend/src/ipc/{receiptVouchers,expenseVouchers}.ipc.js`, `backend/src/ipc/index.js`,
+  `backend/src/repositories/{receipts,expenses}.repository.js` (voucher_id on insert),
+  `backend/src/services/{receipts,expenses}.service.js` (voucher_id in buildFields),
+  `frontend/src/lib/ipcBridge.ts` (`receiptVouchers`, `expenseVouchers` added to FEATURES),
+  `System_architecture/database_schema_v4.3.md`
+- **Verified:** migration applied live to `wentox_db` — 8 receipts → 8 vouchers numbered 1–8 in date
+  order, 4 expenses → 4 vouchers, **zero** rows left without a voucher, **zero** line/header date
+  mismatches, total receipt amount unchanged at 210,500. Then both services driven end to end
+  against the live database, reproducing the client's own screen: a voucher with three lines of
+  65,000 / 37,000 / 10,000 across **two different accounts**, totalling 112,000 cash — the same
+  figures as their photo. Confirmed: empty voucher reads UNPOSTED; post wrote 6 ledger entries and
+  the voucher read POSTED; header edit and delete both blocked with POSTED_LOCK while posted; unpost
+  removed all 6 ledger entries and returned to UNPOSTED; posting 1 of 3 lines read **PARTIAL**;
+  header date edit propagated to all three lines; list() returned the derived status and per-mode
+  totals. Same sequence passed for payment vouchers. Every test row was deleted afterwards — the
+  database is back to its pre-test counts (8 receipts, 4 expenses, 0 orphans).
+- **Not done yet:** the screens. `ReceiptsPage.tsx` and `ExpensesPage.tsx` still drive the old
+  one-receipt-per-posting flow and do not call these channels at all, so nothing is user-visible
+  yet. RJ-03/PN-01 stay open until those are rebuilt.
+
+### 2026-08-17 — SB-06 / P-03: post a whole run of documents at once (Change requests SB-06, P-03)
+- **What:** every bill and every purchase had to be posted individually. Both screens now carry a
+  "Pending Posting" panel listing what is saved but not yet in the ledger, with one Post All action
+  and a per-document result.
+- **How:** `listUnposted()` on both repositories defines unposted as the **absence of ledger
+  entries** — the same definition `isPosted()` already uses; there is no status column on
+  `sale_bills` to read instead (it was removed, see `database_schema_v4.3.md`). Ordered oldest
+  first so a run lands in the ledger in the order it was typed. These select only the display
+  fields the panel needs, not `SELECT *` — nothing here renders a document.
+  `postAll(ids)` loops those (or an explicit id list) and calls the existing per-document `post()`.
+  Two properties matter and are commented at the call site:
+  **Each document keeps its own transaction.** Per the user's explicit choice, one document that
+  can't post must not roll back the ones that already did. So `postAll` **resolves** with
+  `{ posted, failed, attempted }` rather than throwing on first failure — unlike
+  `products`/`businessAccounts` `createBatch`, which reject the whole batch. `ok: true` therefore
+  does NOT mean everything posted; callers must read `failed`. Both the IPC comment and the
+  `PostAllResult` type say so, because this is exactly the kind of contract that gets misread.
+  **The loop is sequential, deliberately.** Two unposted bills can each pass the SB-03 stock check
+  alone yet not together; `postLedgerAndStock()` reads `pairsOnHand()` live, so posting one after
+  another is precisely what makes the second correctly fail with a specific INSUFFICIENT_STOCK
+  message. `Promise.all` here would let both read the same pre-sale stock and oversell. Left an
+  explicit "do not turn this into a Promise.all" note.
+  A document already posted by someone else is skipped rather than reported as a failure — the
+  user's intent ("get these posted") is satisfied either way. Non-`ApiError` failures are logged
+  with their stack but reported generically, since the batch summary is the only place the user
+  sees them.
+  Frontend: the result panel is **not** auto-hidden on a timer like the ordinary success banner —
+  a run can post 18 of 20, and the two that failed are the entire point of the message, so it stays
+  until dismissed. Both mount effects fold the new list into the page's existing one rather than
+  adding a second `useEffect`, which keeps the lint count at baseline.
+- **Files:** `backend/src/repositories/{saleBills,purchases}.repository.js`,
+  `backend/src/services/{saleBills,purchases}.service.js`,
+  `backend/src/ipc/{saleBills,purchases}.ipc.js` (`:listUnposted`, `:postAll`),
+  `frontend/src/lib/api.ts` (`UnpostedBillRow`, `UnpostedPurchaseRow`, `PostAllResult`, bindings),
+  `frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/PurchasePage.tsx`
+- **Verified:** `tsc -b` clean, `npm run build` clean, ESLint at baseline (12 on these two files
+  before and after). Executed live against `wentox_db`: `listUnposted()` returned the 2 genuinely
+  unposted bills and 1 unposted purchase with correct customer/vendor names and totals, and
+  `postAll([999999])` on both services returned
+  `{posted:[], failed:[{... "Sale bill not found", code:"NOT_FOUND"}], attempted:1}` — a bad id
+  lands in `failed` rather than throwing the batch out.
+- **Not verified:** the partial-success path itself — "some post, some fail" — has not been driven,
+  because exercising it means posting the user's real unposted bills into their ledger, which was
+  not done without asking. Also unverified: the panel rendering and the Post All button, same
+  Electron-clicking limitation as SB-05.
+
+### 2026-08-17 — SB-05 / P-02: ready for the next document after posting (Change requests SB-05, P-02)
+- **What:** posting a sale bill or a purchase left the finished document on screen, so entering a
+  run of twenty bills meant twenty trips through the New button. A document completed in this run
+  now clears itself back to a blank form, ready to type the next one.
+- **How:** the reset reuses each page's existing `handleNew()` rather than repeating its field
+  list, so "a blank bill" stays defined in one place; `readyForNextBill()` / `readyForNextPurchase()`
+  then put the working **date** back, because `handleNew()` snaps to today and a run entered for an
+  earlier date would otherwise reset on every single document. Bill numbers are already regenerated
+  by `handleNew()`, satisfying SB-05's "each bill gets its own number". The cursor lands in the
+  first field on its own — the app-wide G-01 auto-focus rule fires when the form remounts, so
+  nothing page-specific was needed.
+  The non-obvious part is **when** to reset. "After posting" is too broad: opening a bill from the
+  Find tab and posting it there would wipe a screen the user deliberately navigated to. Both pages
+  now carry a `createdInThisRun` ref — set only when `create()` succeeds (never on an edit of an
+  existing document), cleared by `handleNew()` and by loading any existing row — and the reset is
+  gated on it. Sale Bill's save-and-post path and its standalone Post button both honour it;
+  Purchase has no combined action, so its Post button is the completion moment there.
+  A save that succeeds but whose **post** fails deliberately does not reset: the document exists and
+  must stay on screen so the user can see which one failed and retry. Success messages now name the
+  document ("Bill 34871 saved & posted. Ready for the next one.") because once the form empties, the
+  clearing is otherwise the only evidence anything was saved.
+- **Files:** `frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/PurchasePage.tsx`
+- **Verified:** `tsc -b` clean, `npm run build` clean, and ESLint unchanged against baseline — 9
+  errors before, the same 9 after (all pre-existing, including the `handleNew`-before-declaration
+  one already recorded in `System_architecture/TODO.md` §4.2).
+- **Not verified:** the behaviour itself has not been driven in the running app — this is frontend
+  state, and there is no way to click an Electron window from this environment. Needs a click-through:
+  enter a bill → Save & Post → confirm the form clears, keeps the date, has a new bill number, and
+  the cursor is in the first field; then open a bill from Find, post it, and confirm it does NOT clear.
+- **Known consequence:** the just-posted bill is no longer on screen to print. It stays reachable
+  from the Find tab, but if printing immediately after posting is part of the daily routine, this
+  ordering needs revisiting (print-then-clear, or a "print last bill" action).
+
+### 2026-08-16 — PR-01: Purchase Return prefills the price actually paid (Change request PR-01)
+- **What:** a purchase return priced its lines off whatever the user typed, so it could credit the
+  vendor at a price that was never paid. It now prefills each line from this vendor's last POSTED
+  purchase of that material — the counterpart of SR-01, which already did this for Sale Return.
+- **How:** mirrored SR-01's implementation rather than inventing a second approach —
+  `purchases.repository#lastPurchasedRate` is `saleBills.repository#lastSoldRate` with the sale
+  tables swapped for the purchase ones, same `EXISTS(ledger_entries)` posted-only rule, same
+  `ORDER BY date DESC, id DESC`.
+  Two deliberate differences from SR-01. **Keyed on material NAME, not id:** the Purchase/Purchase
+  Return screens hold free text and only resolve to a `material_id` at save time via
+  `materials.repository#resolveOrCreate`, so an id-keyed lookup had nothing to pass. Matching is a
+  plain `=` on `m.name`, leaning on the same case-insensitive collation `resolveOrCreate` already
+  leans on. It is strictly read-only — it never registers a material, so typing an unknown name
+  returns null instead of quietly creating a `materials` row. **Returns the unit with the price:**
+  a purchase line's unit is self-assigned, so "200 kg @ 230" and "200 meters @ 230" are different
+  purchases and a price without its unit is ambiguous.
+  Frontend fires on **blur** of the material name, not on change — mid-typing, the name matches
+  nothing. A `resolvedNames` ref records the name each row was last priced from, so re-blurring an
+  untouched field never overwrites a price the user has since edited by hand, while genuinely
+  changing the material does refill. The ref is cleared when the vendor changes (same material,
+  different last-paid price), and **pre-seeded** on both load paths — copy-from-purchase and
+  open-existing-return — because those lines already carry the source document's own rates, which
+  beat "last posted purchase" when the two differ. A fetched unit outside `UNIT_PRESETS` also flips
+  that row's unit control to free-text, or the select would snap the line back to a preset.
+- **Files:** `backend/src/repositories/purchases.repository.js`,
+  `backend/src/services/purchases.service.js`, `backend/src/ipc/purchases.ipc.js`
+  (`purchases:lastPurchasedRate`), `frontend/src/lib/api.ts` (`LastPurchasedRate`, bridge binding),
+  `frontend/src/pages/PurchaseReturnPage.tsx`
+- **Verified:** `tsc -b` clean; executed live against `wentox_db` — exact name returned
+  `{ price_per_unit: 12, unit: 'Buckles' }`, a lowercased name returned the same row (collation),
+  a wrong vendor and an unknown material both returned null, the service's blank-name and
+  no-vendor guards short-circuited before SQL, and **an unposted purchase's price did not leak**
+  (a draft line at 688 returned null).
+- **Not exercised:** the most-recent-wins ordering — this database has only one posted purchase per
+  material, and proving it would have meant writing extra purchases into the user's data. The
+  ORDER BY is verbatim from the already-proven `lastSoldRate`.
+- **Not wired:** `purchases:lastPurchasedRate` is a new channel on an existing feature, so
+  `ipcBridge.ts`'s `FEATURES` array needed no change (`purchases` is already listed).
+
+### 2026-08-16 — C-01: show the account code, not the IDENTITY value (Change request C-01)
+- **What:** Vendor and Customer setup screens showed the raw `vendor_id`/`customer_id` as the
+  party's "ID". Those are `IDENTITY` values and they skip, which the client reported as a bug
+  ("only one vendor exists but the system generated ID = 2"). Both screens now show the linked
+  business account's `code` instead, relabelled Vendor Code / Customer Code.
+- **How:** there was no defect to fix — the skipping is expected behaviour, and confirmed live on
+  `wentox_db`: vendor_ids run 1, 2, 3, **1003** while their account codes run 2000010001–…0004
+  with no gap at all. The 1000 jump is SQL Server's identity cache losing its reserved block on an
+  unclean shutdown; a rolled-back create burns a value the same way, and `vendors.create()` wraps
+  the vendor and its business account in one transaction, so any failure there consumes an id.
+  Soft-deleted rows hold theirs permanently too. The account code has none of these properties —
+  it's allocated `MAX(serial under parent) + 1` by `businessAccounts.service.js` and is already the
+  number printed on the ledger and the voucher for that same party, so the screens now agree with
+  the accounts.
+  `list()`/`findById()` in both repositories gained a `LEFT JOIN dbo.business_accounts ba ON
+  ba.ba_id = <t>.ba_id` and select `ba.code AS account_code` — LEFT, not INNER, so a party with no
+  linked account still lists (renders as `—`) rather than vanishing from the screen. Both search
+  filters now match `ba.code` alongside the name, and the two client-side search boxes match
+  `account_code` **as well as** the old raw id, so anyone who has memorised the old number can
+  still type it. Display-only: no migration, no renumbering, no data touched.
+- **Files:** `backend/src/repositories/vendors.repository.js`,
+  `backend/src/repositories/customers.repository.js`, `frontend/src/lib/api.ts`
+  (`VendorRow.account_code`, `CustomerRow.account_code`),
+  `frontend/src/pages/VendorSetupPage.tsx` (list column, search, detail panel),
+  `frontend/src/pages/CustomerSetupPage.tsx` (list column, search, ledger header, printed statement)
+- **Verified:** `tsc -b` clean; both repositories executed live against `wentox_db` — 4 vendors and
+  6 customers all returned a populated `account_code`, `findById` carried it, and searching by a
+  full account code returned exactly the one matching row on both entities.
+
 ## Backing the database up to an external drive
 
 ### 2026-08-13 — External-drive backup, and a staging path the mirror could never have written on Windows (Milestone 9, follow-up)
