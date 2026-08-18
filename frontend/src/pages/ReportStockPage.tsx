@@ -1530,6 +1530,9 @@ export default function ReportStockPage() {
                 <label className="block text-xs font-semibold text-slate-600 mb-1">
                   Content Color <span className="text-red-500 font-bold">*</span>
                 </label>
+                {/* The dropdown branch was a native <select>; it is a SearchableSelect now, so the
+                    colour list types-to-search like every other lookup. The __new__ sentinel is still
+                    a real option, and choosing it still swaps in the free-text input above. */}
                 {isNewColor ? (
                   <input
                     type="text"
@@ -1543,24 +1546,23 @@ export default function ReportStockPage() {
                     className="soleria-input font-bold"
                   />
                 ) : (
-                  <select
+                  <SearchableSelect
+                    options={[
+                      ...existingColors.map(c => ({ value: c, label: c })),
+                      { value: '__new__', label: '+ Add New Color (type manually)...' },
+                    ]}
                     value={existingColors.includes(addColor) ? addColor : ''}
-                    onChange={e => {
-                      if (e.target.value === '__new__') {
+                    onChange={val => {
+                      if (val === '__new__') {
                         setIsNewColor(true);
                         setAddColor('');
                       } else {
-                        setAddColor(e.target.value);
+                        setAddColor(val);
                       }
                     }}
-                    className="soleria-input cursor-pointer font-bold"
-                  >
-                    <option value="">Select existing color...</option>
-                    {existingColors.map(c => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                    <option value="__new__">+ Add New Color (type manually)...</option>
-                  </select>
+                    placeholder="Select existing color..."
+                    searchPlaceholder="Search colors..."
+                  />
                 )}
                 {!matchedRow && addColor.trim() && (
                   <p className="text-[10px] text-amber-600 mt-1">

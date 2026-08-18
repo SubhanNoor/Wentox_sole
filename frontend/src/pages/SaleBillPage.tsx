@@ -227,6 +227,26 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     if (billId != null && res.data.posted.some(p => p.bill_id === billId)) setCurrentBillIsPosted(true);
   };
 
+  // Region/city lists for the quick-add modals. citiesInRegion keeps the dependent filtering the
+  // native <select>s had: pick a region and the city list narrows to it, with no region meaning all.
+  const regionOptions = useMemo(
+    () => regions.map(r => ({ value: String(r.region_id), label: r.name })),
+    [regions]
+  );
+
+  const citiesInRegion = useCallback(
+    (regionId: string) =>
+      cities
+        .filter(c => !regionId || c.region_id === Number(regionId))
+        .map(c => ({ value: String(c.city_id), label: c.name })),
+    [cities]
+  );
+
+  const storeOptions = useMemo(
+    () => stores.map(st => ({ value: String(st.store_id), label: st.name })),
+    [stores]
+  );
+
   // Customer search: Primary = Region, Secondary = City
   const customerOptions = useMemo(() => {
     const regionName = (id: number) => regions.find(r => r.region_id === id)?.name || '';
@@ -1276,12 +1296,16 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
                 From Store <span className="text-red-500 font-bold">*</span>
               </label>
-              <select value={storeId} disabled={isViewMode} onChange={e => setStoreId(e.target.value)} className="soleria-input cursor-pointer" style={{ fontSize: '13px' }}>
-                <option value="">Select store...</option>
-                {stores.map(st => (
-                  <option key={st.store_id} value={st.store_id}>{st.name}</option>
-                ))}
-              </select>
+              {/* Was a native <select>. SearchableSelect so this field behaves like every other
+                  lookup on the screen: focus it and type, Enter selects and moves on. */}
+              <SearchableSelect
+                options={storeOptions}
+                value={storeId}
+                onChange={setStoreId}
+                placeholder="Select store..."
+                searchPlaceholder="Search stores..."
+                disabled={isViewMode}
+              />
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
@@ -1713,31 +1737,26 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   Region <span className="text-red-500 font-bold">*</span>
                 </label>
-                <select
+                <SearchableSelect
+                  options={regionOptions}
                   value={newSubCustomerRegionId}
-                  onChange={e => { setNewSubCustomerRegionId(e.target.value); setNewSubCustomerCityId(''); }}
-                  className="soleria-input font-semibold cursor-pointer"
-                  required
-                >
-                  <option value="">Select Region...</option>
-                  {regions.map(r => (
-                    <option key={r.region_id} value={r.region_id}>{r.name}</option>
-                  ))}
-                </select>
+                  onChange={val => { setNewSubCustomerRegionId(val); setNewSubCustomerCityId(''); }}
+                  placeholder="Select Region..."
+                  searchPlaceholder="Search regions..."
+                />
               </div>
 
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   City
                 </label>
-                <select value={newSubCustomerCityId} onChange={e => setNewSubCustomerCityId(e.target.value)} className="soleria-input font-semibold cursor-pointer">
-                  <option value="">Select City...</option>
-                  {cities
-                    .filter(c => !newSubCustomerRegionId || c.region_id === Number(newSubCustomerRegionId))
-                    .map(c => (
-                      <option key={c.city_id} value={c.city_id}>{c.name}</option>
-                    ))}
-                </select>
+                <SearchableSelect
+                  options={citiesInRegion(newSubCustomerRegionId)}
+                  value={newSubCustomerCityId}
+                  onChange={setNewSubCustomerCityId}
+                  placeholder="Select City..."
+                  searchPlaceholder="Search cities..."
+                />
               </div>
             </div>
 
@@ -1786,31 +1805,26 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   Select Region <span className="text-red-500 font-bold">*</span>
                 </label>
-                <select
+                <SearchableSelect
+                  options={regionOptions}
                   value={newCustomerRegionId}
-                  onChange={e => { setNewCustomerRegionId(e.target.value); setNewCustomerCityId(''); }}
-                  className="soleria-input cursor-pointer font-semibold"
-                  required
-                >
-                  <option value="">Select Region...</option>
-                  {regions.map(rg => (
-                    <option key={rg.region_id} value={rg.region_id}>{rg.name}</option>
-                  ))}
-                </select>
+                  onChange={val => { setNewCustomerRegionId(val); setNewCustomerCityId(''); }}
+                  placeholder="Select Region..."
+                  searchPlaceholder="Search regions..."
+                />
               </div>
 
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   Select City
                 </label>
-                <select value={newCustomerCityId} onChange={e => setNewCustomerCityId(e.target.value)} className="soleria-input cursor-pointer font-semibold">
-                  <option value="">Select City...</option>
-                  {cities
-                    .filter(ct => !newCustomerRegionId || ct.region_id === Number(newCustomerRegionId))
-                    .map(ct => (
-                      <option key={ct.city_id} value={ct.city_id}>{ct.name}</option>
-                    ))}
-                </select>
+                <SearchableSelect
+                  options={citiesInRegion(newCustomerRegionId)}
+                  value={newCustomerCityId}
+                  onChange={setNewCustomerCityId}
+                  placeholder="Select City..."
+                  searchPlaceholder="Search cities..."
+                />
               </div>
             </div>
 

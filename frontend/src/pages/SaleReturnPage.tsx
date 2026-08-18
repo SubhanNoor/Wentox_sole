@@ -127,6 +127,17 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   const sortedCustomers = useMemo(() => [...customers].sort((a, b) => a.name.localeCompare(b.name)), [customers]);
 
+  // Option lists for the fields converted off native <select>. citiesInRegion keeps the dependent
+  // filtering the select had: pick a region and the city list narrows to it, no region means all.
+  const storeOptions = useMemo(
+    () => stores.map(st => ({ value: String(st.store_id), label: st.name })),
+    [stores]
+  );
+  const customerOptions = useMemo(
+    () => sortedCustomers.map(c => ({ value: String(c.customer_id), label: c.name })),
+    [sortedCustomers]
+  );
+
   // Drafts
   const [drafts, setDrafts] = useState<SaleReturnRow[]>([]);
   const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
@@ -537,6 +548,18 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // Regions/cities are only needed here for the inline "+ Add Sub-Customer" modal.
   const [regions, setRegions] = useState<{ region_id: number; name: string }[]>([]);
   const [cities, setCities] = useState<{ city_id: number; name: string; region_id: number | null }[]>([]);
+
+  const regionOptions = useMemo(
+    () => regions.map(r => ({ value: String(r.region_id), label: r.name })),
+    [regions]
+  );
+  const citiesInRegion = useCallback(
+    (regionId: string) =>
+      cities
+        .filter(c => !regionId || c.region_id === Number(regionId))
+        .map(c => ({ value: String(c.city_id), label: c.name })),
+    [cities]
+  );
   useEffect(() => {
     (async () => {
       const [rg, ct] = await Promise.all([api.listRegions(), api.listCities()]);
@@ -982,12 +1005,15 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
                 TO Store (Return Destination) <span className="text-red-500 font-bold">*</span>
               </label>
-              <select value={storeId} disabled={isViewMode} onChange={e => setStoreId(e.target.value)} className="soleria-input cursor-pointer" style={{ fontSize: '13px' }}>
-                <option value="">Select store...</option>
-                {stores.map(st => (
-                  <option key={st.store_id} value={st.store_id}>{st.name}</option>
-                ))}
-              </select>
+              {/* Was a native <select> — SearchableSelect so it types-to-search like the rest. */}
+              <SearchableSelect
+                options={storeOptions}
+                value={storeId}
+                onChange={setStoreId}
+                placeholder="Select store..."
+                searchPlaceholder="Search stores..."
+                disabled={isViewMode}
+              />
             </div>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
@@ -1023,18 +1049,14 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   <label className="block text-xs font-medium text-slate-600 mb-1">
                     Select Customer Name <span className="text-red-500 font-bold">*</span>
                   </label>
-                  <select
+                  <SearchableSelect
+                    options={customerOptions}
                     value={customerId}
+                    onChange={val => { setCustomerId(val); setSubCustomerId(''); }}
+                    placeholder="Select customer..."
+                    searchPlaceholder="Search customers..."
                     disabled={isViewMode}
-                    onChange={e => { setCustomerId(e.target.value); setSubCustomerId(''); }}
-                    className="soleria-input cursor-pointer"
-                    style={{ fontSize: '13px' }}
-                  >
-                    <option value="">Select customer...</option>
-                    {sortedCustomers.map(c => (
-                      <option key={c.customer_id} value={c.customer_id}>{c.name}</option>
-                    ))}
-                  </select>
+                  />
                   {selectedCustomer && selectedCustomer.ba_id == null && (
                     <p className="text-[10px] text-amber-600 mt-1 font-semibold">
                       This customer has no linked business account — the return cannot be posted until Setup adds one.
@@ -1340,31 +1362,26 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   Region <span className="text-red-500 font-bold">*</span>
                 </label>
-                <select
+                <SearchableSelect
+                  options={regionOptions}
                   value={newSubCustomerRegionId}
-                  onChange={e => { setNewSubCustomerRegionId(e.target.value); setNewSubCustomerCityId(''); }}
-                  className="soleria-input font-semibold cursor-pointer"
-                  required
-                >
-                  <option value="">Select Region...</option>
-                  {regions.map(r => (
-                    <option key={r.region_id} value={r.region_id}>{r.name}</option>
-                  ))}
-                </select>
+                  onChange={val => { setNewSubCustomerRegionId(val); setNewSubCustomerCityId(''); }}
+                  placeholder="Select Region..."
+                  searchPlaceholder="Search regions..."
+                />
               </div>
 
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   City
                 </label>
-                <select value={newSubCustomerCityId} onChange={e => setNewSubCustomerCityId(e.target.value)} className="soleria-input font-semibold cursor-pointer">
-                  <option value="">Select City...</option>
-                  {cities
-                    .filter(c => !newSubCustomerRegionId || c.region_id === Number(newSubCustomerRegionId))
-                    .map(c => (
-                      <option key={c.city_id} value={c.city_id}>{c.name}</option>
-                    ))}
-                </select>
+                <SearchableSelect
+                  options={citiesInRegion(newSubCustomerRegionId)}
+                  value={newSubCustomerCityId}
+                  onChange={setNewSubCustomerCityId}
+                  placeholder="Select City..."
+                  searchPlaceholder="Search cities..."
+                />
               </div>
             </div>
 

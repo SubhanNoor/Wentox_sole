@@ -25,6 +25,64 @@ Log every completed task here (newest first within its milestone). Format:
 
 ## Navigation
 
+### 2026-08-18 — Dropdowns: focus and type, Enter selects and moves on
+- **What:** every dropdown in the app used to need a click to open before you could search it, and
+  Enter parked the cursor back on the same field. Now focusing a dropdown and simply typing starts the
+  search, and Enter takes the match and moves to the next field. 14 native `<select>`s were also
+  converted so they behave the same way; 12 deliberately were not.
+- **Two things found while reading the code, both of which shaped the fix:**
+  1. **The portal defeats the existing Enter rule.** The dropdown panel renders into `document.body`,
+     so from its search box `target.closest('form')` is null and AppLayout's app-wide G-01 handler
+     ("Enter moves to the next field") returns before it can move anything. That is *why* Enter only
+     ever closed the panel. The component has to advance focus itself.
+  2. **Not every dropdown was a `SearchableSelect`** — 64 were, but 26 native `<select>`s also
+     existed, split between real entry fields and small filters.
+- **How:** `lib/fieldNav.ts` now holds the one definition of "the fields of this form" and "move to
+  the next one". That logic was private to `AppLayout`; the dropdown needs the identical notion, and a
+  second copy inside the component is exactly how the two would have drifted apart later. AppLayout
+  was refactored onto it (it had the selector string duplicated twice internally, too).
+  `lib/keyboard.ts` holds `isTypeAheadKey` — "is this the user typing, or a control key?". Extracted
+  rather than inlined because it is three subtle guards, it is unit-testable on its own, and the
+  native-select work needs the same predicate. `key.length === 1` separates printable characters from
+  named keys (Tab/Enter/Escape/F1/Shift all report multi-character names); the modifier check keeps
+  application shortcuts alive — **without it a focused dropdown would swallow Alt+V and search for
+  "v" instead of opening Print Preview (G-09)**.
+  In `SearchableSelect`: a printable key on the focused trigger opens the panel and **seeds the search
+  with that character**, so the keystroke that opened it is not lost — otherwise the user ends up one
+  letter short of what they typed. Space opens with an empty search rather than searching for " ",
+  since it is also the conventional open-a-select key. Enter commits and advances; **a mouse click
+  commits without advancing**, because a mouse user did not ask to be moved on. Focus is restored to
+  the trigger before advancing, both because that is the right resting place if there is no next
+  field and because `focusNextField` locates the next field relative to the trigger — it cannot work
+  from the search box, which has no enclosing form.
+- **Native selects — converted (14):** store on Sale Bill and Sale Return, customer on Sale Return,
+  account class on Group Accounts, the region+city pairs in all four quick-add modals (sub-customer
+  ×2, customer, vendor), the copy-from-prior-purchase picker on Purchase Return, and the colour picker
+  on Current Stock's add-stock modal. The last two were outside the line originally drawn and were
+  pulled in on a second look: both are variable-length data-entry lists, which is precisely where
+  type-to-search earns its keep.
+- **Native selects — left alone (12), on purpose:** filters (cheque status, JV status, adda), the four
+  draft loaders, and tiny fixed lists — Cartons/Pairs, SAME/Custom delivery, cheque disposition, and
+  the two unit presets. Turning a two-option control into a searchable panel makes it worse, not
+  better. Dependent filtering was preserved everywhere: picking a region still narrows its city list.
+- **Files:** `frontend/src/lib/fieldNav.ts` (new), `frontend/src/lib/keyboard.ts` (new),
+  `frontend/src/components/SearchableSelect.tsx`, `frontend/src/components/AppLayout.tsx`,
+  `frontend/src/pages/{SaleBillPage,SaleReturnPage,PurchasePage,PurchaseReturnPage,GroupAcSetupPage,ReportStockPage}.tsx`
+- **Verified:** `tsc -b` clean, `npm run build` clean, ESLint at the project baseline (102 before and
+  after). `isTypeAheadKey`/`isBlankOpenKey` were esbuild-bundled and **unit-tested against 37
+  assertions**: letters, digits, punctuation and accented characters begin a search; 21 named keys fall
+  through; Alt+V, Ctrl+C, Ctrl+V and Cmd+A are ignored while Shift+K still types a capital. Counted
+  mechanically: SearchableSelect instances 64 → 78, native selects 26 → 12, and each remaining one was
+  listed and checked against the keep-it list.
+- **Not verified:** the feel of it in the running app — no way to click an Electron window from here.
+  `focusNextField` is a verbatim extraction of the logic already powering G-01, so it is not new code,
+  but the type-to-search path itself has only been reasoned about and unit-tested at the predicate
+  level. Worth checking: that the first typed character reliably lands in the search box, and that
+  Enter lands on the field you expect on a line-item grid.
+- **Also:** ST-01 (multi-store stock) was planned and approved, then parked when this task arrived.
+  Nothing was built, so there is nothing to unwind — the plan stands in this log's own history.
+
+
 ### 2026-08-18 — Reclaiming the sidebar's space: wider list pages, last card grids to rows
 - **What:** two follow-ups to removing the sidebar, so the pages actually grow into the ~256px it was
   taking. (1) The wide page-width cap goes from 1400 to 1750. (2) The last six card grids become row

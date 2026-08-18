@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import SearchableSelect from '@/components/SearchableSelect';
 import AppLayout from '@/components/AppLayout';
 import { Plus, Search, Settings, Save, Edit2, X, ListCollapse } from 'lucide-react';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
@@ -153,6 +154,11 @@ export default function GroupAcSetupPage() {
   }, [groups, searchQuery, sortBy]);
 
   const viewingGroup = useMemo(() => groups.find(g => g.group_id === viewingGroupId), [viewingGroupId, groups]);
+
+  const classOptions = useMemo(
+    () => classes.map(c => ({ value: String(c.class_id), label: c.name })),
+    [classes]
+  );
 
   useEffect(() => {
     if (viewingGroupId == null) {
@@ -404,16 +410,16 @@ export default function GroupAcSetupPage() {
                   <label className="block text-xs font-semibold text-slate-600 mb-1.5">
                     Account Class Category <span className="text-rose-500">*</span>
                   </label>
-                  <select
-                    value={classId ?? ''}
-                    onChange={e => setClassId(Number(e.target.value))}
+                  {/* Was a native <select>. onChange hands back a string, so it is parsed here -
+                      classId is a number, and Number('') would silently become 0. */}
+                  <SearchableSelect
+                    options={classOptions}
+                    value={classId != null ? String(classId) : ''}
+                    onChange={val => setClassId(val ? Number(val) : null)}
+                    placeholder="Select account class..."
+                    searchPlaceholder="Search classes..."
                     disabled={!!selectedId}
-                    className="soleria-input w-full cursor-pointer font-semibold disabled:bg-slate-100 disabled:text-slate-500"
-                  >
-                    {classes.map(c => (
-                      <option key={c.class_id} value={c.class_id}>{c.name}</option>
-                    ))}
-                  </select>
+                  />
                 </div>
 
                 <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">

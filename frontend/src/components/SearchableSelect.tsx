@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, ChevronDown } from 'lucide-react';
+import { focusNextField } from '@/lib/fieldNav';
+import { isTypeAheadKey, isBlankOpenKey } from '@/lib/keyboard';
 
 interface Option {
   value: string;
@@ -122,11 +124,14 @@ export default function SearchableSelect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, highlightedIndex, filteredOptions.length]);
 
-  const open = () => {
+  // `seed` is the character that triggered the open, when the user simply started typing on a
+  // focused field instead of clicking. Without it the first keystroke would be swallowed: the panel
+  // would appear with an empty box and the user would be one letter short of what they typed.
+  const open = (seed = '') => {
     if (disabled || isOpen) return;
     place();
     setIsOpen(true);
-    setSearch('');
+    setSearch(seed);
   };
 
   const toggle = () => {
@@ -137,18 +142,47 @@ export default function SearchableSelect({
   };
 
   function handleTriggerKeyDown(e: React.KeyboardEvent) {
-    if (!isOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    if (isOpen) return;
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       open();
+      return;
+    }
+
+    // Type-to-search: with the field merely FOCUSED, any printable character opens the panel and
+    // becomes the first character of the search. This is the point of the change — entry is a
+    // continuous run of typing, never a click to open and then a type.
+    //
+    // isTypeAheadKey keeps named keys (Tab, Enter, Escape, F1...) and modifier combos out — see
+    // lib/keyboard.ts for why each guard is there.
+    if (isTypeAheadKey(e)) {
+      e.preventDefault();
+      open(isBlankOpenKey(e) ? '' : e.key);
     }
   }
 
-  function commitHighlighted() {
+  /**
+   * Take the highlighted option and move on.
+   *
+   * `advance` is true for Enter — the whole point being that a selection ends with the cursor in the
+   * NEXT field, so a form is filled in one unbroken run of typing. It is false for a mouse click,
+   * where jumping the cursor somewhere else would be surprising.
+   *
+   * Focus has to be restored to the trigger first, and for two reasons: it is the right place for
+   * the cursor if there is no next field, and focusNextField locates the next field RELATIVE to the
+   * trigger. It cannot work from the search box, which lives in a portal on document.body and so has
+   * no enclosing form at all — the same reason AppLayout's own Enter handler never fires in here.
+   */
+  function commitHighlighted(advance = false) {
     const opt = filteredOptions[highlightedIndex];
     if (!opt) return;
     onChange(opt.value);
     setIsOpen(false);
-    triggerRef.current?.focus();
+
+    const trigger = triggerRef.current;
+    trigger?.focus();
+    if (advance) focusNextField(trigger);
   }
 
   function handleSearchKeyDown(e: React.KeyboardEvent) {
@@ -160,7 +194,7 @@ export default function SearchableSelect({
       setHighlightedIndex(i => Math.max(i - 1, 0));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      commitHighlighted();
+      commitHighlighted(true);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       setIsOpen(false);
@@ -226,6 +260,7 @@ export default function SearchableSelect({
                     type="button"
                     onMouseEnter={() => setHighlightedIndex(idx)}
                     onClick={() => {
+                      // Deliberately does NOT advance: a mouse user did not ask to be moved on.
                       onChange(opt.value);
                       setIsOpen(false);
                       triggerRef.current?.focus();

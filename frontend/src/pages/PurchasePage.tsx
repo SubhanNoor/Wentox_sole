@@ -37,6 +37,20 @@ export default function PurchasePage() {
   const [vendors, setVendors] = useState<VendorRow[]>([]);
   const [regions, setRegions] = useState<RegionRow[]>([]);
   const [cities, setCities] = useState<CityRow[]>([]);
+
+  // Option lists for the vendor quick-add, converted off native <select>. citiesInRegion keeps the
+  // dependent filtering: pick a region and the city list narrows to it, no region means all.
+  const regionOptions = useMemo(
+    () => regions.map(rg => ({ value: String(rg.region_id), label: rg.name })),
+    [regions]
+  );
+  const citiesInRegion = useCallback(
+    (regionId: string) =>
+      cities
+        .filter(ct => !regionId || ct.region_id === Number(regionId))
+        .map(ct => ({ value: String(ct.city_id), label: ct.name })),
+    [cities]
+  );
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
   const [lookupError, setLookupError] = useState('');
 
@@ -785,35 +799,26 @@ export default function PurchasePage() {
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   Select Region <span className="text-red-500 font-bold">*</span>
                 </label>
-                <select
+                <SearchableSelect
+                  options={regionOptions}
                   value={newVendorRegionId}
-                  onChange={e => { setNewVendorRegionId(e.target.value); setNewVendorCityId(''); }}
-                  className="soleria-input cursor-pointer font-semibold"
-                  required
-                >
-                  <option value="">Select Region...</option>
-                  {regions.map(rg => (
-                    <option key={rg.region_id} value={rg.region_id}>{rg.name}</option>
-                  ))}
-                </select>
+                  onChange={val => { setNewVendorRegionId(val); setNewVendorCityId(''); }}
+                  placeholder="Select Region..."
+                  searchPlaceholder="Search regions..."
+                />
               </div>
 
               <div className="mb-6">
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                   City
                 </label>
-                <select
+                <SearchableSelect
+                  options={citiesInRegion(newVendorRegionId)}
                   value={newVendorCityId}
-                  onChange={e => setNewVendorCityId(e.target.value)}
-                  className="soleria-input cursor-pointer font-semibold"
-                >
-                  <option value="">Select City...</option>
-                  {cities
-                    .filter(ct => !newVendorRegionId || ct.region_id === Number(newVendorRegionId))
-                    .map(ct => (
-                      <option key={ct.city_id} value={ct.city_id}>{ct.name}</option>
-                    ))}
-                </select>
+                  onChange={setNewVendorCityId}
+                  placeholder="Select City..."
+                  searchPlaceholder="Search cities..."
+                />
               </div>
 
               <div className="flex justify-end gap-2 text-sm font-semibold">

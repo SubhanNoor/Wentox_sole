@@ -8,6 +8,7 @@ import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
 import ZoomControl from '@/components/ZoomControl';
 import MenuBar from '@/components/MenuBar';
+import { FIELD_SELECTOR, fieldsIn } from '@/lib/fieldNav';
 import * as api from '@/lib/api';
 
 // Navigation moved out of this file entirely: the five hover menus and their page mapping live in
@@ -139,9 +140,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
   // The fix: also try focusing synchronously on mount, against whatever's already in the DOM —
   // the observer stays too, to catch a form that opens later (a modal, or a genuinely async page).
   useEffect(() => {
-    const FIELD_SELECTOR =
-      'input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled), button[data-field-nav]:not(:disabled)';
-
     function focusFirstField(root: ParentNode): boolean {
       const form = root.querySelector('form');
       if (!form) return false;
@@ -189,14 +187,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     // [data-field-nav] picks up SearchableSelect's own trigger button (the app's custom dropdown,
     // used in place of a native <select> almost everywhere) without pulling in every other button
     // on the form (delete-row icons, Cancel, etc.).
-    const FIELD_SELECTOR = 'input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled), button[data-field-nav]:not(:disabled)';
-
-    function fieldsIn(form: HTMLFormElement): HTMLElement[] {
-      return Array.from(form.querySelectorAll<HTMLElement>(FIELD_SELECTOR)).filter(
-        (el) => el.offsetParent !== null
-      );
-    }
-
     function onKeyDown(e: KeyboardEvent) {
       const target = e.target;
       if (!(target instanceof HTMLElement)) return;

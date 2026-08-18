@@ -405,17 +405,16 @@ export default function PurchaseReturnPage() {
                 <label className="block text-xs font-medium text-slate-600 mb-1">
                   Copy From Prior Purchase (optional)
                 </label>
-                <select
+                {/* Was a native <select>. A vendor's purchase history can be long, so this is
+                    exactly where typing to search beats scrolling. "Manual entry" is carried as a
+                    real option rather than the placeholder, so it can be chosen again to go back. */}
+                <SearchableSelect
+                  options={[{ value: '', label: 'Manual entry (default)' }, ...priorPurchaseOptions]}
                   value={copyFromPurchaseId}
-                  onChange={e => handleCopyFromPurchase(e.target.value)}
-                  className="soleria-input cursor-pointer"
-                  style={{ fontSize: '13px' }}
-                >
-                  <option value="">Manual entry (default)</option>
-                  {priorPurchaseOptions.map(o => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
+                  onChange={handleCopyFromPurchase}
+                  placeholder="Manual entry (default)"
+                  searchPlaceholder="Search prior purchases..."
+                />
               </div>
             )}
             <div>
