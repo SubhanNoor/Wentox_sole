@@ -187,7 +187,7 @@ export default function JournalVoucherPage() {
     <button
       type="button"
       onClick={() => setActiveTab(key)}
-      className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+      className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
         activeTab === key ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
           : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
       }`}
@@ -196,14 +196,18 @@ export default function JournalVoucherPage() {
     </button>
   );
 
-  return (
-    <AppLayout pageTitle="Journal Voucher">
-      <div className="mx-auto" style={{ maxWidth: 1100 }}>
+  // Sub-tab switcher — lives in the top header bar next to the page title (AppLayout's
+  // headerAction slot), same treatment as Sale Bill/Receipts/Expenses/Cheque/Reports/SalaryRun.
+  const tabBar = (
+    <div className="flex gap-1.5" data-no-print>
+      {tabButton('entry', 'Journal Voucher Entry')}
+      {tabButton('ledger', 'JV Ledger')}
+    </div>
+  );
 
-        <div className="flex gap-2 mb-6" data-no-print>
-          {tabButton('entry', 'Journal Voucher Entry')}
-          {tabButton('ledger', 'JV Ledger')}
-        </div>
+  return (
+    <AppLayout pageTitle="Journal Voucher" headerAction={tabBar}>
+      <div className="mx-auto" style={{ maxWidth: 1100 }}>
 
         {lookupError && <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700">{lookupError}</div>}
         {successMsg && <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-semibold text-emerald-800">{successMsg}</div>}
@@ -211,35 +215,47 @@ export default function JournalVoucherPage() {
 
         {activeTab === 'entry' && (
           <>
-            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm mb-6">
-              <div className="flex items-center justify-between border-b pb-3 mb-5">
-                <div className="flex items-center gap-2">
-                  <span className="font-lora font-bold text-lg text-slate-900">
-                    {mode === 'edit' ? `Editing JV #${jvId}` : mode === 'view' ? `JV #${jvId}` : 'New Journal Voucher'}
-                  </span>
-                  {jvId != null && (
-                    isPosted
-                      ? <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Posted</span>
-                      : <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-900" title="Saved but not yet in the ledger — Post it to move any balance.">Not Posted</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  {mode === 'view' && !isPosted && (
-                    <button type="button" onClick={() => setMode('edit')} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all flex items-center gap-1">
-                      <Edit size={14} /> Edit
-                    </button>
-                  )}
-                  {mode === 'view' && jvId != null && (
-                    isPosted
-                      ? <button type="button" onClick={handleUnpost} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all">Unpost</button>
-                      : <button type="button" onClick={handlePost} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all">Post</button>
-                  )}
-                  <button type="button" onClick={handleNew} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all">
-                    New JV
+            {/* Toolbar — Save/Edit/Post/Unpost/New JV live in one dedicated bar above the card, same
+                shape as the Receipts/Expenses/Sale Bill toolbars. "Save JV" submits the form below
+                via the form="" attribute since the button itself sits outside it. */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-6 p-4 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }}>
+              <div className="flex flex-wrap gap-2">
+                {!isViewMode && (
+                  <button
+                    type="submit"
+                    form="jv-entry-form"
+                    className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg"
+                  >
+                    <Save size={16} /> {mode === 'edit' ? 'Update JV' : 'Save JV'}
                   </button>
-                </div>
+                )}
+                {mode === 'view' && !isPosted && (
+                  <button type="button" onClick={() => setMode('edit')} className="px-4 py-2 text-sm font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all flex items-center gap-1.5">
+                    <Edit size={14} /> Edit
+                  </button>
+                )}
+                {mode === 'view' && jvId != null && (
+                  isPosted
+                    ? <button type="button" onClick={handleUnpost} className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all">Unpost</button>
+                    : <button type="button" onClick={handlePost} className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all">Post</button>
+                )}
+                <button type="button" onClick={handleNew} className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all">
+                  New JV
+                </button>
               </div>
+              <div className="flex items-center gap-2">
+                <span className="font-lora font-bold text-sm text-slate-900">
+                  {mode === 'edit' ? `Editing JV #${jvId}` : mode === 'view' ? `JV #${jvId}` : 'New Journal Voucher'}
+                </span>
+                {jvId != null && (
+                  isPosted
+                    ? <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Posted</span>
+                    : <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-900" title="Saved but not yet in the ledger — Post it to move any balance.">Not Posted</span>
+                )}
+              </div>
+            </div>
 
+            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm mb-6">
               <p className="text-xs text-slate-500 mb-5 leading-relaxed">
                 Writes goodwill off an account's balance — an <em>eidi</em> on what a customer owes,
                 or a concession a vendor grants you. The other side lands on the{' '}
@@ -248,21 +264,11 @@ export default function JournalVoucherPage() {
                 which only exists attached to a receipt.
               </p>
 
-              <form onSubmit={handleSave} className="flex flex-col gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
-                  <input type="date" value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input font-semibold" />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    Account <span className="text-red-500 font-bold">*</span>
-                    <span className="text-slate-400 font-normal normal-case ml-1">— any account, not just customers</span>
-                  </label>
-                  <SearchableSelect options={accountOptions} value={baId} onChange={setBaId} placeholder="Search account..." disabled={isViewMode} />
-                </div>
-
-                <div>
+              <form id="jv-entry-form" onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 md:items-start">
+                {/* Direction — its own full-width row so Date and the balance panel line up as the
+                    first row of the two columns below, same shape as the Credit/Debit switch on the
+                    Transfer Cash page. */}
+                <div className="md:col-span-2">
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Direction</label>
                   <div className="grid grid-cols-2 gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
                     <button
@@ -280,39 +286,52 @@ export default function JournalVoucherPage() {
                   </div>
                 </div>
 
-                {/* CREDIT lowers the party's balance, DEBIT raises it — the panel shows which. */}
-                <AccountBalancePanel
-                  baId={baId ? Number(baId) : null}
-                  refreshKey={balanceRefreshKey}
-                  lines={[{ label: 'This voucher', delta: direction === 'CREDIT' ? -amount : amount }]}
-                />
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
+                    <input type="date" value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input font-semibold" />
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Amount (PKR)</label>
-                  <input type="number" min={0} value={amount || ''} disabled={isViewMode}
-                    onChange={e => setAmount(Math.max(0, parseInt(e.target.value) || 0))}
-                    placeholder="Enter amount in Rs..." className="soleria-input font-semibold font-mono" />
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      Account <span className="text-red-500 font-bold">*</span>
+                      <span className="text-slate-400 font-normal normal-case ml-1">— any account, not just customers</span>
+                    </label>
+                    <SearchableSelect options={accountOptions} value={baId} onChange={setBaId} placeholder="Search account..." disabled={isViewMode} />
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    Reason <span className="text-red-500 font-bold">*</span>
-                  </label>
-                  <input type="text" value={reason} disabled={isViewMode} onChange={e => setReason(e.target.value)}
-                    placeholder="e.g. Eid compensation" className="soleria-input font-semibold" />
+                <div className="flex flex-col gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Amount (PKR)</label>
+                    <input type="number" min={0} value={amount || ''} disabled={isViewMode}
+                      onChange={e => setAmount(Math.max(0, parseInt(e.target.value) || 0))}
+                      placeholder="Enter amount in Rs..." className="soleria-input font-semibold font-mono" />
+                  </div>
+
+                  {/* CREDIT lowers the party's balance, DEBIT raises it — the panel shows which. */}
+                  <AccountBalancePanel
+                    baId={baId ? Number(baId) : null}
+                    refreshKey={balanceRefreshKey}
+                    lines={[{ label: 'This voucher', delta: direction === 'CREDIT' ? -amount : amount }]}
+                  />
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      Reason <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    <input type="text" value={reason} disabled={isViewMode} onChange={e => setReason(e.target.value)}
+                      placeholder="e.g. Eid compensation" className="soleria-input font-semibold" />
+                  </div>
                 </div>
 
-                <div>
+                {/* Remarks — full-width textarea below both columns, same shape as the Transfer
+                    Cash page. */}
+                <div className="md:col-span-2">
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
-                  <input type="text" value={remarks} disabled={isViewMode} onChange={e => setRemarks(e.target.value)}
-                    placeholder="Optional" className="soleria-input font-semibold" />
+                  <textarea value={remarks} disabled={isViewMode} onChange={e => setRemarks(e.target.value)}
+                    placeholder="Optional" className="soleria-input font-semibold" rows={4} style={{ resize: 'none' }} />
                 </div>
-
-                {!isViewMode && (
-                  <button type="submit" className="self-start px-4 py-2 text-xs font-bold rounded-xl bg-[#111c2a] text-[#B08D57] border border-[#B08D57] hover:bg-[#1a293d] shadow-sm transition-all flex items-center gap-1.5">
-                    <Save size={14} /> {mode === 'edit' ? 'Update JV' : 'Save JV'}
-                  </button>
-                )}
               </form>
             </div>
 

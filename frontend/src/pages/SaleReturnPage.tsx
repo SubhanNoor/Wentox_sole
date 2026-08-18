@@ -736,53 +736,57 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     );
   }
 
-  return (
-    <AppLayout pageTitle="Sale Return">
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+  // Sub-tab switcher — lives in the top header bar next to the page title (AppLayout's
+  // headerAction slot), same as Sale Bill, so the content below the Quick Menu bar starts
+  // immediately instead of losing a row's height to a tab bar first.
+  const tabBar = (
+    <div className="flex gap-1.5" data-no-print>
+      <button
+        onClick={() => { setActiveTab('return'); handleNew(); }}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'return' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        New Sale Return
+      </button>
+      <button
+        onClick={() => setActiveTab('weekly')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'weekly' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Weekly Records
+      </button>
+      <button
+        onClick={() => setActiveTab('monthly')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'monthly' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Monthly Records
+      </button>
+      <button
+        onClick={() => setActiveTab('overall')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'overall' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Overall Records
+      </button>
+      <button
+        onClick={() => setActiveTab('find')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'find' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Find &amp; Update Return
+      </button>
+    </div>
+  );
 
-        {/* Top Tab Bar */}
-        <div className="flex gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
-          <button
-            onClick={() => { setActiveTab('return'); handleNew(); }}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'return' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            New Sale Return
-          </button>
-          <button
-            onClick={() => setActiveTab('weekly')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'weekly' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Weekly Records
-          </button>
-          <button
-            onClick={() => setActiveTab('monthly')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'monthly' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Monthly Records
-          </button>
-          <button
-            onClick={() => setActiveTab('overall')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'overall' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Overall Records
-          </button>
-          <button
-            onClick={() => setActiveTab('find')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeTab === 'find' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Find &amp; Update Return
-          </button>
-        </div>
+  return (
+    <AppLayout pageTitle="Sale Return" headerAction={tabBar}>
+      <div className="mx-auto" style={{ maxWidth: 1200 }}>
 
         {/* Tab contents (records & find) */}
         <div>

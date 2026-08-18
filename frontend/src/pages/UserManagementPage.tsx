@@ -113,9 +113,30 @@ export default function UserManagementPage() {
 
   return (
     <AppLayout pageTitle="Manage Users">
-      <div className="mx-auto" style={{ maxWidth: 900 }}>
+      <div className="mx-auto" style={{ maxWidth: 1200 }}>
 
-        <div className="card-white p-6 md:p-8 bg-white border max-w-xl mx-auto mb-6">
+        {successMsg && (
+          <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
+        )}
+        {errorMsg && (
+          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
+        )}
+
+        {/* Toolbar — Create User lives in its own dedicated bar above the card, same shape as the
+            Receipts/Expenses/Sale Bill toolbars, instead of at the bottom of the form. */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6 p-4 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }}>
+          <button
+            type="submit"
+            form="create-user-form"
+            disabled={submitting}
+            className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg"
+          >
+            <UserPlus size={16} /> {submitting ? 'Creating User…' : 'Create User'}
+          </button>
+          <span className="text-sm font-semibold text-slate-700">{users.length} account(s)</span>
+        </div>
+
+        <div className="card-white p-6 md:p-8 bg-white border mb-6">
           <div className="border-b pb-4 mb-6">
             <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
               <UserPlus size={20} className="text-[#B08D57]" /> Create Limited-Access User
@@ -126,41 +147,36 @@ export default function UserManagementPage() {
             </p>
           </div>
 
-          {successMsg && (
-            <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
-          )}
-          {errorMsg && (
-            <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
-          )}
+          <form id="create-user-form" onSubmit={handleCreateUser} className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+            <div className="flex flex-col gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
+                  <User size={12} className="text-slate-400" /> Username <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
+                  placeholder="e.g. worker1"
+                  className="soleria-input w-full font-semibold"
+                />
+              </div>
 
-          <form onSubmit={handleCreateUser} className="flex flex-col gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
-                <User size={12} className="text-slate-400" /> Username <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={username}
-                onChange={e => setUsername(e.target.value)}
-                placeholder="e.g. worker1"
-                className="soleria-input w-full font-semibold"
-              />
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
+                  <User size={12} className="text-slate-400" /> Full Name
+                </label>
+                <input
+                  type="text"
+                  value={fullName}
+                  onChange={e => setFullName(e.target.value)}
+                  placeholder="Optional"
+                  className="soleria-input w-full font-semibold"
+                />
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
-                <User size={12} className="text-slate-400" /> Full Name
-              </label>
-              <input
-                type="text"
-                value={fullName}
-                onChange={e => setFullName(e.target.value)}
-                placeholder="Optional"
-                className="soleria-input w-full font-semibold"
-              />
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="flex flex-col gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1">
                   <Lock size={12} className="text-slate-400" /> Password <span className="text-rose-500">*</span>
@@ -184,18 +200,10 @@ export default function UserManagementPage() {
                 />
               </div>
             </div>
-
-            <button
-              type="submit"
-              className="btn-gold w-full mt-3 py-2.5 flex items-center justify-center gap-1.5 text-xs font-semibold cursor-pointer shadow-2xs hover:shadow-xs"
-              disabled={submitting}
-            >
-              <UserPlus size={15} /> {submitting ? 'Creating User…' : 'Create User'}
-            </button>
           </form>
         </div>
 
-        <div className="card-white p-6 md:p-8 bg-white border max-w-3xl mx-auto">
+        <div className="card-white p-6 md:p-8 bg-white border">
           <div className="border-b pb-4 mb-5">
             <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
               <UsersRound size={20} className="text-[#B08D57]" /> Existing Accounts

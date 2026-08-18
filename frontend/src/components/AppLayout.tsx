@@ -386,7 +386,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
             </div>
           </div>
           {headerAction && (
-            <div>{headerAction}</div>
+            <div className="flex-shrink-0 overflow-x-auto">{headerAction}</div>
           )}
           <ZoomControl />
           <NotificationBell />
@@ -547,8 +547,9 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
           </button>
         </div>
 
-        {/* Content */}
-        <main className="app-main flex-1 overflow-auto" style={{ padding: 32 }}>
+        {/* Content — top padding trimmed well below the sides/bottom so the page's own subpage
+            tab bar and cards sit close under the Quick Menu bar instead of leaving a tall gap. */}
+        <main className="app-main flex-1 overflow-auto" style={{ padding: '12px 32px 32px' }}>
           <div className="app-main-inner animate-pageIn" style={{ maxWidth: 1200, margin: '0 auto' }}>
             {children}
           </div>

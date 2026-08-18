@@ -542,86 +542,89 @@ export default function ReportStockPage() {
     );
   };
 
+  // Sub-tab switcher — lives in the top header bar next to the page title (AppLayout's
+  // headerAction slot), same treatment as Sale Bill/Receipts/Expenses/Cheque/Reports/etc.
+  const tabBar = (
+    <div className="flex flex-wrap gap-1.5" data-no-print>
+      <button
+        onClick={() => switchStockTab('current')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap ${
+          activeStockTab === 'current'
+            ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Current Stock
+      </button>
+      <button
+        onClick={() => switchStockTab('material')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap ${
+          activeStockTab === 'material'
+            ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Material Stock
+      </button>
+      <button
+        onClick={() => switchStockTab('ledger')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap ${
+          activeStockTab === 'ledger'
+            ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Product Ledger
+      </button>
+      <button
+        onClick={() => switchStockTab('daily')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap ${
+          activeStockTab === 'daily'
+            ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Daily Production
+      </button>
+      <button
+        onClick={() => switchStockTab('weekly')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap ${
+          activeStockTab === 'weekly'
+            ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Weekly Production
+      </button>
+      <button
+        onClick={() => switchStockTab('monthly')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap ${
+          activeStockTab === 'monthly'
+            ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Monthly Production
+      </button>
+      <button
+        onClick={() => switchStockTab('overall')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap ${
+          activeStockTab === 'overall'
+            ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Overall Production
+      </button>
+    </div>
+  );
+
   return (
-    <AppLayout pageTitle="Stock & Production Center">
+    <AppLayout pageTitle="Stock & Production Center" headerAction={tabBar}>
       <div className="mx-auto" style={{ maxWidth: 1000 }}>
 
         {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>}
         {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>}
-
-        {/* Top Tab Navigation - hidden on print */}
-        <div className="flex flex-wrap gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
-          <button
-            onClick={() => switchStockTab('current')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeStockTab === 'current'
-                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Current Stock
-          </button>
-          <button
-            onClick={() => switchStockTab('material')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeStockTab === 'material'
-                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Material Stock
-          </button>
-          <button
-            onClick={() => switchStockTab('ledger')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeStockTab === 'ledger'
-                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Product Ledger
-          </button>
-          <button
-            onClick={() => switchStockTab('daily')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeStockTab === 'daily'
-                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Daily Production
-          </button>
-          <button
-            onClick={() => switchStockTab('weekly')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeStockTab === 'weekly'
-                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Weekly Production
-          </button>
-          <button
-            onClick={() => switchStockTab('monthly')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeStockTab === 'monthly'
-                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Monthly Production
-          </button>
-          <button
-            onClick={() => switchStockTab('overall')}
-            className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-              activeStockTab === 'overall'
-                ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Overall Production
-          </button>
-        </div>
 
         {/* On-screen View - hidden on print */}
         <div data-no-print className={`transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>

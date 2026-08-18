@@ -52,31 +52,34 @@ export default function ReportsHubPage() {
 
   const activeTabObj = TABS.find(t => t.key === activeTab);
 
-  return (
-    <AppLayout pageTitle="Reports Hub" subTabTitle={activeTabObj?.label} subTabId={activeTab}>
-      <div className="mx-auto" style={{ maxWidth: 1150 }}>
-        {/* Top Bar Tabs - data-no-print */}
-        <div className="flex flex-wrap gap-2 mb-6 border-b pb-3" style={{ borderColor: 'var(--border-color)' }} data-no-print>
-          {TABS.map(tab => (
-            <button
-              key={tab.key}
-              draggable={true}
-              onDragStart={(e) => {
-                e.dataTransfer.setData('text/plain', JSON.stringify({ page: 'reports', tab: tab.key, label: tab.label }));
-              }}
-              onClick={() => switchTab(tab.key)}
-              title="Drag tab to Quick Access Menu Bar to pin"
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
-                activeTab === tab.key
-                  ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+  // Sub-tab switcher — lives in the top header bar next to the page title (AppLayout's
+  // headerAction slot), same treatment as Sale Bill/Sale Return/Receipts/Expenses/Cheque.
+  const tabBar = (
+    <div className="flex flex-wrap gap-1.5" data-no-print>
+      {TABS.map(tab => (
+        <button
+          key={tab.key}
+          draggable={true}
+          onDragStart={(e) => {
+            e.dataTransfer.setData('text/plain', JSON.stringify({ page: 'reports', tab: tab.key, label: tab.label }));
+          }}
+          onClick={() => switchTab(tab.key)}
+          title="Drag tab to Quick Access Menu Bar to pin"
+          className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing whitespace-nowrap ${
+            activeTab === tab.key
+              ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+              : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+          }`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
 
+  return (
+    <AppLayout pageTitle="Reports Hub" subTabTitle={activeTabObj?.label} subTabId={activeTab} headerAction={tabBar}>
+      <div className="mx-auto" style={{ maxWidth: 1150 }}>
         <div className={`transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
           {activeTab === 'sale-analysis' && <SaleAnalysisContent />}
           {activeTab === 'sale-report' && <SaleReportContent />}

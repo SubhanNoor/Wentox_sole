@@ -424,13 +424,13 @@ body {
    instead of jumping straight from "desktop" to "mobile drawer" at 900px. */
 @media (max-width: 1440px) {
   .app-main {
-    padding: 24px !important;
+    padding: 12px 24px 24px !important;
   }
 }
 
 @media (max-width: 1280px) {
   .app-main {
-    padding: 20px !important;
+    padding: 12px 20px 20px !important;
   }
 
   .app-header {
@@ -460,7 +460,7 @@ body {
   }
 
   .app-main {
-    padding: 16px !important;
+    padding: 10px 16px 16px !important;
   }
 }
 
@@ -470,7 +470,7 @@ body {
   }
 
   .app-main {
-    padding: 12px !important;
+    padding: 8px 12px 12px !important;
   }
 
   .card-white {

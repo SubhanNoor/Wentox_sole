@@ -325,40 +325,72 @@ export default function WageRunPage() {
 
   /* ── render ───────────────────────────────────────────────── */
 
+  // Sub-tab switcher — lives in the top header bar next to the page title (AppLayout's
+  // headerAction slot), same treatment as Sale Bill/Receipts/Expenses/Cheque/Reports/SalaryRun.
+  const tabBar = (
+    <div className="flex items-center gap-2" data-no-print>
+      <div className="flex gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200">
+        <button
+          onClick={() => switchTab('entry')}
+          className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+        >
+          <HardHat size={14} /> {editingRunId ? 'Editing Run' : 'New Wage Run'}
+        </button>
+        <button
+          onClick={() => switchTab('history')}
+          className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'history' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+        >
+          <History size={14} /> History ({runs.length})
+        </button>
+      </div>
+      {editingRunId && (
+        <button onClick={resetForm} className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
+          Cancel edit
+        </button>
+      )}
+    </div>
+  );
+
   return (
-    <AppLayout pageTitle="Wage Run (Piece Rate)">
+    <AppLayout pageTitle="Wage Run (Piece Rate)" headerAction={tabBar}>
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
 
         {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>}
         {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>}
 
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
-            <button
-              onClick={() => switchTab('entry')}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              <HardHat size={15} /> {editingRunId ? 'Editing Run' : 'New Wage Run'}
-            </button>
-            <button
-              onClick={() => switchTab('history')}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'history' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              <History size={15} /> History ({runs.length})
-            </button>
-          </div>
-          {editingRunId && (
-            <button onClick={resetForm} className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
-              Cancel edit
-            </button>
-          )}
-        </div>
-
         {tab === 'entry' ? (
-          <form
-            onSubmit={e => e.preventDefault()}
-            className={`flex flex-col gap-5 transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}
-          >
+          <>
+            {/* Toolbar — Save/Post live in one dedicated bar above the cards, same shape as the
+                Receipts/Expenses/Sale Bill toolbars, instead of at the bottom of a long form. */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-6 p-4 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }}>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => save(true)}
+                  disabled={!employeeId}
+                  className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Save size={16} /> {editingRunId ? 'Save & Post' : 'Post Wage Run'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => save(false)}
+                  disabled={!employeeId}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Save as Unposted
+                </button>
+              </div>
+              {employeeId && (
+                <span className="text-sm font-semibold text-slate-700">
+                  {nameOf(Number(employeeId))}{grandTotal > 0 && <span className="text-slate-400 font-normal"> · {formatCurrency(grandTotal)}</span>}
+                </span>
+              )}
+            </div>
+
+            <div
+              className={`flex flex-col gap-5 transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}
+            >
 
             {/* Header */}
             <div className="card-white p-6 bg-white border" style={{ borderColor: 'var(--border-color)' }}>
@@ -590,18 +622,10 @@ export default function WageRunPage() {
                     {zeroRateRows.length} line(s) have a rate of 0 and will add nothing to the total.
                   </p>
                 )}
-
-                <div className="flex gap-3 justify-end border-t pt-4 mt-4">
-                  <button type="button" onClick={() => save(false)} className="px-5 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50">
-                    Save as Unposted
-                  </button>
-                  <button type="submit" onClick={() => save(true)} className="btn-gold flex items-center gap-1.5 px-5 py-2 text-sm">
-                    <Save size={16} /> {editingRunId ? 'Save & Post' : 'Post Wage Run'}
-                  </button>
-                </div>
               </div>
             )}
-          </form>
+            </div>
+          </>
         ) : (
           /* History */
           <div className={`card-white p-6 md:p-8 bg-white border transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`} style={{ borderColor: 'var(--border-color)' }}>

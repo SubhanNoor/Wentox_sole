@@ -310,73 +310,76 @@ export default function TransferPage() {
     );
   }
 
+  // Mode switcher — lives in the top header bar next to the page title (AppLayout's headerAction
+  // slot), same treatment as Sale Bill/Receipts/Expenses/Cheque/Reports/SalaryRun/WageRun/JV.
+  const tabBar = (
+    <div className="flex flex-wrap items-center gap-1.5" data-no-print>
+      <button
+        type="button"
+        onClick={() => { setMode('transfer'); setErrorMsg(''); }}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-all ${
+          mode === 'transfer'
+            ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold'
+            : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
+        }`}
+      >
+        <ArrowLeftRight size={14} /> Transfer Between Accounts
+      </button>
+      <button
+        type="button"
+        onClick={() => { setMode('deposit'); setErrorMsg(''); }}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-all ${
+          mode === 'deposit'
+            ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold'
+            : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
+        }`}
+      >
+        <PiggyBank size={14} /> Add Amount to Bank
+      </button>
+    </div>
+  );
+
   return (
-    <AppLayout pageTitle="Bank Transactions">
+    <AppLayout pageTitle="Bank Transactions" headerAction={tabBar}>
       <div className="mx-auto" style={{ maxWidth: 1750 }}>
 
         {lookupError && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{lookupError}</div>}
         {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>}
         {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>}
 
-        {/* Mode switcher boxed toolbar */}
-        <div className="p-4 rounded-xl border mb-6 bg-white shadow-2xs flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }}>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => { setMode('transfer'); setErrorMsg(''); }}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-all ${
-                mode === 'transfer'
-                  ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold'
-                  : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
-              }`}
-            >
-              <ArrowLeftRight size={15} /> Transfer Between Accounts
-            </button>
-            <button
-              type="button"
-              onClick={() => { setMode('deposit'); setErrorMsg(''); }}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-all ${
-                mode === 'deposit'
-                  ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold'
-                  : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
-              }`}
-            >
-              <PiggyBank size={15} /> Add Amount to Bank
-            </button>
-          </div>
-        </div>
-
         <div key={mode} className="animate-in fade-in slide-in-from-bottom-3 duration-300">
           {mode === 'transfer' ? (
             <>
-            <div className="card-white p-6 md:p-8 bg-white border overflow-visible mb-6" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="flex items-center justify-between border-b pb-3 mb-5">
-                <div className="flex items-center gap-2">
-                  <ArrowLeftRight size={18} className="text-[#B08D57]" />
-                  <div>
-                    <h3 className="font-lora font-semibold text-lg text-slate-800">Move Money Between Our Own Bank Accounts</h3>
-                    <p className="text-xs text-slate-500">
-                      Bank to bank. This is neither income nor an expense — nobody paid us and we paid
-                      nobody — so it never appears in those totals.
-                    </p>
-                  </div>
-                </div>
+            {/* Toolbar — Save/Edit/Post/Unpost/New live in one dedicated bar above the card, same
+                shape as the Receipts/Expenses/Sale Bill toolbars. "Record Transfer" submits the
+                form below via the form="" attribute since the button itself sits outside it. */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-6 p-4 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }}>
+              <div className="flex flex-wrap gap-2">
+                {!isTransferViewMode && accountOptions.length >= 2 && (
+                  <button
+                    type="submit"
+                    form="transfer-form"
+                    className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg"
+                  >
+                    <Save size={16} /> {tMode === 'edit' ? 'Update Transfer' : 'Record Transfer'}
+                  </button>
+                )}
                 {tMode === 'view' && (
-                  <div className="flex items-center gap-2">
+                  <>
                     {!isTransferPosted && (
                       <button
                         type="button"
                         onClick={() => setTMode('edit')}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
+                        className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
                       >
-                        <Edit size={13} /> Edit
+                        <Edit size={14} /> Edit
                       </button>
                     )}
                     {!isTransferPosted ? (
                       <button
                         type="button"
                         onClick={handlePostTransfer}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
+                        className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
                       >
                         Post
                       </button>
@@ -384,21 +387,40 @@ export default function TransferPage() {
                       <button
                         type="button"
                         onClick={handleUnpostTransfer}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
+                        className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
                       >
                         Unpost
                       </button>
                     )}
-
                     <button
                       type="button"
                       onClick={handleNewTransfer}
-                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
+                      className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
                     >
                       New Transfer
                     </button>
-                  </div>
+                  </>
                 )}
+              </div>
+              {tMode === 'view' && transferId != null && (
+                <span className={`text-[11px] font-bold px-2.5 py-1 rounded uppercase ${
+                  isTransferPosted ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500 border border-slate-200'
+                }`}>
+                  Transfer #{transferId} · {transferStatus}
+                </span>
+              )}
+            </div>
+
+            <div className="card-white p-6 md:p-8 bg-white border overflow-visible mb-6" style={{ borderColor: 'var(--border-color)' }}>
+              <div className="flex items-center gap-2 border-b pb-3 mb-5">
+                <ArrowLeftRight size={18} className="text-[#B08D57]" />
+                <div>
+                  <h3 className="font-lora font-semibold text-lg text-slate-800">Move Money Between Our Own Bank Accounts</h3>
+                  <p className="text-xs text-slate-500">
+                    Bank to bank. This is neither income nor an expense — nobody paid us and we paid
+                    nobody — so it never appears in those totals.
+                  </p>
+                </div>
               </div>
 
               {accountOptions.length < 2 ? (
@@ -407,13 +429,13 @@ export default function TransferPage() {
                   <span>At least two accounts are needed to transfer between. Add an account first.</span>
                 </div>
               ) : (
-                <form onSubmit={saveTransfer} className="flex flex-col gap-5">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <form id="transfer-form" onSubmit={saveTransfer} className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 md:items-start">
+                  <div className="flex flex-col gap-4">
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
                       <input
                         type="date"
-            value={date} disabled={isTransferViewMode}
+                        value={date} disabled={isTransferViewMode}
                         onChange={e => setDate(e.target.value)} className="soleria-input"
                       />
                     </div>
@@ -432,7 +454,7 @@ export default function TransferPage() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-4">
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">
                         From <span className="text-red-500 font-bold">*</span>
@@ -457,12 +479,10 @@ export default function TransferPage() {
                         disabled={isTransferViewMode}
                       />
                     </div>
-                  </div>
 
-                  {/* Both balances, because a transfer is the one screen where you need to know
-                      whether the money is actually there before moving it. Signed the way each side
-                      is about to move: out of From, into To. */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Both balances, because a transfer is the one screen where you need to know
+                        whether the money is actually there before moving it. Signed the way each
+                        side is about to move: out of From, into To. */}
                     <AccountBalancePanel
                       baId={fromBaId ? Number(fromBaId) : null}
                       variant="money"
@@ -477,22 +497,16 @@ export default function TransferPage() {
                     />
                   </div>
 
-                  <div>
+                  <div className="md:col-span-2">
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
-                    <input
-                      type="text" value={remarks} disabled={isTransferViewMode}
+                    <textarea
+                      value={remarks} disabled={isTransferViewMode}
                       onChange={e => setRemarks(e.target.value)}
                       placeholder="e.g. Cash takings banked" className="soleria-input"
+                      rows={4}
+                      style={{ resize: 'none' }}
                     />
                   </div>
-
-                  {!isTransferViewMode && (
-                    <div className="flex justify-end border-t pt-4">
-                      <button type="submit" className="btn-gold flex items-center gap-1.5 px-5 py-2 text-sm">
-                        <Save size={16} /> {tMode === 'edit' ? 'Update Transfer' : 'Record Transfer'}
-                      </button>
-                    </div>
-                  )}
                 </form>
               )}
             </div>
@@ -542,35 +556,36 @@ export default function TransferPage() {
           </>
         ) : (
           <>
-            <div className="card-white p-6 md:p-8 bg-white border overflow-visible mb-6" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="flex items-center justify-between border-b pb-3 mb-5">
-                <div className="flex items-center gap-2">
-                  <PiggyBank size={18} className="text-[#B08D57]" />
-                  <div>
-                    <h3 className="font-lora font-semibold text-lg text-slate-800">Credit or Debit an Account Manually</h3>
-                    <p className="text-xs text-slate-500">
-                      Credit: owner capital, a bank loan, an insurance/other refund — money entering from outside.
-                      Debit: bank charges, an error correction, or any deduction with no counter-account in the books.
-                      Not tied to any customer, so it never touches customer ledgers.
-                    </p>
-                  </div>
-                </div>
+            {/* Toolbar — Save/Edit/Post/Unpost/New live in one dedicated bar above the card, same
+                shape as the Receipts/Expenses/Sale Bill toolbars. The Record button submits the
+                form below via the form="" attribute since the button itself sits outside it. */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-6 p-4 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }}>
+              <div className="flex flex-wrap gap-2">
+                {!isDepositViewMode && bankOptions.length > 0 && (
+                  <button
+                    type="submit"
+                    form="deposit-form"
+                    className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg"
+                  >
+                    <Save size={16} /> {dMode === 'edit' ? 'Update Entry' : `Record ${depDirection === 'DEBIT' ? 'Debit' : 'Credit'}`}
+                  </button>
+                )}
                 {dMode === 'view' && (
-                  <div className="flex items-center gap-2">
+                  <>
                     {!isDepositPosted && (
                       <button
                         type="button"
                         onClick={() => setDMode('edit')}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
+                        className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
                       >
-                        <Edit size={13} /> Edit
+                        <Edit size={14} /> Edit
                       </button>
                     )}
                     {!isDepositPosted ? (
                       <button
                         type="button"
                         onClick={handlePostDeposit}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
+                        className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
                       >
                         Post
                       </button>
@@ -578,21 +593,41 @@ export default function TransferPage() {
                       <button
                         type="button"
                         onClick={handleUnpostDeposit}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
+                        className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
                       >
                         Unpost
                       </button>
                     )}
-
                     <button
                       type="button"
                       onClick={handleNewDeposit}
-                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
+                      className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
                     >
                       New Entry
                     </button>
-                  </div>
+                  </>
                 )}
+              </div>
+              {dMode === 'view' && depositId != null && (
+                <span className={`text-[11px] font-bold px-2.5 py-1 rounded uppercase ${
+                  isDepositPosted ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500 border border-slate-200'
+                }`}>
+                  Entry #{depositId} · {depositStatus}
+                </span>
+              )}
+            </div>
+
+            <div className="card-white p-6 md:p-8 bg-white border overflow-visible mb-6" style={{ borderColor: 'var(--border-color)' }}>
+              <div className="flex items-center gap-2 border-b pb-3 mb-5">
+                <PiggyBank size={18} className="text-[#B08D57]" />
+                <div>
+                  <h3 className="font-lora font-semibold text-lg text-slate-800">Credit or Debit an Account Manually</h3>
+                  <p className="text-xs text-slate-500">
+                    Credit: owner capital, a bank loan, an insurance/other refund — money entering from outside.
+                    Debit: bank charges, an error correction, or any deduction with no counter-account in the books.
+                    Not tied to any customer, so it never touches customer ledgers.
+                  </p>
+                </div>
               </div>
 
               {bankOptions.length === 0 ? (
@@ -601,9 +636,11 @@ export default function TransferPage() {
                   <span>No bank account exists yet. Add a bank account first.</span>
                 </div>
               ) : (
-                <form onSubmit={saveDeposit} className="flex flex-col gap-5">
-                  {/* Credit / Debit switch */}
-                  <div className="flex bg-slate-100 p-1 rounded-lg text-sm font-semibold w-fit">
+                <form id="deposit-form" onSubmit={saveDeposit} className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 md:items-start">
+                  {/* Credit / Debit switch — its own full-width row so Date and Amount line up as
+                      the first row of the two columns below, instead of Amount sitting a row lower
+                      than Date. */}
+                  <div className="md:col-span-2 flex bg-slate-100 p-1 rounded-lg text-sm font-semibold w-fit">
                     <button
                       type="button"
                       disabled={isDepositViewMode}
@@ -626,15 +663,30 @@ export default function TransferPage() {
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-4">
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
                       <input
                         type="date"
-            value={depDate} disabled={isDepositViewMode}
+                        value={depDate} disabled={isDepositViewMode}
                         onChange={e => setDepDate(e.target.value)} className="soleria-input"
                       />
                     </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        Account <span className="text-red-500 font-bold">*</span>
+                      </label>
+                      <SearchableSelect
+                        options={bankOptions}
+                        value={depToBaId}
+                        onChange={setDepToBaId}
+                        placeholder="Choose account..."
+                        disabled={isDepositViewMode}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-4">
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">
                         Amount <span className="text-red-500 font-bold">*</span>
@@ -648,61 +700,42 @@ export default function TransferPage() {
                         className="soleria-input font-semibold font-mono text-right"
                       />
                     </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      Account <span className="text-red-500 font-bold">*</span>
-                    </label>
-                    <SearchableSelect
-                      options={bankOptions}
-                      value={depToBaId}
-                      onChange={setDepToBaId}
-                      placeholder="Choose account..."
-                      disabled={isDepositViewMode}
+                    {/* CREDIT puts money IN (see deposits.service.js#post), DEBIT takes it out — so
+                        the panel's delta follows the direction toggle, not the raw amount. */}
+                    <AccountBalancePanel
+                      baId={depToBaId ? Number(depToBaId) : null}
+                      variant="money"
+                      refreshKey={balanceRefreshKey}
+                      lines={[{
+                        label: depDirection === 'DEBIT' ? 'This deduction' : 'This deposit',
+                        delta: depDirection === 'DEBIT' ? -depAmount : depAmount,
+                      }]}
                     />
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        {depSourceLabel} <span className="text-red-500 font-bold">*</span>
+                      </label>
+                      <input
+                        type="text" value={depSource} disabled={isDepositViewMode}
+                        onChange={e => setDepSource(e.target.value)}
+                        placeholder={depDirection === 'DEBIT' ? 'e.g. Bank Charges, Correction' : 'e.g. Owner Capital, Bank Loan, Insurance Refund'}
+                        className="soleria-input"
+                      />
+                    </div>
+
                   </div>
 
-                  {/* CREDIT puts money IN (see deposits.service.js#post), DEBIT takes it out — so the
-                      panel's delta follows the direction toggle, not the raw amount. */}
-                  <AccountBalancePanel
-                    baId={depToBaId ? Number(depToBaId) : null}
-                    variant="money"
-                    refreshKey={balanceRefreshKey}
-                    lines={[{
-                      label: depDirection === 'DEBIT' ? 'This deduction' : 'This deposit',
-                      delta: depDirection === 'DEBIT' ? -depAmount : depAmount,
-                    }]}
-                  />
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      {depSourceLabel} <span className="text-red-500 font-bold">*</span>
-                    </label>
-                    <input
-                      type="text" value={depSource} disabled={isDepositViewMode}
-                      onChange={e => setDepSource(e.target.value)}
-                      placeholder={depDirection === 'DEBIT' ? 'e.g. Bank Charges, Correction' : 'e.g. Owner Capital, Bank Loan, Insurance Refund'}
-                      className="soleria-input"
-                    />
-                  </div>
-
-                  <div>
+                  <div className="md:col-span-2">
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
-                    <input
-                      type="text" value={depRemarks} disabled={isDepositViewMode}
+                    <textarea
+                      value={depRemarks} disabled={isDepositViewMode}
                       onChange={e => setDepRemarks(e.target.value)}
                       placeholder="Optional notes" className="soleria-input"
+                      rows={4}
+                      style={{ resize: 'none' }}
                     />
                   </div>
-
-                  {!isDepositViewMode && (
-                    <div className="flex justify-end border-t pt-4">
-                      <button type="submit" className="btn-gold flex items-center gap-1.5 px-5 py-2 text-sm">
-                        <Save size={16} /> {dMode === 'edit' ? 'Update Entry' : `Record ${depDirection === 'DEBIT' ? 'Debit' : 'Credit'}`}
-                      </button>
-                    </div>
-                  )}
                 </form>
               )}
             </div>
