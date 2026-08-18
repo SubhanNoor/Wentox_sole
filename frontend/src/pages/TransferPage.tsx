@@ -312,7 +312,7 @@ export default function TransferPage() {
 
   return (
     <AppLayout pageTitle="Bank Transactions">
-      <div className="mx-auto" style={{ maxWidth: 1400 }}>
+      <div className="mx-auto" style={{ maxWidth: 1750 }}>
 
         {lookupError && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{lookupError}</div>}
         {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>}

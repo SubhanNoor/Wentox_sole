@@ -3,7 +3,7 @@ import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { SaleReturnRow, CustomerRow, SubCustomerRow, CityRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
-import { Calendar, Search, ArrowRight, ArrowLeft, FileText, Edit2, Printer, ChevronDown, Check } from 'lucide-react';
+import { Calendar, Search, ArrowLeft, FileText, Edit2, Printer, ChevronDown, Check, MapPin } from 'lucide-react';
 
 interface MonthlyReturnTabProps {
   onEditReturn: (ret: SaleReturnRow) => void;
@@ -134,7 +134,7 @@ export default function MonthlyReturnTab({ onEditReturn, onPrintReturn }: Monthl
     return (
       <div className={`mx-auto px-2 transition-all duration-200 ${
         isClosing ? 'opacity-0 translate-y-2 scale-98' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'
-      }`} style={{ maxWidth: 1400 }}>
+      }`} style={{ maxWidth: 1750 }}>
         <div className="card-white p-6 bg-white border border-slate-200/80 shadow-md rounded-2xl mb-6">
           <div className="flex items-center justify-between border-b pb-4 mb-4" style={{ borderColor: 'var(--border-color)' }}>
             <div className="flex items-center gap-3">
@@ -241,7 +241,7 @@ export default function MonthlyReturnTab({ onEditReturn, onPrintReturn }: Monthl
   }
 
   return (
-    <div className="mx-auto px-2" style={{ maxWidth: 1400 }}>
+    <div className="mx-auto px-2" style={{ maxWidth: 1750 }}>
       {/* Filter Toolbar */}
       <div className="w-full flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white shadow-2xs" style={{ borderColor: 'var(--border-color)' }}>
         <div className="relative flex-1 max-w-md">
@@ -316,51 +316,71 @@ export default function MonthlyReturnTab({ onEditReturn, onPrintReturn }: Monthl
       </div>
 
       {/* Customer Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {customerCardsData.length === 0 ? (
-          <div className="col-span-full card-white p-12 bg-slate-50/50 border border-slate-200 rounded-2xl text-center flex flex-col items-center justify-center text-slate-400">
-            <Calendar size={48} className="text-slate-300 mb-3" />
-            <p className="font-lora text-lg font-bold text-slate-600 mb-1">No Monthly Returns Found</p>
-            <p className="text-sm max-w-sm">No sale returns were recorded for this month matching your filters.</p>
-          </div>
-        ) : (
-          customerCardsData.map(data => {
-            const city = cities.find(c => c.city_id === data.customer.city_id)?.name || 'Local';
+      {/* RJ-05 pattern: customer records as table rows, not cards — the same treatment the Receipts
+          and Expenses tabs already got, so every records screen in the app reads the same way. A row
+          is ~40px against a 190px card three-across, so roughly four times as many customers fit
+          without scrolling, and there is now room for the cartons/pairs/value totals this view was
+          already computing and then throwing away. */}
+      <div className="card-white overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border-color)' }}>
+        <table className="w-full text-left border-collapse text-sm">
+          <thead>
+            <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+              <th className="p-3 pl-4">Customer</th>
+              <th className="p-3 text-center">City</th>
+              <th className="p-3 text-center">Returns</th>
+              <th className="p-3 text-right">Cartons</th>
+              <th className="p-3 text-right">Pairs</th>
+              <th className="p-3 text-right pr-6">Total Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {customerCardsData.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="text-center p-12 text-slate-400">
+                  <Calendar size={40} className="text-slate-300 mb-2 mx-auto" />
+                  <p className="font-lora text-base font-semibold text-slate-500 mb-1">No Monthly Returns Found</p>
+                  <p className="text-xs max-w-sm mx-auto">No sale returns were recorded for this month matching your filters.</p>
+                </td>
+              </tr>
+            ) : (
+              customerCardsData.map(data => {
+                const city = cities.find(c => c.city_id === data.customer.city_id)?.name || 'Local';
 
-            return (
-              <div
-                key={data.customer.customer_id}
-                onClick={() => setSelectedCustomerId(data.customer.customer_id)}
-                className="group relative bg-white p-6 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex flex-col justify-between min-h-[190px]"
-              >
-                <div>
-                  <div className="flex items-start justify-between gap-2 mb-1.5">
-                    <h4 className="font-lora font-bold text-lg text-slate-900 group-hover:text-[var(--brand-navy)] transition-colors line-clamp-1">
-                      {data.customer.name}
-                    </h4>
-                    <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider flex-shrink-0">
-                      {city}
-                    </span>
-                  </div>
-
-                  <div className="font-mono text-xs text-slate-400 mb-2">
-                    Customer ID: <span className="font-semibold text-slate-600">#{data.customer.customer_id}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between border-t border-slate-100 pt-3.5 mt-2">
-                  <div className="flex items-center gap-1.5 bg-amber-50/90 text-amber-900 px-3 py-1 rounded-full text-xs font-semibold border border-amber-200/70">
-                    <FileText size={13} className="text-amber-600" />
-                    <span>{data.returns.length} {data.returns.length === 1 ? 'Return' : 'Returns'}</span>
-                  </div>
-                  <span className="text-amber-700 font-semibold text-xs flex items-center gap-1.5 group-hover:text-[var(--brand-navy)] transition-colors">
-                    View Details <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
-                  </span>
-                </div>
-              </div>
-            );
-          })
-        )}
+                return (
+                  <tr
+                    key={data.customer.customer_id}
+                    onClick={() => setSelectedCustomerId(data.customer.customer_id)}
+                    className="border-b hover:bg-slate-50/60 cursor-pointer transition-colors"
+                    style={{ borderColor: 'var(--border-table)' }}
+                  >
+                    <td className="p-3 pl-4">
+                      <div className="font-lora font-bold text-slate-900">{data.customer.name}</div>
+                      {/* C-01: the account code, matching what the Customer setup screen now shows. */}
+                      <div className="font-mono text-[11px] text-slate-400">
+                        Code: {data.customer.account_code ?? '—'}
+                      </div>
+                    </td>
+                    <td className="p-3 text-center">
+                      <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider inline-flex items-center gap-1">
+                        <MapPin size={10} className="text-slate-400" />
+                        {city}
+                      </span>
+                    </td>
+                    <td className="p-3 text-center">
+                      <span className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-900 px-2.5 py-1 rounded-full text-xs font-semibold border border-amber-200/80">
+                        <FileText size={13} className="text-amber-600" />
+                        {data.returns.length} {data.returns.length === 1 ? 'Return' : 'Returns'}
+                      </span>
+                    </td>
+                    <td className="p-3 text-right font-mono text-slate-700">{data.totalCartons.toLocaleString()}</td>
+                    <td className="p-3 text-right font-mono text-slate-700">{data.totalPairs.toLocaleString()}</td>
+                    <td className="p-3 text-right pr-6 font-mono font-bold text-emerald-700">{formatCurrency(data.totalValue)}</td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );

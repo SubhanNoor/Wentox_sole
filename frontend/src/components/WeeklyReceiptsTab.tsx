@@ -179,7 +179,7 @@ export default function WeeklyReceiptsTab() {
   }
 
   return (
-    <div className="mx-auto" style={{ maxWidth: 1400 }}>
+    <div className="mx-auto" style={{ maxWidth: 1750 }}>
       {/* Filter Toolbar Standard */}
       <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white shadow-2xs" style={{ borderColor: 'var(--border-color)' }}>
         <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">

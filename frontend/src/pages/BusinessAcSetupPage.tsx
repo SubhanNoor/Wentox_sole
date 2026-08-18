@@ -263,7 +263,7 @@ export default function BusinessAcSetupPage() {
 
   return (
     <AppLayout pageTitle="Business Accounts Setup">
-      <div className="mx-auto" style={{ maxWidth: 1400 }}>
+      <div className="mx-auto" style={{ maxWidth: 1750 }}>
 
         {successMsg && (
           <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>

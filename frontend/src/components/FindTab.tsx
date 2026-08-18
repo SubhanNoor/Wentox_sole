@@ -269,7 +269,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
   return (
     <>
       {/* Screen-only UI Container */}
-      <div className="mx-auto print:hidden px-2" style={{ maxWidth: 1400 }}>
+      <div className="mx-auto print:hidden px-2" style={{ maxWidth: 1750 }}>
 
         {/* Search Filters Card */}
         <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-5 shadow-2xs">

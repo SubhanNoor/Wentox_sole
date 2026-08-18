@@ -265,7 +265,7 @@ export default function OverallSearchPage() {
         </ReportPrintPreviewModal>
       )}
 
-      <div className="mx-auto" style={{ maxWidth: 1400 }}>
+      <div className="mx-auto" style={{ maxWidth: 1750 }}>
 
         {/* VIEW 1: Directory & Person Search */}
         {!selectedPerson ? (
