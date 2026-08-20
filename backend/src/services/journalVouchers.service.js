@@ -65,6 +65,10 @@ function buildFields(payload) {
     ba_id: payload.ba_id,
     direction: payload.direction,
     amount: payload.amount,
+    // Optional, unvalidated — a manual voucher number for the office's own cross-referencing,
+    // matching the legacy Journal Entry screen's "Number" field. Nothing downstream depends on
+    // it being present or unique (jv_id is the real identity, same as bilty_no/gp_no elsewhere).
+    voucher_no: payload.voucher_no ? payload.voucher_no.trim() : null,
     reason: payload.reason.trim(),
     remarks: payload.remarks,
   };

@@ -5,7 +5,7 @@ import WeeklyTab from '@/components/WeeklyTab';
 import MonthlyTab from '@/components/MonthlyTab';
 import OverallTab from '@/components/OverallTab';
 import FindTab from '@/components/FindTab';
-import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit, AlertTriangle } from 'lucide-react';
+import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { formatDate, getTodayDate } from '@/lib/utils';
 import { focusFirstField } from '@/lib/fieldNav';
@@ -142,7 +142,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
   // Password Modal Protection State
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
-  const [passwordActionType, setPasswordActionType] = useState<'edit_bill' | 'save_bill' | 'save_and_post' | 'post_bill' | null>(null);
+  const [passwordActionType, setPasswordActionType] = useState<'edit_bill' | 'save_bill' | 'save_and_post' | 'post_bill' | 'delete_unposted_bill' | null>(null);
 
   // Form State
   const [billId, setBillId] = useState<number | null>(null);
@@ -195,6 +195,9 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   const [unpostedBills, setUnpostedBills] = useState<UnpostedBillRow[]>([]);
   const [postAllBusy, setPostAllBusy] = useState(false);
   const [postAllResult, setPostAllResult] = useState<PostAllResult<'bill_id'> | null>(null);
+  // Pending Posting sidebar: which single bill is mid-post (disables just that row's Post button
+  // rather than the whole panel).
+  const [postingBillId, setPostingBillId] = useState<number | null>(null);
 
   const refreshUnposted = useCallback(async () => {
     const res = await api.saleBills.listUnposted();
@@ -311,6 +314,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   }, [customerId, date, storeId, billNo, items, isCustomDelivery, subCustomerId, hasStockExceeded]);
 
   const pendingEditRow = useRef<SaleBillRow | null>(null);
+  const pendingDeleteBillId = useRef<number | null>(null);
 
   // G-01: auto-focus the first field (Date) whenever the billing tab becomes the active view and
   // is editable — this page's entry area isn't wrapped in a <form>, so AppLayout's global
@@ -391,6 +395,37 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       window.print();
       setIsPrintingSingle(false);
     }, 150);
+  };
+
+  // Pending Posting sidebar: a bill row only carries the summary fields (UnpostedBillRow), so
+  // opening it for edit fetches the full row first, then reuses the same password-gated edit
+  // path as every other "edit an existing bill" entry point (Weekly/Monthly/Overall/Find tabs).
+  const handleOpenUnpostedBill = async (billId: number) => {
+    const res = await api.saleBills.get(billId);
+    if (!res.ok) {
+      setErrorMsg('Failed to load bill: ' + res.error.message);
+      return;
+    }
+    setActiveTab('billing');
+    await handleEditSpecificBill(res.data);
+  };
+
+  // Posts a single bill straight from the sidebar without loading it into the form — for the
+  // common case of "this one's ready, the rest of the run isn't yet". stopPropagation keeps the
+  // click from also triggering the row's own open-for-edit handler.
+  const handlePostOneUnposted = async (targetBillId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPostingBillId(targetBillId);
+    const res = await api.saleBills.post(targetBillId);
+    setPostingBillId(null);
+    if (!res.ok) {
+      setErrorMsg('Failed to post bill: ' + res.error.message);
+      return;
+    }
+    setSuccessMsg(`Bill ${res.data.bill_no} posted.`);
+    setTimeout(() => setSuccessMsg(''), 3000);
+    await Promise.all([refreshUnposted(), refreshStock(), refreshDrafts()]);
+    if (targetBillId === billId) setCurrentBillIsPosted(true);
   };
 
   // Initialize new bill if mode is new and not set
@@ -643,8 +678,34 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       setTimeout(() => setSuccessMsg(''), 3000);
     } else if (passwordActionType === 'save_bill') {
       await executeSave(password);
+    } else if (passwordActionType === 'delete_unposted_bill') {
+      const targetId = pendingDeleteBillId.current;
+      pendingDeleteBillId.current = null;
+      if (targetId != null) {
+        const res = await api.saleBills.remove(targetId, password);
+        if (!res.ok) {
+          setErrorMsg('Failed to delete bill: ' + res.error.message);
+        } else {
+          setSuccessMsg('Bill deleted successfully.');
+          setTimeout(() => setSuccessMsg(''), 3000);
+          // The bill on screen (if any) may have just been the one deleted — drop back to a
+          // fresh form rather than leave it pointing at a bill that no longer exists.
+          if (billId === targetId) handleNew();
+          await Promise.all([refreshUnposted(), refreshStock()]);
+        }
+      }
     }
     setPasswordActionType(null);
+  };
+
+  // Pending Posting sidebar's Delete button — password-gated (verified server-side), same as
+  // editing an already-posted bill: this is destructive and unlike unposting/posting has no
+  // reverse-never-erase trail, so it needs the same guard.
+  const handleDeleteUnposted = (targetBillId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    pendingDeleteBillId.current = targetBillId;
+    setPasswordActionType('delete_unposted_bill');
+    setIsPasswordModalOpen(true);
   };
 
   // handleSaveDraft removed along with the "Save Draft" button. Loading, confirming and deleting
@@ -670,15 +731,18 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     refreshDrafts();
   };
 
-  // Line Items Helper Actions
-  const handleAddItemRow = () => setItems([...items, newUiItem()]);
+  // Line Items Helper Actions — new rows go to the TOP, not the bottom: the newest article is
+  // what the user is looking at and typing into, so it should be the one visible without
+  // scrolling down through everything already entered (item table only shows ~2 rows before it
+  // scrolls internally — see its wrapper below).
+  const handleAddItemRow = () => setItems([newUiItem(), ...items]);
 
   // Keyboard entry of a whole bill without touching the mouse: G-01's generic Enter-walk already
   // carries a row's own fields forward and hops into the NEXT row correctly (it's a plain DOM-order
   // walk, and the next row's fields are already there to walk into). The one thing it cannot do is
   // create a row that doesn't exist yet — so this only steps in at the boundary, when Enter is
-  // pressed on the LAST field of the LAST row: it appends a blank row and focuses into it, same as
-  // WageRunPage's WR-02. Every other Enter press on this grid is left alone.
+  // pressed on the LAST field of the LAST row: it inserts a blank row at the top and focuses into
+  // it, same as WageRunPage's WR-02. Every other Enter press on this grid is left alone.
   //
   // stopPropagation matters here: AppLayout's own window-level Enter handler runs on the same
   // keydown right after this one, reading the SAME e.target — and setItems() hasn't re-rendered
@@ -702,16 +766,15 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     // the user after trying it.
     //
     // Adding a line is its own explicit action instead: Shift+Enter, Ctrl+Enter, or '.'+Enter, from
-    // the last field of ANY row (not only the last one) — always appends at the end, same as the
+    // the last field of ANY row (not only the last one) — always inserts at the top, same as the
     // "+ Add Item Row" button, and focuses into the new row. Shift+Enter is distinct from its
     // other meaning inside a Remarks textarea (insert a literal newline) — different field, no
     // collision.
     if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey || periodHeld.current)) return;
     e.preventDefault();
     e.stopPropagation(); // stop AppLayout's own Enter handler from also walking this keystroke
-    const newRowIndex = items.length; // always the end, regardless of which row triggered this
     handleAddItemRow();
-    requestAnimationFrame(() => focusFirstField(articleCellRefs.current[newRowIndex]));
+    requestAnimationFrame(() => focusFirstField(articleCellRefs.current[0])); // new row is always index 0 now
   }
 
   const handleRemoveItemRow = (idx: number) => {
@@ -1055,7 +1118,115 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
   return (
     <AppLayout pageTitle="Sale Bill" headerAction={tabBar}>
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
+
+        {/* SB-06: Pending Posting — a flat vertical list of every unposted bill (no customer
+            grouping), pinned outside the card's own left edge rather than inside its layout, so
+            it can never change the card's width/position: it's `absolute`, anchored via
+            `right: calc(100% + gap)` to the LEFT edge of this very `relative` wrapper (the card's
+            own boundary), not to the viewport or a guessed margin — wherever the card's edge
+            actually lands, this sits just outside it, and being `absolute` it's out of flow, so
+            it has zero effect on the card. Only shown from `2xl` up, since below that there
+            usually isn't 280px of real margin free for it to land in without spilling past the
+            window edge. Clicking a bill opens it in the form for editing (same password-gated
+            path as every other edit entry point); the small Post button on a row posts just that
+            bill without leaving the list. "Post All" is unchanged. */}
+        {(unpostedBills.length > 0 || postAllResult) && (
+          <aside
+            className="hidden 2xl:block absolute top-0 w-64 space-y-3"
+            style={{ right: 'calc(100% + 24px)' }}
+            data-no-print
+          >
+            <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="font-semibold text-slate-700">Pending Posting</span>
+                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
+                  {unpostedBills.length}
+                </span>
+              </div>
+              <div className="text-xs text-slate-500 mb-3">
+                {unpostedBills.length > 0 && `Total ${formatCurrency(unpostedBills.reduce((s, b) => s + Number(b.net_value), 0))}`}
+              </div>
+              {unpostedBills.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handlePostAll}
+                  disabled={postAllBusy}
+                  className="w-full px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                >
+                  {postAllBusy ? 'Posting…' : `Post All (${unpostedBills.length})`}
+                </button>
+              )}
+
+              {/* The result stays on screen until dismissed — a run can post 18 of 20 bills, and
+                  the two that failed are the whole point of the message. */}
+              {postAllResult && (
+                <div className="mt-3 pt-3 border-t border-amber-200">
+                  <p className="text-xs font-semibold text-slate-700">
+                    {postAllResult.posted.length} of {postAllResult.attempted} posted
+                    {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
+                  </p>
+                  {postAllResult.failed.length > 0 && (
+                    <ul className="mt-1.5 space-y-1">
+                      {postAllResult.failed.map(f => (
+                        <li key={f.bill_id} className="text-xs text-rose-700">
+                          <span className="font-mono font-semibold">{f.bill_no || `#${f.bill_id}`}</span>
+                          {' — '}{f.message}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setPostAllResult(null)}
+                    className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Flat list — every unposted bill, oldest first (same order the backend returns). */}
+            {unpostedBills.length > 0 && (
+              <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
+                {unpostedBills.map(b => (
+                  <li
+                    key={b.bill_id}
+                    onClick={() => handleOpenUnpostedBill(b.bill_id)}
+                    className="px-3 py-2.5 text-xs flex items-center justify-between gap-2 cursor-pointer hover:bg-amber-50/60 transition-colors border-b border-slate-100 last:border-b-0"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-mono font-semibold text-slate-700">{b.bill_no || `#${b.bill_id}`}</div>
+                      <div className="text-slate-400 truncate">{b.customer_name || 'Unnamed Customer'}</div>
+                      <div className="text-slate-400">{formatDate(b.bill_date)} · {formatCurrency(Number(b.net_value))}</div>
+                    </div>
+                    <div className="flex-shrink-0 flex flex-row items-center gap-1">
+                      <button
+                        type="button"
+                        title="Post this bill"
+                        onClick={(e) => handlePostOneUnposted(b.bill_id, e)}
+                        disabled={postingBillId === b.bill_id}
+                        className="p-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                      >
+                        <CheckCircle2 size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        title="Delete this bill (password required)"
+                        onClick={(e) => handleDeleteUnposted(b.bill_id, e)}
+                        disabled={postingBillId === b.bill_id}
+                        className="p-1.5 rounded-md bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </aside>
+        )}
 
         {/* Tab contents (records & find) */}
         <div>
@@ -1069,22 +1240,22 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
         {/* Banner Messages */}
         {lookupError && (
-          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{lookupError}</div>
+          <div className="banner-error rounded-lg px-4 py-2.5 text-sm mb-3">{lookupError}</div>
         )}
         {successMsg && (
-          <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4 flex items-center justify-between">
+          <div className="banner-success rounded-lg px-4 py-2.5 text-sm mb-3 flex items-center justify-between">
             <span>{successMsg}</span>
           </div>
         )}
         {errorMsg && (
-          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4 flex items-center justify-between">
+          <div className="banner-error rounded-lg px-4 py-2.5 text-sm mb-3 flex items-center justify-between">
             <span>{errorMsg}</span>
           </div>
         )}
 
         {/* Drafts Loader Panel */}
         {mode !== 'view' && drafts.length > 0 && (
-          <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-4 text-sm" data-no-print>
+          <div className="mb-3 p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-3 text-sm" data-no-print>
             <div className="flex items-center gap-2">
               <span className="font-semibold text-slate-700">Saved Drafts:</span>
               <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
@@ -1146,79 +1317,9 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
           </div>
         )}
 
-        {/* SB-06: Pending Posting panel — enter a run of bills, then post them all at the end
-            instead of one at a time. Shown whenever anything is awaiting posting, including bills
-            entered in an earlier session. */}
-        {(unpostedBills.length > 0 || postAllResult) && (
-          <div className="mb-6 p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm" data-no-print>
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-700">Pending Posting:</span>
-                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
-                  {unpostedBills.length} bill(s)
-                </span>
-                <span className="text-xs text-slate-500">
-                  {unpostedBills.length > 0 && `Total ${formatCurrency(unpostedBills.reduce((s, b) => s + Number(b.net_value), 0))}`}
-                </span>
-              </div>
-              {unpostedBills.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handlePostAll}
-                  disabled={postAllBusy}
-                  className="px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                >
-                  {postAllBusy ? 'Posting…' : `Post All (${unpostedBills.length})`}
-                </button>
-              )}
-            </div>
-
-            {unpostedBills.length > 0 && (
-              <ul className="mt-3 space-y-0.5 max-h-32 overflow-y-auto">
-                {unpostedBills.map(b => (
-                  <li key={b.bill_id} className="text-xs text-slate-600 flex gap-2">
-                    <span className="font-mono font-semibold">{b.bill_no || `#${b.bill_id}`}</span>
-                    <span className="text-slate-400">{formatDate(b.bill_date)}</span>
-                    <span className="truncate">{b.customer_name || 'Unnamed Customer'}</span>
-                    <span className="ml-auto font-mono">{formatCurrency(Number(b.net_value))}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {/* The result stays on screen until dismissed — a run can post 18 of 20 bills, and the
-                two that failed are the whole point of the message. Never auto-hidden on a timer
-                like the ordinary success banner. */}
-            {postAllResult && (
-              <div className="mt-3 pt-3 border-t border-amber-200">
-                <p className="text-xs font-semibold text-slate-700">
-                  {postAllResult.posted.length} of {postAllResult.attempted} posted
-                  {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
-                </p>
-                {postAllResult.failed.length > 0 && (
-                  <ul className="mt-1.5 space-y-1">
-                    {postAllResult.failed.map(f => (
-                      <li key={f.bill_id} className="text-xs text-rose-700">
-                        <span className="font-mono font-semibold">{f.bill_no || `#${f.bill_id}`}</span>
-                        {' — '}{f.message}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setPostAllResult(null)}
-                  className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
-                >
-                  Dismiss
-                </button>
-              </div>
-            )}
-          </div>
-        )}
 
         {/* Toolbar - data-no-print */}
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-6 p-4 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap gap-2">
             {mode === 'view' ? (
               <>
@@ -1287,7 +1388,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
                   }`}
                 >
-                  <Save size={16} /> {mode === 'edit' ? 'Update Bill' : 'Save Bill'}
+                  <Save size={16} /> {mode === 'edit' ? 'Update Bill' : 'New Bill'}
                 </button>
                 {!currentBillIsPosted && (
                   <button
@@ -1327,7 +1428,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         </div>
 
         {/* Invoice Layout */}
-        <div className="card-white shadow-sm p-6 md:p-8" style={{ border: '1px solid var(--border-color)', background: '#ffffff', overflow: 'visible' }}>
+        <div className="card-white shadow-sm p-3 md:p-4" style={{ border: '1px solid var(--border-color)', background: '#ffffff', overflow: 'visible' }}>
 
           {/* Print Title (Visible only when printing) */}
           <div className="hidden print:flex items-center justify-between mb-6 pb-4 border-b">
@@ -1342,7 +1443,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
           </div>
 
           {/* Master Info Header fields */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 pb-6 border-b" style={{ borderColor: 'var(--border-table)' }}>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }}>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
                 System No.
@@ -1380,14 +1481,14 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
           </div>
 
           {/* Customer & Dispatch Section */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6 pb-6 border-b" style={{ borderColor: 'var(--border-table)' }}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }}>
 
             {/* Customer Details Box */}
-            <div className="flex flex-col gap-3 p-4 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-1.5">
+            <div className="flex flex-col gap-1.5 p-2.5 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-0.5">
                 Customer Information
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-1.5">
                 <div className="col-span-2">
                   <div className="flex justify-between items-center mb-1">
                     <label className="block text-xs font-medium text-slate-600">
@@ -1433,11 +1534,11 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
             </div>
 
             {/* Delivery & Logistics Box */}
-            <div className="flex flex-col gap-3 p-4 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-1.5">
+            <div className="flex flex-col gap-1.5 p-2.5 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-0.5">
                 Delivery &amp; Logistics
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-1.5">
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
                     Delivery
@@ -1529,7 +1630,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
           {/* Stock Limit Warning Banner */}
           {hasStockExceeded && !isViewMode && (
-            <div className="flex items-center justify-between p-3.5 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-semibold mb-4 shadow-sm animate-in fade-in slide-in-from-top-2">
+            <div className="flex items-center justify-between p-2.5 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-semibold mb-3 shadow-sm animate-in fade-in slide-in-from-top-2">
               <div className="flex items-center gap-2.5">
                 <AlertTriangle size={18} className="text-rose-600 shrink-0" />
                 <div>
@@ -1543,22 +1644,27 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
             </div>
           )}
 
-          {/* Product Items Table */}
-          <div className="mb-6 rounded-lg border bg-white overflow-visible" style={{ borderColor: 'var(--border-color)' }}>
+          {/* Product Items Table — capped to roughly 2 rows tall, then scrolls internally rather
+              than growing the card past the screen as more rows are added. The header row is
+              `sticky` within this scroll box so it stays visible past row 2. SearchableSelect's
+              own dropdown is rendered via a `fixed`-position React portal (see its source), so it
+              isn't clipped by this box's `overflow-y: auto` even when a select near the bottom
+              edge is opened. */}
+          <div className="mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)', maxHeight: '150px' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="p-3 pl-4" style={{ minWidth: '190px' }}>Article <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 pl-4" style={{ width: '130px', minWidth: '110px' }}>Color <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 text-center" style={{ width: '80px' }}>Packing</th>
-                  <th className="p-3 text-center" style={{ minWidth: '120px' }}>Stock in Hand</th>
-                  <th className="p-3 text-center" style={{ width: '90px', minWidth: '76px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 text-center" style={{ width: '90px', minWidth: '64px' }}>Pairs</th>
-                  <th className="p-3 text-right" style={{ width: '110px', minWidth: '96px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 text-center" style={{ width: '100px', minWidth: '72px' }}>D%</th>
-                  <th className="p-3 text-right" style={{ width: '110px' }}>D. Value</th>
-                  <th className="p-3 text-right" style={{ width: '130px' }}>Value</th>
-                  {!isViewMode && <th className="p-3 text-center" style={{ width: '50px' }}></th>}
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 pl-4" style={{ minWidth: '190px' }}>Article <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 pl-4" style={{ width: '130px', minWidth: '110px' }}>Color <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '80px' }}>Packing</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ minWidth: '120px' }}>Stock in Hand</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '90px', minWidth: '76px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '90px', minWidth: '64px' }}>Pairs</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '110px', minWidth: '96px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '100px', minWidth: '72px' }}>D%</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '110px' }}>D. Value</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '130px' }}>Value</th>
+                  {!isViewMode && <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '50px' }}></th>}
                 </tr>
               </thead>
               <tbody>
@@ -1568,7 +1674,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   return (
                     <tr key={item.uid} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                       {/* Article select */}
-                      <td className="p-3 pl-4" ref={el => { articleCellRefs.current[idx] = el; }}>
+                      <td className="p-1.5 pl-4" ref={el => { articleCellRefs.current[idx] = el; }}>
                         {isViewMode ? (
                           <span className="font-semibold text-slate-800 text-[13px] pl-2">{item.label || 'N/A'}</span>
                         ) : (
@@ -1583,7 +1689,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       </td>
 
                       {/* Color / Variant select */}
-                      <td className="p-3 pl-4">
+                      <td className="p-1.5 pl-4">
                         {isViewMode ? (
                           <span className="text-slate-600 text-[13px]">{variantOptions.find(v => v.value === String(item.variantId))?.label || '-'}</span>
                         ) : (
@@ -1599,12 +1705,12 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       </td>
 
                       {/* Packing */}
-                      <td className="p-3 text-center font-mono text-sm text-slate-600">
+                      <td className="p-1.5 text-center font-mono text-sm text-slate-600">
                         {item.packing || '-'}
                       </td>
 
                       {/* Stock in Hand — Cartons & Pairs */}
-                      <td className="p-3 text-center font-mono">
+                      <td className="p-1.5 text-center font-mono">
                         {(() => {
                           const stockInfo = getStockInfo(item.articleId, item.variantId);
                           if (!stockInfo) return <span className="text-slate-400 text-xs">—</span>;
@@ -1623,7 +1729,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       </td>
 
                       {/* Cartons */}
-                      <td className="p-3">
+                      <td className="p-1.5">
                         <input
                           type="number"
                           value={item.cartons || ''}
@@ -1644,12 +1750,12 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       </td>
 
                       {/* Pairs */}
-                      <td className="p-3 text-center font-mono text-sm font-semibold text-slate-700">
+                      <td className="p-1.5 text-center font-mono text-sm font-semibold text-slate-700">
                         {item.pairs || '-'}
                       </td>
 
                       {/* Rate */}
-                      <td className="p-3">
+                      <td className="p-1.5">
                         <input
                           type="number"
                           value={item.rate || ''}
@@ -1662,7 +1768,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       </td>
 
                       {/* Discount % */}
-                      <td className="p-3">
+                      <td className="p-1.5">
                         <input
                           type="number"
                           value={item.discountPercent || ''}
@@ -1677,18 +1783,18 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       </td>
 
                       {/* Discount Value — Calculated from Discount % */}
-                      <td className="p-3 text-right font-mono text-xs font-semibold text-slate-700">
+                      <td className="p-1.5 text-right font-mono text-xs font-semibold text-slate-700">
                         {item.discountValue > 0 ? item.discountValue.toLocaleString() : '-'}
                       </td>
 
                       {/* Row Total Value */}
-                      <td className="p-3 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>
+                      <td className="p-1.5 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>
                         {formatCurrency(item.value)}
                       </td>
 
                       {/* Delete Action */}
                       {!isViewMode && (
-                        <td className="p-3 text-center">
+                        <td className="p-1.5 text-center">
                           <button type="button" onClick={() => handleRemoveItemRow(idx)} className="text-red-500 hover:text-red-700 p-1" disabled={items.length <= 1}>
                             <Trash2 size={16} />
                           </button>
@@ -1703,44 +1809,50 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
           {/* Add Row Button */}
           {!isViewMode && (
-            <button type="button" onClick={handleAddItemRow} className="btn-dashed flex items-center gap-1 mb-6 px-3 py-1.5">
+            <button type="button" onClick={handleAddItemRow} className="btn-dashed flex items-center gap-1 mb-2 px-3 py-1">
               <Plus size={14} /> Add Item Row
             </button>
           )}
 
-          {/* Bottom Section: Remarks & Calculations */}
-          <div className="grid grid-cols-1 gap-4 sm:gap-5 md:grid-cols-2 md:gap-6 lg:gap-8 mt-6 pt-4 border-t" style={{ borderColor: 'var(--border-table)' }}>
-            {/* Remarks / Notes */}
-            <div className="flex flex-col gap-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Remarks / Notes
-              </label>
-              <textarea
-                value={remarks}
-                disabled={isViewMode}
-                onChange={e => setRemarks(e.target.value)}
-                placeholder="Enter any sales remarks..."
-                className="soleria-input w-full flex-grow font-inter"
-                rows={4}
-                style={{ fontSize: '13px', resize: 'none', minHeight: '120px' }}
-              />
-
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mt-1">
-                Payment Due Date <span className="text-slate-400 font-normal normal-case">— optional</span>
-              </label>
-              <input type="date"
-            value={dueDate} disabled={isViewMode} onChange={e => setDueDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
-              <p className="text-[10px] text-slate-400 -mt-1">
-                Leave blank if this customer has no fixed payment terms — no overdue alert will be generated.
-              </p>
+          {/* Bottom Section: Remarks & Calculations — deliberately compact (small textarea, tight
+              gaps) so a typical bill's whole form fits one screen without scrolling to reach
+              Save/Post; the due-date helper text was the one line worth dropping entirely rather
+              than shrinking further, since the field label + optional tag already say enough. */}
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
+            {/* Remarks / Notes, with Payment Due Date stacked directly beneath it */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Remarks / Notes
+                </label>
+                <textarea
+                  value={remarks}
+                  disabled={isViewMode}
+                  onChange={e => setRemarks(e.target.value)}
+                  placeholder="Enter any sales remarks..."
+                  className="soleria-input w-full font-inter"
+                  rows={2}
+                  style={{ fontSize: '13px', resize: 'none', minHeight: '52px' }}
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Payment Due Date <span className="text-slate-400 font-normal normal-case">— optional</span>
+                </label>
+                <input type="date"
+              value={dueDate} disabled={isViewMode} onChange={e => setDueDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
+                <p className="text-[10px] text-slate-400 leading-tight">
+                  Blank = no fixed terms, no overdue alert.
+                </p>
+              </div>
             </div>
 
             {/* Calculations Box */}
-            <div className="flex flex-col justify-between p-3 sm:p-4 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md min-h-[140px] sm:min-h-[160px]">
-              <div className="text-xs font-semibold uppercase tracking-wider border-b pb-1.5 mb-2 text-slate-400 border-slate-800">
+            <div className="flex flex-col justify-between p-3 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md">
+              <div className="text-xs font-semibold uppercase tracking-wider border-b pb-1 mb-1.5 text-slate-400 border-slate-800">
                 Calculations
               </div>
-              <div className="flex flex-col gap-2 font-inter text-xs">
+              <div className="flex flex-col gap-1 font-inter text-xs">
                 <div className="flex justify-between">
                   <span className="text-slate-400">Total Cartons:</span>
                   <span className="font-semibold font-mono">{totalCartons}</span>
@@ -1768,7 +1880,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   )}
                 </div>
               </div>
-              <div className="flex justify-between items-center border-t pt-2 mt-2 border-[#1e293b]">
+              <div className="flex justify-between items-center border-t pt-1.5 mt-1.5 border-[#1e293b]">
                 <span className="font-bold text-[11px] uppercase tracking-wider text-slate-400">Net Amount:</span>
                 <span className="text-xl font-bold font-mono text-[#B08D57] font-extrabold">
                   {formatCurrency(finalTotalValue)}
@@ -1921,16 +2033,21 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
           setIsPasswordModalOpen(false);
           setPasswordActionType(null);
           pendingEditRow.current = null;
+          pendingDeleteBillId.current = null;
         }}
         onSuccess={handlePasswordSuccess}
         title={
           passwordActionType === 'edit_bill'
             ? 'Authorization Required to Edit Bill'
+            : passwordActionType === 'delete_unposted_bill'
+            ? 'Authorization Required to Delete Bill'
             : 'Authorization Required to Update Bill'
         }
         subtitle={
           passwordActionType === 'edit_bill'
             ? `Please enter password for user '${state.currentUsername || 'user'}' to unlock & edit Bill #${billNo || billId || ''}.`
+            : passwordActionType === 'delete_unposted_bill'
+            ? `Please enter password for user '${state.currentUsername || 'user'}' to permanently delete this unposted bill.`
             : `Please enter password for user '${state.currentUsername || 'user'}' to save changes to Bill #${billNo || billId || ''}.`
         }
       />

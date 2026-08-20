@@ -174,6 +174,14 @@ async function deleteItems(transaction, billId) {
   await request.query('DELETE FROM dbo.sale_bill_items WHERE bill_id = @billId');
 }
 
+// Removing an unposted bill entirely (Pending Posting sidebar's Delete). Only ever called on a
+// bill with no ledger_entries (service.remove() checks first) — items/stock movements are
+// deleted by the caller before this, in the same transaction.
+async function deleteBill(transaction, billId) {
+  const request = requestWithParams(transaction, { billId: { type: sql.Int, value: billId } });
+  await request.query('DELETE FROM dbo.sale_bills WHERE bill_id = @billId');
+}
+
 async function updateHeader(transaction, billId, bill) {
   const request = requestWithParams(transaction, {
     billId: { type: sql.Int, value: billId },
@@ -209,11 +217,19 @@ async function updateHeader(transaction, billId, bill) {
   `);
 }
 
-async function deleteLedgerAndStock(transaction, billId) {
+// Split from a single deleteLedgerAndStock: stock now deducts at SAVE time (create()), not at
+// post() — matching draft_sale_bills — so ledger and stock rows no longer share one lifecycle.
+// unpost() only ever needs the ledger half; update() needs both, but stock unconditionally and
+// ledger only when the bill is posted.
+async function deleteLedgerEntries(transaction, billId) {
   const request = requestWithParams(transaction, { billId: { type: sql.Int, value: billId } });
   await request.query(
     `DELETE FROM dbo.ledger_entries WHERE source_type = 'SALE_BILL' AND source_id = @billId`,
   );
+}
+
+async function deleteStockMovements(transaction, billId) {
+  const request = requestWithParams(transaction, { billId: { type: sql.Int, value: billId } });
   await request.query(
     `DELETE FROM dbo.stock_movements WHERE source_type = 'SALE_BILL' AND source_id = @billId`,
   );
@@ -259,7 +275,7 @@ async function list(filters = {}) {
 // Only the display fields the confirm/result list needs, not SELECT * — nothing here renders a bill.
 async function listUnposted() {
   const result = await query(
-    `SELECT sb.bill_id, sb.bill_no, sb.bill_date, sb.net_value, c.name AS customer_name
+    `SELECT sb.bill_id, sb.bill_no, sb.bill_date, sb.net_value, sb.customer_id, c.name AS customer_name
      FROM dbo.sale_bills sb
      LEFT JOIN dbo.customers c ON c.customer_id = sb.customer_id
      WHERE NOT EXISTS (
@@ -354,6 +370,7 @@ async function lastSoldRate(customerId, variantId) {
 
 module.exports = {
   getVariantPackings, insert, insertItems, findById, isPosted, insertLedgerEntries,
-  insertStockMovements, deleteItems, updateHeader, deleteLedgerAndStock, list,
+  insertStockMovements, deleteItems, updateHeader, deleteLedgerEntries, deleteStockMovements,
+  deleteBill, list,
   biltySearch, updateBiltyInfo, lastSoldRate, listUnposted,
 };

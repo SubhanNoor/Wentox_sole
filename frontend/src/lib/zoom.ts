@@ -16,9 +16,9 @@ export const ZOOM_STORAGE_KEY = 'wento_zoom_factor';
 
 // A fresh install starts smaller than 100%: Windows commonly runs at 125% display scaling, and this
 // UI is built in fixed pixels, so out of the box it renders larger than intended and less fits on
-// screen than should. Shipping at 90% means the client never has to discover the control to get a
+// screen than should. Shipping at 80% means the client never has to discover the control to get a
 // usable view — a starting point, not a ceiling.
-export const DEFAULT_ZOOM = 0.9;
+export const DEFAULT_ZOOM = 0.8;
 
 /** Snaps any factor onto the ladder, so the label and the window can never disagree. */
 export function nearestStep(factor: number): number {

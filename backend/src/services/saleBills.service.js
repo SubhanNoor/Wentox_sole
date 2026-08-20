@@ -63,13 +63,53 @@ function buildBillFields(payload, totals) {
   };
 }
 
+// Never deduct stock below zero. Mirrors draftSaleBills.service's assertStockAvailable — a saved
+// (unposted) bill now reserves stock the same way a draft does, so both go through the same check.
+// Requested pairs are summed per variant first since the same article/color can appear on more
+// than one line (SB-02).
+async function assertStockAvailable(lines) {
+  const requestedByVariant = new Map();
+  for (const line of lines) {
+    requestedByVariant.set(line.variant_id, (requestedByVariant.get(line.variant_id) || 0) + line.pairs);
+  }
+  for (const [variantId, requestedPairs] of requestedByVariant) {
+    const onHand = await stockService.pairsOnHand(variantId);
+    if (requestedPairs > onHand) {
+      const variant = await productColorsService.getById(variantId);
+      const article = await productsService.getById(variant.article_id);
+      throw ApiError.conflict(
+        `Not enough stock for ${article.name} (${variant.color}): ${requestedPairs} pairs requested, only ${onHand} on hand.`,
+        'INSUFFICIENT_STOCK',
+        { variant_id: variantId, requested_pairs: requestedPairs, on_hand_pairs: onHand },
+      );
+    }
+  }
+}
+
+function saleStockMovements(billId, billDate, lines, sign) {
+  return lines.map((line) => ({
+    variant_id: line.variant_id,
+    movement_type: 'ADJUSTMENT',
+    qty_pairs: sign * line.pairs,
+    movement_date: billDate,
+    source_type: 'SALE_BILL',
+    source_id: billId,
+  }));
+}
+
+// Saving a bill deducts stock immediately (same reserve-on-save model as draft_sale_bills) — a
+// negative ADJUSTMENT movement per item, no ledger entry yet. Posting later only writes the
+// ledger; unposting only removes it. Stock stays reserved for as long as the bill exists,
+// regardless of posted status.
 async function create(payload, userId) {
   const { lines, totals } = await resolveLinesAndTotals(payload);
   const bill = { ...buildBillFields(payload, totals), created_by: userId };
+  await assertStockAvailable(lines);
 
   const billId = await withTransaction(async (transaction) => {
     const id = await repository.insert(transaction, bill);
     await repository.insertItems(transaction, id, lines);
+    await repository.insertStockMovements(transaction, saleStockMovements(id, bill.bill_date, lines, -1));
     return id;
   });
 
@@ -103,33 +143,68 @@ function list(filters = {}) {
   });
 }
 
-// Editing a not-yet-posted bill just replaces header/items (nothing posted yet, nothing to
-// reverse). Editing an already-posted bill reverses its live ledger/stock rows and reapplies them
-// against the new totals in the same transaction — the unpost-edit-repost cycle collapsed into
-// one atomic step so "posted" (derived from ledger_entries — see repository.isPosted) never
-// visibly flips off from the user's perspective (see saleBills.ipc.js for the password guard,
-// which only applies to this already-posted-edit branch).
+// Stock is reserved from SAVE, not from posting (see create()), so an edit's new lines are
+// checked against what's on hand PLUS whatever this same bill already has reserved — otherwise
+// editing a bill's own quantities without changing the total would wrongly look like an
+// oversell. Must run before the transaction: pairsOnHand() reads through the pool's own
+// connection, not the transaction's, so it can't see this bill's stock rows once they're deleted
+// inside one (they'd still be locked/uncommitted) — same reason draftSaleBills.service checks
+// before opening its transaction.
+async function assertStockAvailableForEdit(existingItems, newLines) {
+  const alreadyReserved = new Map();
+  for (const item of existingItems) {
+    alreadyReserved.set(item.variant_id, (alreadyReserved.get(item.variant_id) || 0) + item.pairs);
+  }
+  const requestedByVariant = new Map();
+  for (const line of newLines) {
+    requestedByVariant.set(line.variant_id, (requestedByVariant.get(line.variant_id) || 0) + line.pairs);
+  }
+  for (const [variantId, requestedPairs] of requestedByVariant) {
+    const onHand = await stockService.pairsOnHand(variantId);
+    const effectiveOnHand = onHand + (alreadyReserved.get(variantId) || 0);
+    if (requestedPairs > effectiveOnHand) {
+      const variant = await productColorsService.getById(variantId);
+      const article = await productsService.getById(variant.article_id);
+      throw ApiError.conflict(
+        `Not enough stock for ${article.name} (${variant.color}): ${requestedPairs} pairs requested, only ${effectiveOnHand} on hand.`,
+        'INSUFFICIENT_STOCK',
+        { variant_id: variantId, requested_pairs: requestedPairs, on_hand_pairs: effectiveOnHand },
+      );
+    }
+  }
+}
+
+// Editing a bill always reconciles stock (reserved at save, independent of posted status): the
+// old lines' reservation is released and the new lines' reservation is written in the same
+// transaction. Ledger only exists once posted, so that half stays conditional on
+// existing.is_posted — the unpost-edit-repost cycle collapsed into one atomic step so "posted"
+// (derived from ledger_entries — see repository.isPosted) never visibly flips off from the
+// user's perspective (see saleBills.ipc.js for the password guard, which only applies to this
+// already-posted-edit branch).
 async function update(id, payload) {
   const existing = await getById(id);
   const { lines, totals } = await resolveLinesAndTotals(payload);
   const bill = buildBillFields(payload, totals);
 
+  await assertStockAvailableForEdit(existing.items, lines);
+
   await withTransaction(async (transaction) => {
     if (existing.is_posted) {
-      await repository.deleteLedgerAndStock(transaction, id);
+      await repository.deleteLedgerEntries(transaction, id);
     }
+    await repository.deleteStockMovements(transaction, id);
 
     await repository.updateHeader(transaction, id, bill);
     await repository.deleteItems(transaction, id);
     await repository.insertItems(transaction, id, lines);
+    await repository.insertStockMovements(transaction, saleStockMovements(id, bill.bill_date, lines, -1));
 
     if (existing.is_posted) {
-      await postLedgerAndStock(transaction, {
+      await writeLedger(transaction, {
         billId: id,
         customerId: bill.customer_id,
         netValue: totals.netValue,
         billDate: bill.bill_date,
-        items: lines,
       });
     }
   });
@@ -137,6 +212,8 @@ async function update(id, payload) {
   return getById(id);
 }
 
+// Posting no longer moves stock — create() already reserved it at save time — so this only
+// writes the ledger entries.
 async function post(id) {
   const bill = await getById(id);
   if (bill.is_posted) {
@@ -144,12 +221,11 @@ async function post(id) {
   }
 
   await withTransaction(async (transaction) => {
-    await postLedgerAndStock(transaction, {
+    await writeLedger(transaction, {
       billId: id,
       customerId: bill.customer_id,
       netValue: bill.net_value,
       billDate: bill.bill_date,
-      items: bill.items,
     });
   });
 
@@ -169,10 +245,9 @@ function listUnposted() {
 // throwing on the first failure, unlike products/businessAccounts createBatch which reject the
 // whole batch. Callers must read `failed`, not just assume success.
 //
-// **Sequential, deliberately.** Two unposted bills can each pass the SB-03 stock check on their
-// own yet not together — postLedgerAndStock() reads pairsOnHand() live, so posting them one after
-// another is what makes the second one correctly fail. Running these concurrently would let both
-// read the same pre-sale stock and oversell. Do not turn this loop into a Promise.all.
+// Sequential rather than Promise.all mainly so a batch's per-bill breakdown stays honest under
+// concurrent posting — stock itself no longer needs the ordering, since it was already reserved
+// per-bill at save time (create()/update()), not here.
 async function postAll(ids) {
   // No explicit list = every unposted bill, in entry order.
   const targets = Array.isArray(ids) && ids.length
@@ -206,6 +281,9 @@ async function postAll(ids) {
   return { posted, failed, attempted: targets.length };
 }
 
+// Unposting only removes the ledger entries now — stock stays reserved (it isn't tied to posted
+// status; only deleting the bill itself would release it, and there's no delete on a real
+// sale_bills row, matching the schema's reverse-never-erase pattern).
 async function unpost(id) {
   const bill = await getById(id);
   if (!bill.is_posted) {
@@ -213,10 +291,71 @@ async function unpost(id) {
   }
 
   await withTransaction(async (transaction) => {
-    await repository.deleteLedgerAndStock(transaction, id);
+    await repository.deleteLedgerEntries(transaction, id);
   });
 
   return getById(id);
+}
+
+// Pending Posting sidebar's Delete: only ever an UNPOSTED bill (nothing in ledger_entries yet —
+// a posted bill must be unposted first, same restriction as everywhere else financial gets
+// undone). Releases the stock create() reserved at save time, then removes the items and the
+// bill itself. Password verification happens in the ipc layer, before this is ever called —
+// deleting a bill is destructive with no reverse-never-erase trail the way unposting has one, so
+// unlike posting (no password) this is treated like editing an already-posted bill.
+async function remove(id) {
+  const bill = await getById(id);
+  if (bill.is_posted) {
+    throw ApiError.conflict('Bill is posted — unpost it before deleting', 'ALREADY_POSTED');
+  }
+
+  await withTransaction(async (transaction) => {
+    await repository.deleteStockMovements(transaction, id);
+    await repository.deleteItems(transaction, id);
+    await repository.deleteBill(transaction, id);
+  });
+
+  return { ok: true };
+}
+
+// Ledger-only half of the old postLedgerAndStock, used by post()/update() now that stock is
+// reserved at save time instead of at post time. postLedgerAndStock (below) stays intact for
+// draftSaleBills.confirm, which still writes both in one step (confirm = create + post collapsed
+// into one action on a bill that was never separately saved-unposted).
+async function writeLedger(transaction, { billId, customerId, netValue, billDate }) {
+  const customer = await customersService.getById(customerId);
+  if (!customer.ba_id) {
+    throw ApiError.conflict(
+      'Customer has no linked account yet — add one before posting',
+      'NO_CUSTOMER_ACCOUNT',
+    );
+  }
+
+  const salesAccount = await chartAccountsRepository.findByCode(CODES.SALES);
+  if (!salesAccount) {
+    throw new Error(`Reserved chart account SALES (code ${CODES.SALES}) not found — run npm run seed`);
+  }
+
+  await repository.insertLedgerEntries(transaction, [
+    {
+      entry_date: billDate,
+      ba_id: customer.ba_id,
+      debit: netValue,
+      credit: 0,
+      source_type: 'SALE_BILL',
+      source_id: billId,
+      narration: `Sale bill #${billId}`,
+    },
+    {
+      entry_date: billDate,
+      ac_id: salesAccount.ac_id,
+      debit: 0,
+      credit: netValue,
+      source_type: 'SALE_BILL',
+      source_id: billId,
+      narration: `Sale bill #${billId}`,
+    },
+  ]);
 }
 
 // Shared posting logic (schema §6 posting matrix): debit CUSTOMER BA / credit SALES chart account,
@@ -336,6 +475,6 @@ async function updateBiltyInfo(billId, payload) {
 }
 
 module.exports = {
-  create, list, getById, update, post, unpost, postLedgerAndStock, insertConfirmed,
+  create, list, getById, update, post, unpost, remove, postLedgerAndStock, insertConfirmed,
   biltySearch, updateBiltyInfo, lastSoldRate, listUnposted, postAll,
 };

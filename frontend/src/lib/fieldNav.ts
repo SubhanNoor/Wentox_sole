@@ -36,6 +36,24 @@ export function fieldsIn(form: HTMLFormElement): HTMLElement[] {
 }
 
 /**
+ * The form's primary action button — NOT necessarily a descendant of `form`. Several pages
+ * (Receipts, Expenses, Journal Voucher, Transfer, User Management) put the submit button in a
+ * toolbar row that sits visually ABOVE the card, outside the `<form>` element entirely, and
+ * associate it with the form via the HTML `form="<id>"` attribute instead of nesting. A plain
+ * `form.querySelector('button[type="submit"]')` never finds that button — querySelector only
+ * walks descendants, and the `form` ATTRIBUTE isn't a parent/child relationship it knows about —
+ * so Enter on the last field silently did nothing on every one of those pages (reported directly
+ * by the user on Receipts). `HTMLButtonElement.form` is the browser's own resolved association,
+ * correct for both a nested button and one linked via the attribute, so a document-wide scan
+ * filtered by it works uniformly for every case without the caller needing to know which one it
+ * is.
+ */
+export function findSubmitButton(form: HTMLFormElement): HTMLButtonElement | null {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('button[type="submit"]:not(:disabled)'))
+    .find((btn) => btn.form === form) ?? null;
+}
+
+/**
  * Move focus to the field after `from`. On the last field, click the form's primary action instead
  * — every creation form in this app marks that button `type="submit"` and every other button
  * `type="button"`, which is what makes the lookup unambiguous.
@@ -55,7 +73,7 @@ export function focusNextField(from: HTMLElement | null | undefined): boolean {
   if (idx < fields.length - 1) {
     fields[idx + 1].focus();
   } else {
-    form.querySelector<HTMLButtonElement>('button[type="submit"]:not(:disabled)')?.click();
+    findSubmitButton(form)?.click();
   }
   return true;
 }

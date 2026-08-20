@@ -3973,3 +3973,325 @@ _Stale note — this was true when first written; superseded by the entries near
   `backend/src/ipc/index.js`, `backend/electron/main.js`, `backend/build/installer.nsh`,
   `backend/package.json`, `frontend/src/pages/SettingsPage.tsx`,
   `frontend/src/lib/ipcBridge.ts`, `frontend/src/types/electron-api.d.ts`
+
+## Sale Bill — stock reserved at save, not at post
+- **Behavior change (explicit user decision):** saving a sale bill (the existing "Save Bill"
+  button — no separate "New Bill" button added, kept as one action) now deducts stock immediately,
+  the same reserve-on-save model `draftSaleBills.service.js` already used, instead of waiting
+  until `post()`. The ledger (`ledger_entries`) still only gets written at `post()`/`postAll()`,
+  and only removed at `unpost()` — stock no longer moves on post/unpost at all, since it's already
+  reserved from the moment the bill is saved and stays reserved for as long as the bill exists.
+- `saleBills.service.js`: `create()` now inserts a negative ADJUSTMENT `stock_movements` row per
+  item (via new `assertStockAvailable()`/`saleStockMovements()` helpers, mirroring
+  `draftSaleBills.service.js`). `update()` unconditionally reconciles stock (release old lines,
+  reserve new ones) via a new `assertStockAvailableForEdit()` that nets out the bill's own
+  existing reservation before checking against `pairsOnHand()` — otherwise editing a bill's own
+  quantities without changing the total would look like a false oversell. `post()`/`update()`'s
+  posted branch now call a new ledger-only `writeLedger()` (split out of `postLedgerAndStock`,
+  which stays intact for `draftSaleBills.confirm()` — that flow still writes ledger+stock together
+  in one step). `unpost()` only deletes ledger entries now, never stock.
+- `saleBills.repository.js`: `deleteLedgerAndStock()` split into `deleteLedgerEntries()` +
+  `deleteStockMovements()`.
+- No frontend changes needed — `SaleBillPage.tsx`'s existing "Save Bill" button (edit mode) and
+  the "Post All" button already implement exactly this save-unposted-then-post-later flow; the
+  stock timing was the only thing that needed to move.
+- **Not yet live-verified** — no SQL Server reachable in this sandbox; run through create → edit
+  quantities → Post All → unpost on a real DB to confirm stock lands correctly at each step.
+- **Files:** `backend/src/services/saleBills.service.js`, `backend/src/repositories/saleBills.repository.js`
+
+## Sale Bill — Pending Posting moved to a vertical sidebar, grouped by customer
+- **UI change (explicit user request):** the "Pending Posting" panel moved out of the main
+  content flow into a persistent left-side vertical rail (`SaleBillPage.tsx`), shown across all
+  sub-tabs, not only the billing form. Bills are grouped by customer (click a customer to expand/
+  collapse their bills) instead of one flat list. Clicking a bill loads it into the form via the
+  existing password-gated edit path (`handleEditSpecificBill`, fetching the full row with
+  `api.saleBills.get` since `listUnposted` only returns summary fields). Each bill row also has
+  its own small "Post" button (`handlePostOneUnposted`) to post just that one without leaving the
+  sidebar; "Post All" is unchanged.
+- `listUnposted()` (`saleBills.repository.js`) now also selects `sb.customer_id` so bills can be
+  grouped reliably instead of only by name string; `UnpostedBillRow` (`frontend/src/lib/api.ts`)
+  gained the matching `customer_id` field.
+- **Files:** `frontend/src/pages/SaleBillPage.tsx`, `frontend/src/lib/api.ts`,
+  `backend/src/repositories/saleBills.repository.js`
+
+## Sale Bill — Pending Posting: corrected to leave the main card untouched, flat list
+- **Follow-up correction (explicit user feedback):** the previous change had shrunk/shifted the
+  main Sale Bill card to make room for the sidebar via flexbox, and grouped unposted bills by
+  customer — both undone. The main card (`mx-auto`, `maxWidth: 1200`) is back to its original,
+  unmodified layout. "Pending Posting" instead sits `position: absolute` in the unused left
+  margin (`hidden xl:block absolute left-0 top-0 w-64`, inside a `relative` wrapper around the
+  whole page body) so it never affects the card's own width or centering. Customer grouping
+  removed — back to one flat list of every unposted bill (bill_no, customer name, date, value),
+  each row still click-to-edit and carrying its own individual Post button; "Post All" unchanged.
+- **Files:** `frontend/src/pages/SaleBillPage.tsx`
+
+## Sale Bill — Pending Posting: fixed overlap with the main card
+- **Bug fix (user-reported, with screenshot):** the absolute-positioned left-margin placement from
+  the prior entry overlapped the main card at normal window widths — it assumed more spare margin
+  existed than actually did. Replaced with a real flex layout: the Pending Posting list is a flex
+  sibling with a fixed `w-64` column (`hidden lg:block`, sticky), and the card's wrapper
+  (`mx-auto`, `maxWidth: 1200`, unchanged otherwise) is `flex-1 min-w-0` so it centers within
+  whatever space remains next to that column — guaranteed no overlap at any width, at the cost of
+  the card recentering slightly left of full-page-center when the sidebar is showing.
+- **Files:** `frontend/src/pages/SaleBillPage.tsx`
+
+## Sale Bill — Pending Posting: card left genuinely untouched
+- **Follow-up correction (user-reported, with screenshot):** the flex-sibling fix removed the
+  overlap but visibly narrowed/shifted the card (it centered within the remaining flex space
+  instead of its original position). Replaced with: the Pending Posting list now lives INSIDE the
+  same `mx-auto`/`maxWidth: 1200` wrapper as the card (that wrapper now also carries `relative`),
+  positioned `absolute` and anchored via `right: calc(100% + 24px)` to that wrapper's own left
+  edge — not to the viewport, not to a guessed margin. Being `absolute`, it's out of flow, so it
+  cannot affect the card's width or position at all; wherever the card's real edge lands, the list
+  sits just outside it. Shown only from the `2xl` breakpoint up (≥1536px viewport), since below
+  that there generally isn't ~280px of real margin for it to land in without spilling past the
+  window edge.
+- **Files:** `frontend/src/pages/SaleBillPage.tsx`
+
+## Sale Bill — compacted form to fit one screen (no scroll to reach Save/Post)
+- **UI request:** the form's vertical stack (toolbar → header fields → customer/delivery boxes →
+  item table → remarks/calculations) ran well past typical window height, so posting a bill
+  always required scrolling. Tightened spacing throughout `SaleBillPage.tsx` rather than removing
+  any field:
+  - Toolbar and card outer padding trimmed (`p-4`→`p-3`, `p-6 md:p-8`→`p-4 md:p-5`).
+  - Header fields grid, Customer Information box, Delivery & Logistics box: `gap-4/6`→`gap-2/3`,
+    `mb-6 pb-6`→`mb-3 pb-3`, box padding `p-4`→`p-3`.
+  - Item table cell padding `p-3`→`p-2` throughout (header + body cells).
+  - Remarks/Due Date/Calculations: was a tall stacked column (120px textarea + due date + helper
+    line, `mt-6 pt-4` gap) next to a `min-h-[160px]` calculations box. Now Remarks and Payment Due
+    Date sit side-by-side (2-col sub-grid) with a 2-row textarea (`minHeight: 52px`), shortened
+    helper text, and the calculations box padding/line-gaps tightened — no `min-h` floor left, it
+    sizes to content.
+  - Banners (error/success/stock-limit) and the Drafts panel: padding/margins trimmed to match
+    (`py-3`→`py-2.5`, `mb-4`→`mb-3`, etc.)
+  - No fields removed or hidden — same data, tighter spacing.
+- **Files:** `frontend/src/pages/SaleBillPage.tsx`
+
+## Sale Return — same form compaction as Sale Bill
+- Applied the identical spacing tightening from the Sale Bill pass to `SaleReturnPage.tsx`'s main
+  card: toolbar/drafts-panel/banner padding-margins, card outer padding (`p-6 md:p-8`→`p-4 md:p-5`),
+  header fields grid, Customer Information / Dispatch Logistics box padding+gaps, item table cell
+  padding (`p-3`→`p-2`), Add Item Row button margin, and the Remarks/Calculations row (textarea
+  4 rows→2 rows with no forced growth, calculations box `min-h-[160px]` floor removed).
+  Sale Return has no due-date field, so there was nothing to move under Remarks here — the rest of
+  the compaction is otherwise a direct match.
+- **Files:** `frontend/src/pages/SaleReturnPage.tsx`
+
+## Sale Return — Saved Drafts moved to a left-side vertical list (same pattern as Sale Bill)
+- **User request:** move the "Saved Drafts" panel the same way SaleBillPage's Pending Posting
+  panel was moved — off the main flow, onto the left. Replaced the horizontal
+  select+"Confirm Draft (Post)"+"Delete Selected Draft" bar with a flat vertical list, positioned
+  identically to SaleBillPage's sidebar: `absolute`, anchored via `right: calc(100% + 24px)` to
+  the card wrapper's own left edge (not the viewport), `hidden 2xl:block` so it only shows when
+  there's realistically enough margin, living inside the same `mx-auto`/`maxWidth: 1200` wrapper
+  (now also `relative`) so it can never affect the card's own width/position.
+- Each row (bill_no, customer name, date) is click-to-load (`handleOpenDraftRow`) plus its own
+  small Post (`handleConfirmDraftRow`) / Delete (`handleDeleteDraftRow`) buttons — self-contained
+  per row instead of the old single-selection + two buttons acting on `selectedDraftId`. The old
+  `handleConfirmDraft` (select-driven) was removed as dead code once nothing referenced it.
+- **Files:** `frontend/src/pages/SaleReturnPage.tsx`
+
+## Sale Bill / Sale Return — further compaction, icon action buttons, Sale Return Post All
+1. **Further compaction (both pages):** an additional tightening pass on top of the earlier one —
+   card outer padding `p-4 md:p-5`→`p-3 md:p-4`, toolbar `p-3 mb-3`→`p-2.5 mb-2`, header fields
+   grid and Customer/Dispatch section outer grid `gap-3 mb-3 pb-3`→`gap-2 mb-2 pb-2`, the two info
+   boxes `p-3`→`p-2.5` with tighter internal gaps, item table cell padding `p-2`→`p-1.5`
+   throughout, Add Item Row margin `mb-3`→`mb-2`, Remarks/Calculations row `gap-3 mt-3 pt-3`→
+   `gap-2 mt-2 pt-2`. Also caught `SaleReturnPage.tsx`'s item table wrapper, which still had the
+   original `mb-6` — missed in the first compaction pass.
+2. **Draft/pending-list row actions → icon buttons, horizontal:** replaced the text "Post"/"Del"
+   buttons in both SaleBillPage's Pending Posting list and SaleReturnPage's Saved Drafts list with
+   small icon-only buttons (`CheckCircle2` for post, `Trash2` for delete) laid out in a horizontal
+   row (`flex flex-row gap-1`) instead of stacked/full-width text buttons.
+3. **Sale Return: added a "Post All" button** for drafts. There's no backend batch-post endpoint
+   for sale returns the way `saleBills.postAll()` exists for bills (a draft return already IS the
+   unposted state — there's no separate "saved but unposted" return the way a saved bill is), so
+   `handlePostAllDrafts` confirms every draft sequentially client-side through the same
+   `draftSaleReturns.confirm()` a single row's Post button uses, sequential (not `Promise.all`)
+   for the same one-failure-shouldn't-block-the-rest reasoning as `saleBills.postAll()`, reporting
+   posted/failed counts the same way.
+- **Files:** `frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/SaleReturnPage.tsx`
+
+## Sale Return — fixed Transport Adda wrapping + wasted space beside Customer box
+- **Bug fix:** "Delivery Agent (if any)" was `col-span-2` (full width), pushing Transport Adda
+  onto its own third row instead of sitting beside Delivery Agent the way SaleBillPage pairs its
+  Delivery field with Transport Adda. That extra row made the Dispatch Logistics box taller than
+  the Customer Information box beside it in the same grid row — since grid items stretch to match
+  by default, the shorter Customer box visibly had empty space below Customer Code. Removed the
+  `col-span-2`, so Delivery Agent and Transport Adda now share row 1 (GP No./Bilty No. stay row
+  2) — 2 rows total, matching Customer Information's height, no more empty space.
+- **Files:** `frontend/src/pages/SaleReturnPage.tsx`
+
+## Sale Bill — Delete button on a specific unposted bill (password-gated)
+- **New capability:** the Pending Posting sidebar's row icons gained a Delete (trash icon) next
+  to Post. Backend: `saleBills.service.js#remove()` — throws if the bill is posted (must unpost
+  first, same restriction pattern used elsewhere), otherwise releases the stock `create()`
+  reserved at save time (`deleteStockMovements`), deletes the items, then the bill row, all in one
+  transaction. New repository `deleteBill()`. New IPC channel `sale-bills:remove` — password
+  verified server-side (`authService.verifyPassword`) unconditionally before calling the service,
+  same guard level as editing an already-posted bill, since deleting has no reverse-never-erase
+  trail. Frontend: `api.saleBills.remove(id, password)`; the sidebar's Delete button reuses the
+  existing `PasswordPromptModal` flow via a new `delete_unposted_bill` password-action branch — on
+  success, refreshes the Pending Posting list and stock, and resets the form if the bill just
+  deleted was the one open on screen.
+- **Files:** `backend/src/services/saleBills.service.js`,
+  `backend/src/repositories/saleBills.repository.js`, `backend/src/ipc/saleBills.ipc.js`,
+  `frontend/src/lib/api.ts`, `frontend/src/pages/SaleBillPage.tsx`
+
+## Sale Bill / Sale Return — item table scrolls internally past 3 rows
+- **UI request:** adding item rows was growing the card indefinitely (and re-triggering the
+  scroll problem task 1 fixed). The item table wrapper is now `overflow-y-auto` with
+  `maxHeight: 230px` (~header + 3 rows) instead of `overflow-visible` with no cap — the 4th row
+  onward scrolls inside the table instead of growing the card. The header row (`<th>`s) is
+  `sticky top-0` within that scroll box so column labels stay visible past row 3.
+  `SearchableSelect`'s own dropdown already renders through a `position: fixed` React portal (not
+  a descendant of the scroll box in the DOM), so it isn't clipped by the new `overflow-y: auto`
+  even when opened on a row near the bottom edge — confirmed by reading its source before making
+  this change, since clipping a dropdown menu would have been a real regression otherwise.
+- **Files:** `frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/SaleReturnPage.tsx`
+
+## Sale Bill / Sale Return — new item rows insert at the top, not the bottom
+- **UI request:** "+ Add Item Row" (and its keyboard equivalent — Shift+Enter/Ctrl+Enter/'.'+Enter
+  from the last field of any row) now prepends the new row instead of appending it, on both pages.
+  Pairs with the recent 2-row scroll cap on the item table: the newest article is the one the user
+  is about to type into, so it should be the one visible without scrolling down past everything
+  already entered. The keyboard shortcut's focus target changed from `items.length` (old last
+  index) to a fixed `0` (new row is always the top row now).
+- **Files:** `frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/SaleReturnPage.tsx`
+
+## Purchase Page — Recorded Purchases moved to its own tab, Save button moved up, 10-row scroll cap
+- **UI request:** three changes to `PurchasePage.tsx`, bringing it in line with the Sale Bill /
+  Sale Return pattern:
+  1. **Recorded Purchases → its own tab.** Was an always-rendered card below the live entry form
+     (every purchase ever recorded, no filter, pushing the page well past one screen). Added a
+     `tabBar` (New Purchase / Recorded Purchases) in `AppLayout`'s `headerAction` slot, matching
+     SaleBillPage's tab switcher placement. The records tab has a From/To date-range filter
+     (`recordsDateFrom`/`recordsDateTo`, either end optional — blank means unbounded) via a new
+     `filteredPurchases` memo; clicking a row loads it and switches back to the entry tab in view
+     mode, same as the other pages' record tabs.
+  2. **Save/Update Purchase button moved up** into the toolbar row at the top of the form
+     (alongside Edit/Post/Unpost/New Purchase), instead of sitting below the entire item table —
+     matching SaleBillPage/SaleReturnPage, where the primary action doesn't require scrolling past
+     the item table to reach. "Cancel Edit" moved with it; "Add Line Item" stayed where it was,
+     next to the table.
+  3. **Item table capped to ~10 rows**, `overflow-y-auto` + `maxHeight: 620px` with a `sticky`
+     header, same pattern as the other pages' item tables (SaleBill/SaleReturn cap at ~2 rows;
+     this one's taller since a purchase routinely lists more distinct materials than a sale bill
+     lists articles). Purchase's own item fields are plain `<input>`/native `<select>` rather than
+     `SearchableSelect`, so there's no dropdown-portal clipping concern here.
+- **Files:** `frontend/src/pages/PurchasePage.tsx`
+
+## Purchase Return Page — same treatment as PurchasePage
+- Applied the identical set of changes made to `PurchasePage.tsx` to `PurchaseReturnPage.tsx`:
+  1. Recorded Purchase Returns moved to its own tab (`tabBar` in `AppLayout`'s `headerAction`),
+     off the always-rendered inline card. Date-range filter defaults to the last three months
+     (`getThreeMonthsAgoDate()` to `getTodayDate()`) via a new `filteredReturns` memo, both ends
+     editable/clearable. Clicking a row loads it and switches back to the entry tab.
+  2. Save/Update Return button moved up into the top toolbar row (with Edit/Post/Unpost/New
+     Return), instead of below the item table. "Cancel Edit" moved with it; "Add Line Item" stayed
+     by the table.
+  3. Item table capped to ~8 rows (`overflow-y-auto`, `maxHeight: 500px`) with a `sticky` header,
+     same as PurchasePage. No unposted/Pending-Posting concept exists on this page (returns post/
+     unpost individually, no batch), so nothing else needed moving.
+- **Files:** `frontend/src/pages/PurchaseReturnPage.tsx`
+
+## Receipts Page — Recorded Receipts now shows unposted only
+- **UI request:** "Recorded Receipts" was mixing CONFIRMED (posted) and DRAFT (unposted) rows
+  together. `sortedReceipts` now filters to `status !== 'CONFIRMED'` before sorting; the endorsed
+  settlements appended into the same table (a separate `settlements` list, joined visually via the
+  Type column) get the identical filter via a new `unpostedSettlements` memo. Empty-state check
+  and copy updated to account for both lists together ("No unposted receipts."), and the section
+  heading now reads "Recorded Receipts — Unposted".
+- **Files:** `frontend/src/pages/ReceiptsPage.tsx`
+
+## Receipts Page — Enter-walk reaches Payment Mode; Endorse checkbox gets the Shift+Enter chord
+- **Bug 1 — Enter-walk skipped Payment Mode entirely:** the Cash/Cheque/Online buttons were plain
+  `button[type="button"]` with no `data-field-nav` — AppLayout's G-01 Enter-walk only recognizes
+  `input`/`select`/`textarea`/`button[data-field-nav]`, so the group was invisible to it and Enter
+  jumped straight from Remarks to the Endorse checkbox, skipping Payment Mode. Fixed with a
+  roving-stop pattern: only the currently SELECTED button carries `data-field-nav` (`PAYMENT_MODES`/
+  `PAYMENT_MODE_LABELS` + `paymentModeRefs`), so the group is exactly one stop, landing on whichever
+  mode is active. Left/Right now cycles the selection and moves focus with it
+  (`handlePaymentModeKeyDown`, `stopPropagation`'d so AppLayout's own Left/Right field-walk doesn't
+  also fire), giving keyboard users a way to actually change the mode.
+- **Bug 2 — Endorse checkbox's Enter behavior made explicit:** adopted the same
+  Shift+Enter/Ctrl+Enter/'.'+Enter convention already used elsewhere (SaleBillPage/
+  SaleReturnPage/PurchasePage's "add a row") — on the checkbox, that chord checks Endorse and
+  focuses straight into the newly-revealed Pay To field (`handleEndorseCheckboxKeyDown`, new
+  `endorseToWrapRef` + `focusFirstField`). Plain Enter is left completely untouched, so G-01's
+  existing handler runs exactly as it already does everywhere else: walk to the next field, or —
+  if the checkbox is the last field currently on screen — submit (save the receipt unposted).
+- **Files:** `frontend/src/pages/ReceiptsPage.tsx`
+
+## Expenses Page — same Enter-walk fix as Receipts
+- **Bug fix (mirrors ReceiptsPage):** Payment Mode here is a 4-way button toggle (Cash/Cheque
+  Endorsed/Cheque Issued/Online), same plain `button[type="button"]` issue — invisible to
+  AppLayout's G-01 Enter-walk (`input`/`select`/`textarea`/`button[data-field-nav]` only), so Enter
+  skipped straight past it. Same roving-stop fix: only the selected button carries
+  `data-field-nav` (`PAYMENT_MODES`/`PAYMENT_MODE_LABELS` + `paymentModeRefs`), Left/Right cycles
+  the selection and moves focus with it (`handlePaymentModeKeyDown`, `stopPropagation`'d). Reused
+  the existing `selectPaymentMode()` helper (already resets mode-dependent fields) rather than
+  calling `setPaymentMode` directly.
+  No Endorse-checkbox equivalent exists on this page — Cheque Endorsed is just one of the four
+  button modes, already reachable once the roving-stop fix landed — so there was nothing else to
+  change here.
+- **Files:** `frontend/src/pages/ExpensesPage.tsx`
+
+## Fixed: Enter on the last field did nothing on Receipts/Expenses/Journal Voucher/Transfer/
+## User Management — submit button lookup didn't account for form="<id>" association
+- **Root cause:** these pages put the primary action button in a toolbar row ABOVE the card,
+  outside the `<form>` element, associated via the HTML `form="<id>"` attribute instead of being
+  nested inside it. Both `AppLayout.tsx`'s G-01 Enter handler and `lib/fieldNav.ts`'s
+  `focusNextField()` (used by SearchableSelect/add-row flows) found the submit button via
+  `form.querySelector('button[type="submit"]')` — which only walks DOM descendants and has no
+  concept of the `form` attribute association — so on every one of these pages, pressing Enter on
+  the last field silently did nothing. Reported directly by the user on Receipts (the Endorse
+  checkbox specifically, but the bug affects the whole form on all five pages equally, not
+  anything specific to that field).
+- **Fix:** new shared `findSubmitButton(form)` in `lib/fieldNav.ts` — scans
+  `document.querySelectorAll('button[type="submit"]:not(:disabled)')` and filters by
+  `btn.form === form`. `HTMLButtonElement.form` is the browser's own resolved association,
+  correct for both a nested button and one linked via the attribute, so this works uniformly
+  without the caller needing to know which shape a given page uses. Both `AppLayout.tsx`'s inline
+  Enter-handler logic and `focusNextField()` now call it instead of duplicating (and
+  independently getting wrong) the same `querySelector` lookup.
+- **Files:** `frontend/src/lib/fieldNav.ts`, `frontend/src/components/AppLayout.tsx`
+
+## Expenses Page — Recorded Expenses now shows unposted only
+- **UI request (mirrors ReceiptsPage):** "Recorded Expenses" was mixing CONFIRMED (posted) and
+  DRAFT (unposted) rows. `sortedExpenses` now filters to `status !== 'CONFIRMED'` before sorting.
+  Empty-state copy updated ("No unposted expenses.") and the section heading now reads "Recorded
+  Expenses — Unposted".
+- **Files:** `frontend/src/pages/ExpensesPage.tsx`
+
+## Journal Voucher — added Number field (matches legacy Journal Entry screen)
+- **User request:** match the old system's Journal Entry screen's fields, scoped down after
+  confirming with the user to just the missing field rather than rebuilding JV as a full
+  multi-line general journal (the old screen's A/C Code/Debit/Credit grid across N accounts is a
+  fundamentally different tool than today's simplified 2-leg "one account vs the fixed JOURNAL
+  VOUCHER clearing account" design — that would need a new `journal_voucher_lines` table and
+  balance-to-zero posting logic; user chose to keep the current model).
+- Added `voucher_no NVARCHAR(30) NULL` via new migration `023_journal_vouchers_number.sql`
+  (schema.sql is already-applied, per convention never edited directly). Optional, unvalidated,
+  same treatment as `sale_bills.gp_no`/`bilty_no` — a manual office cross-reference number,
+  distinct from `jv_id`.
+  Threaded through `journalVouchers.repository.js` (insert/update), `journalVouchers.service.js`'s
+  `buildFields()`, `JournalVoucherRow`/`JournalVoucherCreateInput` in `lib/api.ts`, and
+  `JournalVoucherPage.tsx` (new `voucherNo` state, form field next to Date, list table column,
+  included in the JV search filter).
+- **Not yet live-verified** — no SQL Server reachable in this sandbox; run `npm run migrate` on a
+  real DB to confirm the column lands and create/update/list round-trip it correctly.
+- **Files:** `backend/src/db/migrations/023_journal_vouchers_number.sql`,
+  `backend/src/repositories/journalVouchers.repository.js`,
+  `backend/src/services/journalVouchers.service.js`, `frontend/src/lib/api.ts`,
+  `frontend/src/pages/JournalVoucherPage.tsx`
+
+## Journal Voucher — removed Remarks field (Reason covers it)
+- Removed the Remarks textarea and its `remarks` state from `JournalVoucherPage.tsx`'s entry form
+  — Reason (required) is enough, per explicit user decision. Dropped from `handleNew`,
+  `buildPayload` (no longer sent — the field stays optional server-side, so omitting it is a valid
+  payload), `loadRow`, and the JV search filter; search placeholder updated to mention Number
+  instead of remarks. Backend (`journal_vouchers.remarks` column, service/repository support)
+  left untouched — harmless unused capability, no migration needed to remove a nullable column
+  nothing writes to anymore.
+- **Files:** `frontend/src/pages/JournalVoucherPage.tsx`

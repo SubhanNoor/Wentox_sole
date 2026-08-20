@@ -230,6 +230,27 @@ export default function ExpensesPage() {
     if (m === 'CASH') setDetails('');
   };
 
+  // Payment Mode is a 4-way button toggle, not a native input/select — AppLayout's G-01 Enter-walk
+  // only recognizes input/select/textarea/button[data-field-nav], so plain button[type="button"]s
+  // were invisible to it and Enter silently skipped the whole group (same issue fixed on
+  // ReceiptsPage). Roving-stop: only the currently SELECTED button carries data-field-nav, so the
+  // group is exactly one stop, landing on whichever mode is active; Left/Right cycles the
+  // selection and moves focus with it.
+  const PAYMENT_MODES: ExpensePaymentMode[] = ['CASH', 'CHEQUE_ENDORSED', 'CHEQUE_ISSUED', 'ONLINE'];
+  const PAYMENT_MODE_LABELS: Record<ExpensePaymentMode, string> = {
+    CASH: 'Cash', CHEQUE_ENDORSED: 'Cheque Endorsed', CHEQUE_ISSUED: 'Cheque Issued', ONLINE: 'Online',
+  };
+  const paymentModeRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  function handlePaymentModeKeyDown(e: React.KeyboardEvent, idx: number) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    e.stopPropagation(); // don't also let AppLayout's own Left/Right field-walk fire on this keystroke
+    const nextIdx = e.key === 'ArrowRight' ? (idx + 1) % PAYMENT_MODES.length : (idx - 1 + PAYMENT_MODES.length) % PAYMENT_MODES.length;
+    selectPaymentMode(PAYMENT_MODES[nextIdx]);
+    paymentModeRefs.current[nextIdx]?.focus();
+  }
+
   const handleNew = () => {
     setMode('new');
     setExpenseId(null);
@@ -494,8 +515,11 @@ export default function ExpensesPage() {
     refreshCheques();
   };
 
+  // Recorded Expenses (below) shows only what's still awaiting posting — a CONFIRMED expense has
+  // already done its job and belongs in the reports/ledger, not in a list whose whole point was
+  // "here's what still needs attention." Mirrors the identical fix on ReceiptsPage.
   const sortedExpenses = useMemo(
-    () => [...expenseRows].sort((a, b) => b.expense_date.localeCompare(a.expense_date)),
+    () => [...expenseRows].filter(r => r.status !== 'CONFIRMED').sort((a, b) => b.expense_date.localeCompare(a.expense_date)),
     [expenseRows]
   );
 
@@ -634,7 +658,7 @@ export default function ExpensesPage() {
                     form="expense-entry-form"
                     className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg"
                   >
-                    <Save size={16} /> {mode === 'edit' ? 'Update Entry' : 'Done — Add to Voucher'}
+                    <Save size={16} /> {mode === 'edit' ? 'Update Entry' : 'Done'}
                   </button>
                 )}
                 {voucher && voucherLines.length > 0 && voucher.status !== 'POSTED' && (
@@ -826,38 +850,20 @@ export default function ExpensesPage() {
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Payment Mode</label>
                     <div className="grid grid-cols-4 gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
-                      <button
-                        type="button"
-                        disabled={isViewMode}
-                        onClick={() => selectPaymentMode('CASH')}
-                        className={`py-2 rounded-md transition-colors ${paymentMode === 'CASH' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-                      >
-                        Cash
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isViewMode}
-                        onClick={() => selectPaymentMode('CHEQUE_ENDORSED')}
-                        className={`py-2 rounded-md transition-colors ${paymentMode === 'CHEQUE_ENDORSED' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-                      >
-                        Cheque Endorsed
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isViewMode}
-                        onClick={() => selectPaymentMode('CHEQUE_ISSUED')}
-                        className={`py-2 rounded-md transition-colors ${paymentMode === 'CHEQUE_ISSUED' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-                      >
-                        Cheque Issued
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isViewMode}
-                        onClick={() => selectPaymentMode('ONLINE')}
-                        className={`py-2 rounded-md transition-colors ${paymentMode === 'ONLINE' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-                      >
-                        Online
-                      </button>
+                      {PAYMENT_MODES.map((pm, idx) => (
+                        <button
+                          key={pm}
+                          type="button"
+                          ref={el => { paymentModeRefs.current[idx] = el; }}
+                          data-field-nav={paymentMode === pm ? 'true' : undefined}
+                          disabled={isViewMode}
+                          onClick={() => selectPaymentMode(pm)}
+                          onKeyDown={e => handlePaymentModeKeyDown(e, idx)}
+                          className={`py-2 rounded-md transition-colors ${paymentMode === pm ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                        >
+                          {PAYMENT_MODE_LABELS[pm]}
+                        </button>
+                      ))}
                     </div>
                   </div>
 
@@ -1072,12 +1078,13 @@ export default function ExpensesPage() {
               )}
             </div>
 
-            {/* Recorded Expenses */}
+            {/* Recorded Expenses — unposted only now, same as Recorded Receipts: a CONFIRMED
+                expense has already done its job and belongs in the reports/ledger, not here. */}
             <div className="card-white p-6 mt-8 bg-white border border-slate-200 rounded-xl shadow-sm">
-              <h3 className="font-lora font-semibold text-lg text-slate-800 mb-4">Recorded Expenses</h3>
+              <h3 className="font-lora font-semibold text-lg text-slate-800 mb-4">Recorded Expenses <span className="text-xs font-normal text-slate-400 uppercase tracking-wider">— Unposted</span></h3>
               {sortedExpenses.length === 0 ? (
                 <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
-                  No expenses recorded yet.
+                  No unposted expenses.
                 </div>
               ) : (
                 <div className="overflow-x-auto">

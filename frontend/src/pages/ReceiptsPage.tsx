@@ -5,6 +5,8 @@ import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow, SettlementRow, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { focusFirstField } from '@/lib/fieldNav';
+import { useHeldKey } from '@/hooks/useHeldKey';
 import { Save, Edit, Trash2 } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
@@ -175,6 +177,44 @@ export default function ReceiptsPage() {
       return firstEntryFieldWrapRef.current?.querySelector<HTMLElement>('button[data-field-nav]') ?? null;
     },
   };
+
+  // Payment Mode is a 3-way button toggle, not a native input/select — G-01's Enter-walk (in
+  // AppLayout) only recognizes input/select/textarea/button[data-field-nav], so without this it's
+  // invisible to the walk entirely. Roving-stop: only the selected button is ever a stop, and
+  // Left/Right cycles + refocuses within the group instead of leaving it (handlePaymentModeKeyDown
+  // below, wired per-button next to the JSX).
+  const PAYMENT_MODES = ['CASH', 'CHEQUE', 'ONLINE'] as const;
+  const PAYMENT_MODE_LABELS: Record<typeof PAYMENT_MODES[number], string> = { CASH: 'Cash', CHEQUE: 'Cheque', ONLINE: 'Online' };
+  const paymentModeRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  function handlePaymentModeKeyDown(e: React.KeyboardEvent, idx: number) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    e.stopPropagation(); // don't also let AppLayout's own Left/Right field-walk fire on this keystroke
+    const nextIdx = e.key === 'ArrowRight' ? (idx + 1) % PAYMENT_MODES.length : (idx - 1 + PAYMENT_MODES.length) % PAYMENT_MODES.length;
+    const next = PAYMENT_MODES[nextIdx];
+    setPaymentMode(next);
+    if (next === 'CASH') setDetails('');
+    paymentModeRefs.current[nextIdx]?.focus();
+  }
+
+  // Endorse checkbox: Shift+Enter/Ctrl+Enter/'.'+Enter is the same "do the explicit extra thing"
+  // chord used elsewhere (SaleBillPage/SaleReturnPage/PurchasePage's "add a row") — here it checks
+  // the box and reveals the Pay To field, focusing straight into it. Plain Enter is left alone so
+  // G-01's own handler runs unmodified: walk to the next field, or submit (save the receipt
+  // unposted) if the checkbox happens to be the last field currently on screen.
+  const periodHeld = useHeldKey('.');
+  const endorseToWrapRef = useRef<HTMLDivElement>(null);
+
+  function handleEndorseCheckboxKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey || periodHeld.current)) return;
+    e.preventDefault();
+    e.stopPropagation(); // don't also let AppLayout's own Enter handler walk/submit this keystroke
+    const next = !isEndorsed;
+    setIsEndorsed(next);
+    if (!next) setEndorseToBaId('');
+    if (next) requestAnimationFrame(() => focusFirstField(endorseToWrapRef.current));
+  }
 
   const isViewMode = mode === 'view';
   const isPosted = receiptStatus === 'CONFIRMED';
@@ -608,9 +648,18 @@ export default function ReceiptsPage() {
     setBalanceRefreshKey(k => k + 1);
   };
 
+  // Recorded Receipts (below) shows only what's still awaiting posting — a receipt already
+  // CONFIRMED has done its job and belongs in the reports/ledger, not in a list whose whole
+  // point was "here's what still needs attention." Same filter applied to `settlements` below,
+  // which render into the same table.
   const sortedReceipts = useMemo(
-    () => [...receipts].sort((a, b) => b.receipt_date.localeCompare(a.receipt_date)),
+    () => [...receipts].filter(r => r.status !== 'CONFIRMED').sort((a, b) => b.receipt_date.localeCompare(a.receipt_date)),
     [receipts]
+  );
+
+  const unpostedSettlements = useMemo(
+    () => [...settlements].filter(st => st.status !== 'CONFIRMED').sort((a, b) => b.settlement_date.localeCompare(a.settlement_date)),
+    [settlements]
   );
 
   const accountName = useCallback(
@@ -760,7 +809,7 @@ export default function ReceiptsPage() {
                     form="receipt-entry-form"
                     className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg"
                   >
-                    <Save size={16} /> {mode === 'edit' ? 'Update Entry' : 'Done — Add to Voucher'}
+                    <Save size={16} /> {mode === 'edit' ? 'Update Entry' : 'Done'}
                   </button>
                 )}
                 {/* Post/Unpost are voucher-level. Post needs at least one committed line; an empty
@@ -999,31 +1048,31 @@ export default function ReceiptsPage() {
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Payment Mode</label>
+                    {/* G-01's Enter-walk only recognizes input/select/textarea/button[data-field-nav]
+                        — these were plain button[type="button"] with none of those, so the walk
+                        silently skipped the whole group (reported directly by the user: "it did
+                        not go to the payment method"). Roving-stop pattern instead of marking all
+                        three: only the currently SELECTED button carries data-field-nav, so the
+                        group is exactly one stop in the walk, landing on whichever mode is
+                        active. Left/Right cycles the selection and moves focus with it — the same
+                        role AppLayout's own Left/Right field-walk plays for every other field,
+                        scoped to this group via stopPropagation so it cycles the mode instead of
+                        leaving it. */}
                     <div className="grid grid-cols-3 gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
-                      <button
-                        type="button"
-                        disabled={isViewMode}
-                        onClick={() => { setPaymentMode('CASH'); setDetails(''); }}
-                        className={`py-2 rounded-md transition-colors ${paymentMode === 'CASH' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-                      >
-                        Cash
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isViewMode}
-                        onClick={() => setPaymentMode('CHEQUE')}
-                        className={`py-2 rounded-md transition-colors ${paymentMode === 'CHEQUE' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-                      >
-                        Cheque
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isViewMode}
-                        onClick={() => setPaymentMode('ONLINE')}
-                        className={`py-2 rounded-md transition-colors ${paymentMode === 'ONLINE' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-                      >
-                        Online
-                      </button>
+                      {PAYMENT_MODES.map((pm, idx) => (
+                        <button
+                          key={pm}
+                          type="button"
+                          ref={el => { paymentModeRefs.current[idx] = el; }}
+                          data-field-nav={paymentMode === pm ? 'true' : undefined}
+                          disabled={isViewMode}
+                          onClick={() => { setPaymentMode(pm); if (pm === 'CASH') setDetails(''); }}
+                          onKeyDown={e => handlePaymentModeKeyDown(e, idx)}
+                          className={`py-2 rounded-md transition-colors ${paymentMode === pm ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
+                        >
+                          {PAYMENT_MODE_LABELS[pm]}
+                        </button>
+                      ))}
                     </div>
                   </div>
 
@@ -1037,6 +1086,7 @@ export default function ReceiptsPage() {
                         checked={isEndorsed}
                         disabled={isViewMode || (mode === 'edit' && docKind === 'RECEIPT')}
                         onChange={e => { setIsEndorsed(e.target.checked); if (!e.target.checked) setEndorseToBaId(''); }}
+                        onKeyDown={handleEndorseCheckboxKeyDown}
                         className="mt-0.5"
                       />
                       <span>
@@ -1052,7 +1102,7 @@ export default function ReceiptsPage() {
                     </label>
 
                     {isEndorsed && (
-                      <div className="mt-3">
+                      <div className="mt-3" ref={endorseToWrapRef}>
                         <label className="block text-xs font-semibold text-slate-600 mb-1">
                           Pay To <span className="text-red-500 font-bold">*</span>
                           <span className="text-slate-400 font-normal normal-case ml-1">— whoever you owe</span>
@@ -1290,12 +1340,14 @@ export default function ReceiptsPage() {
               )}
             </div>
 
-            {/* Recorded Receipts */}
+            {/* Recorded Receipts — unposted only now (both receipts and endorsed settlements
+                filtered above): a CONFIRMED entry has already done its job and belongs in the
+                reports/ledger, not in a list whose point is "here's what still needs posting." */}
             <div className="card-white p-6 mt-8 bg-white border border-slate-200 rounded-xl shadow-sm">
-              <h3 className="font-lora font-semibold text-lg text-slate-800 mb-4">Recorded Receipts</h3>
-              {sortedReceipts.length === 0 ? (
+              <h3 className="font-lora font-semibold text-lg text-slate-800 mb-4">Recorded Receipts <span className="text-xs font-normal text-slate-400 uppercase tracking-wider">— Unposted</span></h3>
+              {sortedReceipts.length === 0 && unpostedSettlements.length === 0 ? (
                 <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
-                  No receipts recorded yet.
+                  No unposted receipts.
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -1348,7 +1400,7 @@ export default function ReceiptsPage() {
                       {/* Endorsed entries live in `settlements`, not `receipts`, but they were
                           entered here so they belong in the same list — the Type column is what
                           tells them apart. */}
-                      {settlements.map(st => (
+                      {unpostedSettlements.map(st => (
                         <tr
                           key={`st-${st.settlement_id}`}
                           onClick={() => loadSettlementRow(st)}

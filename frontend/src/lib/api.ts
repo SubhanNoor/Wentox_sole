@@ -487,6 +487,7 @@ export interface UnpostedBillRow {
   bill_no: string;
   bill_date: string;
   net_value: number;
+  customer_id: number | null;
   customer_name: string | null;
 }
 
@@ -629,6 +630,9 @@ export interface JournalVoucherRow {
   ba_id: number;
   direction: 'CREDIT' | 'DEBIT';
   amount: number;
+  /** Manual voucher number (office cross-referencing), matching the legacy Journal Entry
+   *  screen's "Number" field — optional, never validated, distinct from jv_id. */
+  voucher_no: string | null;
   reason: string;
   remarks: string | null;
   status: 'CONFIRMED' | 'DRAFT';
@@ -642,6 +646,7 @@ export interface JournalVoucherCreateInput {
   ba_id: number;
   direction: 'CREDIT' | 'DEBIT';
   amount: number;
+  voucher_no?: string;
   reason: string;
   remarks?: string;
 }
@@ -1564,6 +1569,7 @@ declare global {
         update: (payload: { id: number; password?: string } & Partial<SaleBillCreateInput>) => Promise<ApiResult<SaleBillRow>>;
         post: (payload: { id: number; password?: string }) => Promise<ApiResult<SaleBillRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<SaleBillRow>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         biltySearch: (payload?: SaleBillListFilters) => Promise<ApiResult<SaleBillRow[]>>;
         updateBilty: (payload: { id: number; bilty_no: string; adda_id: number }) => Promise<ApiResult<SaleBillRow>>;
         lastSoldRate: (payload: { customer_id: number; variant_id: number }) => Promise<ApiResult<number | null>>;
@@ -2109,6 +2115,8 @@ export const saleBills = {
     window.api ? window.api.saleBills.post({ id, password }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
     window.api ? window.api.saleBills.unpost({ id }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.saleBills.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   biltySearch: (payload?: SaleBillListFilters) =>
     window.api ? window.api.saleBills.biltySearch(payload).then(r => mapResult(r, rows => rows.map(normalizeBillRow))) : Promise.resolve(NO_BRIDGE),
   updateBilty: (id: number, bilty_no: string, adda_id: number) =>

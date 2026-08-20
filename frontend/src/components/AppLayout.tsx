@@ -8,7 +8,7 @@ import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
 import ZoomControl from '@/components/ZoomControl';
 import MenuBar from '@/components/MenuBar';
-import { FIELD_SELECTOR, fieldsIn } from '@/lib/fieldNav';
+import { FIELD_SELECTOR, fieldsIn, findSubmitButton } from '@/lib/fieldNav';
 import * as api from '@/lib/api';
 
 // Navigation moved out of this file entirely: the five hover menus and their page mapping live in
@@ -213,7 +213,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
         if (idx < fields.length - 1) {
           fields[idx + 1].focus();
         } else {
-          form.querySelector<HTMLButtonElement>('button[type="submit"]:not(:disabled)')?.click();
+          findSubmitButton(form)?.click();
         }
         return;
       }

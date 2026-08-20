@@ -58,14 +58,15 @@ async function insert(transaction, jv) {
     baId: { type: sql.Int, value: jv.ba_id },
     direction: { type: sql.VarChar(10), value: jv.direction },
     amount: { type: sql.Decimal(14, 2), value: jv.amount },
+    voucherNo: { type: sql.NVarChar(30), value: jv.voucher_no ?? null },
     reason: { type: sql.NVarChar(200), value: jv.reason },
     remarks: { type: sql.NVarChar(500), value: jv.remarks ?? null },
     createdBy: { type: sql.Int, value: jv.created_by ?? null },
   });
   const result = await request.query(`
-    INSERT INTO dbo.journal_vouchers (jv_date, ba_id, direction, amount, reason, remarks, status, created_by)
+    INSERT INTO dbo.journal_vouchers (jv_date, ba_id, direction, amount, voucher_no, reason, remarks, status, created_by)
     OUTPUT inserted.jv_id
-    VALUES (@jvDate, @baId, @direction, @amount, @reason, @remarks, 'DRAFT', @createdBy)
+    VALUES (@jvDate, @baId, @direction, @amount, @voucherNo, @reason, @remarks, 'DRAFT', @createdBy)
   `);
   return result.recordset[0].jv_id;
 }
@@ -74,7 +75,7 @@ async function update(jvId, jv) {
   await query(
     `UPDATE dbo.journal_vouchers SET
        jv_date = @jvDate, ba_id = @baId, direction = @direction,
-       amount = @amount, reason = @reason, remarks = @remarks
+       amount = @amount, voucher_no = @voucherNo, reason = @reason, remarks = @remarks
      WHERE jv_id = @jvId`,
     {
       jvId: { type: sql.Int, value: jvId },
@@ -82,6 +83,7 @@ async function update(jvId, jv) {
       baId: { type: sql.Int, value: jv.ba_id },
       direction: { type: sql.VarChar(10), value: jv.direction },
       amount: { type: sql.Decimal(14, 2), value: jv.amount },
+      voucherNo: { type: sql.NVarChar(30), value: jv.voucher_no ?? null },
       reason: { type: sql.NVarChar(200), value: jv.reason },
       remarks: { type: sql.NVarChar(500), value: jv.remarks ?? null },
     },

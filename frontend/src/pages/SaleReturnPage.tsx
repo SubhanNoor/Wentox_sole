@@ -5,7 +5,7 @@ import WeeklyReturnTab from '@/components/WeeklyReturnTab';
 import MonthlyReturnTab from '@/components/MonthlyReturnTab';
 import OverallReturnTab from '@/components/OverallReturnTab';
 import FindReturnTab from '@/components/FindReturnTab';
-import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit } from 'lucide-react';
+import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit, CheckCircle2 } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { formatDate, getTodayDate } from '@/lib/utils';
 import { focusFirstField } from '@/lib/fieldNav';
@@ -442,13 +442,25 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   };
   */
 
-  const handleConfirmDraft = async () => {
-    if (selectedDraftId == null) {
-      setErrorMsg('Please select a draft first.');
-      setTimeout(() => setErrorMsg(''), 2000);
-      return;
-    }
-    const res = await api.draftSaleReturns.confirm(selectedDraftId);
+  // Drafts sidebar (mirrors SaleBillPage's Pending Posting list): clicking a row loads that
+  // draft into the form; the small per-row Post/Delete buttons act on that draft directly
+  // instead of going through the select+selectedDraftId indirection the old horizontal panel
+  // used, so a row is fully self-contained.
+  const [draftActionBusyId, setDraftActionBusyId] = useState<number | null>(null);
+  const [postAllDraftsBusy, setPostAllDraftsBusy] = useState(false);
+  const [postAllDraftsResult, setPostAllDraftsResult] = useState<{ posted: number; failed: { return_id: number; bill_no: string | null; message: string }[]; attempted: number } | null>(null);
+
+  const handleOpenDraftRow = (d: SaleReturnRow) => {
+    setSelectedDraftId(d.return_id);
+    loadReturnRow(d);
+    setMode('new');
+  };
+
+  const handleConfirmDraftRow = async (returnId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDraftActionBusyId(returnId);
+    const res = await api.draftSaleReturns.confirm(returnId);
+    setDraftActionBusyId(null);
     if (!res.ok) {
       setErrorMsg('Failed to confirm draft: ' + res.error.message);
       return;
@@ -461,14 +473,70 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     refreshDrafts();
   };
 
-  // Line Items Helper Actions
-  const handleAddItemRow = () => setItems([...items, newUiItem()]);
+  const handleDeleteDraftRow = async (returnId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDraftActionBusyId(returnId);
+    const res = await api.draftSaleReturns.remove(returnId);
+    setDraftActionBusyId(null);
+    if (!res.ok) {
+      setErrorMsg('Failed to delete draft: ' + res.error.message);
+      return;
+    }
+    if (selectedDraftId === returnId) {
+      setSelectedDraftId(null);
+      handleNew();
+    }
+    refreshDrafts();
+    setSuccessMsg('Draft deleted successfully.');
+    setTimeout(() => setSuccessMsg(''), 2000);
+  };
+
+  // Post All: there's no backend batch endpoint for sale returns the way saleBills.postAll()
+  // exists for bills (returns never get "saved unposted" the way bills do — a draft here IS the
+  // unposted state), so this confirms every draft sequentially client-side, each through the
+  // exact same draftSaleReturns.confirm() a single row's Post button uses. Sequential, not
+  // Promise.all, for the same reason saleBills.postAll() is: one draft failing to confirm must
+  // not affect the others, and the per-draft failure list is only useful read in order.
+  const handlePostAllDrafts = async () => {
+    setPostAllDraftsBusy(true);
+    setPostAllDraftsResult(null);
+    const targets = [...drafts];
+    let posted = 0;
+    const failed: { return_id: number; bill_no: string | null; message: string }[] = [];
+    for (const d of targets) {
+      const res = await api.draftSaleReturns.confirm(d.return_id);
+      if (res.ok) {
+        posted += 1;
+      } else {
+        failed.push({ return_id: d.return_id, bill_no: d.bill_no, message: res.error.message });
+      }
+    }
+    setPostAllDraftsBusy(false);
+    setPostAllDraftsResult({ posted, failed, attempted: targets.length });
+    if (failed.length === 0) {
+      setSuccessMsg(`${posted} draft(s) posted.`);
+      setTimeout(() => setSuccessMsg(''), 3000);
+    }
+    // If the draft open on screen was one of the ones that posted, its draft row is gone —
+    // drop back to a fresh form rather than leave the screen pointing at nothing.
+    if (selectedDraftId != null && !failed.some(f => f.return_id === selectedDraftId)) {
+      setSelectedDraftId(null);
+      handleNew();
+    }
+    refreshDrafts();
+  };
+
+  // Line Items Helper Actions — new rows go to the TOP, not the bottom: the newest article is
+  // what the user is looking at and typing into, so it should be the one visible without
+  // scrolling down through everything already entered (item table only shows ~2 rows before it
+  // scrolls internally — see its wrapper below).
+  const handleAddItemRow = () => setItems([newUiItem(), ...items]);
 
   // Keyboard entry without the mouse — mirrors SaleBillPage. G-01's generic Enter-walk already
   // carries fields forward within a row and into an EXISTING next row; this only steps in at the
-  // boundary (Enter on the last field of the last row), where it appends a blank row and focuses
-  // into it. stopPropagation stops AppLayout's own window-level Enter handler from also firing on
-  // the same keydown and clicking Save & Post before the new row exists.
+  // boundary (Enter on the last field of the last row), where it inserts a blank row at the top
+  // and focuses into it. stopPropagation stops AppLayout's own window-level Enter handler from
+  // also firing on the same keydown and clicking Save & Post before the new row exists.
   const articleCellRefs = useRef<(HTMLTableCellElement | null)[]>([]);
   // '.' held while Enter is pressed is a genuine three-way chord alongside Shift+Enter/Ctrl+Enter
   // below — tracked via useHeldKey since '.' isn't a real modifier key with its own event flag.
@@ -486,16 +554,15 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     // the user after trying it.
     //
     // Adding a line is its own explicit action instead: Shift+Enter, Ctrl+Enter, or '.'+Enter, from
-    // the last field of ANY row (not only the last one) — always appends at the end, same as the
+    // the last field of ANY row (not only the last one) — always inserts at the top, same as the
     // "+ Add Item Row" button, and focuses into the new row. Shift+Enter is distinct from its
     // other meaning inside a Remarks textarea (insert a literal newline) — different field, no
     // collision.
     if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey || periodHeld.current)) return;
     e.preventDefault();
     e.stopPropagation(); // stop AppLayout's own Enter handler from also walking this keystroke
-    const newRowIndex = items.length; // always the end, regardless of which row triggered this
     handleAddItemRow();
-    requestAnimationFrame(() => focusFirstField(articleCellRefs.current[newRowIndex]));
+    requestAnimationFrame(() => focusFirstField(articleCellRefs.current[0])); // new row is always index 0 now
   }
 
   const handleRemoveItemRow = (idx: number) => {
@@ -822,7 +889,114 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   return (
     <AppLayout pageTitle="Sale Return" headerAction={tabBar}>
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
+
+        {/* Saved Drafts — moved off the main flow, same treatment as SaleBillPage's Pending
+            Posting: a flat vertical list, positioned `absolute` and anchored via
+            `right: calc(100% + gap)` to this wrapper's own left edge (not the viewport or a
+            guessed margin), so it can never affect the card's width/position. Shown only from
+            `2xl` up, since below that there generally isn't enough real margin for it to land in
+            without spilling past the window edge. Clicking a row loads that draft into the form;
+            the small Post/Delete buttons act on that row directly. */}
+        {mode !== 'view' && (drafts.length > 0 || postAllDraftsResult) && (
+          <aside
+            className="hidden 2xl:block absolute top-0 w-64 space-y-3"
+            style={{ right: 'calc(100% + 24px)' }}
+            data-no-print
+          >
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="font-semibold text-slate-700">Saved Drafts</span>
+                <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-bold">
+                  {drafts.length}
+                </span>
+              </div>
+              <div className="text-xs text-slate-500 mb-3">
+                Incomplete returns — click to load, finish, then post.
+              </div>
+              {drafts.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handlePostAllDrafts}
+                  disabled={postAllDraftsBusy}
+                  className="w-full px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                >
+                  {postAllDraftsBusy ? 'Posting…' : `Post All (${drafts.length})`}
+                </button>
+              )}
+
+              {/* Stays on screen until dismissed — a run can post most drafts, and the ones that
+                  failed are the whole point of the message. */}
+              {postAllDraftsResult && (
+                <div className="mt-3 pt-3 border-t border-slate-200">
+                  <p className="text-xs font-semibold text-slate-700">
+                    {postAllDraftsResult.posted} of {postAllDraftsResult.attempted} posted
+                    {postAllDraftsResult.failed.length > 0 && ` · ${postAllDraftsResult.failed.length} failed`}
+                  </p>
+                  {postAllDraftsResult.failed.length > 0 && (
+                    <ul className="mt-1.5 space-y-1">
+                      {postAllDraftsResult.failed.map(f => (
+                        <li key={f.return_id} className="text-xs text-rose-700">
+                          <span className="font-mono font-semibold">{f.bill_no || `#${f.return_id}`}</span>
+                          {' — '}{f.message}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setPostAllDraftsResult(null)}
+                    className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {drafts.length > 0 && (
+            <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
+              {drafts.map(d => {
+                const custName = customers.find(c => c.customer_id === d.customer_id)?.name || 'Unnamed Customer';
+                const busy = draftActionBusyId === d.return_id;
+                return (
+                  <li
+                    key={d.return_id}
+                    onClick={() => handleOpenDraftRow(d)}
+                    className="px-3 py-2.5 text-xs flex items-center justify-between gap-2 cursor-pointer hover:bg-amber-50/60 transition-colors border-b border-slate-100 last:border-b-0"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-mono font-semibold text-slate-700">{d.bill_no || 'No Number'}</div>
+                      <div className="text-slate-400 truncate">{custName}</div>
+                      <div className="text-slate-400">{formatDate(d.return_date)}</div>
+                    </div>
+                    <div className="flex flex-row items-center gap-1 flex-shrink-0">
+                      <button
+                        type="button"
+                        title="Post this draft"
+                        onClick={(e) => handleConfirmDraftRow(d.return_id, e)}
+                        disabled={busy}
+                        className="p-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                      >
+                        <CheckCircle2 size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        title="Delete this draft"
+                        onClick={(e) => handleDeleteDraftRow(d.return_id, e)}
+                        disabled={busy}
+                        className="p-1.5 rounded-md bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+            )}
+          </aside>
+        )}
 
         {/* Tab contents (records & find) */}
         <div>
@@ -836,81 +1010,21 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
         {/* Banner Messages */}
         {lookupError && (
-          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{lookupError}</div>
+          <div className="banner-error rounded-lg px-4 py-2.5 text-sm mb-3">{lookupError}</div>
         )}
         {successMsg && (
-          <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4 flex items-center justify-between">
+          <div className="banner-success rounded-lg px-4 py-2.5 text-sm mb-3 flex items-center justify-between">
             <span>{successMsg}</span>
           </div>
         )}
         {errorMsg && (
-          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4 flex items-center justify-between">
+          <div className="banner-error rounded-lg px-4 py-2.5 text-sm mb-3 flex items-center justify-between">
             <span>{errorMsg}</span>
           </div>
         )}
 
-        {/* Drafts Loader Panel */}
-        {mode !== 'view' && drafts.length > 0 && (
-          <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-4 text-sm" data-no-print>
-            <div className="flex items-center gap-2">
-              <span className="font-semibold text-slate-700">Saved Drafts:</span>
-              <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-bold">
-                {drafts.length} incomplete return(s)
-              </span>
-            </div>
-            <div className="flex items-center gap-3">
-              <select
-                value={selectedDraftId ?? ''}
-                onChange={e => {
-                  const draftId = e.target.value ? Number(e.target.value) : null;
-                  setSelectedDraftId(draftId);
-                  const selected = drafts.find(d => d.return_id === draftId);
-                  if (selected) {
-                    loadReturnRow(selected);
-                    setMode('new');
-                  }
-                }}
-                className="soleria-input py-1 px-2.5 text-xs bg-white border cursor-pointer font-medium"
-                style={{ width: '220px' }}
-              >
-                <option value="">Select a draft to load...</option>
-                {drafts.map(d => {
-                  const custName = customers.find(c => c.customer_id === d.customer_id)?.name || 'Unnamed Customer';
-                  return (
-                    <option key={d.return_id} value={d.return_id}>
-                      {d.bill_no || 'No Number'} - {custName} ({formatDate(d.return_date)})
-                    </option>
-                  );
-                })}
-              </select>
-              <button type="button" onClick={handleConfirmDraft} className="text-xs text-emerald-600 hover:text-emerald-800 font-semibold transition-colors">
-                Confirm Draft (Post)
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  if (selectedDraftId != null) {
-                    await api.draftSaleReturns.remove(selectedDraftId);
-                    setSelectedDraftId(null);
-                    handleNew();
-                    refreshDrafts();
-                    setSuccessMsg('Draft deleted successfully.');
-                    setTimeout(() => setSuccessMsg(''), 2000);
-                  } else {
-                    setErrorMsg('Please select a draft first.');
-                    setTimeout(() => setErrorMsg(''), 2000);
-                  }
-                }}
-                className="text-xs text-rose-600 hover:text-rose-800 font-semibold transition-colors"
-              >
-                Delete Selected Draft
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Toolbar - data-no-print */}
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-6 p-4 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap gap-2">
             {mode === 'view' ? (
               <>
@@ -1012,7 +1126,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
         </div>
 
         {/* Invoice Layout */}
-        <div className="card-white shadow-sm p-6 md:p-8" style={{ border: '1px solid var(--border-color)', background: '#ffffff' }}>
+        <div className="card-white shadow-sm p-3 md:p-4" style={{ border: '1px solid var(--border-color)', background: '#ffffff' }}>
 
           {/* Print Title (Visible only when printing) */}
           <div className="hidden print:flex items-center justify-between mb-6 pb-4 border-b">
@@ -1027,7 +1141,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           </div>
 
           {/* Master Info Header fields */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 pb-6 border-b" style={{ borderColor: 'var(--border-table)' }}>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }}>
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
                 Return No.
@@ -1077,14 +1191,14 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           </div>
 
           {/* Customer & Dispatch Section */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6 pb-6 border-b" style={{ borderColor: 'var(--border-table)' }}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }}>
 
             {/* Customer Details Box */}
-            <div className="flex flex-col gap-3 p-4 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-1.5">
+            <div className="flex flex-col gap-1.5 p-2.5 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-0.5">
                 Customer Information
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-1.5">
                 <div className="col-span-2">
                   <label className="block text-xs font-medium text-slate-600 mb-1">
                     Select Customer Name <span className="text-red-500 font-bold">*</span>
@@ -1113,12 +1227,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
 
             {/* Delivery & Dispatch Box */}
-            <div className="flex flex-col gap-3 p-4 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-1.5">
+            <div className="flex flex-col gap-1.5 p-2.5 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-0.5">
                 Dispatch Logistics
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2">
+              <div className="grid grid-cols-2 gap-1.5">
+                <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="block text-xs font-medium text-slate-600">
                       Delivery Agent (if any)
@@ -1144,6 +1258,10 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   />
                 </div>
                 <div>
+                  {/* Same row as Delivery Agent — Transport Adda paired alongside it here matches
+                      how SaleBillPage pairs its own Delivery field with Transport Adda, and keeps
+                      this box to 2 rows instead of 3 (was pushing it taller than the Customer
+                      Information box beside it, leaving visible empty space under Customer Code). */}
                   <label className="block text-xs font-medium text-slate-600 mb-1">
                     Transport Adda <span className="text-slate-400 font-normal normal-case">— optional</span>
                   </label>
@@ -1172,22 +1290,27 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
           </div>
 
-          {/* Product Items Table */}
-          <div className="mb-6 rounded-lg border bg-white overflow-visible" style={{ borderColor: 'var(--border-color)' }}>
+          {/* Product Items Table — capped to roughly 2 rows tall, then scrolls internally rather
+              than growing the card past the screen as more rows are added. The header row is
+              `sticky` within this scroll box so it stays visible past row 2. SearchableSelect's
+              own dropdown is rendered via a `fixed`-position React portal (see its source), so it
+              isn't clipped by this box's `overflow-y: auto` even when a select near the bottom
+              edge is opened. */}
+          <div className="mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)', maxHeight: '150px' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="p-3 pl-4" style={{ minWidth: '190px' }}>Returned Article <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 pl-4" style={{ width: '130px', minWidth: '110px' }}>Color <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 text-center" style={{ width: '80px' }}>Packing</th>
-                  <th className="p-3 text-center" style={{ minWidth: '120px' }}>Stock</th>
-                  <th className="p-3 text-center" style={{ width: '90px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 text-center" style={{ width: '90px' }}>Pairs</th>
-                  <th className="p-3 text-right" style={{ width: '110px', minWidth: '96px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 text-center" style={{ width: '100px', minWidth: '72px' }}>D%</th>
-                  <th className="p-3 text-right" style={{ width: '110px' }}>D. Value</th>
-                  <th className="p-3 text-right" style={{ width: '130px' }}>Total Credit</th>
-                  {!isViewMode && <th className="p-3 text-center" style={{ width: '50px' }}></th>}
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 pl-4" style={{ minWidth: '190px' }}>Returned Article <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 pl-4" style={{ width: '130px', minWidth: '110px' }}>Color <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '80px' }}>Packing</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ minWidth: '120px' }}>Stock</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '90px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '90px' }}>Pairs</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '110px', minWidth: '96px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '100px', minWidth: '72px' }}>D%</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '110px' }}>D. Value</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '130px' }}>Total Credit</th>
+                  {!isViewMode && <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '50px' }}></th>}
                 </tr>
               </thead>
               <tbody>
@@ -1197,7 +1320,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   return (
                     <tr key={item.uid} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                       {/* Article select */}
-                      <td className="p-3 pl-4" ref={el => { articleCellRefs.current[idx] = el; }}>
+                      <td className="p-1.5 pl-4" ref={el => { articleCellRefs.current[idx] = el; }}>
                         {isViewMode ? (
                           <span className="font-semibold text-slate-800 text-[13px] pl-2">{item.label || 'N/A'}</span>
                         ) : (
@@ -1212,7 +1335,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                       </td>
 
                       {/* Color / Variant select */}
-                      <td className="p-3 pl-4">
+                      <td className="p-1.5 pl-4">
                         {isViewMode ? (
                           <span className="text-slate-600 text-[13px]">{variantOptions.find(v => v.value === String(item.variantId))?.label || '-'}</span>
                         ) : (
@@ -1228,15 +1351,15 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                       </td>
 
                       {/* Packing */}
-                      <td className="p-3 text-center font-mono text-sm text-slate-600">
+                      <td className="p-1.5 text-center font-mono text-sm text-slate-600">
                         {item.packing || '-'}
                       </td>
 
                       {/* Stock — no real-time stock IPC channel exposed yet, see SaleBillPage comment */}
-                      <td className="p-3 text-center text-xs font-medium">—</td>
+                      <td className="p-1.5 text-center text-xs font-medium">—</td>
 
                       {/* Cartons */}
-                      <td className="p-3">
+                      <td className="p-1.5">
                         <input
                           type="number"
                           value={item.cartons || ''}
@@ -1249,12 +1372,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                       </td>
 
                       {/* Pairs */}
-                      <td className="p-3 text-center text-sm font-bold text-slate-700">
+                      <td className="p-1.5 text-center text-sm font-bold text-slate-700">
                         {item.pairs || '-'}
                       </td>
 
                       {/* Rate */}
-                      <td className="p-3">
+                      <td className="p-1.5">
                         <input
                           type="number"
                           value={item.rate || ''}
@@ -1267,7 +1390,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                       </td>
 
                       {/* Discount % */}
-                      <td className="p-3">
+                      <td className="p-1.5">
                         <input
                           type="number"
                           value={item.discountPercent || ''}
@@ -1282,18 +1405,18 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                       </td>
 
                       {/* Discount Value — Calculated from Discount % */}
-                      <td className="p-3 text-right font-mono text-xs font-semibold text-slate-700">
+                      <td className="p-1.5 text-right font-mono text-xs font-semibold text-slate-700">
                         {item.discountValue > 0 ? item.discountValue.toLocaleString() : '-'}
                       </td>
 
                       {/* Row Total Value */}
-                      <td className="p-3 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>
+                      <td className="p-1.5 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>
                         Rs {item.value.toLocaleString('en-US')}
                       </td>
 
                       {/* Delete Action */}
                       {!isViewMode && (
-                        <td className="p-3 text-center">
+                        <td className="p-1.5 text-center">
                           <button type="button" onClick={() => handleRemoveItemRow(idx)} className="text-red-500 hover:text-red-700 p-1" disabled={items.length <= 1}>
                             <Trash2 size={16} />
                           </button>
@@ -1308,8 +1431,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
           {/* Add Row Button */}
           {!isViewMode && (
-            <div className="flex flex-wrap items-center gap-3 mb-6">
-              <button type="button" onClick={handleAddItemRow} className="btn-dashed flex items-center gap-1 px-3 py-1.5">
+            <div className="flex flex-wrap items-center gap-3 mb-2">
+              <button type="button" onClick={handleAddItemRow} className="btn-dashed flex items-center gap-1 px-3 py-1">
                 <Plus size={14} /> Add Item Row
               </button>
               <span className="text-xs text-slate-400">
@@ -1318,11 +1441,13 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
           )}
 
-          {/* Invoice Summary and Remarks */}
-          <div className="grid grid-cols-1 gap-4 sm:gap-5 md:grid-cols-2 md:gap-6 lg:gap-8 pt-4">
+          {/* Invoice Summary and Remarks — compact (small textarea, tight gaps, no min-height
+              floor on the calculations box) so a typical return's whole form fits one screen
+              without scrolling to reach Save/Post, matching SaleBillPage. */}
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
             {/* Remarks */}
-            <div className="flex flex-col">
-              <label className="block text-xs font-bold uppercase tracking-wider mb-2 text-slate-500 font-inter">
+            <div className="flex flex-col gap-1">
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 font-inter">
                 RETURN REASON / REMARKS
               </label>
               <textarea
@@ -1330,18 +1455,18 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 disabled={isViewMode}
                 onChange={e => setRemarks(e.target.value)}
                 placeholder="Enter return reasons or remarks..."
-                className="soleria-input w-full flex-1 rounded-xl border border-slate-200/90 p-3.5 focus:ring-2 focus:ring-[var(--brand-gold)]/20 focus:border-[var(--brand-gold)] transition-all"
-                rows={4}
-                style={{ fontSize: '13px', resize: 'none' }}
+                className="soleria-input w-full rounded-xl border border-slate-200/90 p-2.5 focus:ring-2 focus:ring-[var(--brand-gold)]/20 focus:border-[var(--brand-gold)] transition-all"
+                rows={2}
+                style={{ fontSize: '13px', resize: 'none', minHeight: '52px' }}
               />
             </div>
 
             {/* Calculations Box */}
-            <div className="flex flex-col justify-between p-3 sm:p-4 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md min-h-[140px] sm:min-h-[160px]">
-              <div className="text-xs font-semibold uppercase tracking-wider border-b pb-1.5 mb-2 text-slate-400 border-slate-800">
+            <div className="flex flex-col justify-between p-3 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md">
+              <div className="text-xs font-semibold uppercase tracking-wider border-b pb-1 mb-1.5 text-slate-400 border-slate-800">
                 Calculations
               </div>
-              <div className="flex flex-col gap-2 font-inter text-xs">
+              <div className="flex flex-col gap-1 font-inter text-xs">
                 <div className="flex justify-between">
                   <span className="text-slate-400">Total Cartons:</span>
                   <span className="font-semibold font-mono">{totalCartons}</span>
@@ -1369,7 +1494,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   )}
                 </div>
               </div>
-              <div className="flex justify-between items-center border-t pt-2 mt-2 border-[#1e293b]">
+              <div className="flex justify-between items-center border-t pt-1.5 mt-1.5 border-[#1e293b]">
                 <span className="font-bold text-[11px] uppercase tracking-wider text-slate-400">Total Credit Amount:</span>
                 <span className="text-xl font-bold font-mono text-[#B08D57] font-extrabold">
                   Rs {finalTotalValue.toLocaleString('en-US')}

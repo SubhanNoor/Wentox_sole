@@ -51,11 +51,11 @@ export default function JournalVoucherPage() {
   const [jvId, setJvId] = useState<number | null>(null);
   const [status, setStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
   const [date, setDate] = useState(today());
+  const [voucherNo, setVoucherNo] = useState('');
   const [baId, setBaId] = useState('');
   const [direction, setDirection] = useState<'CREDIT' | 'DEBIT'>('CREDIT');
   const [amount, setAmount] = useState<number>(0);
   const [reason, setReason] = useState('');
-  const [remarks, setRemarks] = useState('');
   const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
 
   const [errorMsg, setErrorMsg] = useState('');
@@ -88,7 +88,7 @@ export default function JournalVoucherPage() {
       if (jvSearch.trim()) {
         const q = jvSearch.trim().toLowerCase();
         const accName = (v.ba_name || accountName(v.ba_id)).toLowerCase();
-        const matches = accName.includes(q) || (v.reason || '').toLowerCase().includes(q) || (v.remarks || '').toLowerCase().includes(q);
+        const matches = accName.includes(q) || (v.reason || '').toLowerCase().includes(q) || (v.voucher_no || '').toLowerCase().includes(q);
         if (!matches) return false;
       }
       return true;
@@ -97,7 +97,7 @@ export default function JournalVoucherPage() {
 
   const handleNew = () => {
     setMode('new'); setJvId(null); setStatus('DRAFT');
-    setDate(today()); setBaId(''); setDirection('CREDIT'); setAmount(0); setReason(''); setRemarks('');
+    setDate(today()); setVoucherNo(''); setBaId(''); setDirection('CREDIT'); setAmount(0); setReason('');
     setErrorMsg('');
   };
 
@@ -108,7 +108,8 @@ export default function JournalVoucherPage() {
     if (!reason.trim()) { setErrorMsg('A reason is required — a JV without one cannot be explained later.'); return null; }
     return {
       jv_date: date, ba_id: Number(baId), direction, amount,
-      reason: reason.trim(), remarks: remarks.trim() || undefined,
+      voucher_no: voucherNo.trim() || undefined,
+      reason: reason.trim(),
     };
   };
 
@@ -152,11 +153,11 @@ export default function JournalVoucherPage() {
     setJvId(row.jv_id);
     setStatus(row.status);
     setDate(row.jv_date.slice(0, 10));
+    setVoucherNo(row.voucher_no || '');
     setBaId(String(row.ba_id));
     setDirection(row.direction);
     setAmount(row.amount);
     setReason(row.reason);
-    setRemarks(row.remarks || '');
     setErrorMsg('');
     setMode('view');
     setActiveTab('entry');
@@ -287,9 +288,18 @@ export default function JournalVoucherPage() {
                 </div>
 
                 <div className="flex flex-col gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
-                    <input type="date" value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input font-semibold" />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
+                      <input type="date" value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input font-semibold" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        Number <span className="text-slate-400 font-normal normal-case">— optional</span>
+                      </label>
+                      <input type="text" value={voucherNo} disabled={isViewMode} onChange={e => setVoucherNo(e.target.value)}
+                        placeholder="Manual voucher #..." className="soleria-input font-semibold" />
+                    </div>
                   </div>
 
                   <div>
@@ -324,14 +334,6 @@ export default function JournalVoucherPage() {
                       placeholder="e.g. Eid compensation" className="soleria-input font-semibold" />
                   </div>
                 </div>
-
-                {/* Remarks — full-width textarea below both columns, same shape as the Transfer
-                    Cash page. */}
-                <div className="md:col-span-2">
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
-                  <textarea value={remarks} disabled={isViewMode} onChange={e => setRemarks(e.target.value)}
-                    placeholder="Optional" className="soleria-input font-semibold" rows={4} style={{ resize: 'none' }} />
-                </div>
               </form>
             </div>
 
@@ -346,7 +348,7 @@ export default function JournalVoucherPage() {
                       type="text"
                       value={jvSearch}
                       onChange={e => setJvSearch(e.target.value)}
-                      placeholder="Search account, reason, remarks..."
+                      placeholder="Search account, reason, number..."
                       className="soleria-input pl-8 py-1.5 text-xs w-64"
                     />
                   </div>
@@ -366,6 +368,7 @@ export default function JournalVoucherPage() {
                   <thead>
                     <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                       <th className="p-3 pl-4">Date</th>
+                      <th className="p-3">Number</th>
                       <th className="p-3">Account</th>
                       <th className="p-3">Reason</th>
                       <th className="p-3 text-center">Direction</th>
@@ -375,10 +378,11 @@ export default function JournalVoucherPage() {
                   </thead>
                   <tbody>
                     {filteredVouchers.length === 0 ? (
-                      <tr><td colSpan={6} className="text-center p-8 text-slate-400">{vouchers.length === 0 ? 'No journal vouchers recorded yet.' : 'No journal vouchers match your search/filter.'}</td></tr>
+                      <tr><td colSpan={7} className="text-center p-8 text-slate-400">{vouchers.length === 0 ? 'No journal vouchers recorded yet.' : 'No journal vouchers match your search/filter.'}</td></tr>
                     ) : filteredVouchers.map(v => (
                       <tr key={v.jv_id} onClick={() => loadRow(v)} className="border-b hover:bg-slate-50/50 cursor-pointer" style={{ borderColor: 'var(--border-table)' }}>
                         <td className="p-3 pl-4 text-xs font-mono text-slate-600">{formatDate(v.jv_date)}</td>
+                        <td className="p-3 text-xs font-mono text-slate-500">{v.voucher_no || '-'}</td>
                         <td className="p-3 font-semibold text-slate-900">{v.ba_name || accountName(v.ba_id)}</td>
                         <td className="p-3 text-xs text-slate-500">{v.reason}</td>
                         <td className="p-3 text-center">

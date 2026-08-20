@@ -69,6 +69,18 @@ module.exports = function register() {
     }),
   );
 
+  // Pending Posting sidebar's Delete (unposted bills only — service.remove() throws on a posted
+  // one). Password required unconditionally, same guard as editing an already-posted bill — this
+  // is destructive with no undo trail, unlike unposting/posting.
+  ipcMain.handle(
+    'sale-bills:remove',
+    wrap(async (payload) => {
+      const session = requireSession();
+      await authService.verifyPassword(session.userId, payload.password);
+      return service.remove(payload.id);
+    }),
+  );
+
   // UC-20: Search & Bilty/Adda Updation. Action names stay camelCase (not kebab-case) — the
   // preload Proxy passes the JS property access straight through as the action segment with no
   // case conversion, so this must match window.api.saleBills.biltySearch(...)/.updateBilty(...)

@@ -7,7 +7,7 @@ import type {
   VendorRow, RegionRow, CityRow, PurchaseRow, PurchaseCreateInput, PurchaseItemInput,
   UnpostedPurchaseRow, PostAllResult
 } from '@/lib/api';
-import { formatDate, getTodayDate } from '@/lib/utils';
+import { formatDate, getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import { focusFirstField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
 import { Plus, Trash2, Save, ShoppingBag, Edit } from 'lucide-react';
@@ -412,8 +412,47 @@ export default function PurchasePage() {
     return [...purchases].sort((a, b) => b.purchase_date.localeCompare(a.purchase_date));
   }, [purchases]);
 
+  // Recorded Purchases moved to its own tab (was inline under the entry form on the same page —
+  // every purchase ever recorded rendering directly below a live entry form doesn't scale and
+  // pushed the whole page well past one screen). Date-range filter, defaulting to the last three
+  // months (today down to three months ago) rather than "everything" — both fields stay editable
+  // and clearable, so either one blank means "no lower/upper bound" once touched.
+  const [activeTab, setActiveTab] = useState<'entry' | 'records'>('entry');
+  const [recordsDateFrom, setRecordsDateFrom] = useState(getThreeMonthsAgoDate());
+  const [recordsDateTo, setRecordsDateTo] = useState(getTodayDate());
+
+  const filteredPurchases = useMemo(() => {
+    return sortedPurchases.filter(p => {
+      const d = p.purchase_date.slice(0, 10);
+      if (recordsDateFrom && d < recordsDateFrom) return false;
+      if (recordsDateTo && d > recordsDateTo) return false;
+      return true;
+    });
+  }, [sortedPurchases, recordsDateFrom, recordsDateTo]);
+
+  const tabBar = (
+    <div className="flex gap-1.5" data-no-print>
+      <button
+        onClick={() => { setActiveTab('entry'); handleNew(); }}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        New Purchase
+      </button>
+      <button
+        onClick={() => setActiveTab('records')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'records' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Recorded Purchases
+      </button>
+    </div>
+  );
+
   return (
-    <AppLayout pageTitle="Purchase Entry">
+    <AppLayout pageTitle="Purchase Entry" headerAction={tabBar}>
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
 
         {lookupError && (
@@ -426,6 +465,8 @@ export default function PurchasePage() {
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
         )}
 
+        {activeTab === 'entry' && (
+        <>
         {/* P-03: Pending Posting panel — enter a run of purchases, then post them all at the end
             instead of one at a time. Mirrors SB-06 on the Sale Bill screen. */}
         {(unpostedPurchases.length > 0 || postAllResult) && (
@@ -538,6 +579,32 @@ export default function PurchasePage() {
                 </button>
               </div>
             )}
+            {/* Save/Update — moved up here from below the item table, matching SaleBillPage/
+                SaleReturnPage: the primary action shouldn't require scrolling past the whole
+                item table to reach. */}
+            {!isViewMode && (
+              <div className="flex items-center gap-2">
+                {mode === 'edit' && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (purchaseId == null) return;
+                      const res = await api.purchases.get(purchaseId);
+                      if (res.ok) await loadPurchaseRow(res.data);
+                    }}
+                    className="btn-outline px-3 py-1.5 text-xs font-semibold"
+                  >
+                    Cancel Edit
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  className="btn-gold flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold"
+                >
+                  <Save size={14} /> {mode === 'edit' ? 'Update Purchase' : 'Save Purchase'}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Header fields */}
@@ -612,17 +679,21 @@ export default function PurchasePage() {
             </div>
           </div>
 
-          {/* Line items */}
-          <div className="mb-4 rounded-lg border bg-white overflow-visible" style={{ borderColor: 'var(--border-color)' }}>
+          {/* Line items — capped to roughly 8 rows tall, then scrolls internally rather than
+              growing the card past the screen as more rows are added (same treatment as
+              SaleBillPage/SaleReturnPage's item tables, just a taller cap — a purchase bill
+              routinely lists more distinct materials than a sale bill lists articles). The header
+              row is `sticky` within the scroll box so column labels stay visible past row 8. */}
+          <div className="mb-4 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)', maxHeight: '500px' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="p-3 pl-4" style={{ minWidth: '200px' }}>Material / Product Name <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3" style={{ width: '160px' }}>Unit <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 text-center" style={{ width: '110px' }}>Quantity <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 text-center" style={{ width: '130px' }}>Price / Unit <span className="text-red-500 font-bold">*</span></th>
-                  <th className="p-3 text-right" style={{ width: '130px' }}>Total Price</th>
-                  <th className="p-3 text-center" style={{ width: '50px' }}></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 pl-4" style={{ minWidth: '200px' }}>Material / Product Name <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3" style={{ width: '160px' }}>Unit <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '110px' }}>Quantity <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '130px' }}>Price / Unit <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: '130px' }}>Total Price</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '50px' }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -734,45 +805,59 @@ export default function PurchasePage() {
           </div>
 
           {!isViewMode && (
-            <div className="flex items-center justify-between">
-              <button
-                type="button"
-                onClick={addItemRow}
-                className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm"
-              >
-                <Plus size={16} /> Add Line Item
-              </button>
-              <div className="flex items-center gap-2">
-                {mode === 'edit' && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      if (purchaseId == null) return;
-                      const res = await api.purchases.get(purchaseId);
-                      if (res.ok) await loadPurchaseRow(res.data);
-                    }}
-                    className="btn-outline px-4 py-2 text-sm font-semibold"
-                  >
-                    Cancel Edit
-                  </button>
-                )}
-                <button
-                  type="submit"
-                  className="btn-gold flex items-center gap-1.5 px-6 py-2.5 text-sm font-bold"
-                >
-                  <Save size={16} /> {mode === 'edit' ? 'Update Purchase' : 'Save Purchase'}
-                </button>
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={addItemRow}
+              className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm"
+            >
+              <Plus size={16} /> Add Line Item
+            </button>
           )}
         </form>
+        </>
+        )}
 
-        {/* Recorded Purchases */}
+        {/* Recorded Purchases — own tab now, with a from/to date filter, rather than always
+            rendering every purchase ever recorded inline below the live entry form. */}
+        {activeTab === 'records' && (
         <div className="card-white p-6 bg-white border">
-          <h3 className="font-lora font-semibold text-lg text-slate-800 mb-4">Recorded Purchases</h3>
-          {sortedPurchases.length === 0 ? (
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+            <h3 className="font-lora font-semibold text-lg text-slate-800">Recorded Purchases</h3>
+            <div className="flex flex-wrap items-end gap-3" data-no-print>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">From</label>
+                <input
+                  type="date"
+                  value={recordsDateFrom}
+                  onChange={e => setRecordsDateFrom(e.target.value)}
+                  className="soleria-input"
+                  style={{ fontSize: '13px' }}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">To</label>
+                <input
+                  type="date"
+                  value={recordsDateTo}
+                  onChange={e => setRecordsDateTo(e.target.value)}
+                  className="soleria-input"
+                  style={{ fontSize: '13px' }}
+                />
+              </div>
+              {(recordsDateFrom || recordsDateTo) && (
+                <button
+                  type="button"
+                  onClick={() => { setRecordsDateFrom(''); setRecordsDateTo(''); }}
+                  className="text-xs text-slate-500 hover:text-slate-700 font-semibold px-2 py-2"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+          {filteredPurchases.length === 0 ? (
             <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
-              No purchases recorded yet.
+              {sortedPurchases.length === 0 ? 'No purchases recorded yet.' : 'No purchases in this date range.'}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -787,12 +872,12 @@ export default function PurchasePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedPurchases.map(p => {
+                  {filteredPurchases.map(p => {
                     const vendorName = vendors.find(v => v.vendor_id === p.vendor_id)?.name || 'Unknown Vendor';
                     return (
                       <tr
                         key={p.purchase_id}
-                        onClick={() => loadPurchaseRow(p)}
+                        onClick={() => { loadPurchaseRow(p); setActiveTab('entry'); }}
                         className="border-b hover:bg-slate-50/40 cursor-pointer"
                         style={{ borderColor: 'var(--border-table)' }}
                       >
@@ -809,6 +894,7 @@ export default function PurchasePage() {
             </div>
           )}
         </div>
+        )}
 
         {/* Add New Vendor Modal */}
         {isAddVendorOpen && (
