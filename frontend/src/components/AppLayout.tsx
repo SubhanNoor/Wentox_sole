@@ -190,11 +190,22 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     function onKeyDown(e: KeyboardEvent) {
       const target = e.target;
       if (!(target instanceof HTMLElement)) return;
-      if (target.tagName === 'TEXTAREA') return; // Enter/arrows edit multi-line text as normal
+      const isTextarea = target.tagName === 'TEXTAREA';
+      // A textarea's Left/Right/Up/Down keep their native meaning unconditionally — cursor
+      // movement is meaningful at every position in multi-line text, not just at a line's start or
+      // end the way it is for a single-line input. Enter is handled below instead of exempted here:
+      // a Remarks box that swallowed Enter forever, with no way to move on or save, was the one
+      // field in the app that broke the "Enter means done with this field" rule every other field
+      // follows — reported directly by the user.
+      if (isTextarea && e.key !== 'Enter') return;
       const form = target.closest('form');
       if (!form) return;
 
       if (e.key === 'Enter') {
+        // Shift+Enter is the escape hatch for a genuine newline in a textarea. Plain Enter now
+        // advances/submits like every other field.
+        if (isTextarea && e.shiftKey) return;
+
         const fields = fieldsIn(form);
         const idx = fields.indexOf(target);
         if (idx === -1) return;

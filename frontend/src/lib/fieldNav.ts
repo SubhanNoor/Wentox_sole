@@ -17,6 +17,17 @@
 export const FIELD_SELECTOR =
   'input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled), button[data-field-nav]:not(:disabled)';
 
+/**
+ * The first focusable field inside `container`, using the same definition of "a field" as
+ * `fieldsIn()`. For a repeating row (a sale-bill line item, a wage-run row) the row's own fields
+ * aren't known to the caller by name — this lets "focus the new row" mean "focus whatever its
+ * first field turns out to be" without the caller needing to know if that's a text input or a
+ * SearchableSelect's trigger button.
+ */
+export function focusFirstField(container: HTMLElement | null | undefined): void {
+  container?.querySelector<HTMLElement>(FIELD_SELECTOR)?.focus();
+}
+
 /** The form's focusable fields in document order, skipping anything not currently on screen. */
 export function fieldsIn(form: HTMLFormElement): HTMLElement[] {
   return Array.from(form.querySelectorAll<HTMLElement>(FIELD_SELECTOR)).filter(

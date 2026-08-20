@@ -5,6 +5,8 @@ import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { VendorRow, CityRow, PurchaseRow, PurchaseReturnRow, PurchaseReturnCreateInput, PurchaseReturnItemInput } from '@/lib/api';
 import { formatDate, getTodayDate } from '@/lib/utils';
+import { focusFirstField } from '@/lib/fieldNav';
+import { useHeldKey } from '@/hooks/useHeldKey';
 import { Plus, Trash2, Save, Undo2, Edit } from 'lucide-react';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
@@ -162,6 +164,40 @@ export default function PurchaseReturnPage() {
   };
 
   const addItemRow = () => setItems(prev => [...prev, emptyItem()]);
+
+  // Keyboard entry without the mouse — same pattern as SaleBillPage/SaleReturnPage. G-01's generic
+  // Enter-walk already carries fields forward within a row and into an EXISTING next row; this only
+  // steps in at the boundary (Enter on the last field of the last row), where it appends a blank row
+  // and focuses into it. stopPropagation stops AppLayout's own window-level Enter handler from also
+  // firing on the same keydown and clicking Save before the new row exists.
+  const materialNameRefs = useRef<(HTMLInputElement | null)[]>([]);
+  // '.' held while Enter is pressed is a genuine three-way chord alongside Shift+Enter/Ctrl+Enter
+  // below — tracked via useHeldKey since '.' isn't a real modifier key with its own event flag.
+  // Typing '.' alone (a decimal point) never triggers this: by the time Enter is a separate,
+  // later keypress, '.' has already been released. Any single stray "." that types into the field
+  // during the chord itself is harmless — the input is fully controlled by the numeric state, so
+  // the very next render overwrites it back to the real number regardless.
+  const periodHeld = useHeldKey('.');
+
+  function handleLastFieldKeyDown(e: React.KeyboardEvent) {
+    // Plain Enter is deliberately left alone here: it now does exactly what every other field
+    // does — walk to whatever's next via AppLayout's own G-01 handler, and eventually reach
+    // Save/Post. An earlier version hijacked it to always append a new line, which meant a plain
+    // Enter on the last field could never actually finish and save a bill — reported directly by
+    // the user after trying it.
+    //
+    // Adding a line is its own explicit action instead: Shift+Enter, Ctrl+Enter, or '.'+Enter, from
+    // the last field of ANY row (not only the last one) — always appends at the end, same as the
+    // "+ Add Item Row" button, and focuses into the new row. Shift+Enter is distinct from its
+    // other meaning inside a Remarks textarea (insert a literal newline) — different field, no
+    // collision.
+    if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey || periodHeld.current)) return;
+    e.preventDefault();
+    e.stopPropagation(); // stop AppLayout's own Enter handler from also walking this keystroke
+    const newRowIndex = items.length; // always the end, regardless of which row triggered this
+    addItemRow();
+    requestAnimationFrame(() => focusFirstField(materialNameRefs.current[newRowIndex]));
+  }
 
   const removeItemRow = (uid: string) => {
     setItems(prev => prev.length > 1 ? prev.filter(it => it.uid !== uid) : prev);
@@ -457,11 +493,12 @@ export default function PurchaseReturnPage() {
                 </tr>
               </thead>
               <tbody>
-                {items.map(item => (
+                {items.map((item, idx) => (
                   <tr key={item.uid} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
                     <td className="p-3 pl-4">
                       <input
                         type="text"
+                        ref={el => { materialNameRefs.current[idx] = el; }}
                         value={item.materialName}
                         disabled={isViewMode}
                         onChange={e => updateItem(item.uid, 'materialName', e.target.value)}
@@ -533,6 +570,7 @@ export default function PurchaseReturnPage() {
                         value={item.pricePerUnit || ''}
                         disabled={isViewMode}
                         onChange={e => updateItem(item.uid, 'pricePerUnit', Number(e.target.value))}
+                        onKeyDown={handleLastFieldKeyDown}
                         className="soleria-input text-center font-semibold"
                         style={{ fontSize: '13px' }}
                       />

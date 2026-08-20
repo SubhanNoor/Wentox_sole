@@ -8,6 +8,8 @@ import FindTab from '@/components/FindTab';
 import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit, AlertTriangle } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { formatDate, getTodayDate } from '@/lib/utils';
+import { focusFirstField } from '@/lib/fieldNav';
+import { useHeldKey } from '@/hooks/useHeldKey';
 import SearchableSelect from '@/components/SearchableSelect';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
@@ -447,6 +449,16 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     const workingDate = date;
     handleNew();
     setDate(workingDate);
+    // The G-01 auto-focus effect in AppLayout only re-scans when a <form> is newly INSERTED into
+    // the DOM (on page mount, or a MutationObserver catching one appearing later) — it does not
+    // re-run just because this page's own state resets while already mounted, since nothing here
+    // remounts AppLayout or removes/reinserts the form. Left to that effect alone, mode's real
+    // path during a save is 'new' -> 'view' -> 'new' — same value it started at from the effect's
+    // perspective, so its own dependency array never sees a change and it never re-fires. Reported
+    // directly by the user: the form cleared correctly, but focus never returned to the first
+    // field. Focusing explicitly here, rather than depending on that effect, is what actually
+    // fixes it.
+    requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
 
   const buildPayload = (): SaleBillCreateInput | null => {
@@ -526,12 +538,18 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     return result.data;
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (mode === 'edit') {
       setPasswordActionType('save_bill');
       setIsPasswordModalOpen(true);
     } else {
-      executeSave();
+      // SB-05: a plain Save is also "done with this bill" — the client's own workflow for a run of
+      // bills is save each one as a draft, then Post All at the end (SB-06), so this has to reset
+      // too, not only Save & Post. Reported directly by the user after testing the keyboard flow:
+      // Enter reached Save correctly, but the form then just sat on the saved bill instead of
+      // being ready for the next one.
+      const saved = await executeSave();
+      if (saved) readyForNextBill();
     }
   };
 
@@ -654,6 +672,47 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
   // Line Items Helper Actions
   const handleAddItemRow = () => setItems([...items, newUiItem()]);
+
+  // Keyboard entry of a whole bill without touching the mouse: G-01's generic Enter-walk already
+  // carries a row's own fields forward and hops into the NEXT row correctly (it's a plain DOM-order
+  // walk, and the next row's fields are already there to walk into). The one thing it cannot do is
+  // create a row that doesn't exist yet — so this only steps in at the boundary, when Enter is
+  // pressed on the LAST field of the LAST row: it appends a blank row and focuses into it, same as
+  // WageRunPage's WR-02. Every other Enter press on this grid is left alone.
+  //
+  // stopPropagation matters here: AppLayout's own window-level Enter handler runs on the same
+  // keydown right after this one, reading the SAME e.target — and setItems() hasn't re-rendered
+  // yet, so as far as that handler can tell this input is still the form's last field. Without
+  // stopPropagation it would also see idx-is-last and, in the same tick, click the Save & Post
+  // button — posting a bill in the middle of appending a row to it.
+  const articleCellRefs = useRef<(HTMLTableCellElement | null)[]>([]);
+  // '.' held while Enter is pressed is a genuine three-way chord alongside Shift+Enter/Ctrl+Enter
+  // below — tracked via useHeldKey since '.' isn't a real modifier key with its own event flag.
+  // Typing '.' alone (a decimal point) never triggers this: by the time Enter is a separate,
+  // later keypress, '.' has already been released. Any single stray "." that types into the field
+  // during the chord itself is harmless — the input is fully controlled by the numeric state, so
+  // the very next render overwrites it back to the real number regardless.
+  const periodHeld = useHeldKey('.');
+
+  function handleLastFieldKeyDown(e: React.KeyboardEvent) {
+    // Plain Enter is deliberately left alone here: it now does exactly what every other field
+    // does — walk to whatever's next via AppLayout's own G-01 handler, and eventually reach
+    // Save/Post. An earlier version hijacked it to always append a new line, which meant a plain
+    // Enter on the last field could never actually finish and save a bill — reported directly by
+    // the user after trying it.
+    //
+    // Adding a line is its own explicit action instead: Shift+Enter, Ctrl+Enter, or '.'+Enter, from
+    // the last field of ANY row (not only the last one) — always appends at the end, same as the
+    // "+ Add Item Row" button, and focuses into the new row. Shift+Enter is distinct from its
+    // other meaning inside a Remarks textarea (insert a literal newline) — different field, no
+    // collision.
+    if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey || periodHeld.current)) return;
+    e.preventDefault();
+    e.stopPropagation(); // stop AppLayout's own Enter handler from also walking this keystroke
+    const newRowIndex = items.length; // always the end, regardless of which row triggered this
+    handleAddItemRow();
+    requestAnimationFrame(() => focusFirstField(articleCellRefs.current[newRowIndex]));
+  }
 
   const handleRemoveItemRow = (idx: number) => {
     if (items.length <= 1) return;
@@ -1509,7 +1568,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   return (
                     <tr key={item.uid} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                       {/* Article select */}
-                      <td className="p-3 pl-4">
+                      <td className="p-3 pl-4" ref={el => { articleCellRefs.current[idx] = el; }}>
                         {isViewMode ? (
                           <span className="font-semibold text-slate-800 text-[13px] pl-2">{item.label || 'N/A'}</span>
                         ) : (
@@ -1611,6 +1670,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                           min={0}
                           max={100}
                           onChange={e => updateNumericField(idx, 'discountPercent', parseFloat(e.target.value) || 0)}
+                          onKeyDown={handleLastFieldKeyDown}
                           className="soleria-input text-center font-mono"
                           style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
