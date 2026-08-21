@@ -287,59 +287,66 @@ export default function JournalVoucherPage() {
               <table className="w-full text-left border-collapse text-sm">
                 <thead>
                   <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                    <th className="p-3 pl-4 w-64">A/C Code</th>
+                    <th className="p-3 pl-4 w-56">A/C Code</th>
+                    <th className="p-3">Account Description</th>
                     <th className="p-3">Narration</th>
-                    <th className="p-3 text-right w-36">Debit</th>
-                    <th className="p-3 text-right w-36">Credit</th>
+                    <th className="p-3 text-right w-36">Debit (NAAM)</th>
+                    <th className="p-3 text-right w-36">Credit (JAMMA)</th>
                     {!isViewMode && <th className="p-3 w-12"></th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {lines.map(line => (
-                    <tr key={line.uid} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
-                      <td className="p-2 pl-4">
-                        <SearchableSelect
-                          options={accountOptions} value={line.baId}
-                          onChange={v => updateLine(line.uid, 'baId', v)}
-                          placeholder="Search account..." disabled={isViewMode}
-                        />
-                      </td>
-                      <td className="p-2">
-                        <input type="text" value={line.narration} disabled={isViewMode}
-                          onChange={e => updateLine(line.uid, 'narration', e.target.value)}
-                          placeholder="Optional note for this line..." className="soleria-input text-xs" />
-                      </td>
-                      <td className="p-2">
-                        <input type="number" min={0} value={line.debit || ''} disabled={isViewMode}
-                          onChange={e => updateLine(line.uid, 'debit', Math.max(0, parseInt(e.target.value) || 0))}
-                          placeholder="0" className="soleria-input font-mono text-right" />
-                      </td>
-                      <td className="p-2">
-                        <input type="number" min={0} value={line.credit || ''} disabled={isViewMode}
-                          onChange={e => updateLine(line.uid, 'credit', Math.max(0, parseInt(e.target.value) || 0))}
-                          placeholder="0" className="soleria-input font-mono text-right" />
-                      </td>
-                      {!isViewMode && (
-                        <td className="p-2 text-center">
-                          <button type="button" onClick={() => removeLine(line.uid)} disabled={lines.length <= 2}
-                            className="text-rose-500 hover:text-rose-700 disabled:opacity-30 disabled:cursor-not-allowed">
-                            <Trash2 size={16} />
-                          </button>
+                  {lines.map(line => {
+                    const selectedAccount = accounts.find(a => a.ba_id === Number(line.baId));
+                    return (
+                      <tr key={line.uid} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
+                        <td className="p-2 pl-4">
+                          <SearchableSelect
+                            options={accountOptions} value={line.baId}
+                            onChange={v => updateLine(line.uid, 'baId', v)}
+                            placeholder="Search account..." disabled={isViewMode}
+                          />
                         </td>
-                      )}
-                    </tr>
-                  ))}
+                        <td className="p-2 text-xs text-slate-600 font-medium">
+                          {selectedAccount ? `${selectedAccount.name} (${selectedAccount.code})` : '—'}
+                        </td>
+                        <td className="p-2">
+                          <input type="text" value={line.narration} disabled={isViewMode}
+                            onChange={e => updateLine(line.uid, 'narration', e.target.value)}
+                            placeholder="Optional note for this line..." className="soleria-input text-xs" />
+                        </td>
+                        <td className="p-2">
+                          <input type="number" min={0} value={line.debit || ''} disabled={isViewMode}
+                            onChange={e => updateLine(line.uid, 'debit', Math.max(0, parseInt(e.target.value) || 0))}
+                            placeholder="0" className="soleria-input font-mono text-right" />
+                        </td>
+                        <td className="p-2">
+                          <input type="number" min={0} value={line.credit || ''} disabled={isViewMode}
+                            onChange={e => updateLine(line.uid, 'credit', Math.max(0, parseInt(e.target.value) || 0))}
+                            placeholder="0" className="soleria-input font-mono text-right" />
+                        </td>
+                        {!isViewMode && (
+                          <td className="p-2 text-center">
+                            <button type="button" onClick={() => removeLine(line.uid)} disabled={lines.length <= 2}
+                              className="text-rose-500 hover:text-rose-700 disabled:opacity-30 disabled:cursor-not-allowed">
+                              <Trash2 size={16} />
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
                 </tbody>
                 <tfoot>
                   <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                    <td colSpan={2} className="p-3 pl-4 text-right font-lora">Net Total</td>
+                    <td colSpan={3} className="p-3 pl-4 text-right font-lora">Net Total</td>
                     <td className="p-3 text-right font-mono text-emerald-800">{formatCurrency(totals.totalDebit)}</td>
                     <td className="p-3 text-right font-mono text-rose-800">{formatCurrency(totals.totalCredit)}</td>
                     {!isViewMode && <td />}
                   </tr>
                   {totals.difference !== 0 && (
                     <tr>
-                      <td colSpan={isViewMode ? 4 : 5} className="p-2 pl-4 text-xs font-semibold text-rose-600">
+                      <td colSpan={isViewMode ? 5 : 6} className="p-2 pl-4 text-xs font-semibold text-rose-600">
                         Out of balance by {formatCurrency(Math.abs(totals.difference))} — debit and credit must match before saving.
                       </td>
                     </tr>
