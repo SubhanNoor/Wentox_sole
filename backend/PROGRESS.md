@@ -4295,3 +4295,76 @@ _Stale note — this was true when first written; superseded by the entries near
   left untouched — harmless unused capability, no migration needed to remove a nullable column
   nothing writes to anymore.
 - **Files:** `frontend/src/pages/JournalVoucherPage.tsx`
+
+## Journal Voucher — full multi-line double-entry rebuild
+- **User request:** the client's legacy "Journal Entry" screen reference pictures (`ref-pics/batch2/
+  journal voucher.jpeg`, `jv2.0.jpeg`) confirmed it was never the simplified 2-leg tool the earlier
+  entry above scoped down to — `jv2.0.jpeg` shows a live example with two different accounts each
+  carrying their own debit/credit (`FINE SHOES - SADIQ ABAD` credited 5,300, `DISCOUNTS, CLAIMS, &
+  COMMISSIONS` debited 5,300, Net Total 0). User explicitly chose the full rebuild this time: a real
+  multi-line double-entry journal, no fixed counter-account, plan approved before coding per this
+  file's workflow rule. Toolbar/visual design stays consistent with the rest of the app (no legacy
+  icon/color replication) — user's explicit call. Per-line optional Narration added (distinct from
+  the header's single Reason) — also user's explicit call this round, not a reversal of the earlier
+  Remarks-removal decision above (that was header-level; this is per-line).
+- **Migration `024_journal_voucher_lines.sql`:** new `dbo.journal_voucher_lines` (line_id, jv_id FK
+  CASCADE, line_no, ba_id, debit, credit, narration), constraints mirroring `ledger_entries`
+  (single-sided per line, non-negative, non-zero). Backfills every existing `journal_vouchers` row
+  into two lines (the party leg + the old fixed JOURNAL VOUCHER account leg) before dropping the
+  now-superseded `ba_id`/`direction`/`amount` header columns and their constraints — no historical
+  data silently dropped. Guarded with an `IF NOT EXISTS`/`RAISERROR` on the reserved JOURNAL VOUCHER
+  business account before the second backfill INSERT, so a missing seed fails loudly instead of
+  silently backfilling an unbalanced single-leg row.
+- **New `journalVouchers.math.js`** (mirrors `purchaseMath.js`): `buildLines`/`validateBalance`
+  (≥2 lines, `SUM(debit) === SUM(credit)` compared in paisa to avoid float drift)/`buildTotals`.
+- **`journalVouchers.repository.js`** rewritten: header CRUD no longer touches
+  `ba_id/direction/amount`; added `insertLines`/`getLines`/`deleteLines` (update = delete-all-then-
+  reinsert, same as `purchase_items`); `insertLedgerEntries` now loops one `ledger_entries` row per
+  line instead of a fixed 2-row pair; `list()`/`findById()` roll up `line_count`/`total_debit`/
+  `total_credit` per voucher via `CROSS APPLY` (always exactly one row per header, so it can't drop
+  a voucher with zero lines — not reachable anyway since create/update always insert header+lines
+  in one transaction). Removed `getJvAccount()`.
+- **`journalVouchers.service.js`** rewritten: `resolveLines()` validates + checks
+  `businessAccountsService.getById`/`assertAccessible` per line (not just one account); `post()`
+  re-validates balance defensively before writing ledger entries; `create`/`update`/`post`/`unpost`
+  all `withTransaction`. Removed the fixed-counter-account lookup entirely.
+- **`journalVouchers.ipc.js`:** removed the `account` channel (no more fixed counter-account to
+  look up for a "JV Ledger" screen).
+- **`reports.repository.js`:** `customerReportRows`/`vendorReportRows`'s JV subqueries rewritten
+  from `SUM(CASE WHEN direction='CREDIT' THEN amount ELSE -amount END)` grouped by
+  `journal_vouchers.ba_id` to `SUM(jvl.credit - jvl.debit)` grouped by `journal_voucher_lines.ba_id`,
+  joined back to `journal_vouchers` (aliased `h`) for the existing date/status `jvWhere` filter —
+  same "what does this party's JVs net to" semantics, now correct across N lines instead of 1.
+- **`frontend/src/lib/api.ts`:** `JournalVoucherRow`/`JournalVoucherCreateInput` replaced with
+  `lines: JournalVoucherLineInput[]` (`ba_id, debit, credit, narration?`) instead of flat
+  `ba_id/direction/amount`; `JournalVoucherRow.lines` is optional since `list()` only returns
+  rolled-up totals, not per-line detail — `get()` is what carries the full lines array. Removed the
+  `account()` wrapper.
+- **`JournalVoucherPage.tsx`** rebuilt: dropped the Direction toggle, single `SearchableSelect`
+  account field, and `AccountBalancePanel` single-account preview; added a line-items grid (account
+  `SearchableSelect` + Debit + Credit + Narration per row, typing into one of Debit/Credit clears
+  the other — single-sided per line, matching `ledger_entries`), a `+ Add Line` button, a per-row
+  remove button (floor of 2 lines), and a Net Total footer (Total Debit/Total Credit/Difference,
+  with an inline "out of balance by X" warning). Save is disabled until ≥2 lines, every line has an
+  account and exactly one of debit/credit > 0, and totals balance to zero — mirrors the
+  service-side rule. Removed the JV Ledger sub-tab entirely: it only ever showed the fixed JOURNAL
+  VOUCHER account's ledger, which no longer exists as a forced counter-party — each line's ledger
+  effect is visible on its own real account via the existing account Ledger screen. "Recorded
+  Journal Vouchers" columns changed from Account/Direction/Amount (single-valued, no longer
+  possible) to Lines (count) / Total. Row click now fetches the full voucher via `get()` to hydrate
+  `lines`, since the listing query only carries rolled-up totals.
+- **Debugger review pass:** ran a full read-through of every changed/new file plus a cross-codebase
+  grep for lingering references to the old single-line shape — no functional bugs found. Two
+  non-blocking hardening items were still worth doing and are folded into the changes above: the
+  migration's `IF NOT EXISTS` guard, and a `?? 0` defensive fallback on `formatCurrency(v.total_debit)`
+  in the listing table (unreachable today since a voucher always has ≥2 lines by the time it's
+  listed, but cheap to guard).
+- **Not yet live-verified** — no SQL Server reachable in this sandbox; `npm run migrate` on a real
+  DB is needed to confirm the backfill and the new table land correctly, and the app needs a manual
+  create → save-blocked-when-unbalanced → post → unpost → edit-lines pass.
+- **Files:** `backend/src/db/migrations/024_journal_voucher_lines.sql` (new),
+  `backend/src/services/journalVouchers.math.js` (new),
+  `backend/src/repositories/journalVouchers.repository.js`,
+  `backend/src/services/journalVouchers.service.js`, `backend/src/ipc/journalVouchers.ipc.js`,
+  `backend/src/repositories/reports.repository.js`, `backend/src/services/businessAccounts.service.js`
+  (comment only), `frontend/src/lib/api.ts`, `frontend/src/pages/JournalVoucherPage.tsx`

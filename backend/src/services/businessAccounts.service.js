@@ -7,9 +7,10 @@ const CODES = require('../constants/reservedAccounts');
 const { withTransaction } = require('../db/pool');
 
 // The reserved chart heads that hold exactly ONE seeded business account, which the posting engine
-// resolves by ac_id (getCashAccount / journalVouchers.service#getJvAccount). Those two rows are
-// structural: Cash backs every transfer and the Cash Book, JOURNAL VOUCHER backs every JV, and
-// closing either breaks posting outright.
+// resolves by ac_id (getCashAccount). Cash backs every transfer and the Cash Book, so closing it
+// breaks posting outright. JOURNAL VOUCHER is kept reserved too even though the multi-line JV
+// rebuild no longer forces every voucher's other leg onto it — it may still be a convenience
+// account for suspense/adjustment JVs, so it stays protected rather than opening it up implicitly.
 //
 // NOT every reserved code. Most reserved heads — CUSTOMERS ACCOUNTS, VENDORS ACCOUNTS, Directors
 // Drawings, Business Running Expenses — hold ordinary party and expense accounts that must stay

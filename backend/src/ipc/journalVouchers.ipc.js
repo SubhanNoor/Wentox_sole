@@ -15,12 +15,6 @@ module.exports = function register() {
     return service.getById(payload.id);
   }));
 
-  // The JV ledger screen needs the account itself to open its Khaata.
-  ipcMain.handle('journal-vouchers:account', wrap(() => {
-    requireSession();
-    return service.getJvAccount();
-  }));
-
   ipcMain.handle('journal-vouchers:create', wrap((payload) => {
     const session = requireSession();
     return service.create(payload, session.userId, session);
