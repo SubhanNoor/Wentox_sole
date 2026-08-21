@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -7,7 +7,7 @@ import type {
   BusinessAccountRow, JournalVoucherRow, JournalVoucherLineInput, JournalVoucherCreateInput,
 } from '@/lib/api';
 import { formatDate, getTodayDate } from '@/lib/utils';
-import { Save, Edit, Search, Plus, Trash2 } from 'lucide-react';
+import { Save, Edit, Search, Plus, Trash2, BookText } from 'lucide-react';
 
 /**
  * Journal Voucher — a real multi-line double-entry journal (legacy "Journal Entry" screen): N
@@ -54,6 +54,11 @@ export default function JournalVoucherPage() {
     refresh();
   }, [refresh]);
 
+  // Recorded Journal Vouchers moved to its own tab (was inline below the live entry form on the
+  // same page — every JV ever recorded rendering directly under a live entry form doesn't scale
+  // and pushed the whole page well past one screen). Mirrors PurchasePage/SaleBillPage.
+  const [activeTab, setActiveTab] = useState<'entry' | 'records'>('entry');
+
   // ── entry form ──
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
   const [jvId, setJvId] = useState<number | null>(null);
@@ -80,8 +85,13 @@ export default function JournalVoucherPage() {
     [accounts]
   );
 
+  const sortedVouchers = useMemo(
+    () => [...vouchers].sort((a, b) => b.jv_date.localeCompare(a.jv_date)),
+    [vouchers]
+  );
+
   const filteredVouchers = useMemo(() => {
-    return vouchers.filter(v => {
+    return sortedVouchers.filter(v => {
       if (jvStatusFilter !== 'all' && v.status !== jvStatusFilter) return false;
       if (jvSearch.trim()) {
         const q = jvSearch.trim().toLowerCase();
@@ -90,7 +100,7 @@ export default function JournalVoucherPage() {
       }
       return true;
     });
-  }, [vouchers, jvSearch, jvStatusFilter]);
+  }, [sortedVouchers, jvSearch, jvStatusFilter]);
 
   const handleNew = () => {
     setMode('new'); setJvId(null); setStatus('DRAFT');
@@ -185,9 +195,9 @@ export default function JournalVoucherPage() {
   };
 
   // Listing rows only carry rolled-up totals (line_count/total_debit/total_credit), not the
-  // per-line detail — a click fetches the full voucher (with lines) to hydrate the form.
-  const loadRow = async (row: JournalVoucherRow) => {
-    const res = await api.journalVouchers.get(row.jv_id);
+  // per-line detail — loading a JV always re-fetches the full voucher (with lines) to hydrate the form.
+  const loadJv = async (id: number) => {
+    const res = await api.journalVouchers.get(id);
     if (!res.ok) { fail('Failed to load Journal Voucher: ' + res.error.message); return; }
     const jv = res.data;
     setJvId(jv.jv_id);
@@ -206,42 +216,108 @@ export default function JournalVoucherPage() {
     setMode('view');
   };
 
+  const loadRow = (row: JournalVoucherRow) => { loadJv(row.jv_id); setActiveTab('entry'); };
+
+  // Entry card fills whatever vertical space is left in the viewport below it (mirrors
+  // SaleBillPage/PurchasePage) — the line-items table (flex-1 inside it) grows into that space,
+  // and the outer app window never scrolls (only the table does). Measured via
+  // getBoundingClientRect rather than a CSS calc() of fixed chrome heights, since the banners
+  // above this form change height dynamically.
+  const entryCardRef = useRef<HTMLFormElement>(null);
+  const [entryCardHeight, setEntryCardHeight] = useState<number | null>(null);
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    function recompute() {
+      const el = entryCardRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      // AppLayout's <main> (the only scroll container in the app) adds 32px of its own
+      // padding-bottom below whatever height we claim here.
+      setEntryCardHeight(Math.max(320, window.innerHeight - top - 32));
+    }
+    recompute();
+    window.addEventListener('resize', recompute);
+    return () => window.removeEventListener('resize', recompute);
+  }, [mode, lookupError, successMsg, errorMsg]);
+
+  const tabBar = (
+    <div className="flex gap-1.5" data-no-print>
+      <button
+        onClick={() => { setActiveTab('entry'); handleNew(); }}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        New Journal Voucher
+      </button>
+      <button
+        onClick={() => setActiveTab('records')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'records' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Recorded Journal Vouchers
+      </button>
+    </div>
+  );
+
   return (
-    <AppLayout pageTitle="Journal Voucher">
+    <AppLayout pageTitle="Journal Voucher" headerAction={tabBar}>
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
 
-        {lookupError && <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700">{lookupError}</div>}
-        {successMsg && <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-semibold text-emerald-800">{successMsg}</div>}
-        {errorMsg && <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700">{errorMsg}</div>}
+        {lookupError && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>}
+        {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>}
+        {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>}
 
-        {/* Toolbar — Save/Edit/Post/Unpost/New JV live in one dedicated bar above the card, same
-            shape as the Receipts/Expenses/Sale Bill toolbars. */}
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-6 p-4 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }}>
+        {activeTab === 'entry' && (
+        <>
+        {/* Toolbar — standalone row above the card, matching PurchasePage/SaleBillPage: every
+            action always renders, only `disabled` changes per state, instead of whole button
+            groups mounting/unmounting per mode. */}
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap gap-2">
-            {!isViewMode && (
-              <button
-                type="submit" form="jv-entry-form" disabled={!isValid}
-                className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Save size={16} /> {mode === 'edit' ? 'Update JV' : 'Save JV'}
-              </button>
-            )}
-            {mode === 'view' && !isPosted && (
-              <button type="button" onClick={() => setMode('edit')} className="px-4 py-2 text-sm font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all flex items-center gap-1.5">
-                <Edit size={14} /> Edit
-              </button>
-            )}
-            {mode === 'view' && jvId != null && (
-              isPosted
-                ? <button type="button" onClick={handleUnpost} className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all">Unpost</button>
-                : <button type="button" onClick={handlePost} className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all">Post</button>
-            )}
-            <button type="button" onClick={handleNew} className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all">
+            <button
+              type="button" onClick={handleNew}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
+            >
               New JV
+            </button>
+            <button
+              type="submit" form="jv-entry-form" disabled={isViewMode || !isValid}
+              className="btn-gold flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <Save size={14} /> {mode === 'edit' ? 'Update JV' : 'Save JV'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { if (jvId != null) loadJv(jvId); }}
+              disabled={mode !== 'edit'}
+              className="btn-outline px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Cancel Edit
+            </button>
+            <button
+              type="button" onClick={() => setMode('edit')} disabled={!isViewMode || isPosted}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <Edit size={13} /> Edit
+            </button>
+            <button
+              type="button" onClick={handlePost} disabled={!isViewMode || jvId == null || isPosted}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Post
+            </button>
+            <button
+              type="button" onClick={handleUnpost} disabled={!isViewMode || jvId == null || !isPosted}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Unpost
             </button>
           </div>
           <div className="flex items-center gap-2">
-            <span className="font-lora font-bold text-sm text-slate-900">
+            <span className="font-lora font-bold text-xs text-slate-900">
               {mode === 'edit' ? `Editing JV #${jvId}` : mode === 'view' ? `JV #${jvId}` : 'New Journal Voucher'}
             </span>
             {jvId != null && (
@@ -252,130 +328,147 @@ export default function JournalVoucherPage() {
           </div>
         </div>
 
-        <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm mb-6">
-          <p className="text-xs text-slate-500 mb-5 leading-relaxed">
-            A real double-entry journal — every line names an account and either a debit or a
-            credit, and the whole voucher must net to zero before it can be saved. Each line's
-            own ledger (the account's Ledger screen) shows exactly what this JV moved through it.
-          </p>
+        {/* This <form> IS the entry card — height pinned to the remaining viewport space (see
+            entryCardHeight above) and laid out as a flex column, so the line-items table below
+            can flex-grow into whatever room that leaves. Every other child keeps its natural
+            size (shrink-0) — only the table wrapper is flex-1. */}
+        <form
+          id="jv-entry-form" ref={entryCardRef} onSubmit={handleSave}
+          className="card-white p-6 bg-white border flex flex-col" style={{ height: entryCardHeight ?? undefined }}
+          data-no-print
+        >
+          <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-5">
+            <BookText size={18} className="text-[#B08D57]" />
+            <h3 className="font-lora font-semibold text-lg text-slate-800">Journal Entry</h3>
+          </div>
 
-          <form id="jv-entry-form" onSubmit={handleSave}>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 mb-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
-                  <input type="date" value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input font-semibold" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    Number <span className="text-slate-400 font-normal normal-case">— optional</span>
-                  </label>
-                  <input type="text" value={voucherNo} disabled={isViewMode} onChange={e => setVoucherNo(e.target.value)}
-                    placeholder="Manual voucher #..." className="soleria-input font-semibold" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  Reason <span className="text-red-500 font-bold">*</span>
-                </label>
-                <input type="text" value={reason} disabled={isViewMode} onChange={e => setReason(e.target.value)}
-                  placeholder="e.g. Eid compensation" className="soleria-input font-semibold" />
-              </div>
+          <div className="shrink-0 grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">
+                Date <span className="text-red-500 font-bold">*</span>
+              </label>
+              <input
+                ref={firstFieldRef} type="date" value={date} disabled={isViewMode}
+                onChange={e => setDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }}
+              />
             </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">
+                Number <span className="text-slate-400 font-normal normal-case">— optional</span>
+              </label>
+              <input
+                type="text" value={voucherNo} disabled={isViewMode} onChange={e => setVoucherNo(e.target.value)}
+                placeholder="Manual voucher #..." className="soleria-input" style={{ fontSize: '13px' }}
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-medium text-slate-600 mb-1">
+                Reason <span className="text-red-500 font-bold">*</span>
+              </label>
+              <input
+                type="text" value={reason} disabled={isViewMode} onChange={e => setReason(e.target.value)}
+                placeholder="e.g. Eid compensation" className="soleria-input" style={{ fontSize: '13px' }}
+              />
+            </div>
+          </div>
 
-            <div className="overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--border-color)' }}>
-              <table className="w-full text-left border-collapse text-sm">
-                <thead>
-                  <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                    <th className="p-3 pl-4 w-56">A/C Code</th>
-                    <th className="p-3">Account Description</th>
-                    <th className="p-3">Narration</th>
-                    <th className="p-3 text-right w-36">Debit (NAAM)</th>
-                    <th className="p-3 text-right w-36">Credit (JAMMA)</th>
-                    {!isViewMode && <th className="p-3 w-12"></th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.map(line => {
-                    const selectedAccount = accounts.find(a => a.ba_id === Number(line.baId));
-                    return (
-                      <tr key={line.uid} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-2 pl-4">
-                          <SearchableSelect
-                            options={accountOptions} value={line.baId}
-                            onChange={v => updateLine(line.uid, 'baId', v)}
-                            placeholder="Search account..." disabled={isViewMode}
-                          />
-                        </td>
-                        <td className="p-2 text-xs text-slate-600 font-medium">
-                          {selectedAccount ? `${selectedAccount.name} (${selectedAccount.code})` : '—'}
-                        </td>
-                        <td className="p-2">
-                          <input type="text" value={line.narration} disabled={isViewMode}
-                            onChange={e => updateLine(line.uid, 'narration', e.target.value)}
-                            placeholder="Optional note for this line..." className="soleria-input text-xs" />
-                        </td>
-                        <td className="p-2">
-                          <input type="number" min={0} value={line.debit || ''} disabled={isViewMode}
-                            onChange={e => updateLine(line.uid, 'debit', Math.max(0, parseInt(e.target.value) || 0))}
-                            placeholder="0" className="soleria-input font-mono text-right" />
-                        </td>
-                        <td className="p-2">
-                          <input type="number" min={0} value={line.credit || ''} disabled={isViewMode}
-                            onChange={e => updateLine(line.uid, 'credit', Math.max(0, parseInt(e.target.value) || 0))}
-                            placeholder="0" className="soleria-input font-mono text-right" />
-                        </td>
-                        {!isViewMode && (
-                          <td className="p-2 text-center">
-                            <button type="button" onClick={() => removeLine(line.uid)} disabled={lines.length <= 2}
-                              className="text-rose-500 hover:text-rose-700 disabled:opacity-30 disabled:cursor-not-allowed">
-                              <Trash2 size={16} />
-                            </button>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                    <td colSpan={3} className="p-3 pl-4 text-right font-lora">Net Total</td>
-                    <td className="p-3 text-right font-mono text-emerald-800">{formatCurrency(totals.totalDebit)}</td>
-                    <td className="p-3 text-right font-mono text-rose-800">{formatCurrency(totals.totalCredit)}</td>
-                    {!isViewMode && <td />}
-                  </tr>
-                  {totals.difference !== 0 && (
-                    <tr>
-                      <td colSpan={isViewMode ? 5 : 6} className="p-2 pl-4 text-xs font-semibold text-rose-600">
-                        Out of balance by {formatCurrency(Math.abs(totals.difference))} — debit and credit must match before saving.
+          {/* Line items — flex-1 so it grows to fill whatever space entryCardHeight (above)
+              leaves after every other section takes its natural size (same treatment as
+              PurchasePage/SaleBillPage's item tables). The header row is sticky within the
+              scroll box so column labels stay visible past the first screenful of rows. */}
+          <div className="flex-1 min-h-0 mb-4 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
+            <table className="w-full text-left border-collapse text-sm">
+              <thead>
+                <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 pl-4" style={{ minWidth: '220px' }}>A/C Code</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3">Account Description</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3">Narration</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: '140px' }}>Debit (NAAM)</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: '140px' }}>Credit (JAMMA)</th>
+                  {!isViewMode && <th className="sticky top-0 z-10 bg-slate-50 p-3" style={{ width: '50px' }}></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map(line => {
+                  const selectedAccount = accounts.find(a => a.ba_id === Number(line.baId));
+                  return (
+                    <tr key={line.uid} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                      <td className="p-2 pl-4">
+                        <SearchableSelect
+                          options={accountOptions} value={line.baId}
+                          onChange={v => updateLine(line.uid, 'baId', v)}
+                          placeholder="Search account..." disabled={isViewMode}
+                        />
                       </td>
+                      <td className="p-2 text-xs text-slate-600 font-medium">
+                        {selectedAccount ? `${selectedAccount.name} (${selectedAccount.code})` : '—'}
+                      </td>
+                      <td className="p-2">
+                        <input type="text" value={line.narration} disabled={isViewMode}
+                          onChange={e => updateLine(line.uid, 'narration', e.target.value)}
+                          placeholder="Optional note for this line..." className="soleria-input text-xs" />
+                      </td>
+                      <td className="p-2">
+                        <input type="number" min={0} value={line.debit || ''} disabled={isViewMode}
+                          onChange={e => updateLine(line.uid, 'debit', Math.max(0, parseInt(e.target.value) || 0))}
+                          placeholder="0" className="soleria-input font-mono text-right" />
+                      </td>
+                      <td className="p-2">
+                        <input type="number" min={0} value={line.credit || ''} disabled={isViewMode}
+                          onChange={e => updateLine(line.uid, 'credit', Math.max(0, parseInt(e.target.value) || 0))}
+                          placeholder="0" className="soleria-input font-mono text-right" />
+                      </td>
+                      {!isViewMode && (
+                        <td className="p-2 text-center">
+                          <button type="button" onClick={() => removeLine(line.uid)} disabled={lines.length <= 2}
+                            className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title="Remove Row">
+                            <Trash2 size={15} />
+                          </button>
+                        </td>
+                      )}
                     </tr>
-                  )}
-                </tfoot>
-              </table>
-            </div>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
+                  <td colSpan={3} className="p-3 pl-4 text-right font-lora">Net Total</td>
+                  <td className="p-3 text-right font-mono text-emerald-800">{formatCurrency(totals.totalDebit)}</td>
+                  <td className="p-3 text-right font-mono text-rose-800">{formatCurrency(totals.totalCredit)}</td>
+                  {!isViewMode && <td />}
+                </tr>
+                {totals.difference !== 0 && (
+                  <tr>
+                    <td colSpan={isViewMode ? 5 : 6} className="p-2 pl-4 text-xs font-semibold text-rose-600">
+                      Out of balance by {formatCurrency(Math.abs(totals.difference))} — debit and credit must match before saving.
+                    </td>
+                  </tr>
+                )}
+              </tfoot>
+            </table>
+          </div>
 
-            {!isViewMode && (
-              <button type="button" onClick={addLine} className="mt-3 flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-all">
-                <Plus size={14} /> Add Line
-              </button>
-            )}
-          </form>
-        </div>
+          {!isViewMode && (
+            <button type="button" onClick={addLine} className="shrink-0 btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
+              <Plus size={16} /> Add Line
+            </button>
+          )}
+        </form>
+        </>
+        )}
 
-        <div className="card-white p-6 bg-white border border-slate-200 rounded-xl shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-            <h3 className="font-lora font-bold text-base text-slate-900">Recorded Journal Vouchers</h3>
-            {/* JV-02: search + filter the listing. */}
-            <div className="flex flex-wrap items-center gap-2">
+        {/* Recorded Journal Vouchers — own tab now, rather than always rendering every JV ever
+            recorded inline below the live entry form. */}
+        {activeTab === 'records' && (
+        <div className="card-white p-6 bg-white border">
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+            <h3 className="font-lora font-semibold text-lg text-slate-800">Recorded Journal Vouchers</h3>
+            <div className="flex flex-wrap items-center gap-2" data-no-print>
               <div className="relative">
                 <Search className="absolute left-3 top-2.5 text-slate-400" size={14} />
                 <input
-                  type="text"
-                  value={jvSearch}
-                  onChange={e => setJvSearch(e.target.value)}
-                  placeholder="Search reason, number..."
-                  className="soleria-input pl-8 py-1.5 text-xs w-64"
+                  type="text" value={jvSearch} onChange={e => setJvSearch(e.target.value)}
+                  placeholder="Search reason, number..." className="soleria-input pl-8 py-1.5 text-xs w-64"
                 />
               </div>
               <select
@@ -389,39 +482,44 @@ export default function JournalVoucherPage() {
               </select>
             </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="p-3 pl-4">Date</th>
-                  <th className="p-3">Number</th>
-                  <th className="p-3">Reason</th>
-                  <th className="p-3 text-center">Lines</th>
-                  <th className="p-3 text-right">Total</th>
-                  <th className="p-3 text-center">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredVouchers.length === 0 ? (
-                  <tr><td colSpan={6} className="text-center p-8 text-slate-400">{vouchers.length === 0 ? 'No journal vouchers recorded yet.' : 'No journal vouchers match your search/filter.'}</td></tr>
-                ) : filteredVouchers.map(v => (
-                  <tr key={v.jv_id} onClick={() => loadRow(v)} className="border-b hover:bg-slate-50/50 cursor-pointer" style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 pl-4 text-xs font-mono text-slate-600">{formatDate(v.jv_date)}</td>
-                    <td className="p-3 text-xs font-mono text-slate-500">{v.voucher_no || '-'}</td>
-                    <td className="p-3 text-xs text-slate-500">{v.reason}</td>
-                    <td className="p-3 text-center text-xs text-slate-500">{v.line_count}</td>
-                    <td className="p-3 text-right font-bold font-mono text-slate-800">{formatCurrency(v.total_debit ?? 0)}</td>
-                    <td className="p-3 text-center">
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${v.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                        {v.status === 'CONFIRMED' ? 'Posted' : 'Not Posted'}
-                      </span>
-                    </td>
+          {filteredVouchers.length === 0 ? (
+            <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
+              {vouchers.length === 0 ? 'No journal vouchers recorded yet.' : 'No journal vouchers match your search/filter.'}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                    <th className="p-3 pl-4">Date</th>
+                    <th className="p-3">Number</th>
+                    <th className="p-3">Reason</th>
+                    <th className="p-3 text-center">Lines</th>
+                    <th className="p-3 text-right">Total</th>
+                    <th className="p-3 text-center">Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {filteredVouchers.map(v => (
+                    <tr key={v.jv_id} onClick={() => loadRow(v)} className="border-b hover:bg-slate-50/40 cursor-pointer" style={{ borderColor: 'var(--border-table)' }}>
+                      <td className="p-3 pl-4 font-mono text-xs text-slate-600">{formatDate(v.jv_date)}</td>
+                      <td className="p-3 text-xs font-mono text-slate-500">{v.voucher_no || '-'}</td>
+                      <td className="p-3 text-xs text-slate-500">{v.reason}</td>
+                      <td className="p-3 text-center text-xs text-slate-500">{v.line_count}</td>
+                      <td className="p-3 text-right font-bold font-mono text-slate-800">{formatCurrency(v.total_debit ?? 0)}</td>
+                      <td className="p-3 text-center">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${v.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                          {v.status === 'CONFIRMED' ? 'Posted' : 'Not Posted'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
+        )}
 
       </div>
     </AppLayout>
