@@ -4368,3 +4368,29 @@ _Stale note — this was true when first written; superseded by the entries near
   `backend/src/services/journalVouchers.service.js`, `backend/src/ipc/journalVouchers.ipc.js`,
   `backend/src/repositories/reports.repository.js`, `backend/src/services/businessAccounts.service.js`
   (comment only), `frontend/src/lib/api.ts`, `frontend/src/pages/JournalVoucherPage.tsx`
+
+## Journal Voucher — compact single-screen layout (follow-up to the multi-line rebuild above)
+- **User request:** the multi-line rebuild above matched the legacy grid's column layout, but not
+  the broader compact-page redesign already applied to `PurchasePage.tsx`/`SaleBillPage.tsx` — a
+  single-screen density (no scrolling the whole page to reach the line-item grid or the toolbar).
+  User pointed this out directly after reviewing the first pass.
+- Copied the exact pattern from `PurchasePage.tsx` (that page was read directly since its compact
+  redesign was still uncommitted in the working tree, not yet on `origin/main` that this worktree
+  branched from):
+  - Toolbar (New/Save/Cancel Edit/Edit/Post/Unpost) is now a standalone compact row above the
+    card — every button always renders, only `disabled` toggles per `mode`/`isPosted`/`isValid`,
+    instead of whole groups mounting/unmounting.
+  - The entry `<form>` IS the card, height pinned to `window.innerHeight - top - 32` (recomputed
+    on resize and whenever the banners above it change), laid out `flex flex-col` so the
+    line-items table (`flex-1 min-h-0 overflow-y-auto`, sticky `<thead>`) grows into whatever
+    space is left — the outer app window never scrolls, only the grid does.
+  - "Recorded Journal Vouchers" moved out of the entry page's inline flow into its own tab
+    (`activeTab: 'entry' | 'records'`, same tab bar shape as Purchase/SaleBill's `headerAction`
+    slot) instead of always rendering below the live entry form.
+  - Dropped the descriptive `<p>` paragraph under the card header — the compact pattern doesn't
+    carry one on Purchase/SaleBill either.
+- `react-hooks/set-state-in-effect` fires on the accounts-load effect (`refresh()` called inside
+  a mount `useEffect`) — pre-existing pattern, confirmed by running the same lint rule against
+  `SaleBillPage.tsx`, which trips the identical warning. Not a regression, left as-is for
+  consistency with the rest of the app.
+- **Files:** `frontend/src/pages/JournalVoucherPage.tsx`
