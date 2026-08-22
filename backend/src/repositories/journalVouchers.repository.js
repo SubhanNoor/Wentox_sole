@@ -2,17 +2,26 @@
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
 const { sql, query, requestWithParams } = require('../db/pool');
 
+function linesSubquery(alias = 'jv') {
+  // No GROUP BY — SQL Server rejects a bare column (jv_id) selected alongside aggregates
+  // without one, even though the WHERE already correlates to a single voucher. Only the
+  // aggregates are actually needed here; the correlation is the WHERE clause, not a SELECTed column.
+  return `(
+    SELECT COUNT(*) AS line_count,
+           SUM(jvl.debit) AS total_debit,
+           SUM(jvl.credit) AS total_credit
+    FROM dbo.journal_voucher_lines jvl
+    WHERE jvl.jv_id = ${alias}.jv_id
+  )`;
+}
+
 async function list(filters = {}) {
   const conditions = [];
   const params = {};
 
   if (filters.ba_id) {
-    conditions.push('jv.ba_id = @baId');
+    conditions.push('EXISTS (SELECT 1 FROM dbo.journal_voucher_lines jvl WHERE jvl.jv_id = jv.jv_id AND jvl.ba_id = @baId)');
     params.baId = { type: sql.Int, value: filters.ba_id };
-  }
-  if (filters.direction) {
-    conditions.push('jv.direction = @direction');
-    params.direction = { type: sql.VarChar(10), value: filters.direction };
   }
   if (filters.status) {
     conditions.push('jv.status = @status');
@@ -26,13 +35,28 @@ async function list(filters = {}) {
     conditions.push('jv.jv_date <= @dateTo');
     params.dateTo = { type: sql.Date, value: filters.date_to };
   }
+  // "Find the JV from any detail" — matches the header (reason/number) or any of its lines
+  // (account name/code, per-line narration, debit/credit amount), so a search box doesn't need
+  // to know which field the thing it's looking for actually landed in.
+  if (filters.search && filters.search.trim()) {
+    conditions.push(`(
+      jv.reason LIKE @search OR jv.voucher_no LIKE @search OR EXISTS (
+        SELECT 1 FROM dbo.journal_voucher_lines s_jvl
+        JOIN dbo.business_accounts s_ba ON s_ba.ba_id = s_jvl.ba_id
+        WHERE s_jvl.jv_id = jv.jv_id AND (
+          s_ba.name LIKE @search OR s_ba.code LIKE @search OR s_jvl.narration LIKE @search
+          OR CAST(s_jvl.debit AS NVARCHAR(30)) LIKE @search OR CAST(s_jvl.credit AS NVARCHAR(30)) LIKE @search
+        )
+      )
+    )`);
+    params.search = { type: sql.NVarChar(120), value: `%${filters.search.trim()}%` };
+  }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT jv.*, ba.name AS ba_name, ba.code AS ba_code, ca.name AS main_account
+    `SELECT jv.*, totals.line_count, totals.total_debit, totals.total_credit
      FROM dbo.journal_vouchers jv
-     JOIN dbo.business_accounts ba ON ba.ba_id = jv.ba_id
-     JOIN dbo.chart_of_accounts ca ON ca.ac_id = ba.ac_id
+     CROSS APPLY ${linesSubquery('jv')} totals
      ${where}
      ORDER BY jv.jv_date DESC, jv.jv_id DESC`,
     params,
@@ -40,54 +64,97 @@ async function list(filters = {}) {
   return result.recordset;
 }
 
+// Every JV still awaiting posting, oldest first — the order they were entered is the order they
+// should post. Mirrors purchases.repository.js#listUnposted, but "unposted" reads straight off
+// journal_vouchers.status rather than being derived from ledger_entries existing, since the JV
+// table (unlike purchases) still carries its own status column.
+async function listUnposted() {
+  const result = await query(
+    `SELECT jv.jv_id, jv.jv_date, jv.voucher_no, jv.reason, totals.total_debit
+     FROM dbo.journal_vouchers jv
+     CROSS APPLY ${linesSubquery('jv')} totals
+     WHERE jv.status = 'DRAFT'
+     ORDER BY jv.jv_date ASC, jv.jv_id ASC`,
+  );
+  return result.recordset;
+}
+
+async function getLines(jvId) {
+  const result = await query(
+    `SELECT jvl.*, ba.name AS ba_name, ba.code AS ba_code
+     FROM dbo.journal_voucher_lines jvl
+     JOIN dbo.business_accounts ba ON ba.ba_id = jvl.ba_id
+     WHERE jvl.jv_id = @jvId
+     ORDER BY jvl.line_no`,
+    { jvId: { type: sql.Int, value: jvId } },
+  );
+  return result.recordset;
+}
+
 async function findById(jvId) {
   const result = await query(
-    `SELECT jv.*, ba.name AS ba_name, ba.code AS ba_code, ca.name AS main_account
+    `SELECT jv.*, totals.line_count, totals.total_debit, totals.total_credit
      FROM dbo.journal_vouchers jv
-     JOIN dbo.business_accounts ba ON ba.ba_id = jv.ba_id
-     JOIN dbo.chart_of_accounts ca ON ca.ac_id = ba.ac_id
+     CROSS APPLY ${linesSubquery('jv')} totals
      WHERE jv.jv_id = @jvId`,
     { jvId: { type: sql.Int, value: jvId } },
   );
-  return result.recordset[0] || null;
+  const jv = result.recordset[0];
+  if (!jv) return null;
+  return { ...jv, lines: await getLines(jvId) };
 }
 
 async function insert(transaction, jv) {
   const request = requestWithParams(transaction, {
     jvDate: { type: sql.Date, value: jv.jv_date },
-    baId: { type: sql.Int, value: jv.ba_id },
-    direction: { type: sql.VarChar(10), value: jv.direction },
-    amount: { type: sql.Decimal(14, 2), value: jv.amount },
     voucherNo: { type: sql.NVarChar(30), value: jv.voucher_no ?? null },
     reason: { type: sql.NVarChar(200), value: jv.reason },
     remarks: { type: sql.NVarChar(500), value: jv.remarks ?? null },
     createdBy: { type: sql.Int, value: jv.created_by ?? null },
   });
   const result = await request.query(`
-    INSERT INTO dbo.journal_vouchers (jv_date, ba_id, direction, amount, voucher_no, reason, remarks, status, created_by)
+    INSERT INTO dbo.journal_vouchers (jv_date, voucher_no, reason, remarks, status, created_by)
     OUTPUT inserted.jv_id
-    VALUES (@jvDate, @baId, @direction, @amount, @voucherNo, @reason, @remarks, 'DRAFT', @createdBy)
+    VALUES (@jvDate, @voucherNo, @reason, @remarks, 'DRAFT', @createdBy)
   `);
   return result.recordset[0].jv_id;
 }
 
-async function update(jvId, jv) {
-  await query(
-    `UPDATE dbo.journal_vouchers SET
-       jv_date = @jvDate, ba_id = @baId, direction = @direction,
-       amount = @amount, voucher_no = @voucherNo, reason = @reason, remarks = @remarks
-     WHERE jv_id = @jvId`,
-    {
+async function updateHeader(transaction, jvId, jv) {
+  const request = requestWithParams(transaction, {
+    jvId: { type: sql.Int, value: jvId },
+    jvDate: { type: sql.Date, value: jv.jv_date },
+    voucherNo: { type: sql.NVarChar(30), value: jv.voucher_no ?? null },
+    reason: { type: sql.NVarChar(200), value: jv.reason },
+    remarks: { type: sql.NVarChar(500), value: jv.remarks ?? null },
+  });
+  await request.query(`
+    UPDATE dbo.journal_vouchers SET
+      jv_date = @jvDate, voucher_no = @voucherNo, reason = @reason, remarks = @remarks
+    WHERE jv_id = @jvId
+  `);
+}
+
+async function insertLines(transaction, jvId, lines) {
+  for (const [index, line] of lines.entries()) {
+    const request = requestWithParams(transaction, {
       jvId: { type: sql.Int, value: jvId },
-      jvDate: { type: sql.Date, value: jv.jv_date },
-      baId: { type: sql.Int, value: jv.ba_id },
-      direction: { type: sql.VarChar(10), value: jv.direction },
-      amount: { type: sql.Decimal(14, 2), value: jv.amount },
-      voucherNo: { type: sql.NVarChar(30), value: jv.voucher_no ?? null },
-      reason: { type: sql.NVarChar(200), value: jv.reason },
-      remarks: { type: sql.NVarChar(500), value: jv.remarks ?? null },
-    },
-  );
+      lineNo: { type: sql.Int, value: index + 1 },
+      baId: { type: sql.Int, value: line.ba_id },
+      debit: { type: sql.Decimal(14, 2), value: line.debit },
+      credit: { type: sql.Decimal(14, 2), value: line.credit },
+      narration: { type: sql.NVarChar(500), value: line.narration ?? null },
+    });
+    await request.query(`
+      INSERT INTO dbo.journal_voucher_lines (jv_id, line_no, ba_id, debit, credit, narration)
+      VALUES (@jvId, @lineNo, @baId, @debit, @credit, @narration)
+    `);
+  }
+}
+
+async function deleteLines(transaction, jvId) {
+  const request = requestWithParams(transaction, { jvId: { type: sql.Int, value: jvId } });
+  await request.query('DELETE FROM dbo.journal_voucher_lines WHERE jv_id = @jvId');
 }
 
 async function remove(jvId) {
@@ -107,38 +174,17 @@ async function setStatus(transaction, jvId, status, updatedBy) {
   );
 }
 
-// One ledger pair, both legs ba_id — the party's account and the JOURNAL VOUCHER account.
-//
-//   CREDIT  Dr JOURNAL VOUCHER / Cr party   -> what the party owes us goes DOWN (the eidi case)
-//   DEBIT   Dr party / Cr JOURNAL VOUCHER   -> what we owe the party goes DOWN
-//
-// Each leg's narration names the reason and the other side, so neither ledger shows an
-// unexplained balance movement — the party's Khaata says a JV was applied and why, and the JV
-// account's own ledger says who it was granted to.
-async function insertLedgerEntries(transaction, { jvId, jvDate, baId, jvBaId, direction, amount, reason, partyName }) {
-  const partyIsDebit = direction === 'DEBIT';
-  const rows = [
-    {
-      ba_id: baId,
-      debit: partyIsDebit ? amount : 0,
-      credit: partyIsDebit ? 0 : amount,
-      narration: `Journal Voucher #${jvId} — ${reason}`,
-    },
-    {
-      ba_id: jvBaId,
-      debit: partyIsDebit ? 0 : amount,
-      credit: partyIsDebit ? amount : 0,
-      narration: `JV #${jvId} to ${partyName} — ${reason}`,
-    },
-  ];
-  for (const row of rows) {
+// One ledger_entries row per line — each line's own narration if given, else the header reason
+// prefixed with the voucher id, so every ledger it lands on says which JV moved it and why.
+async function insertLedgerEntries(transaction, { jvId, jvDate, lines, reason }) {
+  for (const line of lines) {
     const request = requestWithParams(transaction, {
       entryDate: { type: sql.Date, value: jvDate },
-      baId: { type: sql.Int, value: row.ba_id },
-      debit: { type: sql.Decimal(14, 2), value: row.debit },
-      credit: { type: sql.Decimal(14, 2), value: row.credit },
+      baId: { type: sql.Int, value: line.ba_id },
+      debit: { type: sql.Decimal(14, 2), value: line.debit },
+      credit: { type: sql.Decimal(14, 2), value: line.credit },
       sourceId: { type: sql.Int, value: jvId },
-      narration: { type: sql.NVarChar(500), value: row.narration },
+      narration: { type: sql.NVarChar(500), value: `Journal Voucher #${jvId} — ${line.narration || reason}` },
     });
     await request.query(`
       INSERT INTO dbo.ledger_entries (entry_date, ba_id, debit, credit, source_type, source_id, narration)
@@ -155,5 +201,6 @@ async function deleteLedgerEntries(transaction, jvId) {
 }
 
 module.exports = {
-  list, findById, insert, update, remove, setStatus, insertLedgerEntries, deleteLedgerEntries,
+  list, listUnposted, findById, getLines, insert, updateHeader, insertLines, deleteLines, remove,
+  setStatus, insertLedgerEntries, deleteLedgerEntries,
 };

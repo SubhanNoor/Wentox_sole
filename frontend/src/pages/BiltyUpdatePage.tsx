@@ -20,6 +20,7 @@ export default function BiltyUpdatePage() {
   // customerQuery/subCustomerQuery below, rather than one combined field guessing which is meant.
   const [manualBillNoQuery, setManualBillNoQuery] = useState('');
   const [systemBillNoQuery, setSystemBillNoQuery] = useState('');
+  const [biltyNoQuery, setBiltyNoQuery] = useState('');
 
   // Radio Filters State
   const [biltyStatusFilter, setBiltyStatusFilter] = useState<'all' | 'no-bilty' | 'no-adda' | 'has-bilty'>('all');
@@ -133,6 +134,11 @@ export default function BiltyUpdatePage() {
       result = result.filter(b => String(b.bill_id).includes(q));
     }
 
+    if (biltyNoQuery.trim()) {
+      const q = biltyNoQuery.trim().toLowerCase();
+      result = result.filter(b => (b.bilty_no || '').toLowerCase().includes(q));
+    }
+
     if (biltyStatusFilter === 'no-bilty') {
       result = result.filter(b => !b.bilty_no || b.bilty_no.trim() === '');
     } else if (biltyStatusFilter === 'no-adda') {
@@ -150,7 +156,7 @@ export default function BiltyUpdatePage() {
     });
 
     return result;
-  }, [invoices, customerQuery, subCustomerQuery, manualBillNoQuery, systemBillNoQuery, biltyStatusFilter, sortBy]);
+  }, [invoices, customerQuery, subCustomerQuery, manualBillNoQuery, systemBillNoQuery, biltyNoQuery, biltyStatusFilter, sortBy]);
 
   // Count summary helpers
   const missingBilty = filteredInvoices.filter(b => !b.bilty_no || !b.bilty_no.trim()).length;
@@ -383,6 +389,10 @@ export default function BiltyUpdatePage() {
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">System Bill No. (Inv #)</label>
                 <input type="text" placeholder="System-generated Inv #..." value={systemBillNoQuery} onChange={e => setSystemBillNoQuery(e.target.value)} className="soleria-input py-1.5" />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Bilty No.</label>
+                <input type="text" placeholder="Search bilty no..." value={biltyNoQuery} onChange={e => setBiltyNoQuery(e.target.value)} className="soleria-input py-1.5" />
               </div>
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">Customer Name</label>

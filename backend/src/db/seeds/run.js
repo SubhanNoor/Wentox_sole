@@ -170,6 +170,14 @@ async function seed() {
   // --- Module 4b: Deposit's counter-account ---
   await ensureChartAccount(pool, { code: CODES.MISC_ADJUSTMENTS, name: 'Miscellaneous Adjustments', groupId: expensesGroup });
 
+  // --- Journal Voucher's smart-default counter-account (see reservedAccounts.js) ---
+  // Seeded WITH a business account, same reasoning as JOURNAL VOUCHER above: the JV entry form
+  // needs a real ba_id to auto-fill into an untouched second line.
+  const dccAcId = await ensureChartAccount(pool, {
+    code: CODES.DISCOUNTS_CLAIMS_COMMISSIONS, name: 'DISCOUNTS, CLAIMS & COMMISSIONS', groupId: expensesGroup,
+  });
+  await ensureNamedBusinessAccount(pool, dccAcId, CODES.DISCOUNTS_CLAIMS_COMMISSIONS, 'DISCOUNTS, CLAIMS & COMMISSIONS');
+
   // --- Stages (payroll.md §4) — the 12 manufacturing stages, defined once as data ---
   for (const [index, stage] of STAGES.entries()) {
     const exists = await pool.request()

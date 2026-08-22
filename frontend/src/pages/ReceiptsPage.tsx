@@ -3,7 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
-import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, DraftReceiptRow, SettlementRow, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
+import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, DraftReceiptRow, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { focusFirstField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
@@ -53,21 +53,6 @@ export default function ReceiptsPage() {
   const [drafts, setDrafts] = useState<DraftReceiptRow[]>([]);
   const [lookupError, setLookupError] = useState('');
 
-  // The posted receipts themselves are no longer listed on this screen — the "Recorded Receipts"
-  // table shows what still needs posting, which now lives in dbo.draft_receipts (see
-  // sortedReceipts). This is kept as the surfacing point for a failed read of the real table, and
-  // as the trigger every mutation already calls; the rows are read by the ledger/report screens.
-  const refreshReceipts = useCallback(async () => {
-    const res = await api.receipts.list({});
-    if (!res.ok) setLookupError('Failed to load receipts: ' + res.error.message);
-  }, []);
-
-  const refreshSettlements = useCallback(async () => {
-    const res = await api.settlements.list({});
-    if (res.ok) setSettlements(res.data);
-    else setLookupError('Failed to load endorsed settlements: ' + res.error.message);
-  }, []);
-
   const refreshDrafts = useCallback(async () => {
     const res = await api.draftReceipts.list({});
     if (res.ok) setDrafts(res.data);
@@ -88,18 +73,13 @@ export default function ReceiptsPage() {
       if (bk.ok) setBanks(bk.data); else failures.push(bk.error.message);
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
-    refreshReceipts();
     refreshDrafts();
-    refreshSettlements();
-  }, [refreshReceipts, refreshDrafts, refreshSettlements]);
+  }, [refreshDrafts]);
 
   // ── Real-receipt form (mirrors PurchasePage.tsx's mode structure) ──
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
   const [receiptId, setReceiptId] = useState<number | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
-  // Which table `receiptId` points into. An unposted receipt now lives in dbo.draft_receipts and a
-  // posted one in dbo.receipts, so the id alone is ambiguous — this says which id space it is in.
-  const [entryIsDraft, setEntryIsDraft] = useState(false);
   const [date, setDate] = useState(today());
   const [baId, setBaId] = useState('');
   const [amount, setAmount] = useState<number>(0);
@@ -128,7 +108,9 @@ export default function ReceiptsPage() {
   const [isEndorsed, setIsEndorsed] = useState(false);
   const [endorseToBaId, setEndorseToBaId] = useState('');
   const [docKind, setDocKind] = useState<'RECEIPT' | 'SETTLEMENT'>('RECEIPT');
-  const [settlements, setSettlements] = useState<SettlementRow[]>([]);
+  // Which table `receiptId` points into. An unposted receipt now lives in dbo.draft_receipts and a
+  // posted one in dbo.receipts, so the id alone is ambiguous — this says which id space it is in.
+  const [entryIsDraft, setEntryIsDraft] = useState(false);
 
   // RJ-02: previewed account while arrow-keying through the dropdown, for the live balance tooltip.
   const [previewBaId, setPreviewBaId] = useState<number | null>(null);
@@ -149,10 +131,7 @@ export default function ReceiptsPage() {
     setDeleteTarget(null);
     if (!res.ok) return fail('Failed to delete: ' + res.error.message);
     flash('Receipt deleted.');
-    refreshReceipts();
     refreshDrafts();
-    // RJ-03: the deleted row may have been a line of the voucher on screen — re-read it so the grid
-    // and the per-mode totals lose it too, instead of showing an entry that no longer exists.
     // The deleted row may have been a line of the voucher on screen; re-reading is cheap and
     // unconditional now that the target no longer carries its own voucher_id.
     if (voucher) await refreshVoucher(voucher.voucher_id);
@@ -361,7 +340,6 @@ export default function ReceiptsPage() {
     setErrorMsg('');
     flash('Endorsement saved — Post it to update both ledgers.');
     setMode('view');
-    refreshSettlements();
     setBalanceRefreshKey(k => k + 1);
   };
 
@@ -435,7 +413,6 @@ export default function ReceiptsPage() {
     await refreshVoucher(openVoucher.voucher_id);
     clearEntryRow();
     flash(wasEdit ? 'Entry updated.' : 'Entry added to the voucher.');
-    refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
   };
 
@@ -463,7 +440,6 @@ export default function ReceiptsPage() {
     if (!res.ok) { fail('Failed to post voucher: ' + res.error.message); return; }
     setVoucherResult(res.data);
     setVoucher(res.data.voucher);
-    refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
 
     if (res.data.failed.length === 0) {
@@ -482,7 +458,6 @@ export default function ReceiptsPage() {
     if (!res.ok) { fail('Failed to unpost voucher: ' + res.error.message); return; }
     setVoucherResult(res.data);
     setVoucher(res.data.voucher);
-    refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
     if (res.data.failed.length === 0) flash(`Voucher ${voucher.voucher_no} unposted.`);
   };
@@ -541,7 +516,6 @@ export default function ReceiptsPage() {
     if (!res.ok) { fail('Failed to post: ' + res.error.message); return; }
     setReceiptStatus(res.data.status);
     flash(docKind === 'SETTLEMENT' ? 'Endorsement posted — both ledgers updated.' : 'Receipt posted successfully.');
-    if (docKind === 'SETTLEMENT') refreshSettlements(); else refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
   };
 
@@ -564,31 +538,7 @@ export default function ReceiptsPage() {
     }
     refreshDrafts();
     flash(docKind === 'SETTLEMENT' ? 'Endorsement unposted.' : 'Receipt unposted successfully.');
-    if (docKind === 'SETTLEMENT') refreshSettlements(); else refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
-  };
-
-  const loadSettlementRow = (row: SettlementRow) => {
-    setDocKind('SETTLEMENT');
-    setIsEndorsed(true);
-    setReceiptId(row.settlement_id);
-    setReceiptStatus(row.status);
-    setDate(row.settlement_date.slice(0, 10));
-    setBaId(String(row.from_ba_id));
-    setEndorseToBaId(String(row.to_ba_id));
-    setAmount(row.amount);
-    setCommission(0);
-    setPaymentMode(row.payment_mode || 'CASH');
-    setBankId('');
-    setDetails('');
-    setChequeNo(row.cheque_no || '');
-    setChequeDate(row.cheque_date ? row.cheque_date.slice(0, 10) : '');
-    setChequeReceivedDate('');
-    setRemarks(row.remarks || '');
-    setLoadedDraftId(null);
-    setSelectedDraftPick('');
-    setErrorMsg('');
-    setMode('view');
   };
 
   // ── draftReceipts (server-side, CASH/ONLINE only) ──
@@ -647,27 +597,8 @@ export default function ReceiptsPage() {
     setSelectedDraftPick('');
     flash('Draft confirmed and posted as a receipt.');
     refreshDrafts();
-    refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
   };
-
-  // Recorded Receipts (below) shows only what's still awaiting posting — a receipt already
-  // CONFIRMED has done its job and belongs in the reports/ledger, not in a list whose whole
-  // point was "here's what still needs attention." Same filter applied to `settlements` below,
-  // which render into the same table.
-  // Unposted receipts now live in dbo.draft_receipts, so this reads the drafts rather than
-  // filtering the real table — which, by the new invariant, only ever holds CONFIRMED rows and so
-  // would always filter down to nothing. Same list, same meaning ("here's what still needs
-  // attention"), just read from where the rows actually are.
-  const sortedReceipts = useMemo(
-    () => [...drafts].sort((a, b) => b.receipt_date.localeCompare(a.receipt_date)),
-    [drafts]
-  );
-
-  const unpostedSettlements = useMemo(
-    () => [...settlements].filter(st => st.status !== 'CONFIRMED').sort((a, b) => b.settlement_date.localeCompare(a.settlement_date)),
-    [settlements]
-  );
 
   const accountName = useCallback(
     (id: number) => businessAccounts.find(b => b.ba_id === id)?.name || 'Unknown Account',
@@ -1254,7 +1185,7 @@ export default function ReceiptsPage() {
                       </thead>
                       <tbody>
                         {voucherLines.map(line => (
-                          <tr key={line.receipt_id} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                          <tr key={line.receipt_id ?? `draft_${line.draft_id}`} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
                             <td className="p-2.5 pl-3 font-mono text-xs text-slate-600">{line.account_code || '—'}</td>
                             <td className="p-2.5 font-semibold text-slate-800">{line.account_name}</td>
                             <td className="p-2.5 text-slate-600 text-xs">{line.remarks || '—'}</td>
@@ -1345,96 +1276,6 @@ export default function ReceiptsPage() {
                       </button>
                     </div>
                   )}
-                </div>
-              )}
-            </div>
-
-            {/* Recorded Receipts — unposted only now (both receipts and endorsed settlements
-                filtered above): a CONFIRMED entry has already done its job and belongs in the
-                reports/ledger, not in a list whose point is "here's what still needs posting." */}
-            <div className="card-white p-6 mt-8 bg-white border border-slate-200 rounded-xl shadow-sm">
-              <h3 className="font-lora font-semibold text-lg text-slate-800 mb-4">Recorded Receipts <span className="text-xs font-normal text-slate-400 uppercase tracking-wider">— Unposted</span></h3>
-              {sortedReceipts.length === 0 && unpostedSettlements.length === 0 ? (
-                <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
-                  No unposted receipts.
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-sm">
-                    <thead>
-                      <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                        <th className="p-3 pl-4">Date</th>
-                        <th className="p-3">Account</th>
-                        <th className="p-3 text-center">Mode</th>
-                        <th className="p-3 text-right">Amount</th>
-                        <th className="p-3 text-center">Type</th>
-                        <th className="p-3 text-center">Status</th>
-                        <th className="p-3 text-center" style={{ width: 50 }} />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {/* Every row here is an unposted receipt out of dbo.draft_receipts, so the
-                          status is DRAFT by construction — no per-row status test is needed any
-                          more, and clicking one opens it for editing in place. */}
-                      {sortedReceipts.map(r => (
-                        <tr
-                          key={r.draft_id}
-                          onClick={() => loadDraft(r)}
-                          className="border-b hover:bg-slate-50/50 cursor-pointer"
-                          style={{ borderColor: 'var(--border-table)' }}
-                        >
-                          <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(r.receipt_date)}</td>
-                          <td className="p-3 font-semibold text-slate-900">{r.account_name || accountName(r.ba_id)}</td>
-                          <td className="p-3 text-center text-xs text-slate-500">{r.payment_mode}</td>
-                          <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
-                          <td className="p-3 text-center text-[10px] font-bold uppercase text-slate-500">Receipt</td>
-                          <td className="p-3 text-center">
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded uppercase bg-slate-100 text-slate-500">
-                              DRAFT
-                            </span>
-                          </td>
-                          <td className="p-3 text-center">
-                            <button
-                              type="button"
-                              onClick={e => { e.stopPropagation(); setDeleteTarget({ kind: 'draft', id: r.draft_id, amount: Number(r.amount) }); }}
-                              title="Delete"
-                              className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
-                            >
-                              <Trash2 size={15} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                      {/* Endorsed entries live in `settlements`, not `receipts`, but they were
-                          entered here so they belong in the same list — the Type column is what
-                          tells them apart. */}
-                      {unpostedSettlements.map(st => (
-                        <tr
-                          key={`st-${st.settlement_id}`}
-                          onClick={() => loadSettlementRow(st)}
-                          className="border-b hover:bg-slate-50/50 cursor-pointer"
-                          style={{ borderColor: 'var(--border-table)' }}
-                        >
-                          <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(st.settlement_date)}</td>
-                          <td className="p-3 font-semibold text-slate-900">
-                            {st.from_name || accountName(st.from_ba_id)}
-                            <span className="text-slate-400 font-normal"> → {st.to_name || accountName(st.to_ba_id)}</span>
-                          </td>
-                          <td className="p-3 text-center text-xs text-slate-500">{st.payment_mode || '-'}</td>
-                          <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(st.amount)}</td>
-                          <td className="p-3 text-center text-[10px] font-bold uppercase text-amber-700">Endorsed</td>
-                          <td className="p-3 text-center">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
-                              st.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                            }`}>
-                              {st.status}
-                            </span>
-                          </td>
-                          <td className="p-3" />
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
                 </div>
               )}
             </div>

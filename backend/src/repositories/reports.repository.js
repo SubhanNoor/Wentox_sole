@@ -320,9 +320,10 @@ async function saleAggregateByCustomer(filters = {}) {
        GROUP BY from_ba_id
      ) st ON st.from_ba_id = c.ba_id
      LEFT JOIN (
-       SELECT ba_id,
-              SUM(CASE WHEN direction = 'CREDIT' THEN amount ELSE -amount END) AS total_jv
-       FROM dbo.journal_vouchers ${jvWhere} GROUP BY ba_id
+       SELECT jvl.ba_id, SUM(jvl.credit - jvl.debit) AS total_jv
+       FROM dbo.journal_voucher_lines jvl
+       JOIN dbo.journal_vouchers h ON h.jv_id = jvl.jv_id
+       ${jvWhere} GROUP BY jvl.ba_id
      ) jv ON jv.ba_id = c.ba_id
      WHERE sb.total_sales IS NOT NULL OR sr.total_returns IS NOT NULL
         OR rc.total_payment IS NOT NULL OR st.total_settled IS NOT NULL
@@ -418,9 +419,10 @@ async function vendorReportRows(filters = {}) {
        FROM dbo.settlements WHERE ${settleWhere} GROUP BY to_ba_id
      ) st ON st.to_ba_id = v.ba_id
      LEFT JOIN (
-       SELECT ba_id,
-              SUM(CASE WHEN direction = 'CREDIT' THEN amount ELSE -amount END) AS total_jv
-       FROM dbo.journal_vouchers WHERE ${jvWhere} GROUP BY ba_id
+       SELECT jvl.ba_id, SUM(jvl.credit - jvl.debit) AS total_jv
+       FROM dbo.journal_voucher_lines jvl
+       JOIN dbo.journal_vouchers h ON h.jv_id = jvl.jv_id
+       WHERE ${jvWhere} GROUP BY jvl.ba_id
      ) jv ON jv.ba_id = v.ba_id
      ${vendorFilter}
      ORDER BY v.name`,

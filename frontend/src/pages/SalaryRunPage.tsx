@@ -4,7 +4,7 @@ import * as api from '@/lib/api';
 import type { EmployeeRow, SalaryRunRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import AppLayout from '@/components/AppLayout';
-import { Save, BadgeDollarSign, History, Edit2, Undo2, AlertTriangle, RotateCcw } from 'lucide-react';
+import { Save, BadgeDollarSign, History, Edit2, Undo2, AlertTriangle, RotateCcw, X } from 'lucide-react';
 
 interface FormLine {
   employee_id: number;
@@ -191,6 +191,20 @@ export default function SalaryRunPage() {
     if (!res.ok) return fail(res.error.message);
     flash('Run unposted. The month is free to be posted again.');
     loadAll();
+  };
+
+  // A History row only ever carried the month's summary (list() never returns items) — clicking
+  // it now fetches the one detail call (get()) that already existed for editRun, but renders it
+  // read-only instead of loading it into the editable entry form. Works for CONFIRMED rows too,
+  // unlike editRun, which refuses to touch a posted run.
+  const [viewingRun, setViewingRun] = useState<SalaryRunRow | null>(null);
+  const [viewLoading, setViewLoading] = useState(false);
+  const viewRun = async (run: SalaryRunRow) => {
+    setViewLoading(true);
+    const res = await api.salaryRuns.get(run.salary_run_id);
+    setViewLoading(false);
+    if (!res.ok) return fail(res.error.message);
+    setViewingRun(res.data);
   };
 
 
@@ -393,9 +407,12 @@ export default function SalaryRunPage() {
         ) : (
           /* History */
           <div className={`card-white p-6 md:p-8 bg-white border transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`} style={{ borderColor: 'var(--border-color)' }}>
-            <h3 className="font-lora font-semibold text-lg text-slate-800 mb-1">Salary Runs</h3>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="font-lora font-semibold text-lg text-slate-800">Salary Runs</h3>
+              {viewLoading && <span className="text-xs text-slate-400">Loading month detail…</span>}
+            </div>
             <p className="text-xs text-slate-500 mb-6">
-              One posted run per month. Only posted runs count toward a balance.
+              One posted run per month. Only posted runs count toward a balance — click a row to see who was paid.
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-sm">
@@ -419,7 +436,12 @@ export default function SalaryRunPage() {
                       </td>
                     </tr>
                   ) : sortedRuns.map(r => (
-                    <tr key={r.salary_run_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                    <tr
+                      key={r.salary_run_id}
+                      onClick={() => viewRun(r)}
+                      className="border-b hover:bg-slate-50/50 cursor-pointer"
+                      style={{ borderColor: 'var(--border-table)' }}
+                    >
                       <td className="p-3 pl-4 font-semibold text-slate-900">{monthLabel(r.period_month)}</td>
                       <td className="p-3 font-mono text-slate-600">{formatDate(r.run_date)}</td>
                       <td className="p-3 text-center text-slate-600">{r.item_count ?? '—'}</td>
@@ -432,7 +454,7 @@ export default function SalaryRunPage() {
                           <div className="text-[10px] text-slate-400 mt-1">was {formatCurrency(r.amount_before || 0)}</div>
                         )}
                       </td>
-                      <td className="p-3">
+                      <td className="p-3" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-center gap-1.5">
                           {r.status === 'CONFIRMED' ? (
                             <button onClick={() => unpost(r)} title="Unpost" className="p-1.5 rounded hover:bg-amber-50 text-slate-500 hover:text-amber-700">
@@ -454,6 +476,69 @@ export default function SalaryRunPage() {
         )}
 
       </div>
+
+      {/* Read-only per-employee breakdown for the History row just clicked — works for CONFIRMED
+          rows too (editRun refuses those), since viewing doesn't touch the record. */}
+      {viewingRun && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-2xl mx-4 animate-scaleUp">
+            <div className="flex items-start justify-between mb-1">
+              <div>
+                <h3 className="font-lora font-bold text-lg text-slate-800">{monthLabel(viewingRun.period_month)}</h3>
+                <p className="text-xs text-slate-500">
+                  Posted on {formatDate(viewingRun.run_date)} ·{' '}
+                  <span className={`font-bold ${viewingRun.status === 'CONFIRMED' ? 'text-emerald-700' : 'text-slate-500'}`}>
+                    {viewingRun.status === 'CONFIRMED' ? 'Posted' : 'Unposted'}
+                  </span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingRun(null)}
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="overflow-x-auto mt-4 max-h-[60vh] overflow-y-auto">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500 sticky top-0" style={{ borderColor: 'var(--border-color)' }}>
+                    <th className="p-3 pl-4">Employee</th>
+                    <th className="p-3 text-right">Salary</th>
+                    <th className="p-3 text-right">Amount Paid</th>
+                    <th className="p-3">Remarks</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(viewingRun.items || []).length === 0 ? (
+                    <tr><td colSpan={4} className="text-center p-6 text-slate-400">No line items on this run.</td></tr>
+                  ) : (viewingRun.items || []).map(i => {
+                    const changed = Number(i.amount) !== Number(i.salary_amount);
+                    return (
+                      <tr key={i.item_id} className={`border-b ${changed ? 'bg-amber-50/50' : ''}`} style={{ borderColor: 'var(--border-table)' }}>
+                        <td className="p-3 pl-4 font-semibold text-slate-900">{i.employee_name || '—'}</td>
+                        <td className="p-3 text-right text-slate-500 font-mono">{formatCurrency(i.salary_amount)}</td>
+                        <td className="p-3 text-right font-semibold text-slate-800 font-mono">{formatCurrency(i.amount)}</td>
+                        <td className="p-3 text-slate-600">{i.remarks || '-'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-slate-50 font-bold border-t-2" style={{ borderColor: 'var(--border-color)' }}>
+                    <td className="p-3 pl-4 text-slate-700">Total ({(viewingRun.items || []).length} employee(s))</td>
+                    <td className="p-3" />
+                    <td className="p-3 text-right text-slate-900">{formatCurrency(viewingRun.total_amount)}</td>
+                    <td className="p-3" />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </AppLayout>
   );
 }

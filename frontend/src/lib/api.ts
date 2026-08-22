@@ -768,42 +768,67 @@ export interface SettlementListFilters {
   date_to?: string;
 }
 
-// Journal Voucher — goodwill written off a party's balance ("eidi" on a payable). CREDIT reduces
-// what they owe us; DEBIT reduces what we owe them. Countered against the JOURNAL VOUCHER business
-// account, which has its own openable ledger.
+// Journal Voucher — a real multi-line double-entry journal (legacy "Journal Entry" screen): N
+// lines, each against its own account, each a debit OR a credit, that must net to zero. No fixed
+// counter-account — every line names a real business account, visible in that account's own ledger.
+export interface JournalVoucherLineInput {
+  ba_id: number;
+  debit: number;
+  credit: number;
+  /** Per-line note (e.g. "Eid compensation" on one leg, "damaged stock" on another) — distinct
+   *  from the header's single Reason, matching the legacy grid's per-row Narration. */
+  narration?: string;
+}
+
+export interface JournalVoucherLineRow extends JournalVoucherLineInput {
+  line_id: number;
+  line_no: number;
+  ba_name?: string;
+  ba_code?: string;
+}
+
 export interface JournalVoucherRow {
   jv_id: number;
   jv_date: string;
-  ba_id: number;
-  direction: 'CREDIT' | 'DEBIT';
-  amount: number;
   /** Manual voucher number (office cross-referencing), matching the legacy Journal Entry
    *  screen's "Number" field — optional, never validated, distinct from jv_id. */
   voucher_no: string | null;
   reason: string;
   remarks: string | null;
   status: 'CONFIRMED' | 'DRAFT';
-  ba_name?: string;
-  ba_code?: string;
-  main_account?: string;
+  /** Only present on get()/create()/update()/post()/unpost() — list() returns the rolled-up
+   *  totals below without the per-line detail, to keep the listing query a single aggregate. */
+  lines?: JournalVoucherLineRow[];
+  line_count: number;
+  total_debit: number;
+  total_credit: number;
 }
 
 export interface JournalVoucherCreateInput {
   jv_date: string;
-  ba_id: number;
-  direction: 'CREDIT' | 'DEBIT';
-  amount: number;
   voucher_no?: string;
   reason: string;
   remarks?: string;
+  lines: JournalVoucherLineInput[];
 }
 
 export interface JournalVoucherListFilters {
   ba_id?: number;
-  direction?: 'CREDIT' | 'DEBIT';
   status?: 'CONFIRMED' | 'DRAFT';
   date_from?: string;
   date_to?: string;
+  /** Matches the header (reason/number) or any line (account name/code, per-line narration,
+   *  debit/credit amount) — a search box doesn't need to know which field it landed in. */
+  search?: string;
+}
+
+/** A JV still awaiting posting, for the Post All confirmation list. */
+export interface UnpostedJournalVoucherRow {
+  jv_id: number;
+  jv_date: string;
+  voucher_no: string | null;
+  reason: string;
+  total_debit: number;
 }
 
 export interface DepositRow {
@@ -1149,6 +1174,9 @@ export const RESERVED_ACCOUNT_CODES: readonly string[] = [
   '410001', // WAGES_EXPENSE
   '410002', // SALARIES_EXPENSE
   '400006', // MISC_ADJUSTMENTS
+  '400007', // JOURNAL_VOUCHER
+  '200003', // OPENING_BALANCE_EQUITY
+  '400008', // DISCOUNTS_CLAIMS_COMMISSIONS
 ];
 
 export type ExpensePaymentMode = 'CASH' | 'ONLINE' | 'CHEQUE_ENDORSED' | 'CHEQUE_ISSUED';
@@ -1915,12 +1943,14 @@ declare global {
       journalVouchers: {
         list: (payload?: JournalVoucherListFilters) => Promise<ApiResult<JournalVoucherRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<JournalVoucherRow>>;
-        account: () => Promise<ApiResult<BusinessAccountRow>>;
         create: (payload: JournalVoucherCreateInput) => Promise<ApiResult<JournalVoucherRow>>;
         update: (payload: { id: number } & JournalVoucherCreateInput) => Promise<ApiResult<JournalVoucherRow>>;
         remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
         post: (payload: { id: number }) => Promise<ApiResult<JournalVoucherRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<JournalVoucherRow>>;
+        listUnposted: () => Promise<ApiResult<UnpostedJournalVoucherRow[]>>;
+        postAll: (payload?: { ids?: number[] }) => Promise<ApiResult<PostAllResult<'jv_id'>>>;
+        counterAccount: () => Promise<ApiResult<BusinessAccountRow>>;
       };
       settlements: {
         list: (payload?: SettlementListFilters) => Promise<ApiResult<SettlementRow[]>>;
@@ -2745,8 +2775,6 @@ export const journalVouchers = {
     window.api ? window.api.journalVouchers.list(payload).then(r => mapResult(r, rows => rows.map(normalizeJvRow))) : Promise.resolve(NO_BRIDGE),
   get: (id: number) =>
     window.api ? window.api.journalVouchers.get({ id }).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
-  account: () =>
-    window.api ? window.api.journalVouchers.account() : Promise.resolve(NO_BRIDGE),
   create: (payload: JournalVoucherCreateInput) =>
     window.api ? window.api.journalVouchers.create(payload).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: JournalVoucherCreateInput) =>
@@ -2756,6 +2784,12 @@ export const journalVouchers = {
     window.api ? window.api.journalVouchers.post({ id }).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
     window.api ? window.api.journalVouchers.unpost({ id }).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
+  listUnposted: () =>
+    window.api ? window.api.journalVouchers.listUnposted() : Promise.resolve(NO_BRIDGE),
+  postAll: (ids?: number[]) =>
+    window.api ? window.api.journalVouchers.postAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE),
+  counterAccount: () =>
+    window.api ? window.api.journalVouchers.counterAccount() : Promise.resolve(NO_BRIDGE),
 };
 
 export const settlements = {

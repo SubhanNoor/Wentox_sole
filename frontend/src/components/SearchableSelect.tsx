@@ -42,6 +42,20 @@ export default function SearchableSelect({
   const panelRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  // Distinguishes a focus event caused by the user clicking the trigger (onMouseDown fires first,
+  // then focus, then click) from every other way focus can land here (Tab, the app's G-01
+  // Enter-walk between fields, a page auto-focusing its first field on mount) — a mouse click
+  // already opens the panel itself via its own onClick/toggle, so auto-opening on that same
+  // focus event too would immediately toggle it shut again right after.
+  const focusFromMouseRef = useRef(false);
+  // Set just before a deliberate "return focus to the trigger without reopening" call (after
+  // committing a selection, or on Escape) — the panel closes and focus moves back onto this same
+  // button, which would otherwise look identical to a keyboard-driven focus and reopen it.
+  const suppressAutoOpenRef = useRef(false);
+  function focusTriggerWithoutOpening() {
+    suppressAutoOpenRef.current = true;
+    triggerRef.current?.focus();
+  }
 
   /**
    * The panel is rendered through a PORTAL onto document.body rather than as an
@@ -181,8 +195,13 @@ export default function SearchableSelect({
     setIsOpen(false);
 
     const trigger = triggerRef.current;
-    trigger?.focus();
-    if (advance) focusNextField(trigger);
+    focusTriggerWithoutOpening();
+    // `onChange` above can flip another field's `disabled` (e.g. Colour disables until an
+    // Article is chosen) — that state update hasn't committed to the DOM yet at this point in
+    // the same synchronous handler, so scanning for fields now would still see the old
+    // `disabled` and skip straight past it. Deferring past the next paint lets the re-render
+    // land first.
+    if (advance) requestAnimationFrame(() => focusNextField(trigger));
   }
 
   function handleSearchKeyDown(e: React.KeyboardEvent) {
@@ -198,7 +217,7 @@ export default function SearchableSelect({
     } else if (e.key === 'Escape') {
       e.preventDefault();
       setIsOpen(false);
-      triggerRef.current?.focus();
+      focusTriggerWithoutOpening();
     }
   }
 
@@ -211,6 +230,12 @@ export default function SearchableSelect({
         disabled={disabled}
         onClick={toggle}
         onKeyDown={handleTriggerKeyDown}
+        onMouseDown={() => { focusFromMouseRef.current = true; }}
+        onFocus={() => {
+          if (focusFromMouseRef.current) { focusFromMouseRef.current = false; return; }
+          if (suppressAutoOpenRef.current) { suppressAutoOpenRef.current = false; return; }
+          open();
+        }}
         className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
       >
         <span className={selectedOption ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
@@ -263,7 +288,7 @@ export default function SearchableSelect({
                       // Deliberately does NOT advance: a mouse user did not ask to be moved on.
                       onChange(opt.value);
                       setIsOpen(false);
-                      triggerRef.current?.focus();
+                      focusTriggerWithoutOpening();
                     }}
                     className={`w-full text-left px-3.5 py-2 text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
                       isSelected

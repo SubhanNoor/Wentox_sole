@@ -35,15 +35,6 @@ export default function ExpensesPage() {
   const [drafts, setDrafts] = useState<DraftExpenseRow[]>([]);
   const [lookupError, setLookupError] = useState('');
 
-  // The posted expenses themselves are no longer listed on this screen — the "Recorded Expenses"
-  // table shows what still needs posting, which now lives in dbo.draft_expenses (see
-  // sortedExpenses). This is kept as the surfacing point for a failed read of the real table, and
-  // as the trigger every mutation already calls; the rows are read by the ledger/report screens.
-  const refreshExpenses = useCallback(async () => {
-    const res = await api.expenses.list({});
-    if (!res.ok) setLookupError('Failed to load expenses: ' + res.error.message);
-  }, []);
-
   const refreshDrafts = useCallback(async () => {
     const res = await api.draftExpenses.list({});
     if (res.ok) setDrafts(res.data);
@@ -77,11 +68,10 @@ export default function ExpensesPage() {
       if (bk.ok) setBanks(bk.data); else failures.push(bk.error.message);
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
-    refreshExpenses();
     refreshDrafts();
     refreshDrafts();
     refreshCheques();
-  }, [refreshExpenses, refreshDrafts, refreshCheques]);
+  }, [refreshDrafts, refreshCheques]);
 
   // ── Real-expense form (mirrors ReceiptsPage.tsx's mode structure) ──
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
@@ -109,7 +99,6 @@ export default function ExpensesPage() {
     setDeleteTarget(null);
     if (!res.ok) return fail('Failed to delete: ' + res.error.message);
     flash('Expense deleted.');
-    refreshExpenses();
   };
   // Bumped after anything that posts, so the balance panel re-reads instead of showing a stale figure.
   const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
@@ -376,7 +365,6 @@ export default function ExpensesPage() {
         : paidVendor ? `Payment to ${paidVendor} added to the voucher.`
         : 'Entry added to the voucher.'
     );
-    refreshExpenses();
     setBalanceRefreshKey(k => k + 1);
     refreshCheques();
   };
@@ -394,7 +382,6 @@ export default function ExpensesPage() {
     if (!res.ok) { fail('Failed to post voucher: ' + res.error.message); return; }
     setVoucherResult(res.data);
     setVoucher(res.data.voucher);
-    refreshExpenses();
     setBalanceRefreshKey(k => k + 1);
     // A CHEQUE_ENDORSED line allocates against a received cheque when it posts, so the endorsement
     // picker has to re-read or it keeps offering value that is already spent.
@@ -416,7 +403,6 @@ export default function ExpensesPage() {
     if (!res.ok) { fail('Failed to unpost voucher: ' + res.error.message); return; }
     setVoucherResult(res.data);
     setVoucher(res.data.voucher);
-    refreshExpenses();
     setBalanceRefreshKey(k => k + 1);
     refreshCheques(); // unposting releases any cheque allocation the lines held
     if (res.data.failed.length === 0) flash(`Voucher ${voucher.voucher_no} unposted.`);
@@ -513,21 +499,8 @@ export default function ExpensesPage() {
     setSelectedDraftPick('');
     flash('Draft confirmed and posted as an expense.');
     refreshDrafts();
-    refreshExpenses();
     refreshCheques();
   };
-
-  // Recorded Expenses (below) shows only what's still awaiting posting — a CONFIRMED expense has
-  // already done its job and belongs in the reports/ledger, not in a list whose whole point was
-  // "here's what still needs attention." Mirrors the identical fix on ReceiptsPage.
-  // Unposted expenses now live in dbo.draft_expenses, so this reads the drafts rather than
-  // filtering the real table — which, by the new invariant, only ever holds CONFIRMED rows and so
-  // would always filter down to nothing. Same list, same meaning ("here's what still needs
-  // attention"), just read from where the rows actually are.
-  const sortedExpenses = useMemo(
-    () => [...drafts].sort((a, b) => b.expense_date.localeCompare(a.expense_date)),
-    [drafts]
-  );
 
   const accountName = useCallback((id: number) => {
     const ba = businessAccounts.find(b => b.ba_id === id);
@@ -1082,65 +1055,6 @@ export default function ExpensesPage() {
                       </button>
                     </div>
                   )}
-                </div>
-              )}
-            </div>
-
-            {/* Recorded Expenses — unposted only now, same as Recorded Receipts: a CONFIRMED
-                expense has already done its job and belongs in the reports/ledger, not here. */}
-            <div className="card-white p-6 mt-8 bg-white border border-slate-200 rounded-xl shadow-sm">
-              <h3 className="font-lora font-semibold text-lg text-slate-800 mb-4">Recorded Expenses <span className="text-xs font-normal text-slate-400 uppercase tracking-wider">— Unposted</span></h3>
-              {sortedExpenses.length === 0 ? (
-                <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
-                  No unposted expenses.
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-sm">
-                    <thead>
-                      <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                        <th className="p-3 pl-4">Date</th>
-                        <th className="p-3">Account</th>
-                        <th className="p-3 text-center">Mode</th>
-                        <th className="p-3 text-right">Amount</th>
-                        <th className="p-3 text-center">Status</th>
-                        <th className="p-3 text-center" style={{ width: 50 }} />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {/* Every row here is an unposted expense out of dbo.draft_expenses, so the
-                          status is DRAFT by construction — no per-row status test is needed any
-                          more, and clicking one opens it for editing in place. */}
-                      {sortedExpenses.map(r => (
-                        <tr
-                          key={r.draft_id}
-                          onClick={() => loadDraft(r)}
-                          className="border-b hover:bg-slate-50/50 cursor-pointer"
-                          style={{ borderColor: 'var(--border-table)' }}
-                        >
-                          <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(r.expense_date)}</td>
-                          <td className="p-3 font-semibold text-slate-900">{r.ba_name || accountName(r.ba_id)}</td>
-                          <td className="p-3 text-center text-xs text-slate-500">{r.payment_mode}</td>
-                          <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
-                          <td className="p-3 text-center">
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded uppercase bg-slate-100 text-slate-500">
-                              DRAFT
-                            </span>
-                          </td>
-                          <td className="p-3 text-center">
-                            <button
-                              type="button"
-                              onClick={e => { e.stopPropagation(); setDeleteTarget({ kind: 'draft', id: r.draft_id, amount: Number(r.amount) }); }}
-                              title="Delete"
-                              className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
-                            >
-                              <Trash2 size={15} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
                 </div>
               )}
             </div>

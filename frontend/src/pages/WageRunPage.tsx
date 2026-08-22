@@ -7,7 +7,7 @@ import { getRunBalanceBlock } from '@/lib/payroll';
 import { formatDate } from '@/lib/utils';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
-import { Plus, Trash2, Save, HardHat, AlertTriangle, Edit2, Undo2, History, Clock, ChevronDown, Check } from 'lucide-react';
+import { Plus, Trash2, Save, HardHat, AlertTriangle, Edit2, Undo2, History, Clock, ChevronDown, Check, X } from 'lucide-react';
 
 interface FormItem {
   key: string;
@@ -189,8 +189,10 @@ export default function WageRunPage() {
   }
 
   const addRow = () => setItems(prev => [...prev, emptyItem()]);
+  // Last row: reset its fields instead of removing it, keeping the original `key` (rather than
+  // emptyItem()'s freshly-generated one) so the row doesn't remount and lose focus.
   const removeRow = (key: string) =>
-    setItems(prev => prev.length === 1 ? [emptyItem()] : prev.filter(it => it.key !== key));
+    setItems(prev => prev.length === 1 ? [{ ...emptyItem(), key: prev[0].key }] : prev.filter(it => it.key !== key));
 
   /* ── derived figures ──────────────────────────────────────── */
 
@@ -297,6 +299,20 @@ export default function WageRunPage() {
 
 
 
+  // A History row only ever carried the run's summary (list() never returns items) — clicking it
+  // now fetches the one detail call (get()) that already existed for editRun, but renders it
+  // read-only instead of loading it into the editable entry form. Works for CONFIRMED runs too,
+  // unlike editRun, which refuses to touch a posted run. Mirrors the identical fix on SalaryRunPage.
+  const [viewingRun, setViewingRun] = useState<WageRunRow | null>(null);
+  const [viewLoading, setViewLoading] = useState(false);
+  const viewRun = async (run: WageRunRow) => {
+    setViewLoading(true);
+    const res = await api.wageRuns.get(run.wage_run_id);
+    setViewLoading(false);
+    if (!res.ok) return fail(res.error.message);
+    setViewingRun(res.data);
+  };
+
   function nameOf(id: number) {
     return workers.find(e => e.employee_id === id)?.name || '—';
   }
@@ -353,7 +369,38 @@ export default function WageRunPage() {
 
   return (
     <AppLayout pageTitle="Wage Run (Piece Rate)" headerAction={tabBar}>
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
+
+        {/* Recent runs — pinned outside the card's own left edge, matching PurchasePage/
+            SaleBillPage's Pending Posting sidebar exactly (`absolute`, anchored via
+            `right: calc(100% + gap)` to this wrapper's left edge, so it can never affect the
+            card's width/position). Was previously inline inside the Header card, which pushed
+            the header taller and ate horizontal space in a row that only has three fields
+            (Date/Worker/Stage) to begin with. Only shown from `2xl` up, same as Purchase/
+            SaleBill — below that there usually isn't 280px of free margin for it to land in. */}
+        {tab === 'entry' && recentRuns.length > 0 && (
+          <aside
+            className="hidden 2xl:block absolute top-0 w-64"
+            style={{ right: 'calc(100% + 24px)' }}
+          >
+            <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-amber-800 uppercase tracking-wide mb-3">
+                <Clock size={13} /> Recent {stage ? stageLabel(stage) : ''} runs for {nameOf(Number(employeeId))}
+              </div>
+              <ul className="space-y-1.5">
+                {recentRuns.map(r => (
+                  <li key={r.wage_run_id} className="px-2.5 py-1.5 rounded-lg bg-white border border-amber-200 text-xs font-semibold text-slate-700">
+                    {formatDate(r.run_date)} — {formatCurrency(r.total_amount)}
+                    {r.status === 'DRAFT' && <span className="ml-1 text-slate-400 font-medium">(unposted)</span>}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[11px] text-amber-700 mt-3">
+                Check this settlement does not cover work already paid for above.
+              </p>
+            </div>
+          </aside>
+        )}
 
         {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>}
         {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>}
@@ -388,7 +435,13 @@ export default function WageRunPage() {
               )}
             </div>
 
-            <div
+            {/* A real <form> (not a <div>) — AppLayout's G-01 auto-focus/Enter-navigation only
+                scans for a <form> in the DOM, and this page had none, so the first field never
+                got focused on open. Save/Post stay type="button" (two distinct save modes, no
+                single native submit), so onSubmit only guards against the rare native
+                implicit-submit-on-Enter case. */}
+            <form
+              onSubmit={e => e.preventDefault()}
               className={`flex flex-col gap-5 transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}
             >
 
@@ -478,26 +531,6 @@ export default function WageRunPage() {
                   )}
                 </div>
               </div>
-
-              {/* Recent runs — replaces a same-date duplicate warning */}
-              {recentRuns.length > 0 && (
-                <div className="mt-4 p-3 rounded-lg bg-amber-50 border border-amber-200">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-amber-800 uppercase tracking-wide mb-2">
-                    <Clock size={13} /> Recent {stage ? stageLabel(stage) : ''} runs for {nameOf(Number(employeeId))}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {recentRuns.map(r => (
-                      <span key={r.wage_run_id} className="px-2 py-1 rounded bg-white border border-amber-200 text-xs font-semibold text-slate-700">
-                        {formatDate(r.run_date)} — {formatCurrency(r.total_amount)}
-                        {r.status === 'DRAFT' && <span className="ml-1 text-slate-400 font-medium">(unposted)</span>}
-                      </span>
-                    ))}
-                  </div>
-                  <p className="text-[11px] text-amber-700 mt-2">
-                    Check this settlement does not cover work already paid for above.
-                  </p>
-                </div>
-              )}
             </div>
 
             {/* Lines */}
@@ -624,14 +657,17 @@ export default function WageRunPage() {
                 )}
               </div>
             )}
-            </div>
+            </form>
           </>
         ) : (
           /* History */
           <div className={`card-white p-6 md:p-8 bg-white border transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`} style={{ borderColor: 'var(--border-color)' }}>
-            <h3 className="font-lora font-semibold text-lg text-slate-800 mb-1">Wage Runs</h3>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="font-lora font-semibold text-lg text-slate-800">Wage Runs</h3>
+              {viewLoading && <span className="text-xs text-slate-400">Loading run detail…</span>}
+            </div>
             <p className="text-xs text-slate-500 mb-4">
-              Only posted runs count toward a worker's balance. To correct one: unpost, edit, post again.
+              Only posted runs count toward a worker's balance. To correct one: unpost, edit, post again. Click a row to see its article lines.
             </p>
 
             {/* WR-05: search by worker/stage name, plus a date filter. */}
@@ -687,7 +723,12 @@ export default function WageRunPage() {
                       </td>
                     </tr>
                   ) : sortedRuns.map(r => (
-                    <tr key={r.wage_run_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                    <tr
+                      key={r.wage_run_id}
+                      onClick={() => viewRun(r)}
+                      className="border-b hover:bg-slate-50/50 cursor-pointer"
+                      style={{ borderColor: 'var(--border-table)' }}
+                    >
                       <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(r.run_date)}</td>
                       <td className="p-3 font-semibold text-slate-900">{r.employee_name || nameOf(r.employee_id)}</td>
                       <td className="p-3 text-slate-600">{r.stage_label || stageLabel(r.stage_key)}</td>
@@ -703,7 +744,7 @@ export default function WageRunPage() {
                           </div>
                         )}
                       </td>
-                      <td className="p-3">
+                      <td className="p-3" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-center gap-1.5">
                           {r.status === 'CONFIRMED' ? (
                             <button onClick={() => unpost(r)} title="Unpost" className="p-1.5 rounded hover:bg-amber-50 text-slate-500 hover:text-amber-700">
@@ -730,6 +771,68 @@ export default function WageRunPage() {
         )}
 
       </div>
+
+      {/* Read-only article-line breakdown for the History row just clicked — works for CONFIRMED
+          runs too (editRun refuses those), since viewing doesn't touch the record. */}
+      {viewingRun && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-2xl mx-4 animate-scaleUp">
+            <div className="flex items-start justify-between mb-1">
+              <div>
+                <h3 className="font-lora font-bold text-lg text-slate-800">
+                  {viewingRun.employee_name || nameOf(viewingRun.employee_id)}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {formatDate(viewingRun.run_date)} · {viewingRun.stage_label || stageLabel(viewingRun.stage_key)} ·{' '}
+                  <span className={`font-bold ${viewingRun.status === 'CONFIRMED' ? 'text-emerald-700' : 'text-slate-500'}`}>
+                    {viewingRun.status === 'CONFIRMED' ? 'Posted' : 'Unposted'}
+                  </span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingRun(null)}
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="overflow-x-auto mt-4 max-h-[60vh] overflow-y-auto">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500 sticky top-0" style={{ borderColor: 'var(--border-color)' }}>
+                    <th className="p-3 pl-4">Article</th>
+                    <th className="p-3 text-right">Rate</th>
+                    <th className="p-3 text-right">Cartons</th>
+                    <th className="p-3 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(viewingRun.items || []).length === 0 ? (
+                    <tr><td colSpan={4} className="text-center p-6 text-slate-400">No line items on this run.</td></tr>
+                  ) : (viewingRun.items || []).map(i => (
+                    <tr key={i.item_id} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
+                      <td className="p-3 pl-4 font-semibold text-slate-900">{i.article_name || '—'}</td>
+                      <td className="p-3 text-right text-slate-500 font-mono">{formatCurrency(i.rate)}</td>
+                      <td className="p-3 text-right text-slate-600 font-mono">{i.cartons}</td>
+                      <td className="p-3 text-right font-semibold text-slate-800 font-mono">{formatCurrency(i.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-slate-50 font-bold border-t-2" style={{ borderColor: 'var(--border-color)' }}>
+                    <td className="p-3 pl-4 text-slate-700">Total ({(viewingRun.items || []).length} line(s))</td>
+                    <td className="p-3" />
+                    <td className="p-3" />
+                    <td className="p-3 text-right text-slate-900">{formatCurrency(viewingRun.total_amount)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </AppLayout>
   );
 }

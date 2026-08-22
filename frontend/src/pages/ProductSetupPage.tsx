@@ -187,7 +187,18 @@ export default function ProductSetupPage() {
     requestAnimationFrame(() => focusFirstField(articleRowRefs.current[newRowIndex]));
   }
 
+  // This batch form always needs at least one article to type into, so removing the last
+  // remaining one clears its fields back to blank instead of removing the row itself.
   const removeArticle = (idx: number) => {
+    if (articles.length <= 1) {
+      setArticles(prev => prev.map((a, i) => (i === idx ? emptyArticleValues() : a)));
+      setArticleErrors(prev => {
+        const next = { ...prev };
+        delete next[idx];
+        return next;
+      });
+      return;
+    }
     setArticles(prev => prev.filter((_, i) => i !== idx));
     setArticleErrors(prev => {
       const next: Record<number, ArticleFieldErrors> = {};
@@ -581,9 +592,8 @@ export default function ProductSetupPage() {
                           <button
                             type="button"
                             onClick={() => removeArticle(idx)}
-                            disabled={articles.length <= 1}
-                            title="Remove this article"
-                            className="p-1 rounded-md text-slate-300 hover:text-rose-400 hover:bg-white/10 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                            title="Remove this article (clears fields if it's the last one)"
+                            className="p-1 rounded-md text-slate-300 hover:text-rose-400 hover:bg-white/10 transition-colors cursor-pointer"
                           >
                             <Trash2 size={14} />
                           </button>

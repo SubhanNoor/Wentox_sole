@@ -248,8 +248,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
-  const pendingEditRow = useRef<SaleReturnRow | null>(null);
-
   // G-01: auto-focus the first field (Date) whenever the return tab becomes the active view and
   // is editable — this page's entry area isn't wrapped in a <form>, so AppLayout's global
   // auto-focus mechanism (which only looks inside <form> elements) has nothing to find here.
@@ -260,10 +258,13 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     }
   }, [activeTab, mode]);
 
+  // No password prompt here — Save (handleSave, mode==='edit') already asks for one before the
+  // update actually goes through, so gating entry into edit mode too meant asking twice for one
+  // edit (reported directly by the user: edit then update each prompted separately).
   const handleEditSpecificReturn = async (ret: SaleReturnRow) => {
-    setPasswordActionType('edit_return');
-    setIsPasswordModalOpen(true);
-    pendingEditRow.current = ret;
+    await loadReturnRow(ret);
+    setActiveTab('return');
+    setMode('edit');
   };
 
   const handlePrintSpecificReturn = async (ret: SaleReturnRow) => {
@@ -449,25 +450,19 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     refreshDrafts();
   };
 
+  // Entering edit mode never needs its own password prompt anymore — Save (handleSave,
+  // mode==='edit') already asks for one before the update actually goes through, so gating entry
+  // into edit mode too meant asking twice for one edit (reported by the user for both this
+  // button and handleEditSpecificReturn above).
   const handleEditCurrentReturn = () => {
-    setPasswordActionType('edit_return');
-    setIsPasswordModalOpen(true);
+    setMode('edit');
   };
 
   const pendingDeleteReturnId = useRef<number | null>(null);
 
   const handlePasswordSuccess = async (password: string) => {
     setIsPasswordModalOpen(false);
-    if (passwordActionType === 'edit_return') {
-      if (pendingEditRow.current) {
-        await loadReturnRow(pendingEditRow.current);
-        pendingEditRow.current = null;
-        setActiveTab('return');
-      }
-      setMode('edit');
-      setSuccessMsg(`Password verified. Return editing unlocked.`);
-      setTimeout(() => setSuccessMsg(''), 3000);
-    } else if (passwordActionType === 'save_return') {
+    if (passwordActionType === 'save_return') {
       await executeSave(password);
     } else if (passwordActionType === 'delete_unposted_return') {
       const targetId = pendingDeleteReturnId.current;
@@ -603,6 +598,30 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // and focuses into it. stopPropagation stops AppLayout's own window-level Enter handler from
   // also firing on the same keydown and clicking Save & Post before the new row exists.
   const articleCellRefs = useRef<(HTMLTableCellElement | null)[]>([]);
+
+  // Invoice card fills whatever vertical space is left in the viewport below it (mirrors
+  // SaleBillPage) — the item table (flex-1 inside it) grows into that space and the Remarks/
+  // Calculations footer lands at the screen's bottom edge, and the outer app window never scrolls
+  // (only the table does). Measured via getBoundingClientRect rather than a CSS calc() of fixed
+  // chrome heights, since the banners/toolbar above this card change height dynamically.
+  const invoiceCardRef = useRef<HTMLDivElement>(null);
+  const [invoiceCardHeight, setInvoiceCardHeight] = useState<number | null>(null);
+
+  useEffect(() => {
+    function recompute() {
+      const el = invoiceCardRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      // AppLayout's <main> (the only scroll container in the app) adds 32px of its own
+      // padding-bottom below whatever height we claim here — leaving that out would make the
+      // card's bottom edge land 32px past the viewport and force <main> to scroll by that much.
+      setInvoiceCardHeight(Math.max(360, window.innerHeight - top - 32));
+    }
+    recompute();
+    window.addEventListener('resize', recompute);
+    return () => window.removeEventListener('resize', recompute);
+  }, [mode, lookupError, successMsg, errorMsg]);
+
   // '.' held while Enter is pressed is a genuine three-way chord alongside Shift+Enter/Ctrl+Enter
   // below — tracked via useHeldKey since '.' isn't a real modifier key with its own event flag.
   // Typing '.' alone (a decimal point) never triggers this: by the time Enter is a separate,
@@ -630,8 +649,14 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     requestAnimationFrame(() => focusFirstField(articleCellRefs.current[0])); // new row is always index 0 now
   }
 
+  // A return always needs at least one row to type into, so deleting the last remaining one
+  // clears its fields back to blank instead of removing the row itself (keeping its uid, so the
+  // row doesn't remount and lose focus).
   const handleRemoveItemRow = (idx: number) => {
-    if (items.length <= 1) return;
+    if (items.length <= 1) {
+      setItems(prev => prev.map((it, i) => i === idx ? { ...newUiItem(), uid: it.uid } : it));
+      return;
+    }
     setItems(items.filter((_, i) => i !== idx));
   };
 
@@ -1090,90 +1115,97 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
         {/* Toolbar - data-no-print */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
+          {/* Every action always renders (ref-pic style) — only `disabled` changes per state,
+              instead of whole button groups mounting/unmounting per `mode`. */}
           <div className="flex flex-wrap gap-2">
-            {mode === 'view' ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsPrintingSingle(true);
-                    setTimeout(() => { window.print(); setIsPrintingSingle(false); }, 100);
-                  }}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-700 shadow-sm transition-colors flex items-center gap-1.5"
-                >
-                  <Printer size={16} /> Print Return
-                </button>
-                <button type="button" onClick={() => exportToPDF()} className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5">
-                  <FileDown size={16} /> Export PDF
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const headers = ['Article', 'Packing', 'Cartons', 'Pairs', 'Rate', 'D%', 'D. Value', 'Total Value'];
-                    const rows = items.map(it => [it.label, it.packing, it.cartons, it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
-                    exportRowsToExcel(`sale-return-${billNo || returnId}`, headers, rows);
-                  }}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5"
-                >
-                  <FileSpreadsheet size={16} /> Export Excel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleEditCurrentReturn}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
-                >
-                  <Edit size={16} /> Edit Return
-                </button>
-                {returnId != null && !currentReturnIsPosted && (
-                  <button type="button" onClick={handlePostCurrentReturn} className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all">
-                    Post Return
-                  </button>
-                )}
-                {returnId != null && currentReturnIsPosted && (
-                  <button type="button" onClick={handleUnpostCurrentReturn} className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all">
-                    Unpost Return
-                  </button>
-                )}
-                <button type="button" onClick={handleNew} className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all">
-                  Create New Return
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="submit"
-                  onClick={handleSave}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-sm font-inter hover:opacity-90"
-                  style={{
-                    backgroundColor: isNecessaryFieldsFilled ? '#111c2a' : '#e2e8f0',
-                    color: isNecessaryFieldsFilled ? '#B08D57' : '#64748b',
-                    border: isNecessaryFieldsFilled ? '1px solid #B08D57' : '1px solid #cbd5e1',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <Save size={16} /> {mode === 'edit' ? 'Update Return' : 'Save Return'}
-                </button>
-                {!currentReturnIsPosted && (
-                  <button
-                    type="button"
-                    onClick={handleSaveAndPost}
-                    disabled={!isNecessaryFieldsFilled}
-                    className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-50"
-                  >
-                    Save &amp; Post
-                  </button>
-                )}
-                {mode === 'edit' ? (
-                  <button type="button" onClick={() => setMode('view')} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
-                    Cancel Edit
-                  </button>
-                ) : (
-                  <button type="button" onClick={handleNew} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
-                    Clear Form
-                  </button>
-                )}
-              </>
-            )}
+            <button type="button" onClick={handleNew} className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none">
+              New Return
+            </button>
+            <button
+              type="submit"
+              onClick={handleSave}
+              disabled={mode === 'view' || !isNecessaryFieldsFilled}
+              className="px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-sm font-inter hover:opacity-90 disabled:pointer-events-none disabled:cursor-not-allowed"
+              style={{
+                backgroundColor: mode !== 'view' && isNecessaryFieldsFilled ? '#111c2a' : '#e2e8f0',
+                color: mode !== 'view' && isNecessaryFieldsFilled ? '#B08D57' : '#64748b',
+                border: mode !== 'view' && isNecessaryFieldsFilled ? '1px solid #B08D57' : '1px solid #cbd5e1',
+                cursor: mode !== 'view' && isNecessaryFieldsFilled ? 'pointer' : 'not-allowed'
+              }}
+            >
+              <Save size={16} /> {mode === 'edit' ? 'Update Return' : 'Save Return'}
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveAndPost}
+              disabled={mode === 'view' || !isNecessaryFieldsFilled || currentReturnIsPosted}
+              className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Save &amp; Post
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('view')}
+              disabled={mode !== 'edit'}
+              className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Cancel Edit
+            </button>
+            <button
+              type="button"
+              onClick={handleEditCurrentReturn}
+              disabled={mode !== 'view' || returnId == null}
+              className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <Edit size={16} /> Edit Return
+            </button>
+            <button
+              type="button"
+              onClick={handlePostCurrentReturn}
+              disabled={mode !== 'view' || returnId == null || currentReturnIsPosted}
+              className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Post Return
+            </button>
+            <button
+              type="button"
+              onClick={handleUnpostCurrentReturn}
+              disabled={mode !== 'view' || returnId == null || !currentReturnIsPosted}
+              className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Unpost Return
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsPrintingSingle(true);
+                setTimeout(() => { window.print(); setIsPrintingSingle(false); }, 100);
+              }}
+              disabled={mode !== 'view' || returnId == null}
+              className="px-4 py-2 text-sm font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-700 shadow-sm transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <Printer size={16} /> Print Return
+            </button>
+            <button
+              type="button"
+              onClick={() => exportToPDF()}
+              disabled={mode !== 'view' || returnId == null}
+              className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <FileDown size={16} /> Export PDF
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const headers = ['Article', 'Packing', 'Cartons', 'Pairs', 'Rate', 'D%', 'D. Value', 'Total Value'];
+                const rows = items.map(it => [it.label, it.packing, it.cartons, it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
+                exportRowsToExcel(`sale-return-${billNo || returnId}`, headers, rows);
+              }}
+              disabled={mode !== 'view' || returnId == null}
+              className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <FileSpreadsheet size={16} /> Export Excel
+            </button>
           </div>
 
           {mode === 'edit' && (
@@ -1190,8 +1222,15 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           )}
         </div>
 
-        {/* Invoice Layout */}
-        <div className="card-white shadow-sm p-3 md:p-4" style={{ border: '1px solid var(--border-color)', background: '#ffffff' }}>
+        {/* Invoice Layout — height pinned to the remaining viewport space (see invoiceCardHeight
+            above) and laid out as a flex column, so the item table below can flex-grow into
+            whatever room that leaves and the footer lands at the bottom of the screen. Every
+            other child here keeps its natural size (shrink-0) — only the table wrapper is flex-1. */}
+        <div
+          ref={invoiceCardRef}
+          className="card-white shadow-sm p-3 md:p-4 flex flex-col"
+          style={{ border: '1px solid var(--border-color)', background: '#ffffff', height: invoiceCardHeight ?? undefined }}
+        >
 
           {/* Print Title (Visible only when printing) */}
           <div className="hidden print:flex items-center justify-between mb-6 pb-4 border-b">
@@ -1205,24 +1244,26 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
           </div>
 
-          {/* Master Info Header fields */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }}>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
+          {/* Header fields — one dense grid, label-left per field (matches SaleBillPage's
+              compact redesign), instead of stacked label-above-input fields split across
+              bordered cards. */}
+          <div className="shrink-0 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }}>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Return No.
               </label>
-              <input type="text" value={returnId ?? 'Unsaved'} disabled className="soleria-input bg-gray-50 text-gray-500 border-gray-200" style={{ fontSize: '13px' }} />
+              <input type="text" value={returnId ?? 'Unsaved'} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
               <input type="date" ref={firstFieldRef}
-            value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
+            value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
-                TO Store (Return Destination) <span className="text-red-500 font-bold">*</span>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
+                TO Store <span className="text-red-500 font-bold">*</span>
               </label>
               {/* Was a native <select> — SearchableSelect so it types-to-search like the rest. */}
               <SearchableSelect
@@ -1234,8 +1275,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 disabled={isViewMode}
               />
             </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Manual Invoice No. <span className="text-red-500 font-bold">*</span>
               </label>
               <input
@@ -1249,133 +1290,117 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                     prefillFromSaleBill(val);
                   }
                 }}
-                className="soleria-input"
-                style={{ fontSize: '13px' }}
+                className="soleria-input soleria-input-compact"
               />
             </div>
-          </div>
 
-          {/* Customer & Dispatch Section */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }}>
-
-            {/* Customer Details Box */}
-            <div className="flex flex-col gap-1.5 p-2.5 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-0.5">
-                Customer Information
-              </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                <div className="col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Select Customer Name <span className="text-red-500 font-bold">*</span>
-                  </label>
-                  <SearchableSelect
-                    options={customerOptions}
-                    value={customerId}
-                    onChange={val => { setCustomerId(val); setSubCustomerId(''); }}
-                    placeholder="Select customer..."
-                    searchPlaceholder="Search customers..."
-                    disabled={isViewMode}
-                  />
-                  {selectedCustomer && selectedCustomer.ba_id == null && (
-                    <p className="text-[10px] text-amber-600 mt-1 font-semibold">
-                      This customer has no linked business account — the return cannot be posted until Setup adds one.
-                    </p>
-                  )}
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Customer Code
-                  </label>
-                  <input type="text" value={customerId} disabled className="soleria-input bg-gray-100 text-gray-500" style={{ fontSize: '12px' }} />
-                </div>
+            <div className="flex items-center gap-2 md:col-span-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Customer <span className="text-red-500 font-bold">*</span>
+              </label>
+              <div className="flex-1">
+                <SearchableSelect
+                  options={customerOptions}
+                  value={customerId}
+                  onChange={val => { setCustomerId(val); setSubCustomerId(''); }}
+                  placeholder="Select customer..."
+                  searchPlaceholder="Search customers..."
+                  disabled={isViewMode}
+                />
+                {selectedCustomer && selectedCustomer.ba_id == null && (
+                  <p className="text-[10px] text-amber-600 mt-0.5 font-semibold">
+                    This customer has no linked business account — the return cannot be posted until Setup adds one.
+                  </p>
+                )}
               </div>
             </div>
-
-            {/* Delivery & Dispatch Box */}
-            <div className="flex flex-col gap-1.5 p-2.5 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-0.5">
-                Dispatch Logistics
+            {/* Paired with Customer on the same row (both span 2 of 4 columns) so this row packs
+                fully at 4-up, same as SaleBillPage's own row-2 packing — keeping Delivery Agent's
+                natural place after Customer here (rather than after Customer Code) is what makes
+                the header take exactly as many rows as Sale Bill's, instead of leaving Customer
+                Code's row half-empty and pushing Bilty No. onto an orphan 4th row. */}
+            <div className="flex items-center gap-2 md:col-span-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Delivery Agent <span className="text-slate-400 font-normal normal-case">— optional</span>
+              </label>
+              <div className="flex-1">
+                <SearchableSelect
+                  options={subCustomers.map(sc => ({ value: String(sc.sub_customer_id), label: sc.name }))}
+                  value={subCustomerId}
+                  onChange={setSubCustomerId}
+                  placeholder="SAME (Direct) — none selected"
+                  searchPlaceholder="Search sub-customers..."
+                  disabled={isViewMode}
+                />
               </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="block text-xs font-medium text-slate-600">
-                      Delivery Agent (if any)
-                    </label>
-                    {!isViewMode && (
-                      <button
-                        type="button"
-                        onClick={() => setIsAddSubCustomerOpen(true)}
-                        className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102"
-                      >
-                        <Plus size={12} className="text-blue-600" />
-                        <span>Add New</span>
-                      </button>
-                    )}
-                  </div>
-                  <SearchableSelect
-                    options={subCustomers.map(sc => ({ value: String(sc.sub_customer_id), label: sc.name }))}
-                    value={subCustomerId}
-                    onChange={setSubCustomerId}
-                    placeholder="SAME (Direct) — none selected"
-                    searchPlaceholder="Search sub-customers..."
-                    disabled={isViewMode}
-                  />
-                </div>
-                <div>
-                  {/* Same row as Delivery Agent — Transport Adda paired alongside it here matches
-                      how SaleBillPage pairs its own Delivery field with Transport Adda, and keeps
-                      this box to 2 rows instead of 3 (was pushing it taller than the Customer
-                      Information box beside it, leaving visible empty space under Customer Code). */}
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Transport Adda <span className="text-slate-400 font-normal normal-case">— optional</span>
-                  </label>
-                  <SearchableSelect
-                    options={addas.map(ad => ({ value: String(ad.adda_id), label: ad.name }))}
-                    value={addaId}
-                    onChange={setAddaId}
-                    placeholder="Select Adda..."
-                    searchPlaceholder="Search Adda..."
-                    disabled={isViewMode}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    GP No. <span className="text-slate-400 font-normal normal-case">— optional</span>
-                  </label>
-                  <input type="text" value={gpNo} disabled={isViewMode} onChange={e => setGpNo(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Bilty No. <span className="text-slate-400 font-normal normal-case">— optional</span>
-                  </label>
-                  <input type="text" value={biltyNo} disabled={isViewMode} onChange={e => setBiltyNo(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
-                </div>
-              </div>
+              {!isViewMode && (
+                <button
+                  type="button"
+                  onClick={() => setIsAddSubCustomerOpen(true)}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102 shrink-0"
+                >
+                  <Plus size={11} className="text-blue-600" />
+                  <span>New</span>
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Customer Code
+              </label>
+              <input type="text" value={customerId} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Transport Adda <span className="text-slate-400 font-normal normal-case">— optional</span>
+              </label>
+              <SearchableSelect
+                options={addas.map(ad => ({ value: String(ad.adda_id), label: ad.name }))}
+                value={addaId}
+                onChange={setAddaId}
+                placeholder="Select Adda..."
+                searchPlaceholder="Search Adda..."
+                disabled={isViewMode}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                GP No. <span className="text-slate-400 font-normal normal-case">— optional</span>
+              </label>
+              <input type="text" value={gpNo} disabled={isViewMode} onChange={e => setGpNo(e.target.value)} className="soleria-input soleria-input-compact" />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Bilty No. <span className="text-slate-400 font-normal normal-case">— optional</span>
+              </label>
+              <input type="text" value={biltyNo} disabled={isViewMode} onChange={e => setBiltyNo(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
           </div>
 
-          {/* Product Items Table — capped to roughly 2 rows tall, then scrolls internally rather
-              than growing the card past the screen as more rows are added. The header row is
-              `sticky` within this scroll box so it stays visible past row 2. SearchableSelect's
-              own dropdown is rendered via a `fixed`-position React portal (see its source), so it
-              isn't clipped by this box's `overflow-y: auto` even when a select near the bottom
-              edge is opened. */}
-          <div className="mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)', maxHeight: '150px' }}>
+          {/* Product Items Table — flex-1 so it grows to fill whatever space invoiceCardHeight
+              (above) leaves after every other section takes its natural size; this is what pins
+              the footer to the bottom of the screen instead of trailing off after just 2-3 rows.
+              `min-height: 0` overrides flexbox's default min-height:auto, which would otherwise
+              let this box's own content stretch the whole card instead of scrolling internally.
+              The header row is `sticky` within this scroll box so it stays visible past the first
+              screenful of rows. SearchableSelect's own dropdown is rendered via a `fixed`-position
+              React portal (see its source), so it isn't clipped by this box's `overflow-y: auto`
+              even when a select near the bottom edge is opened. */}
+          <div className="flex-1 min-h-0 mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 pl-4" style={{ minWidth: '190px' }}>Returned Article <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 pl-4" style={{ width: '130px', minWidth: '110px' }}>Color <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '80px' }}>Packing</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ minWidth: '120px' }}>Stock</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '90px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '90px' }}>Pairs</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '110px', minWidth: '96px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '100px', minWidth: '72px' }}>D%</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '110px' }}>D. Value</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '130px' }}>Total Credit</th>
-                  {!isViewMode && <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '50px' }}></th>}
+                <tr className="bg-slate-50 border-b text-[11px] font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 pl-3" style={{ minWidth: '190px' }}>Returned Article <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 pl-3" style={{ width: '130px', minWidth: '110px' }}>Color <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '80px' }}>Packing</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ minWidth: '80px' }}>Stock</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px' }}>Pairs</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '110px', minWidth: '96px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '100px', minWidth: '72px' }}>D%</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '110px' }}>D. Value</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '130px' }}>Total Credit</th>
+                  {!isViewMode && <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '50px' }}></th>}
                 </tr>
               </thead>
               <tbody>
@@ -1385,7 +1410,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   return (
                     <tr key={item.uid} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                       {/* Article select */}
-                      <td className="p-1.5 pl-4" ref={el => { articleCellRefs.current[idx] = el; }}>
+                      <td className="p-1 pl-3" ref={el => { articleCellRefs.current[idx] = el; }}>
                         {isViewMode ? (
                           <span className="font-semibold text-slate-800 text-[13px] pl-2">{item.label || 'N/A'}</span>
                         ) : (
@@ -1400,7 +1425,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                       </td>
 
                       {/* Color / Variant select */}
-                      <td className="p-1.5 pl-4">
+                      <td className="p-1 pl-3">
                         {isViewMode ? (
                           <span className="text-slate-600 text-[13px]">{variantOptions.find(v => v.value === String(item.variantId))?.label || '-'}</span>
                         ) : (
@@ -1416,46 +1441,46 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                       </td>
 
                       {/* Packing */}
-                      <td className="p-1.5 text-center font-mono text-sm text-slate-600">
+                      <td className="p-1 text-center font-mono text-sm text-slate-600">
                         {item.packing || '-'}
                       </td>
 
                       {/* Stock — no real-time stock IPC channel exposed yet, see SaleBillPage comment */}
-                      <td className="p-1.5 text-center text-xs font-medium">—</td>
+                      <td className="p-1 text-center text-xs font-medium">—</td>
 
                       {/* Cartons */}
-                      <td className="p-1.5">
+                      <td className="p-1">
                         <input
                           type="number"
                           value={item.cartons || ''}
                           disabled={isViewMode}
                           min={1}
                           onChange={e => updateNumericField(idx, 'cartons', parseInt(e.target.value) || 0)}
-                          className="soleria-input text-center font-mono"
-                          style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
+                          className="soleria-input soleria-input-compact text-center font-mono"
+                          style={{ border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
                       </td>
 
                       {/* Pairs */}
-                      <td className="p-1.5 text-center text-sm font-bold text-slate-700">
+                      <td className="p-1 text-center text-sm font-bold text-slate-700">
                         {item.pairs || '-'}
                       </td>
 
                       {/* Rate */}
-                      <td className="p-1.5">
+                      <td className="p-1">
                         <input
                           type="number"
                           value={item.rate || ''}
                           disabled={isViewMode}
                           min={0}
                           onChange={e => updateNumericField(idx, 'rate', parseInt(e.target.value) || 0)}
-                          className="soleria-input text-right font-mono"
-                          style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
+                          className="soleria-input soleria-input-compact text-right font-mono"
+                          style={{ border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
                       </td>
 
                       {/* Discount % */}
-                      <td className="p-1.5">
+                      <td className="p-1">
                         <input
                           type="number"
                           value={item.discountPercent || ''}
@@ -1464,25 +1489,25 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                           max={100}
                           onChange={e => updateNumericField(idx, 'discountPercent', parseFloat(e.target.value) || 0)}
                           onKeyDown={handleLastFieldKeyDown}
-                          className="soleria-input text-center font-mono"
-                          style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
+                          className="soleria-input soleria-input-compact text-center font-mono"
+                          style={{ border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
                       </td>
 
                       {/* Discount Value — Calculated from Discount % */}
-                      <td className="p-1.5 text-right font-mono text-xs font-semibold text-slate-700">
+                      <td className="p-1 text-right font-mono text-xs font-semibold text-slate-700">
                         {item.discountValue > 0 ? item.discountValue.toLocaleString() : '-'}
                       </td>
 
                       {/* Row Total Value */}
-                      <td className="p-1.5 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>
+                      <td className="p-1 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>
                         Rs {item.value.toLocaleString('en-US')}
                       </td>
 
                       {/* Delete Action */}
                       {!isViewMode && (
-                        <td className="p-1.5 text-center">
-                          <button type="button" onClick={() => handleRemoveItemRow(idx)} className="text-red-500 hover:text-red-700 p-1" disabled={items.length <= 1}>
+                        <td className="p-1 text-center">
+                          <button type="button" onClick={() => handleRemoveItemRow(idx)} className="text-red-500 hover:text-red-700 p-1" title="Remove row (clears fields if it's the last one)">
                             <Trash2 size={16} />
                           </button>
                         </td>
@@ -1496,7 +1521,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
           {/* Add Row Button */}
           {!isViewMode && (
-            <div className="flex flex-wrap items-center gap-3 mb-2">
+            <div className="shrink-0 flex flex-wrap items-center gap-3 mb-2">
               <button type="button" onClick={handleAddItemRow} className="btn-dashed flex items-center gap-1 px-3 py-1">
                 <Plus size={14} /> Add Item Row
               </button>
@@ -1506,10 +1531,10 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
           )}
 
-          {/* Invoice Summary and Remarks — compact (small textarea, tight gaps, no min-height
-              floor on the calculations box) so a typical return's whole form fits one screen
-              without scrolling to reach Save/Post, matching SaleBillPage. */}
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
+          {/* Invoice Summary and Remarks — pinned to the bottom of the screen by the item table's
+              flex-1 above (see invoiceCardHeight). Kept compact (small textarea, tight gaps, no
+              min-height floor on the calculations box) in its own right too, matching SaleBillPage. */}
+          <div className="shrink-0 grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
             {/* Remarks */}
             <div className="flex flex-col gap-1">
               <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 font-inter">
@@ -1527,7 +1552,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
 
             {/* Calculations Box */}
-            <div className="flex flex-col justify-between p-3 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md">
+            <div className="flex flex-col justify-between p-2 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md">
               <div className="text-xs font-semibold uppercase tracking-wider border-b pb-1 mb-1.5 text-slate-400 border-slate-800">
                 Calculations
               </div>
@@ -1643,21 +1668,14 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
         onClose={() => {
           setIsPasswordModalOpen(false);
           setPasswordActionType(null);
-          pendingEditRow.current = null;
         }}
         onSuccess={handlePasswordSuccess}
         title={
-          passwordActionType === 'edit_return'
-            ? 'Authorization Required to Edit Posted Return'
-            : passwordActionType === 'post_return'
-              ? 'Authorization Required to Post Return'
-              : 'Authorization Required to Save Return Changes'
+          passwordActionType === 'post_return'
+            ? 'Authorization Required to Post Return'
+            : 'Authorization Required to Save Return Changes'
         }
-        subtitle={
-          passwordActionType === 'edit_return'
-            ? `Please enter password for user '${state.currentUsername || 'user'}' to unlock & edit Return #${billNo || returnId}.`
-            : `Please enter password for user '${state.currentUsername || 'user'}' to confirm changes to Return #${billNo || returnId}.`
-        }
+        subtitle={`Please enter password for user '${state.currentUsername || 'user'}' to confirm changes to Return #${billNo || returnId}.`}
       />
     </AppLayout>
   );

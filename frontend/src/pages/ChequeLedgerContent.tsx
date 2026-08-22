@@ -135,13 +135,21 @@ export function ChequeLedgerContent() {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // No date filter on the fetch itself — `cheques.list`'s date_from/date_to filter on the cheque's
+  // own due date (cheque_date), not on when any particular event happened, so a post-dated cheque
+  // received today but due next month (or received months ago but due this week) would silently
+  // vanish from the ledger the moment it fell outside the window, no matter what was later done to
+  // it (deposit/endorse/bounce/return never made it into the fetch at all). Every open/closed
+  // cheque is pulled once, unfiltered — same as ChequeInHandContent/ChequeReturnsContent already
+  // do — and the From/To range is applied below, per EVENT date, which is what a ledger's date
+  // filter should mean.
   const loadAll = useCallback(async () => {
     setLoading(true);
     setErrorMsg('');
     try {
       const [receivedRes, issuedRes] = await Promise.all([
-        api.cheques.list({ date_from: fromDate || undefined, date_to: toDate || undefined }),
-        api.expenses.issuedCheques({ date_from: fromDate || undefined, date_to: toDate || undefined }),
+        api.cheques.list({}),
+        api.expenses.issuedCheques({}),
       ]);
 
       let receivedEvts: LedgerEvent[] = [];
@@ -171,7 +179,7 @@ export function ChequeLedgerContent() {
     } finally {
       setLoading(false);
     }
-  }, [fromDate, toDate]);
+  }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -180,8 +188,10 @@ export function ChequeLedgerContent() {
     return events
       .filter(r => typeFilter === 'all' || (typeFilter === 'received' ? r.chequeType === 'Received' : r.chequeType === 'Issued'))
       .filter(r => !q || r.chequeNo.toLowerCase().includes(q) || r.party.toLowerCase().includes(q))
+      .filter(r => !fromDate || r.date.slice(0, 10) >= fromDate)
+      .filter(r => !toDate || r.date.slice(0, 10) <= toDate)
       .sort((a, b) => b.date.localeCompare(a.date));
-  }, [events, typeFilter, search]);
+  }, [events, typeFilter, search, fromDate, toDate]);
 
   const totals = useMemo(() => {
     const totalAmount = ledgerRows.reduce((s, r) => s + r.amount, 0);

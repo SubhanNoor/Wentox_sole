@@ -15,12 +15,6 @@ module.exports = function register() {
     return service.getById(payload.id);
   }));
 
-  // The JV ledger screen needs the account itself to open its Khaata.
-  ipcMain.handle('journal-vouchers:account', wrap(() => {
-    requireSession();
-    return service.getJvAccount();
-  }));
-
   ipcMain.handle('journal-vouchers:create', wrap((payload) => {
     const session = requireSession();
     return service.create(payload, session.userId, session);
@@ -45,5 +39,24 @@ module.exports = function register() {
   ipcMain.handle('journal-vouchers:unpost', wrap((payload) => {
     const session = requireSession();
     return service.unpost(payload.id, session.userId, session);
+  }));
+
+  // The JVs still awaiting posting, for the Post All confirmation list.
+  ipcMain.handle('journal-vouchers:listUnposted', wrap(() => {
+    requireSession();
+    return service.listUnposted();
+  }));
+
+  // Post a run of JVs in one action. Resolves { posted, failed, attempted } — a partial failure
+  // is a SUCCESSFUL result carrying a failure list, so the caller must read `failed`.
+  ipcMain.handle('journal-vouchers:postAll', wrap((payload) => {
+    const session = requireSession();
+    return service.postAll(payload?.ids, session.userId, session);
+  }));
+
+  // The entry form's smart-default counter-account (see reservedAccounts.js).
+  ipcMain.handle('journal-vouchers:counterAccount', wrap(() => {
+    requireSession();
+    return service.getCounterAccount();
   }));
 };
