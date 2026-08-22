@@ -4394,3 +4394,34 @@ _Stale note — this was true when first written; superseded by the entries near
   `SaleBillPage.tsx`, which trips the identical warning. Not a regression, left as-is for
   consistency with the rest of the app.
 - **Files:** `frontend/src/pages/JournalVoucherPage.tsx`
+
+## Journal Voucher — pending-posting batch feature + JV Ledger search by any detail
+- **User feedback after reviewing the compact layout:** (1) JV was missing the "enter a run of
+  records first, post them all in one action" feature every other document type has (P-03 on
+  Purchase, SB-06 on Sale Bill) — pointed out directly, not something this rebuild had considered.
+  (2) The listing tab (renamed **JV Ledger** to match the actual feature name the user meant, not
+  "Recorded Journal Vouchers") needs to find a JV "from any detail" — previously only matched
+  `reason`/`voucher_no`.
+- **`journalVouchers.repository.js`:** `list()`'s `search` filter now matches the header
+  (`reason`/`voucher_no`) OR `EXISTS` against any line — joined `business_accounts` for
+  name/code, plus per-line `narration`/`debit`/`credit` (cast to text for a `LIKE` match) — so a
+  search box finds a JV regardless of which field the term actually landed in. New
+  `listUnposted()`: every JV still `status = 'DRAFT'`, oldest first — reads straight off the
+  status column (unlike `purchases.repository.js`'s version, which derives "unposted" from
+  `ledger_entries` not existing, since purchases dropped their own status column and JV didn't).
+- **`journalVouchers.service.js`:** new `listUnposted()` (passthrough) and `postAll(ids, userId,
+  session)` — mirrors `purchases.service.js#postAll` exactly: each JV posts in its own
+  transaction via the existing `post()`, so one failure never rolls back the ones that already
+  posted; `ALREADY_POSTED` is swallowed as "met the user's intent," not reported as a failure.
+- **`journalVouchers.ipc.js`:** added `journal-vouchers:listUnposted`/`journal-vouchers:postAll`
+  channels, same shape as `purchases:listUnposted`/`purchases:postAll`.
+- **Frontend:** `lib/api.ts` gained `UnpostedJournalVoucherRow`, `JournalVoucherListFilters.search`,
+  and `journalVouchers.listUnposted()`/`postAll()`. `JournalVoucherPage.tsx` gained the same
+  "Pending Posting" `<aside>` sidebar (2xl+ only, pinned outside the card's left edge) with a
+  Post All button and a dismissible per-run result summary, copied from `PurchasePage.tsx`'s
+  exact markup. The JV Ledger tab's search input is now debounced (250ms) and sent to the backend
+  as `filters.search` instead of filtering the already-fetched page client-side — needed since the
+  new search reaches into per-line data the listing query doesn't otherwise fetch to the client.
+- **Files:** `backend/src/repositories/journalVouchers.repository.js`,
+  `backend/src/services/journalVouchers.service.js`, `backend/src/ipc/journalVouchers.ipc.js`,
+  `frontend/src/lib/api.ts`, `frontend/src/pages/JournalVoucherPage.tsx`
