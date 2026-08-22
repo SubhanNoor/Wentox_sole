@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, ChevronDown } from 'lucide-react';
 import { focusNextField } from '@/lib/fieldNav';
@@ -20,6 +20,15 @@ interface SearchableSelectProps {
    * open (null once closed), so a caller can live-preview something about it — e.g. an account's
    * balance — before the user commits to a selection. */
   onHighlightChange?: (value: string | null) => void;
+  /** Opens the panel with its search box focused as soon as this field mounts — the equivalent of
+   * a plain `<input autoFocus>`, but starting the panel pre-opened (via lazy initial state) rather
+   * than opening it off a focus event, which sidesteps a real race against AppLayout's own G-01
+   * auto-focus-first-field logic (see the `isOpen` state and its layout effect). */
+  autoFocus?: boolean;
+  /** Drops this field out of the app's Tab/Enter field-walk (G-01) and native Tab order, while
+   * leaving it enabled and clickable — for a field a workflow normally skips past (once a value's
+   * been chosen for the session) but the user can still reach and change with a deliberate click. */
+  excludeFromNav?: boolean;
 }
 
 /** Roughly the tallest the panel gets: search row + max-h-60 list. */
@@ -32,15 +41,25 @@ export default function SearchableSelect({
   placeholder = 'Select option...',
   searchPlaceholder = 'Search...',
   disabled = false,
-  onHighlightChange
+  onHighlightChange,
+  autoFocus,
+  excludeFromNav
 }: SearchableSelectProps) {
-  const [isOpen, setIsOpen] = useState(false);
+  // Starting `isOpen` open (instead of opening it via a focus event fired by the native
+  // `autoFocus` attribute) sidesteps a real race: AppLayout's own G-01 "focus the form's first
+  // field" logic also calls .focus() on this trigger shortly after mount, and depending on exactly
+  // when the two focus calls land relative to React's commit, the later one can win and strand
+  // keyboard focus on the plain trigger button instead of the search box — typing then goes
+  // nowhere, and a click toggles an already (but invisibly, since position hadn't been measured
+  // yet) open panel shut before a second click reopens it.
+  const [isOpen, setIsOpen] = useState(() => !!autoFocus && !disabled);
   const [search, setSearch] = useState('');
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const [pos, setPos] = useState<{ top: number; left: number; width: number; flip: boolean } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   // Distinguishes a focus event caused by the user clicking the trigger (onMouseDown fires first,
   // then focus, then click) from every other way focus can land here (Tab, the app's G-01
@@ -83,6 +102,18 @@ export default function SearchableSelect({
       width: r.width,
       flip
     });
+  }, []);
+
+  // Mirrors what `open()` does (measure position, focus the search box), for the case where the
+  // panel started already open via the `autoFocus` lazy state above — nothing there calls `open()`
+  // itself, so nothing has measured `pos` or moved focus into the panel yet. Layout effect, not a
+  // plain effect, so this runs before the browser paints — no flash of the panel positioned at
+  // top-left before snapping into place.
+  useLayoutEffect(() => {
+    if (!autoFocus || disabled) return;
+    place();
+    searchInputRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Reposition while open. Capture phase, so scrolling ANY ancestor (a table's
@@ -226,7 +257,8 @@ export default function SearchableSelect({
       <button
         ref={triggerRef}
         type="button"
-        data-field-nav="true"
+        data-field-nav={excludeFromNav ? undefined : 'true'}
+        tabIndex={excludeFromNav ? -1 : undefined}
         disabled={disabled}
         onClick={toggle}
         onKeyDown={handleTriggerKeyDown}
@@ -234,6 +266,11 @@ export default function SearchableSelect({
         onFocus={() => {
           if (focusFromMouseRef.current) { focusFromMouseRef.current = false; return; }
           if (suppressAutoOpenRef.current) { suppressAutoOpenRef.current = false; return; }
+          // The panel can already be open here — e.g. it started open via `autoFocus`'s lazy
+          // state, or AppLayout's own G-01 "focus the form's first field" logic calls .focus() on
+          // this trigger again later. Without this, that redundant focus() call drags keyboard
+          // focus back onto the plain trigger button, and the user's first keystrokes go nowhere.
+          if (isOpen) { searchInputRef.current?.focus(); return; }
           open();
         }}
         className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
@@ -260,6 +297,7 @@ export default function SearchableSelect({
           <div className="p-2 border-b border-slate-100 bg-slate-50 flex items-center gap-2">
             <Search size={14} className="text-slate-400 flex-shrink-0" />
             <input
+              ref={searchInputRef}
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}

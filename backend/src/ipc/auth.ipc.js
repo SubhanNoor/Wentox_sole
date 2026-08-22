@@ -65,10 +65,14 @@ module.exports = function register() {
     }),
   );
 
+  // Admin must re-enter their OWN current password to reset someone else's — same guard shape as
+  // journal-vouchers:remove/sale-bills delete, verified server-side so a compromised renderer can't
+  // skip straight to this destructive call.
   ipcMain.handle(
     'auth:resetPassword',
     wrap(async (payload) => {
-      session.requireRole('ADMIN');
+      const current = session.requireRole('ADMIN');
+      await service.verifyPassword(current.userId, payload.password);
       return service.resetPassword(payload.id, payload.newPassword);
     }),
   );

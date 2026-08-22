@@ -1767,7 +1767,7 @@ declare global {
         createUser: (payload: { username: string; password: string; fullName?: string }) => Promise<ApiResult<UserAccountRowFromApi>>;
         listUsers: () => Promise<ApiResult<UserAccountRowFromApi[]>>;
         setUserActive: (payload: { id: number; is_active: boolean }) => Promise<ApiResult<{ ok: true }>>;
-        resetPassword: (payload: { id: number; newPassword: string }) => Promise<ApiResult<{ ok: true }>>;
+        resetPassword: (payload: { id: number; newPassword: string; password: string }) => Promise<ApiResult<{ ok: true }>>;
       };
       saleBills: {
         create: (payload: SaleBillCreateInput) => Promise<ApiResult<SaleBillRow>>;
@@ -2261,9 +2261,9 @@ export async function setUserActive(id: number, isActive: boolean): Promise<ApiR
   return window.api.auth.setUserActive({ id, is_active: isActive });
 }
 
-export async function resetUserPassword(id: number, newPassword: string): Promise<ApiResult<{ ok: true }>> {
+export async function resetUserPassword(id: number, newPassword: string, password: string): Promise<ApiResult<{ ok: true }>> {
   if (!window.api) return NO_BRIDGE;
-  return window.api.auth.resetPassword({ id, newPassword });
+  return window.api.auth.resetPassword({ id, newPassword, password });
 }
 
 export async function login(username: string, password: string): Promise<ApiResult<{ username: string; role: UserRole }>> {

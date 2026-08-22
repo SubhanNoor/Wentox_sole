@@ -5,6 +5,7 @@ import * as api from '@/lib/api';
 import type { UserAccountRow } from '@/lib/api';
 import { UserPlus, Lock, User, ShieldCheck, UsersRound, UserX, UserCheck, KeyRound, X, Save } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
+import PasswordPromptModal from '@/components/PasswordPromptModal';
 
 export default function UserManagementPage() {
   const { state } = useApp();
@@ -24,6 +25,11 @@ export default function UserManagementPage() {
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [resetError, setResetError] = useState('');
   const [resetting, setResetting] = useState(false);
+  // Once the new password fields validate, the admin must re-enter their OWN current password
+  // before the reset actually goes through — same password-gate pattern as a destructive delete
+  // elsewhere in the app. Kept as a separate step (rather than folding the field into the form
+  // above) so cancelling it doesn't lose what was typed for the new password.
+  const [confirmingReset, setConfirmingReset] = useState(false);
 
   const loadUsers = useCallback(async () => {
     const res = await api.listUsers();
@@ -88,17 +94,23 @@ export default function UserManagementPage() {
     setNewPassword('');
     setConfirmNewPassword('');
     setResetError('');
+    setConfirmingReset(false);
   };
 
-  const handleResetPassword = async (e: React.FormEvent) => {
+  const handleResetPassword = (e: React.FormEvent) => {
     e.preventDefault();
     if (!resetTarget) return;
     setResetError('');
     if (!newPassword) return setResetError('New password is required.');
     if (newPassword !== confirmNewPassword) return setResetError('Passwords do not match.');
+    setConfirmingReset(true);
+  };
 
+  const handleResetPasswordConfirmed = async (adminPassword: string) => {
+    if (!resetTarget) return;
+    setConfirmingReset(false);
     setResetting(true);
-    const res = await api.resetUserPassword(resetTarget.user_id, newPassword);
+    const res = await api.resetUserPassword(resetTarget.user_id, newPassword, adminPassword);
     setResetting(false);
 
     if (!res.ok) {
@@ -353,6 +365,14 @@ export default function UserManagementPage() {
             </div>
           </div>
         )}
+
+        <PasswordPromptModal
+          isOpen={confirmingReset}
+          onClose={() => setConfirmingReset(false)}
+          onSuccess={handleResetPasswordConfirmed}
+          title="Confirm Password Reset"
+          subtitle={`Enter your own password to confirm resetting the password for "${resetTarget?.username}".`}
+        />
 
       </div>
     </AppLayout>

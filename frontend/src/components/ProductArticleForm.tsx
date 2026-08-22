@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import { Settings, Hammer } from 'lucide-react';
 import type { ProductCosts, CostFieldKey } from '@/types';
 import { COST_FIELDS } from '@/types';
@@ -47,6 +47,10 @@ interface ProductArticleFormProps {
    *  SaleBillPage/PurchasePage's item rows. Omitted by the single-product edit form, which has no
    *  such row-adding concept. */
   onLastFieldKeyDown?: (e: React.KeyboardEvent) => void;
+  /** Lets a caller focus the Name field programmatically — the multi-article "Add New" workflow
+      uses this to return focus to the first card's Name input after a save clears the form, ready
+      to type the next article without reaching for the mouse. */
+  nameInputRef?: Ref<HTMLInputElement>;
 }
 
 /**
@@ -56,7 +60,7 @@ interface ProductArticleFormProps {
  */
 export default function ProductArticleForm({
   values, onChange, vendorList, vendorLocked, vendorLockedLabel, leadingSlot, categorySlot, errors,
-  onLastFieldKeyDown,
+  onLastFieldKeyDown, nameInputRef,
 }: ProductArticleFormProps) {
   const setCost = (key: CostFieldKey, value: number) =>
     onChange({ costs: { ...values.costs, [key]: value } });
@@ -73,6 +77,7 @@ export default function ProductArticleForm({
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">Product Article Name</label>
             <input
+              ref={nameInputRef}
               type="text"
               value={values.name}
               onChange={e => onChange({ name: e.target.value })}

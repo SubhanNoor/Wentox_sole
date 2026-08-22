@@ -96,6 +96,9 @@ export default function ProductSetupPage() {
   const [articles, setArticles] = useState<ArticleFormValues[]>([emptyArticleValues()]);
   const [articleErrors, setArticleErrors] = useState<Record<number, ArticleFieldErrors>>({});
   const [pendingCategoryChange, setPendingCategoryChange] = useState<string | null>(null);
+  // Refocused after a successful batch save (handleSaveAll) resets the articles back to one blank
+  // row, so the operator can keep typing the next article without reaching for the mouse.
+  const firstArticleNameRef = useRef<HTMLInputElement>(null);
 
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -291,11 +294,14 @@ export default function ProductSetupPage() {
     }));
 
     flash(`${res.data.length} product article${res.data.length > 1 ? 's' : ''} registered successfully.`);
-    setBatchCategoryId('');
+    // Stay on the form instead of jumping to the Registered Products list — the category is kept
+    // (the page's own copy says "pick a category once, then add as many articles under it as you
+    // need"), only the article rows reset to one blank one, ready to type the next article
+    // straight away.
     setArticles([emptyArticleValues()]);
     setArticleErrors({});
-    handleSwitchTab('list');
     loadAll();
+    requestAnimationFrame(() => firstArticleNameRef.current?.focus());
   };
 
   const confirmReactivateFromPrompt = async () => {
@@ -607,6 +613,7 @@ export default function ProductSetupPage() {
                             vendorLockedLabel={systemVendor?.name || 'Manufacturing Product'}
                             errors={articleErrors[idx]}
                             onLastFieldKeyDown={handleArticleLastFieldKeyDown}
+                            nameInputRef={idx === 0 ? firstArticleNameRef : undefined}
                           />
                         </div>
                       </div>
