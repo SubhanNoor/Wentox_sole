@@ -8,7 +8,7 @@ import type {
   UnpostedJournalVoucherRow, PostAllResult,
 } from '@/lib/api';
 import { formatDate, getTodayDate } from '@/lib/utils';
-import { Save, Edit, Search, Plus, Trash2, BookText } from 'lucide-react';
+import { Save, Edit, Search, Plus, Trash2, BookText, ChevronDown } from 'lucide-react';
 
 /**
  * Journal Voucher — a real multi-line double-entry journal (legacy "Journal Entry" screen): N
@@ -411,16 +411,11 @@ export default function JournalVoucherPage() {
               Unpost
             </button>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="font-lora font-bold text-xs text-slate-900">
-              {mode === 'edit' ? `Editing JV #${jvId}` : mode === 'view' ? `JV #${jvId}` : 'New Journal Voucher'}
-            </span>
-            {jvId != null && (
-              isPosted
-                ? <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Posted</span>
-                : <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-900" title="Saved but not yet in the ledger — Post it to move any balance.">Not Posted</span>
-            )}
-          </div>
+          {/* Status now lives in the card's own "Voucher Status" readout below — just the
+              identity label here, matching Purchase/SaleBill's toolbar shape (buttons only). */}
+          <span className="font-lora font-bold text-xs text-slate-900">
+            {mode === 'edit' ? `Editing JV #${jvId}` : mode === 'view' ? `JV #${jvId}` : 'New Journal Voucher'}
+          </span>
         </div>
 
         {/* This <form> IS the entry card — height pinned to the remaining viewport space (see
@@ -432,12 +427,35 @@ export default function JournalVoucherPage() {
           className="card-white p-6 bg-white border flex flex-col" style={{ height: entryCardHeight ?? undefined }}
           data-no-print
         >
-          <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-5">
-            <BookText size={18} className="text-[#B08D57]" />
-            <h3 className="font-lora font-semibold text-lg text-slate-800">Journal Entry</h3>
+          {/* Header row — "JOURNAL ENTRY" title (left) + a Voucher Status readout styled like a
+              disabled select (right), mirroring the legacy Journal Entry screen's own title/
+              status row, in the app's own navy/gold palette rather than the legacy grey chrome. */}
+          <div className="shrink-0 flex items-center justify-between gap-4 border-b pb-3 mb-4">
+            <div className="flex items-center gap-2">
+              <BookText size={18} className="text-[#B08D57]" />
+              <h3 className="font-lora font-bold text-lg tracking-wide text-slate-800">JOURNAL ENTRY</h3>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-slate-500">Voucher Status</span>
+              <span
+                className={`flex items-center gap-1.5 pl-3 pr-2.5 py-1.5 rounded-lg border text-xs font-bold ${
+                  isPosted ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-900'
+                }`}
+                title={isPosted ? 'Posted — live in the ledger' : 'Saved but not yet in the ledger — Post it to move any balance.'}
+              >
+                {isPosted ? 'Posted' : 'UnPosted'}
+                <ChevronDown size={12} className="opacity-50" />
+              </span>
+            </div>
           </div>
 
-          <div className="shrink-0 grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          {/* Date / Number / Reason — banded row (the app's gold tint standing in for the legacy
+              screen's grey bar) so the master fields read as one grouped strip, same as the
+              picture's Date/Number/Remarks bar. */}
+          <div
+            className="shrink-0 grid grid-cols-1 md:grid-cols-4 gap-4 mb-4 p-4 rounded-lg border"
+            style={{ background: 'rgba(176,141,87,0.06)', borderColor: 'var(--border-color)' }}
+          >
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">
                 Date <span className="text-red-500 font-bold">*</span>
