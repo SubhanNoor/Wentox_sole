@@ -40,4 +40,17 @@ module.exports = function register() {
     const session = requireSession();
     return service.unpost(payload.id, session.userId, session);
   }));
+
+  // The JVs still awaiting posting, for the Post All confirmation list.
+  ipcMain.handle('journal-vouchers:listUnposted', wrap(() => {
+    requireSession();
+    return service.listUnposted();
+  }));
+
+  // Post a run of JVs in one action. Resolves { posted, failed, attempted } — a partial failure
+  // is a SUCCESSFUL result carrying a failure list, so the caller must read `failed`.
+  ipcMain.handle('journal-vouchers:postAll', wrap((payload) => {
+    const session = requireSession();
+    return service.postAll(payload?.ids, session.userId, session);
+  }));
 };

@@ -131,4 +131,43 @@ async function unpost(jvId, userId, session) {
   return getById(jvId);
 }
 
-module.exports = { list, getById, create, update, remove, post, unpost };
+// Every journal voucher still awaiting posting, for the Post All confirmation list — lets a user
+// enter a run of JVs first and post them all in one action, same as every other document type.
+function listUnposted() {
+  return repository.listUnposted();
+}
+
+// Post a run of JVs in one action. Each JV posts in its own transaction (via post() above), so one
+// failure never rolls back the ones that already posted — mirrors purchases.service#postAll and
+// saleBills.service#postAll exactly. Sequential, not parallel: posting reads live state, so
+// concurrent posts on the same run could race each other.
+async function postAll(ids, userId, session) {
+  const targets = Array.isArray(ids) && ids.length
+    ? ids.map((id) => ({ jv_id: id }))
+    : await repository.listUnposted();
+
+  const posted = [];
+  const failed = [];
+
+  for (const target of targets) {
+    const jvId = target.jv_id;
+    try {
+      const jv = await post(jvId, userId, session);
+      posted.push({ jv_id: jvId, bill_no: jv.voucher_no, total_debit: jv.total_debit });
+    } catch (err) {
+      // Already posted by someone else meets the user's intent — not reported as a failure.
+      if (err.code === 'ALREADY_POSTED') continue;
+      if (!err.status) console.error(`postAll: unexpected failure on journal voucher ${jvId}:`, err);
+      failed.push({
+        jv_id: jvId,
+        bill_no: target.voucher_no ?? null,
+        message: err.status ? err.message : 'Unexpected error while posting this journal voucher.',
+        code: err.code || 'INTERNAL',
+      });
+    }
+  }
+
+  return { posted, failed, attempted: targets.length };
+}
+
+module.exports = { list, getById, create, update, remove, post, unpost, listUnposted, postAll };

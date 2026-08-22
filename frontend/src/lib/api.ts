@@ -670,6 +670,18 @@ export interface JournalVoucherListFilters {
   status?: 'CONFIRMED' | 'DRAFT';
   date_from?: string;
   date_to?: string;
+  /** Matches the header (reason/number) or any line (account name/code, per-line narration,
+   *  debit/credit amount) — a search box doesn't need to know which field it landed in. */
+  search?: string;
+}
+
+/** A JV still awaiting posting, for the Post All confirmation list. */
+export interface UnpostedJournalVoucherRow {
+  jv_id: number;
+  jv_date: string;
+  voucher_no: string | null;
+  reason: string;
+  total_debit: number;
 }
 
 export interface DepositRow {
@@ -1742,6 +1754,8 @@ declare global {
         remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
         post: (payload: { id: number }) => Promise<ApiResult<JournalVoucherRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<JournalVoucherRow>>;
+        listUnposted: () => Promise<ApiResult<UnpostedJournalVoucherRow[]>>;
+        postAll: (payload?: { ids?: number[] }) => Promise<ApiResult<PostAllResult<'jv_id'>>>;
       };
       settlements: {
         list: (payload?: SettlementListFilters) => Promise<ApiResult<SettlementRow[]>>;
@@ -2531,6 +2545,10 @@ export const journalVouchers = {
     window.api ? window.api.journalVouchers.post({ id }).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
     window.api ? window.api.journalVouchers.unpost({ id }).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
+  listUnposted: () =>
+    window.api ? window.api.journalVouchers.listUnposted() : Promise.resolve(NO_BRIDGE),
+  postAll: (ids?: number[]) =>
+    window.api ? window.api.journalVouchers.postAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE),
 };
 
 export const settlements = {

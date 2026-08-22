@@ -5,6 +5,7 @@ import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type {
   BusinessAccountRow, JournalVoucherRow, JournalVoucherLineInput, JournalVoucherCreateInput,
+  UnpostedJournalVoucherRow, PostAllResult,
 } from '@/lib/api';
 import { formatDate, getTodayDate } from '@/lib/utils';
 import { Save, Edit, Search, Plus, Trash2, BookText } from 'lucide-react';
@@ -40,10 +41,29 @@ export default function JournalVoucherPage() {
   const [vouchers, setVouchers] = useState<JournalVoucherRow[]>([]);
   const [lookupError, setLookupError] = useState('');
 
+  // JV Ledger — search + status filter, both applied server-side (search matches the header
+  // OR any line: account name/code, per-line narration, debit/credit amount — see
+  // journalVouchers.repository.js#list) so it finds a JV "from any detail", not just reason/number.
+  const [jvSearch, setJvSearch] = useState('');
+  const [jvStatusFilter, setJvStatusFilter] = useState<'all' | 'CONFIRMED' | 'DRAFT'>('all');
+
   const refresh = useCallback(async () => {
-    const res = await api.journalVouchers.list({});
+    const res = await api.journalVouchers.list({
+      search: jvSearch.trim() || undefined,
+      status: jvStatusFilter === 'all' ? undefined : jvStatusFilter,
+    });
     if (res.ok) setVouchers(res.data);
     else setLookupError('Failed to load journal vouchers: ' + res.error.message);
+  }, [jvSearch, jvStatusFilter]);
+
+  // P-03/SB-06: JVs saved but not yet posted, so a run can be entered first and posted together.
+  const [unpostedJvs, setUnpostedJvs] = useState<UnpostedJournalVoucherRow[]>([]);
+  const [postAllBusy, setPostAllBusy] = useState(false);
+  const [postAllResult, setPostAllResult] = useState<PostAllResult<'jv_id'> | null>(null);
+
+  const refreshUnposted = useCallback(async () => {
+    const res = await api.journalVouchers.listUnposted();
+    if (res.ok) setUnpostedJvs(res.data);
   }, []);
 
   useEffect(() => {
@@ -51,8 +71,24 @@ export default function JournalVoucherPage() {
       const ba = await api.listBusinessAccounts();
       if (ba.ok) setAccounts(ba.data); else setLookupError('Failed to load accounts: ' + ba.error.message);
     })();
-    refresh();
+    refreshUnposted();
+  }, [refreshUnposted]);
+
+  // Debounced so typing a search term doesn't fire a query per keystroke.
+  useEffect(() => {
+    const t = setTimeout(refresh, 250);
+    return () => clearTimeout(t);
   }, [refresh]);
+
+  const handlePostAll = async () => {
+    setPostAllBusy(true);
+    const res = await api.journalVouchers.postAll();
+    setPostAllBusy(false);
+    if (!res.ok) { fail('Failed to post all: ' + res.error.message); return; }
+    setPostAllResult(res.data);
+    refresh();
+    refreshUnposted();
+  };
 
   // Recorded Journal Vouchers moved to its own tab (was inline below the live entry form on the
   // same page — every JV ever recorded rendering directly under a live entry form doesn't scale
@@ -76,31 +112,10 @@ export default function JournalVoucherPage() {
   const isViewMode = mode === 'view';
   const isPosted = status === 'CONFIRMED';
 
-  // JV-02: search + filter on the journal voucher listing.
-  const [jvSearch, setJvSearch] = useState('');
-  const [jvStatusFilter, setJvStatusFilter] = useState<'all' | 'CONFIRMED' | 'DRAFT'>('all');
-
   const accountOptions = useMemo(
     () => accounts.map(a => ({ value: String(a.ba_id), label: `${a.name} (${a.code})` })),
     [accounts]
   );
-
-  const sortedVouchers = useMemo(
-    () => [...vouchers].sort((a, b) => b.jv_date.localeCompare(a.jv_date)),
-    [vouchers]
-  );
-
-  const filteredVouchers = useMemo(() => {
-    return sortedVouchers.filter(v => {
-      if (jvStatusFilter !== 'all' && v.status !== jvStatusFilter) return false;
-      if (jvSearch.trim()) {
-        const q = jvSearch.trim().toLowerCase();
-        const matches = (v.reason || '').toLowerCase().includes(q) || (v.voucher_no || '').toLowerCase().includes(q);
-        if (!matches) return false;
-      }
-      return true;
-    });
-  }, [sortedVouchers, jvSearch, jvStatusFilter]);
 
   const handleNew = () => {
     setMode('new'); setJvId(null); setStatus('DRAFT');
@@ -174,6 +189,7 @@ export default function JournalVoucherPage() {
     flash('Journal Voucher saved — Post it to update every line\'s ledger.');
     setMode('view');
     refresh();
+    refreshUnposted();
   };
 
   const handlePost = async () => {
@@ -183,6 +199,7 @@ export default function JournalVoucherPage() {
     setStatus(res.data.status);
     flash('Journal Voucher posted — every line\'s ledger updated.');
     refresh();
+    refreshUnposted();
   };
 
   const handleUnpost = async () => {
@@ -192,6 +209,7 @@ export default function JournalVoucherPage() {
     setStatus(res.data.status);
     flash('Journal Voucher unposted.');
     refresh();
+    refreshUnposted();
   };
 
   // Listing rows only carry rolled-up totals (line_count/total_debit/total_credit), not the
@@ -257,14 +275,91 @@ export default function JournalVoucherPage() {
           activeTab === 'records' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
       >
-        Recorded Journal Vouchers
+        JV Ledger
       </button>
     </div>
   );
 
   return (
     <AppLayout pageTitle="Journal Voucher" headerAction={tabBar}>
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
+
+        {/* Pending Posting — pinned outside the card's own left edge, matching PurchasePage's
+            P-03/SaleBillPage's SB-06 sidebar exactly: enter a run of JVs first, post them all in
+            one action at the end. Only shown from `2xl` up, same as Purchase/SaleBill — below
+            that there usually isn't 280px of free margin for it to land in. */}
+        {(unpostedJvs.length > 0 || postAllResult) && (
+          <aside
+            className="hidden 2xl:block absolute top-0 w-64 space-y-3"
+            style={{ right: 'calc(100% + 24px)' }}
+            data-no-print
+          >
+            <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="font-semibold text-slate-700">Pending Posting</span>
+                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
+                  {unpostedJvs.length}
+                </span>
+              </div>
+              <div className="text-xs text-slate-500 mb-3">
+                {unpostedJvs.length > 0 && `Total ${formatCurrency(unpostedJvs.reduce((s, v) => s + Number(v.total_debit), 0))}`}
+              </div>
+              {unpostedJvs.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handlePostAll}
+                  disabled={postAllBusy}
+                  className="w-full px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                >
+                  {postAllBusy ? 'Posting…' : `Post All (${unpostedJvs.length})`}
+                </button>
+              )}
+
+              {/* Stays until dismissed — a run can post 18 of 20, and the two that failed are the
+                  whole point of the message. Never auto-hidden on a timer. */}
+              {postAllResult && (
+                <div className="mt-3 pt-3 border-t border-amber-200">
+                  <p className="text-xs font-semibold text-slate-700">
+                    {postAllResult.posted.length} of {postAllResult.attempted} posted
+                    {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
+                  </p>
+                  {postAllResult.failed.length > 0 && (
+                    <ul className="mt-1.5 space-y-1">
+                      {postAllResult.failed.map(f => (
+                        <li key={f.jv_id} className="text-xs text-rose-700">
+                          <span className="font-mono font-semibold">{f.bill_no || `#${f.jv_id}`}</span>
+                          {' — '}{f.message}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setPostAllResult(null)}
+                    className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Flat list — every unposted JV, oldest first (same order the backend returns). */}
+            {unpostedJvs.length > 0 && (
+              <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
+                {unpostedJvs.map(v => (
+                  <li key={v.jv_id} className="px-3 py-2.5 text-xs border-b border-slate-100 last:border-b-0">
+                    <div className="min-w-0">
+                      <div className="font-mono font-semibold text-slate-700">{v.voucher_no || `#${v.jv_id}`}</div>
+                      <div className="text-slate-400 truncate">{v.reason}</div>
+                      <div className="text-slate-400">{formatDate(v.jv_date)} · {formatCurrency(Number(v.total_debit))}</div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </aside>
+        )}
 
         {lookupError && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>}
         {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>}
@@ -457,18 +552,19 @@ export default function JournalVoucherPage() {
         </>
         )}
 
-        {/* Recorded Journal Vouchers — own tab now, rather than always rendering every JV ever
-            recorded inline below the live entry form. */}
+        {/* JV Ledger — own tab now, rather than always rendering every JV ever recorded inline
+            below the live entry form. Search matches the header OR any line (account name/code,
+            per-line narration, debit/credit amount) — see journalVouchers.repository.js#list. */}
         {activeTab === 'records' && (
         <div className="card-white p-6 bg-white border">
           <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-            <h3 className="font-lora font-semibold text-lg text-slate-800">Recorded Journal Vouchers</h3>
+            <h3 className="font-lora font-semibold text-lg text-slate-800">JV Ledger</h3>
             <div className="flex flex-wrap items-center gap-2" data-no-print>
               <div className="relative">
                 <Search className="absolute left-3 top-2.5 text-slate-400" size={14} />
                 <input
                   type="text" value={jvSearch} onChange={e => setJvSearch(e.target.value)}
-                  placeholder="Search reason, number..." className="soleria-input pl-8 py-1.5 text-xs w-64"
+                  placeholder="Search by account, reason, number, narration, amount..." className="soleria-input pl-8 py-1.5 text-xs w-80"
                 />
               </div>
               <select
@@ -482,9 +578,9 @@ export default function JournalVoucherPage() {
               </select>
             </div>
           </div>
-          {filteredVouchers.length === 0 ? (
+          {vouchers.length === 0 ? (
             <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
-              {vouchers.length === 0 ? 'No journal vouchers recorded yet.' : 'No journal vouchers match your search/filter.'}
+              {jvSearch.trim() || jvStatusFilter !== 'all' ? 'No journal vouchers match your search/filter.' : 'No journal vouchers recorded yet.'}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -500,7 +596,7 @@ export default function JournalVoucherPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredVouchers.map(v => (
+                  {vouchers.map(v => (
                     <tr key={v.jv_id} onClick={() => loadRow(v)} className="border-b hover:bg-slate-50/40 cursor-pointer" style={{ borderColor: 'var(--border-table)' }}>
                       <td className="p-3 pl-4 font-mono text-xs text-slate-600">{formatDate(v.jv_date)}</td>
                       <td className="p-3 text-xs font-mono text-slate-500">{v.voucher_no || '-'}</td>

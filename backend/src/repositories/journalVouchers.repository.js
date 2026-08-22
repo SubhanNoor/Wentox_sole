@@ -33,6 +33,22 @@ async function list(filters = {}) {
     conditions.push('jv.jv_date <= @dateTo');
     params.dateTo = { type: sql.Date, value: filters.date_to };
   }
+  // "Find the JV from any detail" — matches the header (reason/number) or any of its lines
+  // (account name/code, per-line narration, debit/credit amount), so a search box doesn't need
+  // to know which field the thing it's looking for actually landed in.
+  if (filters.search && filters.search.trim()) {
+    conditions.push(`(
+      jv.reason LIKE @search OR jv.voucher_no LIKE @search OR EXISTS (
+        SELECT 1 FROM dbo.journal_voucher_lines s_jvl
+        JOIN dbo.business_accounts s_ba ON s_ba.ba_id = s_jvl.ba_id
+        WHERE s_jvl.jv_id = jv.jv_id AND (
+          s_ba.name LIKE @search OR s_ba.code LIKE @search OR s_jvl.narration LIKE @search
+          OR CAST(s_jvl.debit AS NVARCHAR(30)) LIKE @search OR CAST(s_jvl.credit AS NVARCHAR(30)) LIKE @search
+        )
+      )
+    )`);
+    params.search = { type: sql.NVarChar(120), value: `%${filters.search.trim()}%` };
+  }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
@@ -42,6 +58,21 @@ async function list(filters = {}) {
      ${where}
      ORDER BY jv.jv_date DESC, jv.jv_id DESC`,
     params,
+  );
+  return result.recordset;
+}
+
+// Every JV still awaiting posting, oldest first — the order they were entered is the order they
+// should post. Mirrors purchases.repository.js#listUnposted, but "unposted" reads straight off
+// journal_vouchers.status rather than being derived from ledger_entries existing, since the JV
+// table (unlike purchases) still carries its own status column.
+async function listUnposted() {
+  const result = await query(
+    `SELECT jv.jv_id, jv.jv_date, jv.voucher_no, jv.reason, totals.total_debit
+     FROM dbo.journal_vouchers jv
+     CROSS APPLY ${linesSubquery('jv')} totals
+     WHERE jv.status = 'DRAFT'
+     ORDER BY jv.jv_date ASC, jv.jv_id ASC`,
   );
   return result.recordset;
 }
@@ -168,6 +199,6 @@ async function deleteLedgerEntries(transaction, jvId) {
 }
 
 module.exports = {
-  list, findById, getLines, insert, updateHeader, insertLines, deleteLines, remove, setStatus,
-  insertLedgerEntries, deleteLedgerEntries,
+  list, listUnposted, findById, getLines, insert, updateHeader, insertLines, deleteLines, remove,
+  setStatus, insertLedgerEntries, deleteLedgerEntries,
 };
