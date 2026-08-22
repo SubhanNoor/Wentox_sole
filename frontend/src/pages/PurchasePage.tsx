@@ -201,8 +201,13 @@ export default function PurchasePage() {
     requestAnimationFrame(() => focusFirstField(materialNameRefs.current[newRowIndex]));
   }
 
+  // A purchase always needs at least one row to type into, so deleting the last remaining one
+  // clears its fields back to blank instead of removing the row itself (keeping its uid, so the
+  // row doesn't remount and lose focus).
   const removeItemRow = (uid: string) => {
-    setItems(prev => prev.length > 1 ? prev.filter(it => it.uid !== uid) : prev);
+    setItems(prev => prev.length > 1
+      ? prev.filter(it => it.uid !== uid)
+      : prev.map(it => it.uid === uid ? { ...emptyItem(), uid: it.uid } : it));
     setCustomUnitRows(prev => {
       const next = { ...prev };
       delete next[uid];
@@ -251,6 +256,29 @@ export default function PurchasePage() {
   // after the same symptom was reported there: the form cleared correctly, but focus never
   // returned to the first field.
   const firstFieldRef = useRef<HTMLInputElement>(null);
+
+  // Invoice card (the <form> itself here — see its opening tag below) fills whatever vertical
+  // space is left in the viewport below it (mirrors SaleBillPage/SaleReturnPage) — the item
+  // table (flex-1 inside it) grows into that space, and the outer app window never scrolls (only
+  // the table does). Measured via getBoundingClientRect rather than a CSS calc() of fixed chrome
+  // heights, since the banners/Pending Posting panel above this form change height dynamically.
+  const invoiceCardRef = useRef<HTMLFormElement>(null);
+  const [invoiceCardHeight, setInvoiceCardHeight] = useState<number | null>(null);
+
+  useEffect(() => {
+    function recompute() {
+      const el = invoiceCardRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      // AppLayout's <main> (the only scroll container in the app) adds 32px of its own
+      // padding-bottom below whatever height we claim here — leaving that out would make the
+      // form's bottom edge land 32px past the viewport and force <main> to scroll by that much.
+      setInvoiceCardHeight(Math.max(360, window.innerHeight - top - 32));
+    }
+    recompute();
+    window.addEventListener('resize', recompute);
+    return () => window.removeEventListener('resize', recompute);
+  }, [mode, lookupError, successMsg, errorMsg, unpostedPurchases.length, postAllResult]);
 
   const readyForNextPurchase = () => {
     const workingDate = date;
@@ -453,7 +481,87 @@ export default function PurchasePage() {
 
   return (
     <AppLayout pageTitle="Purchase Entry" headerAction={tabBar}>
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
+
+        {/* P-03: Pending Posting — pinned outside the card's own left edge rather than inside the
+            page's flow, matching SaleBillPage's SB-06 sidebar exactly (`absolute`, anchored via
+            `right: calc(100% + gap)` to this wrapper's left edge, so it can never affect the
+            card's width/position). Was previously a full-width banner at the top of the entry
+            tab, which pushed the whole form down; this way it's always visible (any tab) without
+            taking layout space at all. Only shown from `2xl` up, same as Sale Bill — below that
+            there usually isn't 280px of free margin for it to land in. */}
+        {(unpostedPurchases.length > 0 || postAllResult) && (
+          <aside
+            className="hidden 2xl:block absolute top-0 w-64 space-y-3"
+            style={{ right: 'calc(100% + 24px)' }}
+            data-no-print
+          >
+            <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="font-semibold text-slate-700">Pending Posting</span>
+                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
+                  {unpostedPurchases.length}
+                </span>
+              </div>
+              <div className="text-xs text-slate-500 mb-3">
+                {unpostedPurchases.length > 0 && `Total ${formatCurrency(unpostedPurchases.reduce((s, p) => s + Number(p.total_value), 0))}`}
+              </div>
+              {unpostedPurchases.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handlePostAll}
+                  disabled={postAllBusy}
+                  className="w-full px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                >
+                  {postAllBusy ? 'Posting…' : `Post All (${unpostedPurchases.length})`}
+                </button>
+              )}
+
+              {/* Stays until dismissed — a run can post 18 of 20, and the two that failed are the
+                  whole point of the message. Never auto-hidden on a timer. */}
+              {postAllResult && (
+                <div className="mt-3 pt-3 border-t border-amber-200">
+                  <p className="text-xs font-semibold text-slate-700">
+                    {postAllResult.posted.length} of {postAllResult.attempted} posted
+                    {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
+                  </p>
+                  {postAllResult.failed.length > 0 && (
+                    <ul className="mt-1.5 space-y-1">
+                      {postAllResult.failed.map(f => (
+                        <li key={f.purchase_id} className="text-xs text-rose-700">
+                          <span className="font-mono font-semibold">{f.bill_no || `#${f.purchase_id}`}</span>
+                          {' — '}{f.message}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setPostAllResult(null)}
+                    className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Flat list — every unposted purchase, oldest first (same order the backend returns). */}
+            {unpostedPurchases.length > 0 && (
+              <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
+                {unpostedPurchases.map(p => (
+                  <li key={p.purchase_id} className="px-3 py-2.5 text-xs border-b border-slate-100 last:border-b-0">
+                    <div className="min-w-0">
+                      <div className="font-mono font-semibold text-slate-700">{p.bill_no || `#${p.purchase_id}`}</div>
+                      <div className="text-slate-400 truncate">{p.vendor_name || 'Unnamed Vendor'}</div>
+                      <div className="text-slate-400">{formatDate(p.purchase_date)} · {formatCurrency(Number(p.total_value))}</div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </aside>
+        )}
 
         {lookupError && (
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>
@@ -467,148 +575,92 @@ export default function PurchasePage() {
 
         {activeTab === 'entry' && (
         <>
-        {/* P-03: Pending Posting panel — enter a run of purchases, then post them all at the end
-            instead of one at a time. Mirrors SB-06 on the Sale Bill screen. */}
-        {(unpostedPurchases.length > 0 || postAllResult) && (
-          <div className="mb-6 p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm" data-no-print>
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-700">Pending Posting:</span>
-                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
-                  {unpostedPurchases.length} purchase(s)
-                </span>
-                <span className="text-xs text-slate-500">
-                  {unpostedPurchases.length > 0 && `Total ${formatCurrency(unpostedPurchases.reduce((s, p) => s + Number(p.total_value), 0))}`}
-                </span>
-              </div>
-              {unpostedPurchases.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handlePostAll}
-                  disabled={postAllBusy}
-                  className="px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                >
-                  {postAllBusy ? 'Posting…' : `Post All (${unpostedPurchases.length})`}
-                </button>
-              )}
-            </div>
 
-            {unpostedPurchases.length > 0 && (
-              <ul className="mt-3 space-y-0.5 max-h-32 overflow-y-auto">
-                {unpostedPurchases.map(p => (
-                  <li key={p.purchase_id} className="text-xs text-slate-600 flex gap-2">
-                    <span className="font-mono font-semibold">{p.bill_no || `#${p.purchase_id}`}</span>
-                    <span className="text-slate-400">{formatDate(p.purchase_date)}</span>
-                    <span className="truncate">{p.vendor_name || 'Unnamed Vendor'}</span>
-                    <span className="ml-auto font-mono">{formatCurrency(Number(p.total_value))}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {/* Stays until dismissed — a run can post 18 of 20, and the two that failed are the
-                whole point of the message. Never auto-hidden on a timer. */}
-            {postAllResult && (
-              <div className="mt-3 pt-3 border-t border-amber-200">
-                <p className="text-xs font-semibold text-slate-700">
-                  {postAllResult.posted.length} of {postAllResult.attempted} posted
-                  {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
-                </p>
-                {postAllResult.failed.length > 0 && (
-                  <ul className="mt-1.5 space-y-1">
-                    {postAllResult.failed.map(f => (
-                      <li key={f.purchase_id} className="text-xs text-rose-700">
-                        <span className="font-mono font-semibold">{f.bill_no || `#${f.purchase_id}`}</span>
-                        {' — '}{f.message}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setPostAllResult(null)}
-                  className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
-                >
-                  Dismiss
-                </button>
-              </div>
-            )}
+        {/* Toolbar — standalone row above the card, matching SaleBillPage/SaleReturnPage's
+            toolbar so every transaction page's action buttons live in the same place instead of
+            being mixed into the card's own header. `flex-wrap` (rather than the old single-row
+            header) lets it wrap on a narrow window instead of squeezing/overflowing.
+            `form="purchase-entry-form"` on the submit button is what lets it still submit the
+            <form> below even though it now renders outside it — see fieldNav.ts's
+            `findSubmitButton` comment for why the HTML `form` attribute is the established way
+            other pages (Receipts, Transfer, etc.) already do this. */}
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
+          <div className="flex flex-wrap gap-2">
+            {/* Every action always renders (ref-pic style) — only `disabled` changes per state,
+                instead of whole button groups mounting/unmounting per `mode`. */}
+            <button
+              type="button"
+              onClick={handleNew}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              New Purchase
+            </button>
+            <button
+              type="submit"
+              form="purchase-entry-form"
+              disabled={isViewMode || !isValid}
+              className="btn-gold flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <Save size={14} /> {mode === 'edit' ? 'Update Purchase' : 'Save Purchase'}
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (purchaseId == null) return;
+                const res = await api.purchases.get(purchaseId);
+                if (res.ok) await loadPurchaseRow(res.data);
+              }}
+              disabled={mode !== 'edit'}
+              className="btn-outline px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Cancel Edit
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('edit')}
+              disabled={!isViewMode || currentIsPosted}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <Edit size={13} /> Edit
+            </button>
+            <button
+              type="button"
+              onClick={handlePost}
+              disabled={!isViewMode || purchaseId == null || currentIsPosted}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Post
+            </button>
+            <button
+              type="button"
+              onClick={handleUnpost}
+              disabled={!isViewMode || purchaseId == null || !currentIsPosted}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Unpost
+            </button>
           </div>
-        )}
+        </div>
 
-        <form onSubmit={handleSave} className="card-white p-6 bg-white border mb-8" data-no-print>
-          <div className="flex items-center justify-between border-b pb-3 mb-5">
-            <div className="flex items-center gap-2">
-              <ShoppingBag size={18} className="text-[#B08D57]" />
-              <h3 className="font-lora font-semibold text-lg text-slate-800">Raw Material Purchase</h3>
-            </div>
-            {mode === 'view' && (
-              <div className="flex items-center gap-2">
-                {!currentIsPosted && (
-                  <button
-                    type="button"
-                    onClick={() => setMode('edit')}
-                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
-                  >
-                    <Edit size={13} /> Edit
-                  </button>
-                )}
-                {!currentIsPosted ? (
-                  <button
-                    type="button"
-                    onClick={handlePost}
-                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
-                  >
-                    Post
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleUnpost}
-                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
-                  >
-                    Unpost
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleNew}
-                  className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
-                >
-                  New Purchase
-                </button>
-              </div>
-            )}
-            {/* Save/Update — moved up here from below the item table, matching SaleBillPage/
-                SaleReturnPage: the primary action shouldn't require scrolling past the whole
-                item table to reach. */}
-            {!isViewMode && (
-              <div className="flex items-center gap-2">
-                {mode === 'edit' && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      if (purchaseId == null) return;
-                      const res = await api.purchases.get(purchaseId);
-                      if (res.ok) await loadPurchaseRow(res.data);
-                    }}
-                    className="btn-outline px-3 py-1.5 text-xs font-semibold"
-                  >
-                    Cancel Edit
-                  </button>
-                )}
-                <button
-                  type="submit"
-                  className="btn-gold flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold"
-                >
-                  <Save size={14} /> {mode === 'edit' ? 'Update Purchase' : 'Save Purchase'}
-                </button>
-              </div>
-            )}
+        {/* This <form> IS the invoice card — height pinned to the remaining viewport space (see
+            invoiceCardHeight above) and laid out as a flex column, so the item table below can
+            flex-grow into whatever room that leaves. Every other child here keeps its natural
+            size (shrink-0) — only the table wrapper is flex-1. */}
+        <form
+          id="purchase-entry-form"
+          ref={invoiceCardRef}
+          onSubmit={handleSave}
+          className="card-white p-6 bg-white border flex flex-col"
+          style={{ height: invoiceCardHeight ?? undefined }}
+          data-no-print
+        >
+          <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-5">
+            <ShoppingBag size={18} className="text-[#B08D57]" />
+            <h3 className="font-lora font-semibold text-lg text-slate-800">Raw Material Purchase</h3>
           </div>
 
           {/* Header fields */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div className="shrink-0 grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">
                 Date <span className="text-red-500 font-bold">*</span>
@@ -679,12 +731,13 @@ export default function PurchasePage() {
             </div>
           </div>
 
-          {/* Line items — capped to roughly 8 rows tall, then scrolls internally rather than
-              growing the card past the screen as more rows are added (same treatment as
-              SaleBillPage/SaleReturnPage's item tables, just a taller cap — a purchase bill
-              routinely lists more distinct materials than a sale bill lists articles). The header
-              row is `sticky` within the scroll box so column labels stay visible past row 8. */}
-          <div className="mb-4 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)', maxHeight: '500px' }}>
+          {/* Line items — flex-1 so it grows to fill whatever space invoiceCardHeight (above)
+              leaves after every other section takes its natural size (same treatment as
+              SaleBillPage/SaleReturnPage's item tables). `min-height: 0` overrides flexbox's
+              default min-height:auto, which would otherwise let this box's own content stretch
+              the whole form instead of scrolling internally. The header row is `sticky` within
+              the scroll box so column labels stay visible past the first screenful of rows. */}
+          <div className="flex-1 min-h-0 mb-4 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
@@ -808,7 +861,7 @@ export default function PurchasePage() {
             <button
               type="button"
               onClick={addItemRow}
-              className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm"
+              className="shrink-0 btn-outline flex items-center gap-1.5 px-4 py-2 text-sm"
             >
               <Plus size={16} /> Add Line Item
             </button>

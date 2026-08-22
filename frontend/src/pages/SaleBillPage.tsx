@@ -142,7 +142,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
   // Password Modal Protection State
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
-  const [passwordActionType, setPasswordActionType] = useState<'edit_bill' | 'save_bill' | 'save_and_post' | 'post_bill' | 'delete_unposted_bill' | null>(null);
+  const [passwordActionType, setPasswordActionType] = useState<'save_bill' | 'save_and_post' | 'post_bill' | 'delete_unposted_bill' | null>(null);
 
   // Form State
   const [billId, setBillId] = useState<number | null>(null);
@@ -313,7 +313,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     return true;
   }, [customerId, date, storeId, billNo, items, isCustomDelivery, subCustomerId, hasStockExceeded]);
 
-  const pendingEditRow = useRef<SaleBillRow | null>(null);
   const pendingDeleteBillId = useRef<number | null>(null);
 
   // G-01: auto-focus the first field (Date) whenever the billing tab becomes the active view and
@@ -381,11 +380,13 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setErrorMsg('');
   };
 
+  // No password prompt here — Save (handleSave, mode==='edit') already asks for one before the
+  // update actually goes through, so gating entry into edit mode too meant asking twice for one
+  // edit (reported directly by the user: edit then update each prompted separately).
   const handleEditSpecificBill = async (bill: SaleBillRow) => {
-    setPasswordActionType('edit_bill');
-    setIsPasswordModalOpen(true);
-    // stash for the password success handler
-    pendingEditRow.current = bill;
+    await loadBillRow(bill);
+    setActiveTab('billing');
+    setMode('edit');
   };
 
   const handlePrintSpecificBill = async (bill: SaleBillRow) => {
@@ -398,8 +399,8 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   };
 
   // Pending Posting sidebar: a bill row only carries the summary fields (UnpostedBillRow), so
-  // opening it for edit fetches the full row first, then reuses the same password-gated edit
-  // path as every other "edit an existing bill" entry point (Weekly/Monthly/Overall/Find tabs).
+  // opening it for edit fetches the full row first, then reuses the same edit path as every other
+  // "edit an existing bill" entry point (Weekly/Monthly/Overall/Find tabs).
   const handleOpenUnpostedBill = async (billId: number) => {
     const res = await api.saleBills.get(billId);
     if (!res.ok) {
@@ -660,23 +661,17 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
+  // Entering edit mode never needs its own password prompt anymore — Save (handleSave,
+  // mode==='edit') already asks for one before the update actually goes through, so gating entry
+  // into edit mode too meant asking twice for one edit (reported by the user for both this
+  // button and handleEditSpecificBill above).
   const handleEditCurrentBill = () => {
-    setPasswordActionType('edit_bill');
-    setIsPasswordModalOpen(true);
+    setMode('edit');
   };
 
   const handlePasswordSuccess = async (password: string) => {
     setIsPasswordModalOpen(false);
-    if (passwordActionType === 'edit_bill') {
-      if (pendingEditRow.current) {
-        await loadBillRow(pendingEditRow.current);
-        pendingEditRow.current = null;
-        setActiveTab('billing');
-      }
-      setMode('edit');
-      setSuccessMsg(`Password verified. Bill editing unlocked.`);
-      setTimeout(() => setSuccessMsg(''), 3000);
-    } else if (passwordActionType === 'save_bill') {
+    if (passwordActionType === 'save_bill') {
       await executeSave(password);
     } else if (passwordActionType === 'delete_unposted_bill') {
       const targetId = pendingDeleteBillId.current;
@@ -750,6 +745,32 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   // stopPropagation it would also see idx-is-last and, in the same tick, click the Save & Post
   // button — posting a bill in the middle of appending a row to it.
   const articleCellRefs = useRef<(HTMLTableCellElement | null)[]>([]);
+
+  // Invoice card fills whatever vertical space is left in the viewport below it, so the item
+  // table (flex-1 inside it) gets to grow and the Remarks/Calculations footer lands at the
+  // screen's bottom edge instead of trailing off wherever the table's old fixed height happened
+  // to end. Measured via getBoundingClientRect rather than a CSS calc() of fixed chrome heights,
+  // because the chrome above this card (toolbar wrapping on a narrow window, the "Saved
+  // Successfully" banner appearing) changes height dynamically — a hardcoded calc() would drift
+  // out of sync with any of those, but the measured top position can't.
+  const invoiceCardRef = useRef<HTMLDivElement>(null);
+  const [invoiceCardHeight, setInvoiceCardHeight] = useState<number | null>(null);
+
+  useEffect(() => {
+    function recompute() {
+      const el = invoiceCardRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      // AppLayout's <main> (the only scroll container in the app) adds 32px of its own
+      // padding-bottom below whatever height we claim here — leaving that out made the card's
+      // bottom edge land 32px past the viewport, so `<main>` still scrolled by that much even
+      // though the intent is for it to never scroll at all, only the item table below.
+      setInvoiceCardHeight(Math.max(360, window.innerHeight - top - 32));
+    }
+    recompute();
+    window.addEventListener('resize', recompute);
+    return () => window.removeEventListener('resize', recompute);
+  }, [mode, hasStockExceeded]);
   // '.' held while Enter is pressed is a genuine three-way chord alongside Shift+Enter/Ctrl+Enter
   // below — tracked via useHeldKey since '.' isn't a real modifier key with its own event flag.
   // Typing '.' alone (a decimal point) never triggers this: by the time Enter is a separate,
@@ -777,8 +798,14 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     requestAnimationFrame(() => focusFirstField(articleCellRefs.current[0])); // new row is always index 0 now
   }
 
+  // A bill always needs at least one row to type into, so deleting the last remaining one clears
+  // its fields back to blank instead of removing the row itself (keeping its uid, so the row
+  // doesn't remount and lose focus).
   const handleRemoveItemRow = (idx: number) => {
-    if (items.length <= 1) return;
+    if (items.length <= 1) {
+      setItems(prev => prev.map((it, i) => i === idx ? { ...newUiItem(), uid: it.uid } : it));
+      return;
+    }
     setItems(items.filter((_, i) => i !== idx));
   };
 
@@ -790,7 +817,8 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       articleId,
       variantId: null,
       label: product?.name || '',
-      packing: product?.packing || 0
+      packing: product?.packing || 0,
+      rate: product?.sale_price ?? it.rate
     }) : it));
     if (articleId != null) await fetchVariants(articleId);
   };
@@ -1320,97 +1348,95 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
         {/* Toolbar - data-no-print */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
+          {/* Every action always renders (ref-pic style) — only `disabled` changes per state,
+              instead of whole button groups mounting/unmounting per `mode`. */}
           <div className="flex flex-wrap gap-2">
-            {mode === 'view' ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsPrintingSingle(true);
-                    setTimeout(() => { window.print(); setIsPrintingSingle(false); }, 100);
-                  }}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-700 shadow-sm transition-colors flex items-center gap-1.5"
-                >
-                  <Printer size={16} /> Print Invoice
-                </button>
-                <button type="button" onClick={() => exportToPDF()} className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5">
-                  <FileDown size={16} /> Export PDF
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const headers = ['Article', 'Packing', 'Cartons', 'Pairs', 'Rate', 'D%', 'D. Value', 'Total Value'];
-                    const rows = items.map(it => [it.label, it.packing, it.cartons, it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
-                    exportRowsToExcel(`sale-bill-${billNo || billId}`, headers, rows);
-                  }}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5"
-                >
-                  <FileSpreadsheet size={16} /> Export Excel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleEditCurrentBill}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5"
-                >
-                  <Edit size={16} /> Edit Bill
-                </button>
-                {billId != null && !currentBillIsPosted && (
-                  <button
-                    type="button"
-                    onClick={handlePostCurrentBill}
-                    className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
-                  >
-                    Post Bill
-                  </button>
-                )}
-                {billId != null && currentBillIsPosted && (
-                  <button
-                    type="button"
-                    onClick={handleUnpostCurrentBill}
-                    className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
-                  >
-                    Unpost Bill
-                  </button>
-                )}
-                <button type="button" onClick={handleNew} className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all">
-                  Create New Bill
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="submit"
-                  onClick={handleSave}
-                  disabled={!isNecessaryFieldsFilled || hasStockExceeded}
-                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-sm font-inter ${
-                    isNecessaryFieldsFilled && !hasStockExceeded
-                      ? 'bg-[#111c2a] text-[#B08D57] border border-[#B08D57] cursor-pointer hover:bg-[#1a293d]'
-                      : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
-                  }`}
-                >
-                  <Save size={16} /> {mode === 'edit' ? 'Update Bill' : 'New Bill'}
-                </button>
-                {!currentBillIsPosted && (
-                  <button
-                    type="button"
-                    onClick={handleSaveAndPost}
-                    disabled={!isNecessaryFieldsFilled || hasStockExceeded}
-                    className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Save &amp; Post
-                  </button>
-                )}
-                {mode === 'edit' ? (
-                  <button type="button" onClick={() => setMode('view')} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
-                    Cancel Edit
-                  </button>
-                ) : (
-                  <button type="button" onClick={handleNew} className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg">
-                    Clear Form
-                  </button>
-                )}
-              </>
-            )}
+            <button type="button" onClick={handleNew} className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none">
+              New Bill
+            </button>
+            <button
+              type="submit"
+              onClick={handleSave}
+              disabled={mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded}
+              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-sm font-inter disabled:pointer-events-none ${
+                mode !== 'view' && isNecessaryFieldsFilled && !hasStockExceeded
+                  ? 'bg-[#111c2a] text-[#B08D57] border border-[#B08D57] cursor-pointer hover:bg-[#1a293d]'
+                  : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+              }`}
+            >
+              <Save size={16} /> {mode === 'edit' ? 'Update Bill' : 'Save Bill'}
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveAndPost}
+              disabled={mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded || currentBillIsPosted}
+              className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Save &amp; Post
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('view')}
+              disabled={mode !== 'edit'}
+              className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Cancel Edit
+            </button>
+            <button
+              type="button"
+              onClick={handleEditCurrentBill}
+              disabled={mode !== 'view' || billId == null}
+              className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <Edit size={16} /> Edit Bill
+            </button>
+            <button
+              type="button"
+              onClick={handlePostCurrentBill}
+              disabled={mode !== 'view' || billId == null || currentBillIsPosted}
+              className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Post Bill
+            </button>
+            <button
+              type="button"
+              onClick={handleUnpostCurrentBill}
+              disabled={mode !== 'view' || billId == null || !currentBillIsPosted}
+              className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              Unpost Bill
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsPrintingSingle(true);
+                setTimeout(() => { window.print(); setIsPrintingSingle(false); }, 100);
+              }}
+              disabled={mode !== 'view' || billId == null}
+              className="px-4 py-2 text-sm font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-700 shadow-sm transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <Printer size={16} /> Print Invoice
+            </button>
+            <button
+              type="button"
+              onClick={() => exportToPDF()}
+              disabled={mode !== 'view' || billId == null}
+              className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <FileDown size={16} /> Export PDF
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const headers = ['Article', 'Packing', 'Cartons', 'Pairs', 'Rate', 'D%', 'D. Value', 'Total Value'];
+                const rows = items.map(it => [it.label, it.packing, it.cartons, it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
+                exportRowsToExcel(`sale-bill-${billNo || billId}`, headers, rows);
+              }}
+              disabled={mode !== 'view' || billId == null}
+              className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+            >
+              <FileSpreadsheet size={16} /> Export Excel
+            </button>
           </div>
 
           {mode === 'edit' && (
@@ -1427,8 +1453,16 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
           )}
         </div>
 
-        {/* Invoice Layout */}
-        <div className="card-white shadow-sm p-3 md:p-4" style={{ border: '1px solid var(--border-color)', background: '#ffffff', overflow: 'visible' }}>
+        {/* Invoice Layout — height pinned to the remaining viewport space (see invoiceCardHeight
+            above) and laid out as a flex column, so the item table below can flex-grow into
+            whatever room that leaves and the footer lands at the bottom of the screen instead of
+            wherever the old fixed-height table happened to end. Every other child here keeps its
+            natural size (flex-shrink-0) — only the table wrapper is flex-1. */}
+        <div
+          ref={invoiceCardRef}
+          className="card-white shadow-sm p-3 md:p-4 flex flex-col"
+          style={{ border: '1px solid var(--border-color)', background: '#ffffff', overflow: 'visible', height: invoiceCardHeight ?? undefined }}
+        >
 
           {/* Print Title (Visible only when printing) */}
           <div className="hidden print:flex items-center justify-between mb-6 pb-4 border-b">
@@ -1442,23 +1476,24 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
             </div>
           </div>
 
-          {/* Master Info Header fields */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }}>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
+          {/* Header fields — one dense grid, label-left per field (matches the legacy app's
+              layout), instead of stacked label-above-input fields split across bordered cards. */}
+          <div className="shrink-0 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }}>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 System No.
               </label>
-              <input type="text" value={billId ?? 'Unsaved'} disabled className="soleria-input bg-gray-50 text-gray-500 border-gray-200" style={{ fontSize: '13px' }} />
+              <input type="text" value={billId ?? 'Unsaved'} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
               <input type="date" ref={firstFieldRef}
-            value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
+            value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 From Store <span className="text-red-500 font-bold">*</span>
               </label>
               {/* Was a native <select>. SearchableSelect so this field behaves like every other
@@ -1472,165 +1507,143 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 disabled={isViewMode}
               />
             </div>
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--secondary-text)' }}>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Manual Bill No. <span className="text-red-500 font-bold">*</span>
               </label>
-              <input type="text" value={billNo} disabled={isViewMode} onChange={e => setBillNo(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
+              <input type="text" value={billNo} disabled={isViewMode} onChange={e => setBillNo(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
-          </div>
 
-          {/* Customer & Dispatch Section */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }}>
-
-            {/* Customer Details Box */}
-            <div className="flex flex-col gap-1.5 p-2.5 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-0.5">
-                Customer Information
+            <div className="flex items-center gap-2 md:col-span-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Customer <span className="text-red-500 font-bold">*</span>
+              </label>
+              <div className="flex-1">
+                <SearchableSelect
+                  options={customerOptions}
+                  value={customerId}
+                  onChange={(val) => {
+                    setCustomerId(val);
+                    setDeliveryType('1');
+                    setSubCustomerId('');
+                    setCustomAddress('');
+                  }}
+                  placeholder="Select customer..."
+                  searchPlaceholder="Search customer by name..."
+                  disabled={isViewMode}
+                />
+                {selectedCustomer && selectedCustomer.ba_id == null && (
+                  <p className="text-[10px] text-amber-600 mt-0.5 font-semibold">
+                    This customer has no linked business account — the bill cannot be posted until Setup adds one.
+                  </p>
+                )}
               </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                <div className="col-span-2">
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="block text-xs font-medium text-slate-600">
-                      Select Customer Name <span className="text-red-500 font-bold">*</span>
-                    </label>
-                    {!isViewMode && (
-                      <button
-                        type="button"
-                        onClick={() => setIsAddCustomerOpen(true)}
-                        className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102"
-                      >
-                        <Plus size={12} className="text-blue-600" />
-                        <span>Add New Customer</span>
-                      </button>
-                    )}
-                  </div>
+              {!isViewMode && (
+                <button
+                  type="button"
+                  onClick={() => setIsAddCustomerOpen(true)}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102 shrink-0"
+                >
+                  <Plus size={11} className="text-blue-600" />
+                  <span>New</span>
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Customer Code
+              </label>
+              <input type="text" value={customerId} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Delivery
+              </label>
+              <select
+                value={isCustomDelivery ? 'custom' : '1'}
+                disabled={isViewMode}
+                onChange={e => {
+                  const val = e.target.value as '1' | 'custom';
+                  setDeliveryType(val);
+                  if (val === '1') {
+                    setSubCustomerId('');
+                    setCustomAddress('');
+                  } else {
+                    setSubCustomerId(subCustomers[0] ? String(subCustomers[0].sub_customer_id) : '');
+                  }
+                }}
+                className="soleria-input soleria-input-compact cursor-pointer"
+              >
+                <option value="1">SAME (Direct)</option>
+                <option value="custom">Custom Agent / Sub-Customer</option>
+              </select>
+            </div>
+            {isCustomDelivery && (
+              <div className="flex items-center gap-2">
+                <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Sub-Customer <span className="text-red-500 font-bold">*</span>
+                </label>
+                <div className="flex-1">
                   <SearchableSelect
-                    options={customerOptions}
-                    value={customerId}
-                    onChange={(val) => {
-                      setCustomerId(val);
-                      setDeliveryType('1');
-                      setSubCustomerId('');
-                      setCustomAddress('');
-                    }}
-                    placeholder="Select customer..."
-                    searchPlaceholder="Search customer by name..."
+                    options={subCustomers.map(sc => ({ value: String(sc.sub_customer_id), label: sc.name }))}
+                    value={subCustomerId}
+                    onChange={setSubCustomerId}
+                    placeholder="Select sub-customer..."
+                    searchPlaceholder="Search sub-customers..."
                     disabled={isViewMode}
                   />
-                  {selectedCustomer && selectedCustomer.ba_id == null && (
-                    <p className="text-[10px] text-amber-600 mt-1 font-semibold">
-                      This customer has no linked business account — the bill cannot be posted until Setup adds one.
-                    </p>
-                  )}
                 </div>
-                <div className="col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Customer Code
-                  </label>
-                  <input type="text" value={customerId} disabled className="soleria-input bg-gray-100 text-gray-500" style={{ fontSize: '12px' }} />
-                </div>
-              </div>
-            </div>
-
-            {/* Delivery & Logistics Box */}
-            <div className="flex flex-col gap-1.5 p-2.5 rounded-lg bg-slate-50 border col-span-1" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b pb-0.5">
-                Delivery &amp; Logistics
-              </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Delivery
-                  </label>
-                  <select
-                    value={isCustomDelivery ? 'custom' : '1'}
-                    disabled={isViewMode}
-                    onChange={e => {
-                      const val = e.target.value as '1' | 'custom';
-                      setDeliveryType(val);
-                      if (val === '1') {
-                        setSubCustomerId('');
-                        setCustomAddress('');
-                      } else {
-                        setSubCustomerId(subCustomers[0] ? String(subCustomers[0].sub_customer_id) : '');
-                      }
-                    }}
-                    className="soleria-input cursor-pointer"
-                    style={{ fontSize: '13px' }}
+                {!isViewMode && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAddSubCustomerOpen(true)}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102 shrink-0"
                   >
-                    <option value="1">SAME (Direct)</option>
-                    <option value="custom">Custom Agent / Sub-Customer</option>
-                  </select>
-                </div>
-                {isCustomDelivery && (
-                  <div>
-                    <div className="flex justify-between items-center mb-1">
-                      <label className="block text-xs font-medium text-slate-600">
-                        Sub-Customer <span className="text-red-500 font-bold">*</span>
-                      </label>
-                      {!isViewMode && (
-                        <button
-                          type="button"
-                          onClick={() => setIsAddSubCustomerOpen(true)}
-                          className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102"
-                        >
-                          <Plus size={12} className="text-blue-600" />
-                          <span>Add New</span>
-                        </button>
-                      )}
-                    </div>
-                    <SearchableSelect
-                      options={subCustomers.map(sc => ({ value: String(sc.sub_customer_id), label: sc.name }))}
-                      value={subCustomerId}
-                      onChange={setSubCustomerId}
-                      placeholder="Select sub-customer..."
-                      searchPlaceholder="Search sub-customers..."
-                      disabled={isViewMode}
-                    />
-                  </div>
+                    <Plus size={11} className="text-blue-600" />
+                    <span>New</span>
+                  </button>
                 )}
-                {isCustomDelivery && (
-                  <div className="col-span-2">
-                    <label className="block text-xs font-medium text-slate-600 mb-1">
-                      Custom Delivery Address
-                    </label>
-                    <input type="text" value={customAddress} disabled={isViewMode} onChange={e => setCustomAddress(e.target.value)} placeholder="Enter custom delivery address..." className="soleria-input" style={{ fontSize: '13px' }} />
-                  </div>
-                )}
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Transport Adda
-                  </label>
-                  <SearchableSelect
-                    options={addaOptions}
-                    value={addaId}
-                    onChange={setAddaId}
-                    placeholder="Select Adda..."
-                    searchPlaceholder="Search Adda..."
-                    disabled={isViewMode}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Gate Pass (GP) No.
-                  </label>
-                  <input type="text" value={gpNo} disabled={isViewMode} onChange={e => setGpNo(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
-                </div>
-                <div className="col-span-2 md:col-span-1">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    Bilty No.
-                  </label>
-                  <input type="text" value={biltyNo} disabled={isViewMode} onChange={e => setBiltyNo(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
-                </div>
               </div>
+            )}
+            {isCustomDelivery && (
+              <div className="flex items-center gap-2 md:col-span-2">
+                <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Custom Address
+                </label>
+                <input type="text" value={customAddress} disabled={isViewMode} onChange={e => setCustomAddress(e.target.value)} placeholder="Enter custom delivery address..." className="soleria-input soleria-input-compact" />
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Transport Adda
+              </label>
+              <SearchableSelect
+                options={addaOptions}
+                value={addaId}
+                onChange={setAddaId}
+                placeholder="Select Adda..."
+                searchPlaceholder="Search Adda..."
+                disabled={isViewMode}
+              />
             </div>
-
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Gate Pass No.
+              </label>
+              <input type="text" value={gpNo} disabled={isViewMode} onChange={e => setGpNo(e.target.value)} className="soleria-input soleria-input-compact" />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Bilty No.
+              </label>
+              <input type="text" value={biltyNo} disabled={isViewMode} onChange={e => setBiltyNo(e.target.value)} className="soleria-input soleria-input-compact" />
+            </div>
           </div>
 
           {/* Stock Limit Warning Banner */}
           {hasStockExceeded && !isViewMode && (
-            <div className="flex items-center justify-between p-2.5 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-semibold mb-3 shadow-sm animate-in fade-in slide-in-from-top-2">
+            <div className="shrink-0 flex items-center justify-between p-2.5 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-semibold mb-3 shadow-sm animate-in fade-in slide-in-from-top-2">
               <div className="flex items-center gap-2.5">
                 <AlertTriangle size={18} className="text-rose-600 shrink-0" />
                 <div>
@@ -1644,27 +1657,30 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
             </div>
           )}
 
-          {/* Product Items Table — capped to roughly 2 rows tall, then scrolls internally rather
-              than growing the card past the screen as more rows are added. The header row is
-              `sticky` within this scroll box so it stays visible past row 2. SearchableSelect's
-              own dropdown is rendered via a `fixed`-position React portal (see its source), so it
-              isn't clipped by this box's `overflow-y: auto` even when a select near the bottom
-              edge is opened. */}
-          <div className="mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)', maxHeight: '150px' }}>
+          {/* Product Items Table — flex-1 so it grows to fill whatever space invoiceCardHeight
+              (above) leaves after every other section takes its natural size; this is what pins
+              the footer to the bottom of the screen instead of trailing off after just 2-3 rows.
+              `min-height: 0` overrides flexbox's default min-height:auto, which would otherwise
+              let this box's own content (as it grows past the flex space) stretch the whole card
+              instead of scrolling internally. The header row is `sticky` within this scroll box
+              so it stays visible past the first screenful of rows. SearchableSelect's own dropdown
+              is rendered via a `fixed`-position React portal (see its source), so it isn't clipped
+              by this box's `overflow-y: auto` even when a select near the bottom edge is opened. */}
+          <div className="flex-1 min-h-0 mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 pl-4" style={{ minWidth: '190px' }}>Article <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 pl-4" style={{ width: '130px', minWidth: '110px' }}>Color <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '80px' }}>Packing</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ minWidth: '120px' }}>Stock in Hand</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '90px', minWidth: '76px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '90px', minWidth: '64px' }}>Pairs</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '110px', minWidth: '96px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '100px', minWidth: '72px' }}>D%</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '110px' }}>D. Value</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '130px' }}>Value</th>
-                  {!isViewMode && <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '50px' }}></th>}
+                <tr className="bg-slate-50 border-b text-[11px] font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 pl-3" style={{ minWidth: '190px' }}>Article <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 pl-3" style={{ width: '130px', minWidth: '110px' }}>Color <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '80px' }}>Packing</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ minWidth: '110px' }}>Stock in Hand</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px', minWidth: '76px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px', minWidth: '64px' }}>Pairs</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '110px', minWidth: '96px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '100px', minWidth: '72px' }}>D%</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '110px' }}>D. Value</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '130px' }}>Value</th>
+                  {!isViewMode && <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '50px' }}></th>}
                 </tr>
               </thead>
               <tbody>
@@ -1674,7 +1690,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   return (
                     <tr key={item.uid} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                       {/* Article select */}
-                      <td className="p-1.5 pl-4" ref={el => { articleCellRefs.current[idx] = el; }}>
+                      <td className="p-1 pl-3" ref={el => { articleCellRefs.current[idx] = el; }}>
                         {isViewMode ? (
                           <span className="font-semibold text-slate-800 text-[13px] pl-2">{item.label || 'N/A'}</span>
                         ) : (
@@ -1689,7 +1705,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       </td>
 
                       {/* Color / Variant select */}
-                      <td className="p-1.5 pl-4">
+                      <td className="p-1 pl-3">
                         {isViewMode ? (
                           <span className="text-slate-600 text-[13px]">{variantOptions.find(v => v.value === String(item.variantId))?.label || '-'}</span>
                         ) : (
@@ -1705,70 +1721,65 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       </td>
 
                       {/* Packing */}
-                      <td className="p-1.5 text-center font-mono text-sm text-slate-600">
+                      <td className="p-1 text-center font-mono text-sm text-slate-600">
                         {item.packing || '-'}
                       </td>
 
-                      {/* Stock in Hand — Cartons & Pairs */}
-                      <td className="p-1.5 text-center font-mono">
+                      {/* Stock in Hand — Cartons & Pairs, one line */}
+                      <td className="p-1 text-center font-mono">
                         {(() => {
                           const stockInfo = getStockInfo(item.articleId, item.variantId);
                           if (!stockInfo) return <span className="text-slate-400 text-xs">—</span>;
                           const hasStock = stockInfo.cartons > 0 || stockInfo.pairs > 0;
                           return (
-                            <div className="flex flex-col items-center justify-center leading-tight py-0.5" title="Current Stock in Hand">
-                              <span className={`font-bold text-xs ${hasStock ? 'text-slate-800' : 'text-rose-600'}`}>
-                                {stockInfo.cartons} <span className="text-[10px] font-medium text-slate-500 uppercase">Ctn</span>
-                              </span>
-                              <span className={`text-[11px] ${hasStock ? 'text-slate-600 font-semibold' : 'text-rose-400'}`}>
-                                {stockInfo.pairs} <span className="text-[9px] text-slate-400 uppercase">Prs</span>
-                              </span>
-                            </div>
+                            <span className={`text-xs whitespace-nowrap ${hasStock ? 'text-slate-700' : 'text-rose-500'}`} title="Current Stock in Hand">
+                              <span className="font-bold">{stockInfo.cartons}</span> Ctn / <span className="font-bold">{stockInfo.pairs}</span> Prs
+                            </span>
                           );
                         })()}
                       </td>
 
                       {/* Cartons */}
-                      <td className="p-1.5">
+                      <td className="p-1">
                         <input
                           type="number"
                           value={item.cartons || ''}
                           disabled={isViewMode}
                           min={1}
                           onChange={e => updateNumericField(idx, 'cartons', parseInt(e.target.value) || 0)}
-                          className={`soleria-input text-center font-mono ${
+                          className={`soleria-input soleria-input-compact text-center font-mono ${
                             stockExceededRows[item.uid] ? 'border-2 border-red-500 bg-rose-50 text-red-700 font-bold focus:ring-2 focus:ring-red-300' : ''
                           }`}
-                          style={{ fontSize: '13px', border: isViewMode ? (stockExceededRows[item.uid] ? '2 border-red-500' : 'none') : undefined, background: isViewMode ? (stockExceededRows[item.uid] ? '#fef2f2' : 'transparent') : undefined }}
+                          style={{ border: isViewMode ? (stockExceededRows[item.uid] ? '2 border-red-500' : 'none') : undefined, background: isViewMode ? (stockExceededRows[item.uid] ? '#fef2f2' : 'transparent') : undefined }}
                         />
                         {stockExceededRows[item.uid] && (
-                          <div className="text-[10px] font-bold text-red-600 mt-1 flex items-center justify-center gap-1 animate-in fade-in" title="Requested cartons exceed available stock in hand">
-                            <AlertTriangle size={12} className="shrink-0 text-red-500" />
+                          <div className="text-[10px] font-bold text-red-600 mt-0.5 flex items-center justify-center gap-1 animate-in fade-in" title="Requested cartons exceed available stock in hand">
+                            <AlertTriangle size={11} className="shrink-0 text-red-500" />
                             <span>Exceeds Stock! (Max: {stockExceededRows[item.uid].available} Ctn)</span>
                           </div>
                         )}
                       </td>
 
                       {/* Pairs */}
-                      <td className="p-1.5 text-center font-mono text-sm font-semibold text-slate-700">
+                      <td className="p-1 text-center font-mono text-sm font-semibold text-slate-700">
                         {item.pairs || '-'}
                       </td>
 
                       {/* Rate */}
-                      <td className="p-1.5">
+                      <td className="p-1">
                         <input
                           type="number"
                           value={item.rate || ''}
                           disabled={isViewMode}
                           min={0}
                           onChange={e => updateNumericField(idx, 'rate', parseInt(e.target.value) || 0)}
-                          className="soleria-input text-right font-mono"
-                          style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
+                          className="soleria-input soleria-input-compact text-right font-mono"
+                          style={{ border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
                       </td>
 
                       {/* Discount % */}
-                      <td className="p-1.5">
+                      <td className="p-1">
                         <input
                           type="number"
                           value={item.discountPercent || ''}
@@ -1777,25 +1788,25 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                           max={100}
                           onChange={e => updateNumericField(idx, 'discountPercent', parseFloat(e.target.value) || 0)}
                           onKeyDown={handleLastFieldKeyDown}
-                          className="soleria-input text-center font-mono"
-                          style={{ fontSize: '13px', border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
+                          className="soleria-input soleria-input-compact text-center font-mono"
+                          style={{ border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
                         />
                       </td>
 
                       {/* Discount Value — Calculated from Discount % */}
-                      <td className="p-1.5 text-right font-mono text-xs font-semibold text-slate-700">
+                      <td className="p-1 text-right font-mono text-xs font-semibold text-slate-700">
                         {item.discountValue > 0 ? item.discountValue.toLocaleString() : '-'}
                       </td>
 
                       {/* Row Total Value */}
-                      <td className="p-1.5 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>
+                      <td className="p-1 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>
                         {formatCurrency(item.value)}
                       </td>
 
                       {/* Delete Action */}
                       {!isViewMode && (
-                        <td className="p-1.5 text-center">
-                          <button type="button" onClick={() => handleRemoveItemRow(idx)} className="text-red-500 hover:text-red-700 p-1" disabled={items.length <= 1}>
+                        <td className="p-1 text-center">
+                          <button type="button" onClick={() => handleRemoveItemRow(idx)} className="text-red-500 hover:text-red-700 p-1" title="Remove row (clears fields if it's the last one)">
                             <Trash2 size={16} />
                           </button>
                         </td>
@@ -1809,16 +1820,17 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
           {/* Add Row Button */}
           {!isViewMode && (
-            <button type="button" onClick={handleAddItemRow} className="btn-dashed flex items-center gap-1 mb-2 px-3 py-1">
+            <button type="button" onClick={handleAddItemRow} className="shrink-0 btn-dashed flex items-center gap-1 mb-2 px-3 py-1">
               <Plus size={14} /> Add Item Row
             </button>
           )}
 
-          {/* Bottom Section: Remarks & Calculations — deliberately compact (small textarea, tight
-              gaps) so a typical bill's whole form fits one screen without scrolling to reach
-              Save/Post; the due-date helper text was the one line worth dropping entirely rather
-              than shrinking further, since the field label + optional tag already say enough. */}
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
+          {/* Bottom Section: Remarks & Calculations — pinned to the bottom of the screen by the
+              item table's flex-1 above (see invoiceCardHeight). Kept compact (small textarea,
+              tight gaps) in its own right too — the due-date helper text was the one line worth
+              dropping entirely rather than shrinking further, since the field label + optional
+              tag already say enough. */}
+          <div className="shrink-0 grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
             {/* Remarks / Notes, with Payment Due Date stacked directly beneath it */}
             <div className="flex flex-col gap-1.5">
               <div className="flex flex-col gap-1">
@@ -1848,7 +1860,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
             </div>
 
             {/* Calculations Box */}
-            <div className="flex flex-col justify-between p-3 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md">
+            <div className="flex flex-col justify-between p-2 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md">
               <div className="text-xs font-semibold uppercase tracking-wider border-b pb-1 mb-1.5 text-slate-400 border-slate-800">
                 Calculations
               </div>
@@ -2032,21 +2044,16 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         onClose={() => {
           setIsPasswordModalOpen(false);
           setPasswordActionType(null);
-          pendingEditRow.current = null;
           pendingDeleteBillId.current = null;
         }}
         onSuccess={handlePasswordSuccess}
         title={
-          passwordActionType === 'edit_bill'
-            ? 'Authorization Required to Edit Bill'
-            : passwordActionType === 'delete_unposted_bill'
+          passwordActionType === 'delete_unposted_bill'
             ? 'Authorization Required to Delete Bill'
             : 'Authorization Required to Update Bill'
         }
         subtitle={
-          passwordActionType === 'edit_bill'
-            ? `Please enter password for user '${state.currentUsername || 'user'}' to unlock & edit Bill #${billNo || billId || ''}.`
-            : passwordActionType === 'delete_unposted_bill'
+          passwordActionType === 'delete_unposted_bill'
             ? `Please enter password for user '${state.currentUsername || 'user'}' to permanently delete this unposted bill.`
             : `Please enter password for user '${state.currentUsername || 'user'}' to save changes to Bill #${billNo || billId || ''}.`
         }

@@ -94,6 +94,12 @@ body {
   box-shadow: 0 0 0 3px rgba(176,141,87,0.15);
 }
 
+/* Denser variant for line-item table cells (Cartons/Rate/Discount %) — same look, smaller box */
+.soleria-input-compact {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8125rem;
+}
+
 /* Hide native number input spinners so narrow columns (Qty/Price/Discount) stay aligned */
 .soleria-input[type='number']::-webkit-outer-spin-button,
 .soleria-input[type='number']::-webkit-inner-spin-button {
