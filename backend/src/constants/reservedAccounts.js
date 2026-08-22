@@ -35,4 +35,11 @@ module.exports = {
   // threw it out by exactly 100,000). Equity sits under LIABILITY here because there is no EQUITY
   // account class; what the business owes its owners is the closest existing fit.
   OPENING_BALANCE_EQUITY: '200003',
+  // Journal Voucher's smart-default counter-account (post multi-line rebuild): the common case is
+  // still one real party account plus a write-off, so the JV entry form auto-fills an untouched
+  // second line against this account to balance the first — matching the reference screenshot's
+  // own example (jv2.0.jpeg: one line credits a customer, the other debits this exact account
+  // name). Unlike the old fixed-counter-account model, this is only a convenience default — the
+  // user can still edit or remove that line, or add more lines, for a real multi-account journal.
+  DISCOUNTS_CLAIMS_COMMISSIONS: '400008',
 };

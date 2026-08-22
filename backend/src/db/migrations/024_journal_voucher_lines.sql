@@ -87,5 +87,9 @@ ALTER TABLE dbo.journal_vouchers DROP CONSTRAINT CK_journal_vouchers_amount;
 GO
 ALTER TABLE dbo.journal_vouchers DROP CONSTRAINT FK_journal_vouchers_ba;
 GO
+-- 016_journal_vouchers.sql also indexed ba_id (paired with jv_date) — that index still
+-- references the column and blocks the DROP COLUMN below until it's gone too.
+DROP INDEX IX_journal_vouchers_ba ON dbo.journal_vouchers;
+GO
 ALTER TABLE dbo.journal_vouchers DROP COLUMN ba_id, direction, amount;
 GO

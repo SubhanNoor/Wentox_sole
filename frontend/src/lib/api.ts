@@ -1003,6 +1003,9 @@ export const RESERVED_ACCOUNT_CODES: readonly string[] = [
   '410001', // WAGES_EXPENSE
   '410002', // SALARIES_EXPENSE
   '400006', // MISC_ADJUSTMENTS
+  '400007', // JOURNAL_VOUCHER
+  '200003', // OPENING_BALANCE_EQUITY
+  '400008', // DISCOUNTS_CLAIMS_COMMISSIONS
 ];
 
 export type ExpensePaymentMode = 'CASH' | 'ONLINE' | 'CHEQUE_ENDORSED' | 'CHEQUE_ISSUED';
@@ -1756,6 +1759,7 @@ declare global {
         unpost: (payload: { id: number }) => Promise<ApiResult<JournalVoucherRow>>;
         listUnposted: () => Promise<ApiResult<UnpostedJournalVoucherRow[]>>;
         postAll: (payload?: { ids?: number[] }) => Promise<ApiResult<PostAllResult<'jv_id'>>>;
+        counterAccount: () => Promise<ApiResult<BusinessAccountRow>>;
       };
       settlements: {
         list: (payload?: SettlementListFilters) => Promise<ApiResult<SettlementRow[]>>;
@@ -2549,6 +2553,8 @@ export const journalVouchers = {
     window.api ? window.api.journalVouchers.listUnposted() : Promise.resolve(NO_BRIDGE),
   postAll: (ids?: number[]) =>
     window.api ? window.api.journalVouchers.postAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE),
+  counterAccount: () =>
+    window.api ? window.api.journalVouchers.counterAccount() : Promise.resolve(NO_BRIDGE),
 };
 
 export const settlements = {

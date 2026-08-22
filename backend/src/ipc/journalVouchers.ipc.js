@@ -53,4 +53,10 @@ module.exports = function register() {
     const session = requireSession();
     return service.postAll(payload?.ids, session.userId, session);
   }));
+
+  // The entry form's smart-default counter-account (see reservedAccounts.js).
+  ipcMain.handle('journal-vouchers:counterAccount', wrap(() => {
+    requireSession();
+    return service.getCounterAccount();
+  }));
 };

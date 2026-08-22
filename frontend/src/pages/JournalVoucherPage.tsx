@@ -41,6 +41,13 @@ export default function JournalVoucherPage() {
   const [vouchers, setVouchers] = useState<JournalVoucherRow[]>([]);
   const [lookupError, setLookupError] = useState('');
 
+  // Smart default: the common case is one real party account plus a write-off, so an untouched
+  // 2nd line auto-fills to this account balancing the 1st (matches jv2.0.jpeg's own example —
+  // one line credits a customer, the other debits DISCOUNTS, CLAIMS & COMMISSIONS). Just a
+  // convenience, not a fixed model: the user can still edit/remove that line or add more lines
+  // for a real multi-account journal — see the auto-balance effect below.
+  const [counterAccount, setCounterAccount] = useState<BusinessAccountRow | null>(null);
+
   // JV Ledger — search + status filter, both applied server-side (search matches the header
   // OR any line: account name/code, per-line narration, debit/credit amount — see
   // journalVouchers.repository.js#list) so it finds a JV "from any detail", not just reason/number.
@@ -70,6 +77,12 @@ export default function JournalVoucherPage() {
     (async () => {
       const ba = await api.listBusinessAccounts();
       if (ba.ok) setAccounts(ba.data); else setLookupError('Failed to load accounts: ' + ba.error.message);
+    })();
+    (async () => {
+      const ca = await api.journalVouchers.counterAccount();
+      if (ca.ok) setCounterAccount(ca.data);
+      // Not fatal if this fails — the smart default just won't fire; manual multi-line entry
+      // still works fine without it.
     })();
     refreshUnposted();
   }, [refreshUnposted]);
@@ -103,6 +116,9 @@ export default function JournalVoucherPage() {
   const [voucherNo, setVoucherNo] = useState('');
   const [reason, setReason] = useState('');
   const [lines, setLines] = useState<UiLine[]>([emptyLine(), emptyLine()]);
+  // Turns off the 2nd-line auto-balance once the user edits that line themselves (it's their
+  // line now, not ours to keep overwriting) — see the auto-balance effect below.
+  const [secondLineTouched, setSecondLineTouched] = useState(false);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -121,10 +137,15 @@ export default function JournalVoucherPage() {
     setMode('new'); setJvId(null); setStatus('DRAFT');
     setDate(getTodayDate()); setVoucherNo(''); setReason('');
     setLines([emptyLine(), emptyLine()]);
+    setSecondLineTouched(false);
     setErrorMsg('');
   };
 
   const updateLine = (uid: string, field: keyof UiLine, value: string | number) => {
+    const idx = lines.findIndex(l => l.uid === uid);
+    // Editing the 2nd line directly, while it's still the auto-balance slot, hands it over to
+    // the user — the effect below stops overwriting it from this point on.
+    if (idx === 1 && lines.length === 2) setSecondLineTouched(true);
     setLines(prev => prev.map(l => {
       if (l.uid !== uid) return l;
       const updated = { ...l, [field]: value };
@@ -143,6 +164,21 @@ export default function JournalVoucherPage() {
     const totalCredit = round2(lines.reduce((s, l) => s + (Number(l.credit) || 0), 0));
     return { totalDebit, totalCredit, difference: round2(totalDebit - totalCredit) };
   }, [lines]);
+
+  // Smart default: with exactly 2 lines and the 2nd untouched, keep it mirroring the 1st line's
+  // account+amount on the opposite side against the counter-account. Stops the moment the user
+  // edits that line themselves (secondLineTouched), adds/removes lines, or in view mode.
+  useEffect(() => {
+    if (isViewMode || secondLineTouched || lines.length !== 2 || !counterAccount) return;
+    const [first, second] = lines;
+    const firstAmount = Number(first.debit) || Number(first.credit) || 0;
+    if (!first.baId || firstAmount <= 0) return;
+    const wantDebit = Number(first.credit) > 0 ? firstAmount : 0;
+    const wantCredit = Number(first.debit) > 0 ? firstAmount : 0;
+    const counterBaId = String(counterAccount.ba_id);
+    if (second.baId === counterBaId && Number(second.debit) === wantDebit && Number(second.credit) === wantCredit) return;
+    setLines(prev => prev.map((l, i) => i === 1 ? { ...l, baId: counterBaId, debit: wantDebit, credit: wantCredit } : l));
+  }, [lines, secondLineTouched, counterAccount, isViewMode]);
 
   const isValid = useMemo(() => {
     if (!date || !reason.trim()) return false;
@@ -230,6 +266,9 @@ export default function JournalVoucherPage() {
       credit: l.credit,
       narration: l.narration || '',
     })));
+    // Loaded data is already whatever it is — the auto-balance effect must not overwrite an
+    // existing voucher's 2nd line just because it happens to still look untouched.
+    setSecondLineTouched(true);
     setErrorMsg('');
     setMode('view');
   };

@@ -7,9 +7,22 @@
 // ledger shows exactly what a JV moved through it and why.
 const repository = require('../repositories/journalVouchers.repository');
 const businessAccountsService = require('./businessAccounts.service');
+const chartAccountsRepository = require('../repositories/chartAccounts.repository');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 const { buildLines, validateBalance } = require('./journalVouchers.math');
+const CODES = require('../constants/reservedAccounts');
+
+// The frontend's smart default: an untouched second line auto-fills to this account to balance
+// the first, for the common one-real-party-account case (jv2.0.jpeg's own example). Resolved by
+// reserved code, same as every other reserved lookup — never a hardcoded id.
+async function getCounterAccount() {
+  const chartAccount = await chartAccountsRepository.findByCode(CODES.DISCOUNTS_CLAIMS_COMMISSIONS);
+  if (!chartAccount) throw new Error(`Reserved chart account DISCOUNTS, CLAIMS & COMMISSIONS (code ${CODES.DISCOUNTS_CLAIMS_COMMISSIONS}) not found — run npm run seed`);
+  const account = await businessAccountsService.getByAcId(chartAccount.ac_id);
+  if (!account) throw new Error('DISCOUNTS, CLAIMS & COMMISSIONS business account not found — run npm run seed');
+  return account;
+}
 
 function validateHeader(payload) {
   if (!payload.jv_date) throw ApiError.badRequest('jv_date is required');
@@ -170,4 +183,6 @@ async function postAll(ids, userId, session) {
   return { posted, failed, attempted: targets.length };
 }
 
-module.exports = { list, getById, create, update, remove, post, unpost, listUnposted, postAll };
+module.exports = {
+  list, getById, create, update, remove, post, unpost, listUnposted, postAll, getCounterAccount,
+};

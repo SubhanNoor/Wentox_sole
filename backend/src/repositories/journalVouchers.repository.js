@@ -3,9 +3,11 @@
 const { sql, query, requestWithParams } = require('../db/pool');
 
 function linesSubquery(alias = 'jv') {
+  // No GROUP BY — SQL Server rejects a bare column (jv_id) selected alongside aggregates
+  // without one, even though the WHERE already correlates to a single voucher. Only the
+  // aggregates are actually needed here; the correlation is the WHERE clause, not a SELECTed column.
   return `(
-    SELECT jvl.jv_id,
-           COUNT(*) AS line_count,
+    SELECT COUNT(*) AS line_count,
            SUM(jvl.debit) AS total_debit,
            SUM(jvl.credit) AS total_credit
     FROM dbo.journal_voucher_lines jvl
