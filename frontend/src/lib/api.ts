@@ -1945,7 +1945,7 @@ declare global {
         get: (payload: { id: number }) => Promise<ApiResult<JournalVoucherRow>>;
         create: (payload: JournalVoucherCreateInput) => Promise<ApiResult<JournalVoucherRow>>;
         update: (payload: { id: number } & JournalVoucherCreateInput) => Promise<ApiResult<JournalVoucherRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         post: (payload: { id: number }) => Promise<ApiResult<JournalVoucherRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<JournalVoucherRow>>;
         listUnposted: () => Promise<ApiResult<UnpostedJournalVoucherRow[]>>;
@@ -2779,7 +2779,8 @@ export const journalVouchers = {
     window.api ? window.api.journalVouchers.create(payload).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: JournalVoucherCreateInput) =>
     window.api ? window.api.journalVouchers.update({ id, ...payload }).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.journalVouchers.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.journalVouchers.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   post: (id: number) =>
     window.api ? window.api.journalVouchers.post({ id }).then(r => mapResult(r, normalizeJvRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>

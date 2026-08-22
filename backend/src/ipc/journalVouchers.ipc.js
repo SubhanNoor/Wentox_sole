@@ -1,6 +1,7 @@
 // IPC layer: registers ipcMain.handle channels for journal vouchers — no business logic, no SQL.
 const { ipcMain } = require('electron');
 const service = require('../services/journalVouchers.service');
+const authService = require('../services/auth.service');
 const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
 
@@ -26,8 +27,12 @@ module.exports = function register() {
     return service.update(payload.id, payload, session);
   }));
 
-  ipcMain.handle('journal-vouchers:remove', wrap((payload) => {
-    requireSession();
+  // Pending Posting sidebar's Delete (unposted JVs only — service.remove() throws on a posted
+  // one). Password required unconditionally, same guard as Sale Bill/Purchase's unposted delete —
+  // this is destructive with no undo trail, unlike unposting/posting.
+  ipcMain.handle('journal-vouchers:remove', wrap(async (payload) => {
+    const session = requireSession();
+    await authService.verifyPassword(session.userId, payload.password);
     return service.remove(payload.id);
   }));
 

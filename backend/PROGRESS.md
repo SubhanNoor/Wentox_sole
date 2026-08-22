@@ -4814,3 +4814,23 @@ no logic** — every cheque / online / endorsement / bounce / voucher rule behav
 - **Files:** `backend/src/repositories/journalVouchers.repository.js`,
   `backend/src/services/journalVouchers.service.js`, `backend/src/ipc/journalVouchers.ipc.js`,
   `frontend/src/lib/api.ts`, `frontend/src/pages/JournalVoucherPage.tsx`
+
+## Journal Voucher — password-gated delete for unposted JVs, brought to parity with the rest of the site
+- **User request:** every other transaction page (Sale Bill, Sale Return, Purchase, Purchase
+  Return) has a password-gated Delete button on its Pending Posting sidebar for an unposted
+  document — Journal Voucher never got one when its own sidebar was added (previous entry above),
+  and its `remove()` channel had no password guard at all (unlike every other module's
+  `X:remove`).
+- **`journalVouchers.ipc.js`:** `journal-vouchers:remove` now calls
+  `authService.verifyPassword(session.userId, payload.password)` before `service.remove()` — same
+  guard shape as `sale-bills:remove`/`purchases:remove`/etc. `service.remove()` itself already
+  correctly blocked deleting a posted JV (`POSTED_LOCK`), so no service-layer change was needed.
+- **Frontend:** `lib/api.ts`'s `journalVouchers.remove` gained a required `password` parameter.
+  `JournalVoucherPage.tsx`'s Pending Posting sidebar rows were previously inert (no click handler,
+  no per-row actions at all) — brought up to the same interactive pattern `PurchasePage.tsx` uses:
+  clicking a row now opens it into the form (`handleOpenUnposted`), plus inline Post
+  (`handlePostOneUnposted`, mirrors `handlePostOneUnposted` on Purchase) and password-gated Delete
+  (`handleDeleteUnposted` + `PasswordPromptModal`) icon buttons per row.
+- Full project `npx tsc -b --force` and `node -c` on the touched backend file both pass clean.
+- **Files:** `backend/src/ipc/journalVouchers.ipc.js`, `frontend/src/lib/api.ts`,
+  `frontend/src/pages/JournalVoucherPage.tsx`

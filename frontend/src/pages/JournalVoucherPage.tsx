@@ -8,7 +8,8 @@ import type {
   UnpostedJournalVoucherRow, PostAllResult,
 } from '@/lib/api';
 import { formatDate, getTodayDate } from '@/lib/utils';
-import { Save, Edit, Search, Plus, Trash2, BookText, ChevronDown } from 'lucide-react';
+import { Save, Edit, Search, Plus, Trash2, BookText, ChevronDown, CheckCircle2 } from 'lucide-react';
+import PasswordPromptModal from '@/components/PasswordPromptModal';
 
 /**
  * Journal Voucher — a real multi-line double-entry journal (legacy "Journal Entry" screen): N
@@ -67,6 +68,7 @@ export default function JournalVoucherPage() {
   const [unpostedJvs, setUnpostedJvs] = useState<UnpostedJournalVoucherRow[]>([]);
   const [postAllBusy, setPostAllBusy] = useState(false);
   const [postAllResult, setPostAllResult] = useState<PostAllResult<'jv_id'> | null>(null);
+  const [postingJvId, setPostingJvId] = useState<number | null>(null);
 
   const refreshUnposted = useCallback(async () => {
     const res = await api.journalVouchers.listUnposted();
@@ -275,6 +277,48 @@ export default function JournalVoucherPage() {
 
   const loadRow = (row: JournalVoucherRow) => { loadJv(row.jv_id); setActiveTab('entry'); };
 
+  // Pending Posting sidebar: opening a row loads that JV straight into the form.
+  const handleOpenUnposted = (jvId: number) => { loadJv(jvId); setActiveTab('entry'); };
+
+  // Posts a single JV straight from the sidebar without loading it into the form — for the common
+  // case of "this one's ready, the rest of the run isn't yet". stopPropagation keeps the click
+  // from also triggering the row's own open-for-edit handler.
+  const handlePostOneUnposted = async (targetId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPostingJvId(targetId);
+    const res = await api.journalVouchers.post(targetId);
+    setPostingJvId(null);
+    if (!res.ok) { fail('Failed to post: ' + res.error.message); return; }
+    flash(`Journal Voucher ${res.data.voucher_no || `#${res.data.jv_id}`} posted.`);
+    refresh();
+    refreshUnposted();
+    if (targetId === jvId) setStatus(res.data.status);
+  };
+
+  // Password-gated (verified server-side) — deleting a saved-unposted JV is destructive with no
+  // reverse-never-erase trail, same guard level used on Sale Bill/Sale Return/Purchase.
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const pendingDeleteJvId = useRef<number | null>(null);
+
+  const handleDeleteUnposted = (targetId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    pendingDeleteJvId.current = targetId;
+    setIsPasswordModalOpen(true);
+  };
+
+  const handleDeletePasswordSuccess = async (password: string) => {
+    setIsPasswordModalOpen(false);
+    const targetId = pendingDeleteJvId.current;
+    pendingDeleteJvId.current = null;
+    if (targetId == null) return;
+    const res = await api.journalVouchers.remove(targetId, password);
+    if (!res.ok) { fail('Failed to delete: ' + res.error.message); return; }
+    flash('Journal Voucher deleted successfully.');
+    if (jvId === targetId) handleNew();
+    refresh();
+    refreshUnposted();
+  };
+
   // Entry card fills whatever vertical space is left in the viewport below it (mirrors
   // SaleBillPage/PurchasePage) — the line-items table (flex-1 inside it) grows into that space,
   // and the outer app window never scrolls (only the table does). Measured via
@@ -383,15 +427,41 @@ export default function JournalVoucherPage() {
               )}
             </div>
 
-            {/* Flat list — every unposted JV, oldest first (same order the backend returns). */}
+            {/* Flat list — every unposted JV, oldest first (same order the backend returns).
+                Each row opens straight into the form for editing, with inline Post/Delete actions
+                so a single ready one doesn't need to be opened first just to post it. */}
             {unpostedJvs.length > 0 && (
               <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
                 {unpostedJvs.map(v => (
-                  <li key={v.jv_id} className="px-3 py-2.5 text-xs border-b border-slate-100 last:border-b-0">
-                    <div className="min-w-0">
-                      <div className="font-mono font-semibold text-slate-700">{v.voucher_no || `#${v.jv_id}`}</div>
-                      <div className="text-slate-400 truncate">{v.reason}</div>
-                      <div className="text-slate-400">{formatDate(v.jv_date)} · {formatCurrency(Number(v.total_debit))}</div>
+                  <li
+                    key={v.jv_id}
+                    onClick={() => handleOpenUnposted(v.jv_id)}
+                    className="px-3 py-2.5 text-xs border-b border-slate-100 last:border-b-0 cursor-pointer hover:bg-amber-50/60 transition-colors"
+                  >
+                    <div className="min-w-0 flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-mono font-semibold text-slate-700">{v.voucher_no || `#${v.jv_id}`}</div>
+                        <div className="text-slate-400 truncate">{v.reason}</div>
+                        <div className="text-slate-400">{formatDate(v.jv_date)} · {formatCurrency(Number(v.total_debit))}</div>
+                      </div>
+                      <button
+                        type="button"
+                        title="Post this Journal Voucher"
+                        onClick={(e) => handlePostOneUnposted(v.jv_id, e)}
+                        disabled={postingJvId === v.jv_id}
+                        className="flex-shrink-0 p-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                      >
+                        <CheckCircle2 size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        title="Delete this Journal Voucher (password required)"
+                        onClick={(e) => handleDeleteUnposted(v.jv_id, e)}
+                        disabled={postingJvId === v.jv_id}
+                        className="flex-shrink-0 p-1 rounded bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                      >
+                        <Trash2 size={12} />
+                      </button>
                     </div>
                   </li>
                 ))}
@@ -399,6 +469,14 @@ export default function JournalVoucherPage() {
             )}
           </aside>
         )}
+
+        <PasswordPromptModal
+          isOpen={isPasswordModalOpen}
+          onClose={() => { setIsPasswordModalOpen(false); pendingDeleteJvId.current = null; }}
+          onSuccess={handleDeletePasswordSuccess}
+          title="Delete Unposted Journal Voucher"
+          subtitle="Enter your password to permanently delete this unposted Journal Voucher."
+        />
 
         {lookupError && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>}
         {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>}
