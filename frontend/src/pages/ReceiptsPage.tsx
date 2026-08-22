@@ -3,7 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
-import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow, SettlementRow, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
+import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { focusFirstField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
@@ -50,21 +50,8 @@ export default function ReceiptsPage() {
   const [regions, setRegions] = useState<RegionRow[]>([]);
   const [cities, setCities] = useState<CityRow[]>([]);
   const [banks, setBanks] = useState<BankAccountRow[]>([]);
-  const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [drafts, setDrafts] = useState<DraftReceiptRow[]>([]);
   const [lookupError, setLookupError] = useState('');
-
-  const refreshReceipts = useCallback(async () => {
-    const res = await api.receipts.list({});
-    if (res.ok) setReceipts(res.data);
-    else setLookupError('Failed to load receipts: ' + res.error.message);
-  }, []);
-
-  const refreshSettlements = useCallback(async () => {
-    const res = await api.settlements.list({});
-    if (res.ok) setSettlements(res.data);
-    else setLookupError('Failed to load endorsed settlements: ' + res.error.message);
-  }, []);
 
   const refreshDrafts = useCallback(async () => {
     const res = await api.draftReceipts.list({});
@@ -86,10 +73,8 @@ export default function ReceiptsPage() {
       if (bk.ok) setBanks(bk.data); else failures.push(bk.error.message);
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
-    refreshReceipts();
     refreshDrafts();
-    refreshSettlements();
-  }, [refreshReceipts, refreshDrafts, refreshSettlements]);
+  }, [refreshDrafts]);
 
   // ── Real-receipt form (mirrors PurchasePage.tsx's mode structure) ──
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
@@ -123,7 +108,6 @@ export default function ReceiptsPage() {
   const [isEndorsed, setIsEndorsed] = useState(false);
   const [endorseToBaId, setEndorseToBaId] = useState('');
   const [docKind, setDocKind] = useState<'RECEIPT' | 'SETTLEMENT'>('RECEIPT');
-  const [settlements, setSettlements] = useState<SettlementRow[]>([]);
 
   // RJ-02: previewed account while arrow-keying through the dropdown, for the live balance tooltip.
   const [previewBaId, setPreviewBaId] = useState<number | null>(null);
@@ -137,7 +121,6 @@ export default function ReceiptsPage() {
     setDeleteTarget(null);
     if (!res.ok) return fail('Failed to delete: ' + res.error.message);
     flash('Receipt deleted.');
-    refreshReceipts();
     // RJ-03: the deleted row may have been a line of the voucher on screen — re-read it so the grid
     // and the per-mode totals lose it too, instead of showing an entry that no longer exists.
     if (voucher && deleteTarget.voucher_id === voucher.voucher_id) await refreshVoucher(voucher.voucher_id);
@@ -346,7 +329,6 @@ export default function ReceiptsPage() {
     setErrorMsg('');
     flash('Endorsement saved — Post it to update both ledgers.');
     setMode('view');
-    refreshSettlements();
     setBalanceRefreshKey(k => k + 1);
   };
 
@@ -417,7 +399,6 @@ export default function ReceiptsPage() {
     await refreshVoucher(openVoucher.voucher_id);
     clearEntryRow();
     flash(wasEdit ? 'Entry updated.' : 'Entry added to the voucher.');
-    refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
   };
 
@@ -445,7 +426,6 @@ export default function ReceiptsPage() {
     if (!res.ok) { fail('Failed to post voucher: ' + res.error.message); return; }
     setVoucherResult(res.data);
     setVoucher(res.data.voucher);
-    refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
 
     if (res.data.failed.length === 0) {
@@ -464,7 +444,6 @@ export default function ReceiptsPage() {
     if (!res.ok) { fail('Failed to unpost voucher: ' + res.error.message); return; }
     setVoucherResult(res.data);
     setVoucher(res.data.voucher);
-    refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
     if (res.data.failed.length === 0) flash(`Voucher ${voucher.voucher_no} unposted.`);
   };
@@ -520,7 +499,6 @@ export default function ReceiptsPage() {
     if (!res.ok) { fail('Failed to post: ' + res.error.message); return; }
     setReceiptStatus(res.data.status);
     flash(docKind === 'SETTLEMENT' ? 'Endorsement posted — both ledgers updated.' : 'Receipt posted successfully.');
-    if (docKind === 'SETTLEMENT') refreshSettlements(); else refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
   };
 
@@ -535,76 +513,7 @@ export default function ReceiptsPage() {
     if (!res.ok) { fail('Failed to unpost: ' + res.error.message); return; }
     setReceiptStatus(res.data.status);
     flash(docKind === 'SETTLEMENT' ? 'Endorsement unposted.' : 'Receipt unposted successfully.');
-    if (docKind === 'SETTLEMENT') refreshSettlements(); else refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
-  };
-
-  const loadReceiptRow = async (rowIn: ReceiptRow) => {
-    // list() rows never carry cheque_no/cheque_date (only get()'s join does) — re-fetch
-    // full detail whenever a CHEQUE row is opened for view/edit.
-    let row = rowIn;
-    if (row.payment_mode === 'CHEQUE' && row.cheque_no === undefined) {
-      const res = await api.receipts.get(row.receipt_id);
-      if (!res.ok) { fail('Failed to load receipt: ' + res.error.message); return; }
-      row = res.data;
-    }
-
-    setDocKind('RECEIPT');
-    setIsEndorsed(false);
-    setEndorseToBaId('');
-    setReceiptId(row.receipt_id);
-    setReceiptStatus(row.status);
-    setDate(row.receipt_date.slice(0, 10));
-    setBaId(String(row.ba_id));
-    setAmount(row.amount);
-    setCommission(row.commission || 0);
-    setPaymentMode(row.payment_mode);
-    setBankId(row.bank_id != null ? String(row.bank_id) : '');
-    setDetails(row.details || '');
-    setChequeNo(row.cheque_no || '');
-    setChequeDate(row.cheque_date ? row.cheque_date.slice(0, 10) : '');
-    setChequeReceivedDate(row.cheque_received_date ? row.cheque_received_date.slice(0, 10) : '');
-    setRemarks(row.remarks || '');
-    setLoadedDraftId(null);
-    setSelectedDraftPick('');
-    setErrorMsg('');
-    setMode('view');
-
-    // RJ-03: opening a receipt from the records list also opens the voucher it belongs to, so its
-    // sibling entries, the per-mode totals and the voucher's Post/Un Post are all on screen —
-    // otherwise the user is looking at one line of a document with no way to reach the rest of it.
-    // Every receipt has a voucher (migration 022 backfilled the old ones), but voucher_id is
-    // nullable in the column, so this stays guarded rather than assuming.
-    if (row.voucher_id != null) await refreshVoucher(row.voucher_id);
-    else setVoucher(null);
-    setVoucherResult(null);
-  };
-
-
-
-
-
-  const loadSettlementRow = (row: SettlementRow) => {
-    setDocKind('SETTLEMENT');
-    setIsEndorsed(true);
-    setReceiptId(row.settlement_id);
-    setReceiptStatus(row.status);
-    setDate(row.settlement_date.slice(0, 10));
-    setBaId(String(row.from_ba_id));
-    setEndorseToBaId(String(row.to_ba_id));
-    setAmount(row.amount);
-    setCommission(0);
-    setPaymentMode(row.payment_mode || 'CASH');
-    setBankId('');
-    setDetails('');
-    setChequeNo(row.cheque_no || '');
-    setChequeDate(row.cheque_date ? row.cheque_date.slice(0, 10) : '');
-    setChequeReceivedDate('');
-    setRemarks(row.remarks || '');
-    setLoadedDraftId(null);
-    setSelectedDraftPick('');
-    setErrorMsg('');
-    setMode('view');
   };
 
   // ── draftReceipts (server-side, CASH/ONLINE only) ──
@@ -644,23 +553,8 @@ export default function ReceiptsPage() {
     setSelectedDraftPick('');
     flash('Draft confirmed and posted as a receipt.');
     refreshDrafts();
-    refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
   };
-
-  // Recorded Receipts (below) shows only what's still awaiting posting — a receipt already
-  // CONFIRMED has done its job and belongs in the reports/ledger, not in a list whose whole
-  // point was "here's what still needs attention." Same filter applied to `settlements` below,
-  // which render into the same table.
-  const sortedReceipts = useMemo(
-    () => [...receipts].filter(r => r.status !== 'CONFIRMED').sort((a, b) => b.receipt_date.localeCompare(a.receipt_date)),
-    [receipts]
-  );
-
-  const unpostedSettlements = useMemo(
-    () => [...settlements].filter(st => st.status !== 'CONFIRMED').sort((a, b) => b.settlement_date.localeCompare(a.settlement_date)),
-    [settlements]
-  );
 
   const accountName = useCallback(
     (id: number) => businessAccounts.find(b => b.ba_id === id)?.name || 'Unknown Account',
@@ -1336,97 +1230,6 @@ export default function ReceiptsPage() {
                       </button>
                     </div>
                   )}
-                </div>
-              )}
-            </div>
-
-            {/* Recorded Receipts — unposted only now (both receipts and endorsed settlements
-                filtered above): a CONFIRMED entry has already done its job and belongs in the
-                reports/ledger, not in a list whose point is "here's what still needs posting." */}
-            <div className="card-white p-6 mt-8 bg-white border border-slate-200 rounded-xl shadow-sm">
-              <h3 className="font-lora font-semibold text-lg text-slate-800 mb-4">Recorded Receipts <span className="text-xs font-normal text-slate-400 uppercase tracking-wider">— Unposted</span></h3>
-              {sortedReceipts.length === 0 && unpostedSettlements.length === 0 ? (
-                <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
-                  No unposted receipts.
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-sm">
-                    <thead>
-                      <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                        <th className="p-3 pl-4">Date</th>
-                        <th className="p-3">Account</th>
-                        <th className="p-3 text-center">Mode</th>
-                        <th className="p-3 text-right">Amount</th>
-                        <th className="p-3 text-center">Type</th>
-                        <th className="p-3 text-center">Status</th>
-                        <th className="p-3 text-center" style={{ width: 50 }} />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sortedReceipts.map(r => (
-                        <tr
-                          key={r.receipt_id}
-                          onClick={() => loadReceiptRow(r)}
-                          className="border-b hover:bg-slate-50/50 cursor-pointer"
-                          style={{ borderColor: 'var(--border-table)' }}
-                        >
-                          <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(r.receipt_date)}</td>
-                          <td className="p-3 font-semibold text-slate-900">{r.account_name || accountName(r.ba_id)}</td>
-                          <td className="p-3 text-center text-xs text-slate-500">{r.payment_mode}</td>
-                          <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
-                          <td className="p-3 text-center text-[10px] font-bold uppercase text-slate-500">Receipt</td>
-                          <td className="p-3 text-center">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
-                              r.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                            }`}>
-                              {r.status}
-                            </span>
-                          </td>
-                          <td className="p-3 text-center">
-                            {r.status !== 'CONFIRMED' && (
-                              <button
-                                type="button"
-                                onClick={e => { e.stopPropagation(); setDeleteTarget(r); }}
-                                title="Delete"
-                                className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
-                              >
-                                <Trash2 size={15} />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                      {/* Endorsed entries live in `settlements`, not `receipts`, but they were
-                          entered here so they belong in the same list — the Type column is what
-                          tells them apart. */}
-                      {unpostedSettlements.map(st => (
-                        <tr
-                          key={`st-${st.settlement_id}`}
-                          onClick={() => loadSettlementRow(st)}
-                          className="border-b hover:bg-slate-50/50 cursor-pointer"
-                          style={{ borderColor: 'var(--border-table)' }}
-                        >
-                          <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(st.settlement_date)}</td>
-                          <td className="p-3 font-semibold text-slate-900">
-                            {st.from_name || accountName(st.from_ba_id)}
-                            <span className="text-slate-400 font-normal"> → {st.to_name || accountName(st.to_ba_id)}</span>
-                          </td>
-                          <td className="p-3 text-center text-xs text-slate-500">{st.payment_mode || '-'}</td>
-                          <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(st.amount)}</td>
-                          <td className="p-3 text-center text-[10px] font-bold uppercase text-amber-700">Endorsed</td>
-                          <td className="p-3 text-center">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
-                              st.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                            }`}>
-                              {st.status}
-                            </span>
-                          </td>
-                          <td className="p-3" />
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
                 </div>
               )}
             </div>

@@ -32,15 +32,8 @@ export default function ExpensesPage() {
   const [banks, setBanks] = useState<BankAccountRow[]>([]);
   const [cheques, setCheques] = useState<ChequeRow[]>([]);
   const [allocationsByReceipt, setAllocationsByReceipt] = useState<Record<number, ChequeAllocationRow[]>>({});
-  const [expenseRows, setExpenseRows] = useState<ExpenseRow[]>([]);
   const [drafts, setDrafts] = useState<DraftExpenseRow[]>([]);
   const [lookupError, setLookupError] = useState('');
-
-  const refreshExpenses = useCallback(async () => {
-    const res = await api.expenses.list({});
-    if (res.ok) setExpenseRows(res.data);
-    else setLookupError('Failed to load expenses: ' + res.error.message);
-  }, []);
 
   const refreshDrafts = useCallback(async () => {
     const res = await api.draftExpenses.list({});
@@ -75,10 +68,9 @@ export default function ExpensesPage() {
       if (bk.ok) setBanks(bk.data); else failures.push(bk.error.message);
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
-    refreshExpenses();
     refreshDrafts();
     refreshCheques();
-  }, [refreshExpenses, refreshDrafts, refreshCheques]);
+  }, [refreshDrafts, refreshCheques]);
 
   // ── Real-expense form (mirrors ReceiptsPage.tsx's mode structure) ──
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
@@ -96,7 +88,6 @@ export default function ExpensesPage() {
     setDeleteTarget(null);
     if (!res.ok) return fail('Failed to delete: ' + res.error.message);
     flash('Expense deleted.');
-    refreshExpenses();
   };
   // Bumped after anything that posts, so the balance panel re-reads instead of showing a stale figure.
   const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
@@ -359,7 +350,6 @@ export default function ExpensesPage() {
         : paidVendor ? `Payment to ${paidVendor} added to the voucher.`
         : 'Entry added to the voucher.'
     );
-    refreshExpenses();
     setBalanceRefreshKey(k => k + 1);
     refreshCheques();
   };
@@ -377,7 +367,6 @@ export default function ExpensesPage() {
     if (!res.ok) { fail('Failed to post voucher: ' + res.error.message); return; }
     setVoucherResult(res.data);
     setVoucher(res.data.voucher);
-    refreshExpenses();
     setBalanceRefreshKey(k => k + 1);
     // A CHEQUE_ENDORSED line allocates against a received cheque when it posts, so the endorsement
     // picker has to re-read or it keeps offering value that is already spent.
@@ -399,7 +388,6 @@ export default function ExpensesPage() {
     if (!res.ok) { fail('Failed to unpost voucher: ' + res.error.message); return; }
     setVoucherResult(res.data);
     setVoucher(res.data.voucher);
-    refreshExpenses();
     setBalanceRefreshKey(k => k + 1);
     refreshCheques(); // unposting releases any cheque allocation the lines held
     if (res.data.failed.length === 0) flash(`Voucher ${voucher.voucher_no} unposted.`);
@@ -436,39 +424,6 @@ export default function ExpensesPage() {
     setRemarks(line.remarks || '');
     setErrorMsg('');
     focusFirstEntryField();
-  };
-
-  const loadExpenseRow = async (rowIn: ExpenseRow) => {
-    // list() rows never carry cheque_no/cheque_status (only get()'s join does) — re-fetch
-    // full detail whenever a CHEQUE_ENDORSED row is opened for view/edit.
-    let row = rowIn;
-    if (row.payment_mode === 'CHEQUE_ENDORSED' && row.cheque_no === undefined) {
-      const res = await api.expenses.get(row.expense_id);
-      if (!res.ok) { fail('Failed to load expense: ' + res.error.message); return; }
-      row = res.data;
-    }
-
-    setExpenseId(row.expense_id);
-    setDate(row.expense_date.slice(0, 10));
-    setBaId(String(row.ba_id));
-    setAmount(row.amount);
-    setPaymentMode(row.payment_mode);
-    setBankId(row.bank_id != null ? String(row.bank_id) : '');
-    setChequeId(row.cheque_id != null ? String(row.cheque_id) : '');
-    setIssuedChequeNo(row.issued_cheque_no || '');
-    setIssuedChequeDate(row.issued_cheque_date ? row.issued_cheque_date.slice(0, 10) : '');
-    setDetails(row.details || '');
-    setRemarks(row.remarks || '');
-    setLoadedDraftId(null);
-    setSelectedDraftPick('');
-    setErrorMsg('');
-    setMode('view');
-
-    // PN-01: opening an expense from the records list also opens the voucher it belongs to, so its
-    // sibling entries, the per-mode totals and the voucher's Post/Un Post are all on screen.
-    if (row.voucher_id != null) await refreshVoucher(row.voucher_id);
-    else setVoucher(null);
-    setVoucherResult(null);
   };
 
   // PN-01: the per-expense handlePost/handleUnpost that used to live here are gone — posting is a
@@ -511,17 +466,8 @@ export default function ExpensesPage() {
     setSelectedDraftPick('');
     flash('Draft confirmed and posted as an expense.');
     refreshDrafts();
-    refreshExpenses();
     refreshCheques();
   };
-
-  // Recorded Expenses (below) shows only what's still awaiting posting — a CONFIRMED expense has
-  // already done its job and belongs in the reports/ledger, not in a list whose whole point was
-  // "here's what still needs attention." Mirrors the identical fix on ReceiptsPage.
-  const sortedExpenses = useMemo(
-    () => [...expenseRows].filter(r => r.status !== 'CONFIRMED').sort((a, b) => b.expense_date.localeCompare(a.expense_date)),
-    [expenseRows]
-  );
 
   const accountName = useCallback((id: number) => {
     const ba = businessAccounts.find(b => b.ba_id === id);
@@ -1074,66 +1020,6 @@ export default function ExpensesPage() {
                       </button>
                     </div>
                   )}
-                </div>
-              )}
-            </div>
-
-            {/* Recorded Expenses — unposted only now, same as Recorded Receipts: a CONFIRMED
-                expense has already done its job and belongs in the reports/ledger, not here. */}
-            <div className="card-white p-6 mt-8 bg-white border border-slate-200 rounded-xl shadow-sm">
-              <h3 className="font-lora font-semibold text-lg text-slate-800 mb-4">Recorded Expenses <span className="text-xs font-normal text-slate-400 uppercase tracking-wider">— Unposted</span></h3>
-              {sortedExpenses.length === 0 ? (
-                <div className="text-center p-8 text-slate-400 border border-dashed rounded-xl">
-                  No unposted expenses.
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-sm">
-                    <thead>
-                      <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                        <th className="p-3 pl-4">Date</th>
-                        <th className="p-3">Account</th>
-                        <th className="p-3 text-center">Mode</th>
-                        <th className="p-3 text-right">Amount</th>
-                        <th className="p-3 text-center">Status</th>
-                        <th className="p-3 text-center" style={{ width: 50 }} />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sortedExpenses.map(r => (
-                        <tr
-                          key={r.expense_id}
-                          onClick={() => loadExpenseRow(r)}
-                          className="border-b hover:bg-slate-50/50 cursor-pointer"
-                          style={{ borderColor: 'var(--border-table)' }}
-                        >
-                          <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(r.expense_date)}</td>
-                          <td className="p-3 font-semibold text-slate-900">{r.ba_name || accountName(r.ba_id)}</td>
-                          <td className="p-3 text-center text-xs text-slate-500">{r.payment_mode}</td>
-                          <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
-                          <td className="p-3 text-center">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
-                              r.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                            }`}>
-                              {r.status}
-                            </span>
-                          </td>
-                          <td className="p-3 text-center">
-                            {r.status !== 'CONFIRMED' && (
-                              <button
-                                type="button"
-                                onClick={e => { e.stopPropagation(); setDeleteTarget(r); }}
-                                title="Delete"
-                                className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
-                              >
-                                <Trash2 size={15} />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
                 </div>
               )}
             </div>
