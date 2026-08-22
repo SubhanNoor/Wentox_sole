@@ -40,6 +40,15 @@ module.exports = function register() {
   }));
 
   // CHEQUE_ENDORSED is rejected here (USE_CHEQUE_REVERSAL) — see expenses.service.js#unpost().
+  // "Unpost" now moves the expense back to draft_expenses — the real table strictly never holds an
+  // unposted document. Every guard expenses:unpost applies still applies: CHEQUE_ENDORSED is still
+  // refused (USE_CHEQUE_REVERSAL — bounce/return the cheque itself), and a CHEQUE_ISSUED cheque
+  // that has already bounced/been returned is still refused (ISSUED_CHEQUE_TERMINAL).
+  ipcMain.handle('expenses:unconfirm', wrap((payload) => {
+    const session = requireSession();
+    return service.unconfirm(payload.id, session);
+  }));
+
   ipcMain.handle('expenses:unpost', wrap((payload) => {
     const session = requireSession();
     return service.unpost(payload.id, session);

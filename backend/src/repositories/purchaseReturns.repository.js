@@ -157,6 +157,13 @@ async function deleteLedgerAndStock(transaction, returnId) {
   );
 }
 
+// Deletes the real return row itself (used by unconfirm(), after deleteItems/deleteLedgerAndStock
+// have already cleared its dependents) — mirrors purchases.repository.js#deletePurchase.
+async function deleteReturn(transaction, returnId) {
+  const request = requestWithParams(transaction, { returnId: { type: sql.Int, value: returnId } });
+  await request.query('DELETE FROM dbo.purchase_returns WHERE return_id = @returnId');
+}
+
 async function list(filters = {}) {
   const conditions = [];
   const params = {};
@@ -174,15 +181,22 @@ async function list(filters = {}) {
     params.dateTo = { type: sql.Date, value: filters.date_to };
   }
 
+  // is_posted: same fix as purchases.repository.js#list() — plain SELECT * never computed this
+  // before, despite PurchaseReturnRow.is_posted being a required field, so callers listing a
+  // vendor's/account's RETURN HISTORY (e.g. PurchaseReturnPage's "Recorded Purchase Returns" tab)
+  // could never actually filter to posted-only.
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT * FROM dbo.purchase_returns ${where} ORDER BY return_date DESC, return_id DESC`,
+    `SELECT pr.*, CASE WHEN EXISTS (
+       SELECT 1 FROM dbo.ledger_entries le WHERE le.source_type = 'PURCHASE_RETURN' AND le.source_id = pr.return_id
+     ) THEN 1 ELSE 0 END AS is_posted
+     FROM dbo.purchase_returns pr ${where} ORDER BY return_date DESC, return_id DESC`,
     params,
   );
-  return result.recordset;
+  return result.recordset.map((r) => ({ ...r, is_posted: r.is_posted === 1 }));
 }
 
 module.exports = {
   insert, insertItems, findById, isPosted, insertLedgerEntries, insertVendorStockMovements,
-  deleteItems, updateHeader, deleteLedgerAndStock, list,
+  deleteItems, updateHeader, deleteLedgerAndStock, deleteReturn, list,
 };

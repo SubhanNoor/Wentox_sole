@@ -20,16 +20,21 @@ async function insert(transaction, receipt) {
     // RJ-03: the voucher this entry belongs to. Nullable in the column so migration 022's backfill
     // could populate it, but every line written through here carries one.
     voucherId: { type: sql.Int, value: receipt.voucher_id ?? null },
+    // Carried across from the draft by draftReceipts.service#confirm() so a line that gets posted
+    // keeps its original position in its voucher's entry order rather than jumping to the end
+    // (listLines orders the posted+unposted halves together by created_at). Defaults to now for
+    // every other caller.
+    createdAt: { type: sql.DateTime2, value: receipt.created_at ?? null },
   });
   const result = await request.query(`
     INSERT INTO dbo.receipts (
       receipt_date, ba_id, amount, commission, payment_mode, details, bank_id, remarks,
-      status, created_by, voucher_id
+      status, created_by, voucher_id, created_at
     )
     OUTPUT inserted.receipt_id
     VALUES (
       @receiptDate, @baId, @amount, @commission, @paymentMode, @details, @bankId, @remarks,
-      'DRAFT', @createdBy, @voucherId
+      'DRAFT', @createdBy, @voucherId, ISNULL(@createdAt, SYSUTCDATETIME())
     )
   `);
   return result.recordset[0].receipt_id;

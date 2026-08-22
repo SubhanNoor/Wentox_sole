@@ -90,6 +90,58 @@ export interface SaleBillListFilters {
   range?: 'weekly' | 'monthly' | 'overall';
 }
 
+/** Every saved-unposted Sale Bill now lives here, not just genuinely incomplete entries — the
+ *  real `sale_bills` table strictly never holds an unposted document. Its own key is `draft_id`,
+ *  NOT `bill_id` — a distinct row space from SaleBillRow, unrelated ids once confirmed. No
+ *  `due_date`/`is_posted` columns exist on the draft table (due_date only applies once a real
+ *  bill exists; a draft is never posted by definition). */
+export interface DraftSaleBillItemRow {
+  variant_id: number;
+  cartons: number;
+  pairs: number;
+  rate: number;
+  discount_percent: number;
+  discount_value: number;
+  value: number;
+  line_no: number;
+  color?: string;
+  article_code?: string;
+  article_name?: string;
+}
+
+export interface DraftSaleBillRow {
+  draft_id: number;
+  bill_date: string;
+  store_id: number | null;
+  customer_id: number;
+  sub_customer_id: number | null;
+  main_ac_id: number | null;
+  delivery_type: 'SAME' | 'CUSTOM';
+  delivery_address: string | null;
+  bill_no: string | null;
+  gp_no: string | null;
+  bilty_no: string | null;
+  adda_id: number | null;
+  remarks: string | null;
+  invoice_discount: number;
+  total_cartons: number;
+  total_pairs: number;
+  gross_value: number;
+  net_value: number;
+  created_by: number | null;
+  // Only populated by get()/create()/update() (findById's join) — never by list(). confirm()
+  // returns a real SaleBillRow instead (the draft no longer exists once confirmed).
+  items?: DraftSaleBillItemRow[];
+}
+
+/** confirmAll()'s per-draft result — same shape as PostAllResult but keyed on draft_id, since
+ *  that's the id being acted on (the bill_id it becomes only exists once confirm() succeeds). */
+export interface ConfirmAllResult {
+  posted: { draft_id: number; bill_no: string | null; net_value: number }[];
+  failed: { draft_id: number; bill_no: string | null; message: string; code: string }[];
+  attempted: number;
+}
+
 export interface SaleReturnItemRow {
   item_id: number;
   variant_id: number;
@@ -153,6 +205,45 @@ export interface SaleReturnListFilters {
   date_from?: string;
   date_to?: string;
   range?: 'weekly' | 'monthly' | 'overall';
+}
+
+export interface DraftSaleReturnItemRow {
+  variant_id: number;
+  cartons: number;
+  pairs: number;
+  rate: number;
+  discount_percent: number;
+  discount_value: number;
+  value: number;
+  line_no: number;
+  color?: string;
+  article_code?: string;
+  article_name?: string;
+}
+
+/** Every saved-unposted Sale Return now lives here — same architecture change as
+ *  DraftSaleBillRow. Own key is `draft_id`, not `return_id`. No `is_posted` column (a draft is
+ *  never posted by definition). */
+export interface DraftSaleReturnRow {
+  draft_id: number;
+  return_date: string;
+  store_id: number | null;
+  customer_id: number;
+  sub_customer_id: number | null;
+  bill_no: string | null;
+  gp_no: string | null;
+  bilty_no: string | null;
+  adda_id: number | null;
+  remarks: string | null;
+  invoice_discount: number;
+  total_cartons: number;
+  total_pairs: number;
+  gross_value: number;
+  net_value: number;
+  created_by: number | null;
+  // Only populated by get()/create()/update() — never by list(). confirm() returns a real
+  // SaleReturnRow instead (the draft no longer exists once confirmed).
+  items?: DraftSaleReturnItemRow[];
 }
 
 export interface CustomerRow {
@@ -441,6 +532,34 @@ export interface PurchaseListFilters {
   range?: 'weekly' | 'monthly' | 'overall';
 }
 
+export interface DraftPurchaseItemRow {
+  material_id: number;
+  material_name?: string;
+  unit: string;
+  quantity: number;
+  weight: number | null;
+  price_per_unit: number;
+  total_price: number;
+  line_no: number;
+}
+
+/** Every saved-unposted Purchase now lives here — same architecture change as DraftSaleBillRow.
+ *  Own key is `draft_id`, not `purchase_id`. No `is_posted` column (never posted by definition).
+ *  Unlike Sale Bill/Return, a draft purchase has zero stock effect either way (see
+ *  draftPurchases.service.js), so there's nothing stock-related to normalize here. */
+export interface DraftPurchaseRow {
+  draft_id: number;
+  purchase_date: string;
+  vendor_id: number;
+  bill_no: string | null;
+  remarks: string | null;
+  total_value: number;
+  created_by: number | null;
+  // Only populated by get()/create()/update() — never by list(). confirm() returns a real
+  // PurchaseRow instead.
+  items?: DraftPurchaseItemRow[];
+}
+
 export interface PurchaseReturnItemRow {
   item_id: number;
   material_id: number;
@@ -479,6 +598,34 @@ export interface PurchaseReturnCreateInput {
   bill_no?: string;
   remarks?: string;
   items: PurchaseReturnItemInput[];
+}
+
+export interface DraftPurchaseReturnItemRow {
+  material_id: number;
+  material_name?: string;
+  unit: string;
+  quantity: number;
+  weight: number | null;
+  price_per_unit: number;
+  total_price: number;
+  line_no: number;
+}
+
+/** Every saved-unposted Purchase Return now lives here — same architecture change as
+ *  DraftPurchaseRow. Own key is `draft_id`, not `return_id`. No `is_posted` column (never posted
+ *  by definition). Like draft purchases, a draft purchase return has zero stock effect either way
+ *  (see draftPurchaseReturns.service.js), so there's nothing stock-related to normalize here. */
+export interface DraftPurchaseReturnRow {
+  draft_id: number;
+  return_date: string;
+  vendor_id: number;
+  bill_no: string | null;
+  remarks: string | null;
+  total_value: number;
+  created_by: number | null;
+  // Only populated by get()/create()/update() — never by list(). confirm() returns a real
+  // PurchaseReturnRow instead.
+  items?: DraftPurchaseReturnItemRow[];
 }
 
 /** SB-06: a sale bill awaiting posting, for the Post All confirmation list. */
@@ -736,9 +883,24 @@ export interface ReceiptVoucherRow {
   total_cheque: number;
   total_online: number;
   /** Present on get(), absent on list(). list() carries line_count/confirmed_lines instead. */
-  lines?: ReceiptRow[];
+  lines?: ReceiptVoucherLineRow[];
   line_count?: number;
   confirmed_lines?: number;
+}
+
+/** RJ-03: one line of a receipt voucher. A voucher's lines live in two tables now — posted ones in
+ *  dbo.receipts, unposted ones in dbo.draft_receipts — and listLines unions them, so exactly one of
+ *  `receipt_id` / `draft_id` is set per line and names which table (and which id) the per-line
+ *  actions must address. `status` is derived from which side it came from, not stored. */
+export interface ReceiptVoucherLineRow extends Omit<ReceiptRow, 'receipt_id'> {
+  receipt_id: number | null;
+  draft_id: number | null;
+}
+
+/** PN-01: one line of an expense voucher — same two-table union as ReceiptVoucherLineRow. */
+export interface ExpenseVoucherLineRow extends Omit<ExpenseRow, 'expense_id'> {
+  expense_id: number | null;
+  draft_id: number | null;
 }
 
 /** RJ-03/PN-01: the outcome of posting or unposting a whole voucher. Each line acts in its own
@@ -762,12 +924,21 @@ export interface DraftReceiptRow {
   customer_id: number | null;
   amount: number;
   commission: number;
-  payment_mode: 'CASH' | 'ONLINE';
+  // All three modes now — migration 024 gave draft_receipts its own cheque columns, so a CHEQUE
+  // receipt is draftable like any other. The real dbo.cheques row is created at confirm() time.
+  payment_mode: 'CASH' | 'ONLINE' | 'CHEQUE';
   details: string | null;
   bank_id: number | null;
   remarks: string | null;
   customer_name?: string;
   bank_name?: string;
+  account_code?: string;
+  // Held directly on the draft (no cheques row exists until it is posted), hence no cheque_status.
+  cheque_no?: string | null;
+  cheque_date?: string | null;
+  cheque_received_date?: string | null;
+  /** RJ-03: the voucher this draft line belongs to (migration 024). */
+  voucher_id?: number | null;
 }
 
 export interface ReceiptCreateInput {
@@ -1024,7 +1195,7 @@ export interface ExpenseVoucherRow {
   total_cheque: number;
   total_online: number;
   /** Present on get(), absent on list(). list() carries line_count/confirmed_lines instead. */
-  lines?: ExpenseRow[];
+  lines?: ExpenseVoucherLineRow[];
   line_count?: number;
   confirmed_lines?: number;
 }
@@ -1091,6 +1262,14 @@ export interface DraftExpenseRow {
   remarks: string | null;
   ba_name?: string;
   bank_name?: string;
+  account_name?: string;
+  account_code?: string;
+  endorsed_cheque_no?: string;
+  /** PN-01: the voucher this draft line belongs to (migration 024). */
+  voucher_id?: number | null;
+  /** Set by a confirm() attempt that created a real expense but failed before posting it — the
+   *  draft is the only pointer back to it, so edit/delete are blocked while it is set. */
+  pending_expense_id?: number | null;
 }
 
 // ── Module 4e: Payroll (Employees & Stages, Wage Run, Salary Run) ──
@@ -1569,6 +1748,7 @@ declare global {
         update: (payload: { id: number; password?: string } & Partial<SaleBillCreateInput>) => Promise<ApiResult<SaleBillRow>>;
         post: (payload: { id: number; password?: string }) => Promise<ApiResult<SaleBillRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<SaleBillRow>>;
+        unconfirm: (payload: { id: number }) => Promise<ApiResult<DraftSaleBillRow>>;
         remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         biltySearch: (payload?: SaleBillListFilters) => Promise<ApiResult<SaleBillRow[]>>;
         updateBilty: (payload: { id: number; bilty_no: string; adda_id: number }) => Promise<ApiResult<SaleBillRow>>;
@@ -1583,20 +1763,25 @@ declare global {
         update: (payload: { id: number; password?: string } & Partial<SaleReturnCreateInput>) => Promise<ApiResult<SaleReturnRow>>;
         post: (payload: { id: number; password?: string }) => Promise<ApiResult<SaleReturnRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<SaleReturnRow>>;
+        unconfirm: (payload: { id: number }) => Promise<ApiResult<DraftSaleReturnRow>>;
       };
       draftSaleBills: {
-        create: (payload: Partial<SaleBillCreateInput>) => Promise<ApiResult<SaleBillRow>>;
-        list: (payload?: SaleBillListFilters) => Promise<ApiResult<SaleBillRow[]>>;
-        get: (payload: { id: number }) => Promise<ApiResult<SaleBillRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        create: (payload: Partial<SaleBillCreateInput>) => Promise<ApiResult<DraftSaleBillRow>>;
+        list: (payload?: SaleBillListFilters) => Promise<ApiResult<DraftSaleBillRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<DraftSaleBillRow>>;
+        update: (payload: { id: number } & Partial<SaleBillCreateInput>) => Promise<ApiResult<DraftSaleBillRow>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         confirm: (payload: { id: number }) => Promise<ApiResult<SaleBillRow>>;
+        confirmAll: (payload?: { ids?: number[] }) => Promise<ApiResult<ConfirmAllResult>>;
       };
       draftSaleReturns: {
-        create: (payload: Partial<SaleReturnCreateInput>) => Promise<ApiResult<SaleReturnRow>>;
-        list: (payload?: SaleReturnListFilters) => Promise<ApiResult<SaleReturnRow[]>>;
-        get: (payload: { id: number }) => Promise<ApiResult<SaleReturnRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        create: (payload: Partial<SaleReturnCreateInput>) => Promise<ApiResult<DraftSaleReturnRow>>;
+        list: (payload?: SaleReturnListFilters) => Promise<ApiResult<DraftSaleReturnRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<DraftSaleReturnRow>>;
+        update: (payload: { id: number } & Partial<SaleReturnCreateInput>) => Promise<ApiResult<DraftSaleReturnRow>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         confirm: (payload: { id: number }) => Promise<ApiResult<SaleReturnRow>>;
+        confirmAll: (payload?: { ids?: number[] }) => Promise<ApiResult<ConfirmAllResult>>;
       };
       customers: {
         list: (payload?: { includeInactive?: boolean; region_id?: number; city_id?: number; search?: string }) => Promise<ApiResult<CustomerRow[]>>;
@@ -1687,6 +1872,7 @@ declare global {
         update: (payload: { id: number } & Partial<PurchaseCreateInput>) => Promise<ApiResult<PurchaseRow>>;
         post: (payload: { id: number }) => Promise<ApiResult<PurchaseRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<PurchaseRow>>;
+        unconfirm: (payload: { id: number }) => Promise<ApiResult<DraftPurchaseRow>>;
         lastPurchasedRate: (payload: { vendor_id: number; material_name: string }) => Promise<ApiResult<LastPurchasedRate | null>>;
         listUnposted: () => Promise<ApiResult<UnpostedPurchaseRow[]>>;
         postAll: (payload?: { ids?: number[] }) => Promise<ApiResult<PostAllResult<'purchase_id'>>>;
@@ -1698,20 +1884,25 @@ declare global {
         update: (payload: { id: number } & Partial<PurchaseReturnCreateInput>) => Promise<ApiResult<PurchaseReturnRow>>;
         post: (payload: { id: number }) => Promise<ApiResult<PurchaseReturnRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<PurchaseReturnRow>>;
+        unconfirm: (payload: { id: number }) => Promise<ApiResult<DraftPurchaseReturnRow>>;
       };
       draftPurchases: {
-        create: (payload: Partial<PurchaseCreateInput>) => Promise<ApiResult<PurchaseRow>>;
-        list: (payload?: PurchaseListFilters) => Promise<ApiResult<PurchaseRow[]>>;
-        get: (payload: { id: number }) => Promise<ApiResult<PurchaseRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        create: (payload: Partial<PurchaseCreateInput>) => Promise<ApiResult<DraftPurchaseRow>>;
+        list: (payload?: PurchaseListFilters) => Promise<ApiResult<DraftPurchaseRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<DraftPurchaseRow>>;
+        update: (payload: { id: number } & Partial<PurchaseCreateInput>) => Promise<ApiResult<DraftPurchaseRow>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         confirm: (payload: { id: number }) => Promise<ApiResult<PurchaseRow>>;
+        confirmAll: (payload?: { ids?: number[] }) => Promise<ApiResult<ConfirmAllResult>>;
       };
       draftPurchaseReturns: {
-        create: (payload: Partial<PurchaseReturnCreateInput>) => Promise<ApiResult<PurchaseReturnRow>>;
-        list: (payload?: PurchaseReturnListFilters) => Promise<ApiResult<PurchaseReturnRow[]>>;
-        get: (payload: { id: number }) => Promise<ApiResult<PurchaseReturnRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        create: (payload: Partial<PurchaseReturnCreateInput>) => Promise<ApiResult<DraftPurchaseReturnRow>>;
+        list: (payload?: PurchaseReturnListFilters) => Promise<ApiResult<DraftPurchaseReturnRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<DraftPurchaseReturnRow>>;
+        update: (payload: { id: number } & Partial<PurchaseReturnCreateInput>) => Promise<ApiResult<DraftPurchaseReturnRow>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         confirm: (payload: { id: number }) => Promise<ApiResult<PurchaseReturnRow>>;
+        confirmAll: (payload?: { ids?: number[] }) => Promise<ApiResult<ConfirmAllResult>>;
       };
       bankAccounts: {
         list: (payload?: { includeInactive?: boolean }) => Promise<ApiResult<BankAccountRow[]>>;
@@ -1766,6 +1957,7 @@ declare global {
         remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         post: (payload: { id: number }) => Promise<ApiResult<ReceiptRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<ReceiptRow>>;
+        unconfirm: (payload: { id: number }) => Promise<ApiResult<DraftReceiptRow>>;
       };
       receiptVouchers: {
         list: (payload?: { date_from?: string; date_to?: string; voucher_no?: number }) => Promise<ApiResult<ReceiptVoucherRow[]>>;
@@ -1780,7 +1972,8 @@ declare global {
         list: (payload?: ReceiptListFilters) => Promise<ApiResult<DraftReceiptRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<DraftReceiptRow>>;
         create: (payload: Partial<ReceiptCreateInput>) => Promise<ApiResult<DraftReceiptRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        update: (payload: { id: number } & Partial<ReceiptCreateInput>) => Promise<ApiResult<DraftReceiptRow>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         confirm: (payload: { id: number }) => Promise<ApiResult<ReceiptRow>>;
       };
       // Sub-actions with hyphens in their name (e.g. 'endorse-to-vendor') bypass camelToKebab() in
@@ -1837,6 +2030,7 @@ declare global {
         remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         post: (payload: { id: number }) => Promise<ApiResult<ExpenseRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<ExpenseRow>>;
+        unconfirm: (payload: { id: number }) => Promise<ApiResult<DraftExpenseRow>>;
         bounceIssuedCheque: (payload: { id: number; bounced_date: string }) => Promise<ApiResult<ExpenseRow>>;
         returnIssuedCheque: (payload: { id: number; returned_date: string; reason?: string }) => Promise<ApiResult<ExpenseRow>>;
         returnableIssuedCheques: (payload?: { date_from?: string; date_to?: string }) => Promise<ApiResult<IssuedChequeRow[]>>;
@@ -1855,7 +2049,8 @@ declare global {
         list: (payload?: ExpenseListFilters) => Promise<ApiResult<DraftExpenseRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<DraftExpenseRow>>;
         create: (payload: Partial<ExpenseCreateInput>) => Promise<ApiResult<DraftExpenseRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        update: (payload: { id: number } & Partial<ExpenseCreateInput>) => Promise<ApiResult<DraftExpenseRow>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         confirm: (payload: { id: number }) => Promise<ApiResult<ExpenseRow>>;
       };
       zoom: {
@@ -2085,6 +2280,12 @@ function normalizeBillRow<T extends { bill_date: string; due_date: string | null
   return { ...row, bill_date: normalizeDate(row.bill_date), due_date: row.due_date != null ? normalizeDate(row.due_date) : row.due_date };
 }
 
+// draft_sale_bills has no due_date column (that only applies once a real bill exists) — a
+// separate normalizer rather than reusing normalizeBillRow, which requires one.
+function normalizeDraftBillRow<T extends { bill_date: string }>(row: T): T {
+  return { ...row, bill_date: normalizeDate(row.bill_date) };
+}
+
 function normalizeReturnRow<T extends { return_date: string }>(row: T): T {
   return { ...row, return_date: normalizeDate(row.return_date) };
 }
@@ -2115,6 +2316,10 @@ export const saleBills = {
     window.api ? window.api.saleBills.post({ id, password }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
     window.api ? window.api.saleBills.unpost({ id }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
+  // "Unpost" now moves the bill back to draft_sale_bills — the real table strictly never holds an
+  // unposted document. Resolves the new DRAFT row, not the same bill still sitting here.
+  unconfirm: (id: number) =>
+    window.api ? window.api.saleBills.unconfirm({ id }).then(r => mapResult(r, normalizeDraftBillRow)) : Promise.resolve(NO_BRIDGE),
   remove: (id: number, password: string) =>
     window.api ? window.api.saleBills.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   biltySearch: (payload?: SaleBillListFilters) =>
@@ -2144,19 +2349,29 @@ export const saleReturns = {
   post: (id: number, password?: string) =>
     window.api ? window.api.saleReturns.post({ id, password }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
-    window.api ? window.api.saleReturns.unpost({ id }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.saleReturns.unpost({ id }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE),
+  // "Unpost" now moves the return back to draft_sale_returns — resolves the new DRAFT row.
+  unconfirm: (id: number) =>
+    window.api ? window.api.saleReturns.unconfirm({ id }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE)
 };
 
 export const draftSaleBills = {
   create: (payload: Partial<SaleBillCreateInput>) =>
-    window.api ? window.api.draftSaleBills.create(payload).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
+    window.api ? window.api.draftSaleBills.create(payload).then(r => mapResult(r, normalizeDraftBillRow)) : Promise.resolve(NO_BRIDGE),
   list: (payload?: SaleBillListFilters) =>
-    window.api ? window.api.draftSaleBills.list(payload).then(r => mapResult(r, rows => rows.map(normalizeBillRow))) : Promise.resolve(NO_BRIDGE),
+    window.api ? window.api.draftSaleBills.list(payload).then(r => mapResult(r, rows => rows.map(normalizeDraftBillRow))) : Promise.resolve(NO_BRIDGE),
   get: (id: number) =>
-    window.api ? window.api.draftSaleBills.get({ id }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.draftSaleBills.remove({ id }) : Promise.resolve(NO_BRIDGE),
+    window.api ? window.api.draftSaleBills.get({ id }).then(r => mapResult(r, normalizeDraftBillRow)) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: Partial<SaleBillCreateInput>) =>
+    window.api ? window.api.draftSaleBills.update({ id, ...payload }).then(r => mapResult(r, normalizeDraftBillRow)) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.draftSaleBills.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   confirm: (id: number) =>
-    window.api ? window.api.draftSaleBills.confirm({ id }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.draftSaleBills.confirm({ id }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
+  // Post All — every draft awaiting posting. Resolving ok does NOT mean everything posted — read
+  // `data.failed`, same contract as saleBills.postAll().
+  confirmAll: (ids?: number[]) =>
+    window.api ? window.api.draftSaleBills.confirmAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE)
 };
 
 export const draftSaleReturns = {
@@ -2166,9 +2381,14 @@ export const draftSaleReturns = {
     window.api ? window.api.draftSaleReturns.list(payload).then(r => mapResult(r, rows => rows.map(normalizeReturnRow))) : Promise.resolve(NO_BRIDGE),
   get: (id: number) =>
     window.api ? window.api.draftSaleReturns.get({ id }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.draftSaleReturns.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: Partial<SaleReturnCreateInput>) =>
+    window.api ? window.api.draftSaleReturns.update({ id, ...payload }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.draftSaleReturns.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   confirm: (id: number) =>
-    window.api ? window.api.draftSaleReturns.confirm({ id }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.draftSaleReturns.confirm({ id }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE),
+  confirmAll: (ids?: number[]) =>
+    window.api ? window.api.draftSaleReturns.confirmAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE)
 };
 
 // ── Read-only lookups Sale Bill/Return's own dropdowns need. Their Setup pages stay on demo
@@ -2351,6 +2571,9 @@ export const purchases = {
     window.api ? window.api.purchases.post({ id }).then(r => mapResult(r, normalizePurchaseRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
     window.api ? window.api.purchases.unpost({ id }).then(r => mapResult(r, normalizePurchaseRow)) : Promise.resolve(NO_BRIDGE),
+  // "Unpost" now moves the purchase back to draft_purchases — resolves the new DRAFT row.
+  unconfirm: (id: number) =>
+    window.api ? window.api.purchases.unconfirm({ id }).then(r => mapResult(r, normalizePurchaseRow)) : Promise.resolve(NO_BRIDGE),
   // PR-01: what this vendor was last paid for this material on a posted purchase. Keyed on the
   // material name because that is what the line holds before save. Null when there is no prior
   // posted purchase, in which case the caller leaves the line as the user typed it.
@@ -2376,7 +2599,9 @@ export const purchaseReturns = {
   post: (id: number) =>
     window.api ? window.api.purchaseReturns.post({ id }).then(r => mapResult(r, normalizePurchaseReturnRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
-    window.api ? window.api.purchaseReturns.unpost({ id }).then(r => mapResult(r, normalizePurchaseReturnRow)) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.purchaseReturns.unpost({ id }).then(r => mapResult(r, normalizePurchaseReturnRow)) : Promise.resolve(NO_BRIDGE),
+  unconfirm: (id: number) =>
+    window.api ? window.api.purchaseReturns.unconfirm({ id }).then(r => mapResult(r, normalizePurchaseReturnRow)) : Promise.resolve(NO_BRIDGE)
 };
 
 export const draftPurchases = {
@@ -2386,9 +2611,14 @@ export const draftPurchases = {
     window.api ? window.api.draftPurchases.list(payload).then(r => mapResult(r, rows => rows.map(normalizePurchaseRow))) : Promise.resolve(NO_BRIDGE),
   get: (id: number) =>
     window.api ? window.api.draftPurchases.get({ id }).then(r => mapResult(r, normalizePurchaseRow)) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.draftPurchases.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: Partial<PurchaseCreateInput>) =>
+    window.api ? window.api.draftPurchases.update({ id, ...payload }).then(r => mapResult(r, normalizePurchaseRow)) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.draftPurchases.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   confirm: (id: number) =>
-    window.api ? window.api.draftPurchases.confirm({ id }).then(r => mapResult(r, normalizePurchaseRow)) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.draftPurchases.confirm({ id }).then(r => mapResult(r, normalizePurchaseRow)) : Promise.resolve(NO_BRIDGE),
+  confirmAll: (ids?: number[]) =>
+    window.api ? window.api.draftPurchases.confirmAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE)
 };
 
 export const draftPurchaseReturns = {
@@ -2398,9 +2628,14 @@ export const draftPurchaseReturns = {
     window.api ? window.api.draftPurchaseReturns.list(payload).then(r => mapResult(r, rows => rows.map(normalizePurchaseReturnRow))) : Promise.resolve(NO_BRIDGE),
   get: (id: number) =>
     window.api ? window.api.draftPurchaseReturns.get({ id }).then(r => mapResult(r, normalizePurchaseReturnRow)) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.draftPurchaseReturns.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: Partial<PurchaseReturnCreateInput>) =>
+    window.api ? window.api.draftPurchaseReturns.update({ id, ...payload }).then(r => mapResult(r, normalizePurchaseReturnRow)) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.draftPurchaseReturns.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   confirm: (id: number) =>
-    window.api ? window.api.draftPurchaseReturns.confirm({ id }).then(r => mapResult(r, normalizePurchaseReturnRow)) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.draftPurchaseReturns.confirm({ id }).then(r => mapResult(r, normalizePurchaseReturnRow)) : Promise.resolve(NO_BRIDGE),
+  confirmAll: (ids?: number[]) =>
+    window.api ? window.api.draftPurchaseReturns.confirmAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE)
 };
 
 export async function listVendors(filters: VendorListFilters = {}): Promise<ApiResult<VendorRow[]>> {
@@ -2609,7 +2844,11 @@ export const receipts = {
   post: (id: number) =>
     window.api ? window.api.receipts.post({ id }).then(r => mapResult(r, normalizeReceiptRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
-    window.api ? window.api.receipts.unpost({ id }).then(r => mapResult(r, normalizeReceiptRow)) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.receipts.unpost({ id }).then(r => mapResult(r, normalizeReceiptRow)) : Promise.resolve(NO_BRIDGE),
+  // Moves the posted receipt back into draft_receipts and resolves the NEW draft — the id space
+  // changes, so callers must re-point at data.draft_id.
+  unconfirm: (id: number) =>
+    window.api ? window.api.receipts.unconfirm({ id }).then(r => mapResult(r, normalizeDraftReceiptRow)) : Promise.resolve(NO_BRIDGE)
 };
 
 // RJ-03: dates come back from SQL Server as full timestamps; normalise the header's own date and
@@ -2618,7 +2857,7 @@ function normalizeVoucher(row: ReceiptVoucherRow): ReceiptVoucherRow {
   return {
     ...row,
     voucher_date: normalizeDate(row.voucher_date),
-    lines: row.lines ? row.lines.map(normalizeReceiptRow) : undefined,
+    lines: row.lines ? row.lines.map(l => ({ ...l, receipt_date: normalizeDate(l.receipt_date) })) : undefined,
   };
 }
 
@@ -2651,7 +2890,10 @@ export const draftReceipts = {
     window.api ? window.api.draftReceipts.get({ id }).then(r => mapResult(r, normalizeDraftReceiptRow)) : Promise.resolve(NO_BRIDGE),
   create: (payload: Partial<ReceiptCreateInput>) =>
     window.api ? window.api.draftReceipts.create(payload).then(r => mapResult(r, normalizeDraftReceiptRow)) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.draftReceipts.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: Partial<ReceiptCreateInput>) =>
+    window.api ? window.api.draftReceipts.update({ id, ...payload }).then(r => mapResult(r, normalizeDraftReceiptRow)) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.draftReceipts.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   confirm: (id: number) =>
     window.api ? window.api.draftReceipts.confirm({ id }).then(r => mapResult(r, normalizeReceiptRow)) : Promise.resolve(NO_BRIDGE)
 };
@@ -2786,6 +3028,12 @@ export const expenses = {
     window.api ? window.api.expenses.post({ id }).then(r => mapResult(r, normalizeExpenseRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>
     window.api ? window.api.expenses.unpost({ id }).then(r => mapResult(r, normalizeExpenseRow)) : Promise.resolve(NO_BRIDGE),
+  // Moves the posted expense back into draft_expenses and resolves the NEW draft — the id space
+  // changes, so callers must re-point at data.draft_id. Refused for CHEQUE_ENDORSED
+  // (USE_CHEQUE_REVERSAL) and for a CHEQUE_ISSUED cheque that already bounced/returned, exactly
+  // as unpost() is.
+  unconfirm: (id: number) =>
+    window.api ? window.api.expenses.unconfirm({ id }).then(r => mapResult(r, normalizeDraftExpenseRow)) : Promise.resolve(NO_BRIDGE),
   // "Cheque Return" page's issued-cheque half — a cheque WE wrote from our own bank, as opposed
   // to cheques.endorsedAllocations()/reverseAllocation() which is for a cheque we RECEIVED and
   // endorsed onward. bounceIssuedCheque has no reason field (a bounce is just a bounce); returnIssuedCheque
@@ -2806,7 +3054,7 @@ function normalizeExpenseVoucher(row: ExpenseVoucherRow): ExpenseVoucherRow {
   return {
     ...row,
     voucher_date: normalizeDate(row.voucher_date),
-    lines: row.lines ? row.lines.map(normalizeExpenseRow) : undefined,
+    lines: row.lines ? row.lines.map(l => ({ ...l, expense_date: normalizeDate(l.expense_date) })) : undefined,
   };
 }
 
@@ -2834,7 +3082,10 @@ export const draftExpenses = {
     window.api ? window.api.draftExpenses.get({ id }).then(r => mapResult(r, normalizeDraftExpenseRow)) : Promise.resolve(NO_BRIDGE),
   create: (payload: Partial<ExpenseCreateInput>) =>
     window.api ? window.api.draftExpenses.create(payload).then(r => mapResult(r, normalizeDraftExpenseRow)) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.draftExpenses.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: Partial<ExpenseCreateInput>) =>
+    window.api ? window.api.draftExpenses.update({ id, ...payload }).then(r => mapResult(r, normalizeDraftExpenseRow)) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.draftExpenses.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   confirm: (id: number) =>
     window.api ? window.api.draftExpenses.confirm({ id }).then(r => mapResult(r, normalizeExpenseRow)) : Promise.resolve(NO_BRIDGE)
 };

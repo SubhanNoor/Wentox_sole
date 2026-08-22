@@ -208,6 +208,23 @@ async function deleteLedgerAndStock(transaction, returnId) {
   );
 }
 
+// Split for saleReturns.service.js#unconfirm() — same reasoning as saleBills.repository.js's
+// split: stock is now reserved/moved independently of the ledger under the draft-table model, so
+// they no longer share one lifecycle.
+async function deleteLedgerEntries(transaction, returnId) {
+  const request = requestWithParams(transaction, { returnId: { type: sql.Int, value: returnId } });
+  await request.query(
+    `DELETE FROM dbo.ledger_entries WHERE source_type = 'SALE_RETURN' AND source_id = @returnId`,
+  );
+}
+
+// Removing a real return entirely (only ever called on an unposted one — saleReturns.service.js#
+// unconfirm() deletes ledger/stock first, this table row last).
+async function deleteReturn(transaction, returnId) {
+  const request = requestWithParams(transaction, { returnId: { type: sql.Int, value: returnId } });
+  await request.query('DELETE FROM dbo.sale_returns WHERE return_id = @returnId');
+}
+
 async function list(filters = {}) {
   const conditions = [];
   const params = {};
@@ -243,5 +260,6 @@ async function list(filters = {}) {
 
 module.exports = {
   getVariantPackings, insert, insertItems, findById, isPosted, insertLedgerEntries,
-  insertStockMovements, deleteItems, updateHeader, deleteLedgerAndStock, list,
+  insertStockMovements, deleteItems, updateHeader, deleteLedgerAndStock, deleteLedgerEntries,
+  deleteReturn, list,
 };

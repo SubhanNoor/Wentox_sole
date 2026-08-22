@@ -9,6 +9,10 @@ const { withTransaction } = require('../db/pool');
 const { buildLine, buildTotals, validateItems } = require('./purchaseMath');
 const CODES = require('../constants/reservedAccounts');
 const { toISODate } = require('../utils/dates');
+// Repository, not service — draftPurchaseReturns.service.js already requires this service the
+// other way (its confirm() calls insertConfirmed()/postLedgerAndStock()), so requiring its
+// SERVICE back here would be circular. Same reasoning as purchases.service.js#unconfirm().
+const draftPurchaseReturnsRepository = require('../repositories/draftPurchaseReturns.repository');
 
 function validateHeader(payload) {
   if (!payload.vendor_id) throw ApiError.badRequest('vendor_id is required');
@@ -128,6 +132,50 @@ async function unpost(id) {
   return getById(id);
 }
 
+// Reverse of draftPurchaseReturns.service.js#confirm(): the real purchase_returns table now
+// strictly never holds an unposted document, mirroring purchases.service.js#unconfirm(). Draft
+// purchase returns have no stock effect (see draftPurchaseReturns.service.js#create()'s own
+// comment), so there's no reservation to hand off — deleteLedgerAndStock already removes both the
+// ledger and the vendor_stock_movements this return posted, in one call.
+async function unconfirm(id) {
+  const ret = await getById(id);
+  if (!ret.is_posted) {
+    throw ApiError.conflict('Return is not posted', 'NOT_POSTED');
+  }
+
+  const draftId = await withTransaction(async (transaction) => {
+    await repository.deleteLedgerAndStock(transaction, id);
+
+    const draft = {
+      return_date: ret.return_date,
+      vendor_id: ret.vendor_id,
+      bill_no: ret.bill_no,
+      remarks: ret.remarks,
+      total_value: ret.total_value,
+      created_by: ret.created_by,
+    };
+    const lines = ret.items.map((item) => ({
+      material_id: item.material_id,
+      material_name: item.material_name,
+      unit: item.unit,
+      quantity: item.quantity,
+      weight: item.weight,
+      price_per_unit: item.price_per_unit,
+      total_price: item.total_price,
+    }));
+
+    const newDraftId = await draftPurchaseReturnsRepository.insertDraft(transaction, draft);
+    await draftPurchaseReturnsRepository.insertDraftItems(transaction, newDraftId, lines);
+
+    await repository.deleteItems(transaction, id);
+    await repository.deleteReturn(transaction, id);
+
+    return newDraftId;
+  });
+
+  return draftPurchaseReturnsRepository.findById(draftId);
+}
+
 // Shared posting logic (schema §7 posting matrix, reverse of purchase): debit VENDOR BA / credit
 // PURCHASES chart account, negative PURCHASE_RETURN vendor-stock movement per item. Used by
 // purchase-returns:post and by draftPurchaseReturns.confirm.
@@ -197,5 +245,5 @@ async function getById(returnId) {
 }
 
 module.exports = {
-  create, list, getById, update, post, unpost, postLedgerAndStock, insertConfirmed,
+  create, list, getById, update, post, unpost, unconfirm, postLedgerAndStock, insertConfirmed,
 };

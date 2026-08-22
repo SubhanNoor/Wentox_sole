@@ -4295,3 +4295,393 @@ _Stale note — this was true when first written; superseded by the entries near
   left untouched — harmless unused capability, no migration needed to remove a nullable column
   nothing writes to anymore.
 - **Files:** `frontend/src/pages/JournalVoucherPage.tsx`
+
+## Fixed: unposted Purchase/Sale Bill amounts leaking into Vendor/Sale reports
+- **Bug reported by user:** an unposted purchase showed up in "the ledger" (specifically, its
+  amount was already counted in the Vendor Report's Total Purchase, before Post ever wrote
+  anything to `ledger_entries`). Audited every aggregation query in
+  `reports.repository.js` for the same class of bug — reading straight from a document table
+  (`sale_bills`/`sale_returns`/`purchases`/`purchase_returns`, none of which carry a stored status
+  column; "posted" is derived from `ledger_entries` existing for the row) without gating on
+  that — and found two:
+  - `vendorReportRows()` (Vendor Report, UC-33): `total_purchase` (from `purchases`) and
+    `total_return` (from `purchase_returns`) had NO posted-only filter, while every other bucket in
+    the same query (expenses, cheque allocations, settlements, JVs) already correctly filtered to
+    CONFIRMED/ACTIVE. Fixed by adding
+    `EXISTS (SELECT 1 FROM ledger_entries WHERE source_type = 'PURCHASE'/'PURCHASE_RETURN' AND
+    source_id = ...)` to both subqueries, same idiom already used in
+    `purchases.repository.js#lastPurchasedRate`.
+  - `saleAggregateByCustomer()` (Sale Analysis & Sale Report, UC-31/32): same bug, same fix —
+    `total_sales` (`sale_bills`)/`total_returns` (`sale_returns`) now gated on the equivalent
+    `SALE_BILL`/`SALE_RETURN` EXISTS check, matching how the receipts/settlements/JVs buckets in
+    that same query already worked.
+  - Everything else in the file checked clean: `ledgerRows`/`netBalance`/
+    `businessAccountBalancesAsOf`/`chartAccountBalancesAsOf`/`chartAccountsWithActivity`/
+    `cashBookRows` all read strictly from `ledger_entries` (inherently posted-only); `paymentTrailRows`/
+    `cashBookNonCashRows`/`cashBookBankTransfers`/`cashBookChequeDeposits` already filter to
+    CONFIRMED/ACTIVE. `productionLog`/`productLedger`/`vendorStock` read `stock_movements`/
+    `vendor_stock_movements`, which fill at SAVE time by design (the reserve-on-save stock model
+    covered earlier in this log) — not a bug, a different, already-agreed-on rule.
+  - Also checked `alerts.repository.js` (already correctly EXISTS-gated) and `addas.repository.js`
+    (a delete-reference COUNT, not a balance figure — doesn't need the filter).
+  - Frontend (`VendorReportPage.tsx`, `SaleReportPage.tsx`, `SaleAnalysisPage.tsx`) only consumes
+    these backend totals directly, no separate client-side aggregation — fixing the two queries
+    fixes every screen that shows them.
+- **Not yet live-verified** — no SQL Server reachable in this sandbox; create an unposted purchase
+  and confirm it no longer moves the Vendor Report's Total Purchase/balance until actually Posted,
+  same for an unposted Sale Bill against Sale Analysis/Sale Report.
+- **Files:** `backend/src/repositories/reports.repository.js`
+
+## Product Setup (multi-article "Add Article" batch) — Shift+Enter/'.'+Enter adds a new article row
+- **UI request:** plain Enter on the last field of the batch already submits the whole "Add
+  Article(s)" form via G-01 (correct, left untouched). Added the same
+  Shift+Enter/Ctrl+Enter/'.'+Enter chord convention used on SaleBillPage/SaleReturnPage/
+  PurchasePage's item rows: from the last field of ANY article row (not only the last one), it
+  appends a new blank article at the end and focuses into it, instead of submitting/walking past.
+- `ProductArticleForm.tsx` gained an optional `onLastFieldKeyDown` prop, wired onto its actual last
+  field (the final cost-breakdown input) — omitted by the single-product edit form's usage, which
+  has no "add another" concept. `ProductSetupPage.tsx` added `articleRowRefs` (one per row wrapper
+  div, used with the existing `focusFirstField()` helper the same way SaleBillPage's
+  `articleCellRefs` works) and `handleArticleLastFieldKeyDown`, passed to every row in the batch.
+- **Files:** `frontend/src/components/ProductArticleForm.tsx`, `frontend/src/pages/ProductSetupPage.tsx`
+
+## Fixed: Vendor purchase-history modal showed unposted purchases
+- **Bug reported by user:** VendorSetupPage's per-vendor "purchase history" drill-down (click a
+  vendor card → modal listing that vendor's purchases) showed unposted purchases alongside posted
+  ones — a purchase that hasn't happened yet (no ledger effect) read as a real recorded one.
+- Root cause: `purchases.repository.js#list()` was a plain `SELECT *`, never computing
+  `is_posted` at all (only `get()`/`create()`/`update()`/`post()`/`unpost()` did, via a separate
+  `isPosted()` query) — despite `PurchaseRow.is_posted` being a required, non-optional field in the
+  frontend type, so every `list()` caller was silently getting `undefined` there. Added the same
+  `EXISTS (SELECT 1 FROM ledger_entries WHERE source_type = 'PURCHASE' ...)` computed column used
+  elsewhere, so `list()` now genuinely matches its own declared type.
+  `VendorSetupPage.tsx#openPurchaseHistory` now filters to `p.is_posted` before displaying.
+- **Files:** `backend/src/repositories/purchases.repository.js`, `frontend/src/pages/VendorSetupPage.tsx`
+
+## Fixed (thorough pass): Recorded Purchases / Recorded Purchase Returns showed unposted rows
+- **Same bug class as the VendorSetupPage fix, applied everywhere else it appeared.** Both
+  `PurchasePage.tsx`'s "Recorded Purchases" tab and `PurchaseReturnPage.tsx`'s "Recorded Purchase
+  Returns" tab were built on `purchases.repository.js`/`purchaseReturns.repository.js#list()`,
+  which — same root cause as before — never computed `is_posted` (plain `SELECT *`), so there was
+  nothing for the frontend to filter on even after the vendor-modal fix landed.
+  - `purchaseReturns.repository.js#list()`: added the identical
+    `EXISTS (SELECT 1 FROM ledger_entries WHERE source_type = 'PURCHASE_RETURN' ...)` computed
+    `is_posted` column `purchases.repository.js#list()` already got in the previous fix.
+  - `PurchasePage.tsx`'s `sortedPurchases` and `PurchaseReturnPage.tsx`'s `sortedReturns` (the
+    memos feeding their respective "Recorded ..." tabs) now filter to `.is_posted` before sorting.
+    An unposted purchase/return is still reachable exactly where it always was — the Pending
+    Posting panel (Purchase) or the entry form directly (Return) — this only removes it from the
+    posted-history list, same split already applied to Sale Bill/Sale Return/Receipts/Expenses.
+- **Files:** `backend/src/repositories/purchaseReturns.repository.js`,
+  `frontend/src/pages/PurchasePage.tsx`, `frontend/src/pages/PurchaseReturnPage.tsx`
+
+## MAJOR ARCHITECTURE CHANGE — Sale Bill: unposted documents now live in the draft table
+- **User-approved plan:** "Save" no longer inserts an unposted row into `sale_bills` — it now
+  inserts into `draft_sale_bills`, the same table that used to be reserved for genuinely
+  incomplete entries. `sale_bills` now strictly NEVER holds an unposted document. "Post" moves the
+  row draft → real (writes ledger, deletes the draft — this is what `draftSaleBills.confirm()`
+  already did for incomplete drafts; it's now the ONLY posting path). "Unpost" is the new reverse:
+  moves the row real → draft again (new `saleBills.service.js#unconfirm()`), rather than the old
+  behavior of just clearing the bill's ledger entries and leaving it sitting in `sale_bills`.
+  Scoped to **Sale Bill only** for this pass, per explicit user choice — Sale Return, Purchase,
+  Purchase Return, Receipts, Expenses are UNCHANGED (still today's "real row, no ledger yet" model)
+  and Journal Voucher has no draft table to move this pattern to yet.
+- **Backend:**
+  - `draftSaleBills.repository.js`: added `updateDraftHeader()`/`deleteDraftItems()` (editing a
+    draft's header/items — previously only insert/find/delete existed).
+  - `draftSaleBills.service.js`: added `update(draftId, payload)` — stock reconciled
+    unconditionally (release old lines' reservation via a positive reversing ADJUSTMENT — never
+    delete the original row, matching the reverse-never-erase pattern `remove()`/`confirm()`
+    already use — then reserve the new lines), netting out the draft's own existing reservation
+    before checking availability (mirrors `saleBills.service.js`'s own edit-reconciliation logic).
+    Added `confirmAll(ids, userId)` — Post All for drafts, same `{posted, failed, attempted}`
+    contract as `saleBills.service.js#postAll()`, sequential for the same live-stock-read reason.
+  - `saleBills.service.js`: added `unconfirm(id)` — the reverse of `draftSaleBills.confirm()`.
+    Deletes the bill's ledger entries, releases its `SALE_BILL` stock reservation, inserts a new
+    `draft_sale_bills` row (+ items + a fresh `DRAFT_SALE_BILL` reservation) from the bill's own
+    data, then deletes the real bill + its items. Requires `draftSaleBills.repository` directly
+    (not its service) to avoid a circular require, since `draftSaleBills.service.js` already
+    requires `saleBills.service.js` the other way for `confirm()`.
+  - New IPC channels: `draft-sale-bills:update`, `draft-sale-bills:confirmAll`,
+    `sale-bills:unconfirm`. `draft-sale-bills:remove` now requires a password (verified
+    server-side) — deleting any saved-unposted bill is destructive with no undo trail, so it gets
+    the same guard editing an already-posted bill does; this used to have no password since it was
+    only ever a genuinely-incomplete entry before.
+  - `sale-bills:create`/`:post`/`:unpost`/`:remove`/`:listUnposted`/`:postAll` and their service
+    functions are left in place but are now DEAD CODE for the Sale Bill flow — nothing in the
+    frontend calls them anymore. Not deleted, to keep the change reversible/lower-risk; a future
+    cleanup pass could remove them once this is confirmed working end-to-end.
+- **Frontend (`SaleBillPage.tsx`):** the old two-separate-concepts UI ("Saved Drafts" panel +
+  select-a-draft dropdown, and "Pending Posting" sidebar reading real unposted rows) collapsed
+  into ONE — the Pending Posting sidebar now reads `draftSaleBills.list()` directly, since there's
+  no longer a meaningful distinction between "incomplete" and "complete but unposted." The old
+  Saved Drafts panel/dropdown/Confirm/Delete buttons and `handleConfirmDraft` were removed
+  entirely. `executeSave()` branches on a new `isEditingPostedBill` flag
+  (`mode === 'edit' && currentBillIsPosted`): that one case still goes through
+  `saleBills.update()` (an already-posted bill can still be edited in place, unaffected by this
+  change); every other save — a brand-new bill, or editing a still-unposted one — goes through
+  `draftSaleBills.create()`/`.update()`. Only editing an ALREADY-POSTED bill is password-gated now
+  (opening/editing a draft from the sidebar needs no password, same as drafts always worked).
+  `billId` now means either a `bill_id` or a `draft_id` depending on `currentBillIsPosted` — every
+  handler that posts/unposts/deletes updates it to the new id space after a successful call, since
+  posting/unposting genuinely changes which row (and which table) the document lives in.
+- **Known gaps, explicitly flagged:**
+  - **No SQL Server reachable in this sandbox — none of this has been live-verified.** Before
+    trusting it: create a new bill (confirm it lands in `draft_sale_bills`, stock reserved), edit
+    it as a draft, Post it (confirm it lands in `sale_bills` with ledger entries, draft gone),
+    Unpost it (confirm it's back in `draft_sale_bills` under a new id, ledger gone), delete a
+    draft (password prompt, stock released), and run Post All across a few drafts.
+  - **Pre-existing data migration**: if a real deployment already has unposted rows sitting in
+    `sale_bills` from before this change, they will NOT automatically move to `draft_sale_bills` —
+    this only governs new saves going forward. A one-time migration script would be needed to
+    backfill any such rows if this ships against a database that already has some.
+- **Files:** `backend/src/repositories/draftSaleBills.repository.js`,
+  `backend/src/services/draftSaleBills.service.js`, `backend/src/services/saleBills.service.js`,
+  `backend/src/ipc/draftSaleBills.ipc.js`, `backend/src/ipc/saleBills.ipc.js`,
+  `frontend/src/lib/api.ts`, `frontend/src/pages/SaleBillPage.tsx`
+- **Live-verified by the user** after restarting the Electron app end-to-end (create → post →
+  confirm — this was also the run that surfaced the `draft-sale-bills:confirmAll` "no handler"
+  error, which turned out to be a stale running process, not a code bug; a full quit+restart of
+  `npm start` fixed it since the main process needs to re-execute the new backend code).
+
+## Draft/Real Table Architecture — Sale Return (rollout, module 2 of 6)
+
+- Same "draft table until posted, real table only ever posted, unpost moves it back to draft"
+  architecture as Sale Bill, applied to Sale Return.
+- **Backend:**
+  - `saleReturns.repository.js`: split the old combined `deleteLedgerAndStock` into
+    `deleteLedgerEntries(transaction, returnId)` and `deleteReturn(transaction, returnId)` (kept
+    the combined helper too, for backward compat with existing callers).
+  - `draftSaleReturns.repository.js`: added `updateDraftHeader`, `deleteDraftItems` (against
+    `dbo.draft_sale_return_items`).
+  - `draftSaleReturns.service.js`: added `update(draftId, payload)` — stock reconciliation with
+    signs flipped vs Sale Bill, since a return RESTORES stock rather than reserving it (so there's
+    no oversell check needed: restoring stock can't drive it negative) — and `confirmAll(ids,
+    userId)`.
+  - `saleReturns.service.js`: added `unconfirm(id)`, mirroring `saleBills.service.js#unconfirm()`
+    with signs flipped (releases a negative ADJUSTMENT on `SALE_RETURN`, restores a positive one
+    on `DRAFT_SALE_RETURN`). Requires `draftSaleReturns.repository.js` directly, same
+    circular-require avoidance as Sale Bill.
+  - Confirmed Sale Return's `postLedgerAndStock` has no stock-availability check at that position
+    (unlike Sale Bill's), so the deadlock bug fixed there does not apply here — no
+    `pairsOnHandTx`-style fix was needed.
+  - New IPC channels: `sale-returns:unconfirm`; `draft-sale-returns.ipc.js` rewritten with
+    `create`/`list`/`get`/password-gated `remove`/`update`/`confirm`/`confirmAll`.
+- **Frontend (`SaleReturnPage.tsx`):** same collapse-into-one-sidebar treatment as Sale Bill —
+  `drafts` state now reads real `DraftSaleReturnRow[]`, `isEditingPostedReturn` flag branches
+  `executeSave`, Post/Unpost/Delete rewired to the new draft-table-backed channels, "Post All" now
+  calls the real `draftSaleReturns.confirmAll()` instead of a client-side sequential loop.
+- Full project `npx tsc -b --force` confirmed clean after these changes.
+- **Files:** `backend/src/repositories/saleReturns.repository.js`,
+  `backend/src/repositories/draftSaleReturns.repository.js`,
+  `backend/src/services/draftSaleReturns.service.js`, `backend/src/services/saleReturns.service.js`,
+  `backend/src/ipc/draftSaleReturns.ipc.js`, `backend/src/ipc/saleReturns.ipc.js`,
+  `frontend/src/lib/api.ts`, `frontend/src/pages/SaleReturnPage.tsx`
+
+## Draft/Real Table Architecture — Purchase (rollout, module 3 of 6)
+
+- Same architecture applied to Purchase. Key simplification found here: a draft purchase has
+  **zero stock effect** (nothing physically arrives before a purchase is recorded — the existing
+  code already said so), and `purchases.service.js#update()` already unconditionally blocked
+  editing a posted purchase in place (`POSTED_LOCK`) — so unlike Sale Bill/Return there's no
+  `isEditingPosted` branching needed on the frontend: `mode === 'edit'` always means editing a
+  draft now.
+- **Backend:**
+  - `purchases.repository.js`: added `deletePurchase(transaction, purchaseId)`.
+  - `draftPurchases.repository.js`: added `updateDraftHeader`, `deleteDraftItems` (against
+    `dbo.draft_purchase_items`).
+  - `draftPurchases.service.js`: added `update(draftId, payload)` (simple — no stock
+    reconciliation needed) and `confirmAll(ids, userId)`.
+  - `purchases.service.js`: added `unconfirm(id)` — reverses via the existing
+    `deleteLedgerAndStock` (removes both ledger entries and vendor_stock_movements in one call,
+    since there's no reservation to hand off), rebuilds a draft from the purchase's own fields via
+    `draftPurchasesRepository.insertDraft`/`insertDraftItems`, then deletes the real row. Requires
+    `draftPurchasesRepository` directly, same circular-require avoidance as the other modules.
+    Confirmed no deadlock risk (`purchases.service.js` has no `pairsOnHand` calls anywhere).
+  - New IPC channel: `purchases:unconfirm`; `draftPurchases.ipc.js` rewritten with password-gated
+    `remove`, new `update`, `confirmAll`.
+  - All backend files syntax-checked clean via `node -c`.
+- **Frontend (`PurchasePage.tsx`):** same collapse-into-one-sidebar treatment. `unpostedPurchases`
+  now reads real `DraftPurchaseRow[]` via `draftPurchases.list()`; `handleSave` always uses
+  `draftPurchases.create()`/`.update()`; `handlePost`/`handlePostAll` call
+  `draftPurchases.confirm()`/`confirmAll()`; `handleUnpost` calls `purchases.unconfirm()`. Added
+  `loadDraftIntoForm`, `handleOpenUnposted`, `handlePostOneUnposted`, and a password-gated delete
+  flow (`handleDeleteUnposted` + `PasswordPromptModal`, mirroring the other modules' guard on
+  deleting a saved-unposted document). The Pending Posting panel's row list is now interactive
+  (click to open, inline Post/Delete icon buttons) and resolves the vendor name locally via
+  `vendors.find(...)` since `DraftPurchaseRow` carries no `vendor_name` field.
+- Full project `npx tsc -b --force` confirmed clean after these changes.
+- **Files:** `backend/src/repositories/purchases.repository.js`,
+  `backend/src/repositories/draftPurchases.repository.js`,
+  `backend/src/services/draftPurchases.service.js`, `backend/src/services/purchases.service.js`,
+  `backend/src/ipc/draftPurchases.ipc.js`, `backend/src/ipc/purchases.ipc.js`,
+  `frontend/src/lib/api.ts`, `frontend/src/pages/PurchasePage.tsx`
+- **Not yet live-verified** — needs the same create→post→unpost→delete→Post-All run-through the
+  user did for Sale Bill before trusting it.
+
+## Draft/Real Table Architecture — Receipts & Expenses (rollout, modules 5 and 6)
+
+Completes the rollout. The instruction was explicit: **relocate where an unposted row lives, change
+no logic** — every cheque / online / endorsement / bounce / voucher rule behaves exactly as before.
+
+- **Migration `024_draft_receipts_expenses_full_parity.sql`** — the draft tables were missing the
+  columns needed to hold *any* unposted receipt/expense, which is the real reason these two modules
+  had been created straight into the real table under a `status` column in the first place:
+  - `draft_receipts.cheque_no / cheque_date / cheque_received_date` — a CHEQUE receipt could not be
+    drafted before, because `cheques.receipt_id` is NOT NULL so the cheques row cannot exist until
+    the receipt does. The draft now holds the cheque's details as plain columns and the real
+    `dbo.cheques` row is still created at confirm time by the SAME
+    `receipts.service#insertReceipt()` code as always — so the cheque is born PENDING at post time
+    and every downstream deposit/endorse/bounce path sees precisely what it saw before.
+  - `draft_receipts.voucher_id`, `draft_expenses.voucher_id` — receipts/expenses gained `voucher_id`
+    in migration 022 but the draft tables did not, so a draft could not belong to the voucher it was
+    entered on.
+  - All added columns are nullable; nothing is dropped or rewritten, and no data migration runs.
+- **Vouchers (RJ-03 / PN-01) — the significant structural piece.** A voucher's lines now live in two
+  tables: posted ones in the real table, unposted ones in the draft table. `listLines()` UNIONs both
+  halves into the single list the screen always rendered, so nothing upstream had to learn there are
+  two tables:
+  - `status` is *derived* from which side a row came from ('CONFIRMED' for real, 'DRAFT' for draft),
+    so `deriveStatus()`'s UNPOSTED/PARTIAL/POSTED judgement is unchanged, as is the decision (from
+    migration 022) not to store a voucher status at all.
+  - each line carries exactly one of `receipt_id`/`draft_id` (resp. `expense_id`/`draft_id`), naming
+    which table it is in and which id the per-line actions address.
+  - the aggregate `list()` query now counts a UNION of both tables — counting only the posted half
+    would report a fully-unposted voucher as having zero lines, which `deriveStatus` would then read
+    as POSTED-of-zero rather than UNPOSTED.
+  - voucher `post()` walks the draft lines through `draftX.confirm()`, `unpost()` walks the real
+    lines through `X.unconfirm()`; the per-line-transaction isolation and the partial-success
+    `{ posted, failed, attempted }` contract are untouched.
+  - `update()` (header date) now syncs the draft half's line dates too; `remove()` deletes draft
+    lines as well as real ones.
+  - **Entry order is preserved across a post/unpost round-trip**: `confirm()`/`unconfirm()` carry
+    `created_at` across, and `listLines` orders the two halves together by it. Without this a line
+    would jump to the bottom of its voucher the moment it posted.
+- **`receipts.service#unconfirm()` / `expenses.service#unconfirm()`** — the reverse of the matching
+  `confirm()`. Every guard the existing `unpost()` applied still applies, unchanged and for the same
+  reasons:
+  - Receipts: a CHEQUE receipt whose cheque has moved past PENDING is still refused
+    (`CHEQUE_IN_USE`). Because that guard *guarantees* the cheque is still PENDING (never deposited,
+    endorsed or allocated), the cheques row can safely be dropped and its details carried back onto
+    the draft — exactly what `remove()` already did for an unposted cheque receipt, and the precise
+    reverse of what `confirm()` does on the way in.
+  - Expenses: `CHEQUE_ENDORSED` is still refused outright (`USE_CHEQUE_REVERSAL` — its ledger effect
+    belongs to a `cheque_allocations` row, and the only correct way to undo a disposition is the
+    cheque's own bounce/return flow), and a `CHEQUE_ISSUED` cheque that already bounced/returned is
+    still refused (`ISSUED_CHEQUE_TERMINAL`). **No endorsement logic was touched.**
+  - `draftExpenses`' `pending_expense_id` stuck-confirm recovery is untouched, and the new
+    `draftExpenses.update()` is blocked while it is set, for the same reason `remove()` already was.
+- **Security guards moved with the create path.** UC-03 point 4 (`assertAccessible`) now also runs in
+  `draftReceipts.create/update` and `draftExpenses.create/update`, because that is where a new
+  receipt/expense is actually created now — leaving it only on the real table's `create()` would
+  have silently dropped the check. `draft-receipts:remove` / `draft-expenses:remove` also gained the
+  password guard that `receipts:remove` / `expenses:remove` already had, since they now hold every
+  unposted document rather than a throwaway scratch entry.
+- **Frontend (`ReceiptsPage.tsx`, `ExpensesPage.tsx`):**
+  - voucher lines are saved via `draftX.create/update`; a new `entryIsDraft` flag says which id
+    space the entry row's id is in.
+  - the "Recorded Receipts"/"Recorded Expenses" tables were already unposted-only, and unposted rows
+    now live in the draft tables — so they read `drafts` instead of filtering the real list (which,
+    by the new invariant, would always filter down to empty). Clicking a row opens it for editing in
+    place, and opens the voucher it belongs to, exactly as before.
+  - the old "Saved Drafts / N incomplete cached" banner is now "Pending Posting / N unposted"; a
+    loaded draft is edited **in place** rather than copied into a real row and the original deleted,
+    so the duplicate-then-delete dance is gone.
+  - `loadReceiptRow`/`loadExpenseRow` were removed as unreachable — their only caller was the
+    unposted-only records list, which now goes through `loadDraft`.
+- Full project `npx tsc -b --force` clean; all touched backend files pass `node -c` and the whole
+  service graph loads without circular-require breakage.
+- **Files:** `backend/src/db/migrations/024_draft_receipts_expenses_full_parity.sql`,
+  `backend/src/repositories/{draftReceipts,receipts,receiptVouchers,draftExpenses,expenses,expenseVouchers}.repository.js`,
+  `backend/src/services/{receipts,draftReceipts,receiptVouchers,expenses,draftExpenses,expenseVouchers}.service.js`,
+  `backend/src/ipc/{receipts,draftReceipts,receiptVouchers,expenses,draftExpenses}.ipc.js`,
+  `frontend/src/lib/api.ts`, `frontend/src/pages/{ReceiptsPage,ExpensesPage}.tsx`
+- **Run `npm run migrate` before starting the app** — migration 024 must be applied or every
+  receipt/expense write will fail on the missing columns.
+- **Live-verified against the real SQL Server** (`npm run migrate` applied 024 cleanly), with a
+  23-case integration script exercising every module's full draft→post→unpost round-trip directly
+  through the service layer. All 23 passed, including the priority checks:
+  - Sale Bill / Sale Return / Purchase / Purchase Return: draft → confirm → unconfirm → confirmAll →
+    unconfirm → delete, with direct SQL assertions that the real table has zero rows for a
+    not-yet-posted id and the draft row is gone the instant it's posted.
+  - Receipt CASH / ONLINE: full round-trip. Receipt CHEQUE: draft → confirm creates the cheques row
+    PENDING → unconfirm while PENDING moves it cleanly back to draft with cheque_no/cheque_date
+    intact → re-confirm → deposit → confirm unconfirm is refused (CHEQUE_IN_USE) → bounce it →
+    confirm unconfirm is STILL refused (extends correctly to a terminal BOUNCED status, not just
+    "disposed of somehow").
+  - Expense CASH, CHEQUE_ISSUED (round-trip while PENDING), CHEQUE_ISSUED-then-bounced (unconfirm
+    refused with ISSUED_CHEQUE_TERMINAL), CHEQUE_ENDORSED (unconfirm always refused with
+    USE_CHEQUE_REVERSAL, confirming no endorsement logic changed).
+  - Receipt Voucher and Expense Voucher: create a voucher, add two draft lines, confirm entry order
+    is preserved, Post All, confirm both lines are CONFIRMED and STILL in original entry order
+    (created_at carried across confirm), Unpost All, confirm both are back to DRAFT in the same
+    order, delete the voucher.
+  - All test rows (and the deliberately-left posted/bounced ones used to prove a guard) were
+    cleaned up afterward via direct SQL in dependency order; a final sweep confirmed zero residue.
+- **Pre-existing rows:** any receipt/expense already sitting in the real table with `status='DRAFT'`
+  from before this change stays there — it is not migrated into the draft tables. Such a row will no
+  longer appear in this screen's unposted list (which now reads the draft tables). The voucher grid
+  still renders it, and the `line.draft_id == null` branches in the delete/edit paths were kept
+  deliberately so it stays actionable. A one-time backfill script would be needed to move them.
+
+## Draft/Real Table Architecture — rollout stopped at 4 modules (SUPERSEDED)
+
+> Superseded by the section above — the user subsequently asked for Receipts and Expenses to be done
+> too, with the constraint that no logic change. Kept for the reasoning it records.
+
+
+- Investigated Receipts next and found it's not a blank slate like the first 4: it already has its
+  own draft-table split (`draft_receipts` + `draftReceipts.service.js#confirm()`, built in an
+  earlier session), but only for CASH/ONLINE — CHEQUE-mode receipts deliberately stay in the real
+  `receipts` table under a `status='DRAFT'` column, since `draft_receipts` has no
+  `cheque_no`/`cheque_date` columns to hold a draft cheque. Receipts also carries RJ-03
+  voucher/settlement/endorsement logic layered on top of `status`, which none of the first 4
+  modules had to account for. Expenses almost certainly mirrors this same shape
+  (`draftExpenses.service.js` exists too, not yet inspected in detail).
+  - Presented this to the user with three options (extend architecture to Receipts/Expenses same
+    as the first 4, extend CASH/ONLINE-only via an `unconfirm`, or a full redesign covering
+    CHEQUE/vouchers/settlements too) — user chose to **stop the rollout at 4 modules** and leave
+    Receipts/Expenses on their existing DRAFT/CONFIRMED status design, since it already
+    distinguishes posted from unposted (just via a column instead of a separate table) and
+    touching the voucher/settlement/endorsement code paths carries materially more risk than the
+    first 4 modules did.
+- **Rollout scope as it now stands, final:** Sale Bill, Sale Return, Purchase, Purchase Return —
+  all 4 on the full draft-table architecture (draft table until posted, real table strictly only
+  posted, unpost moves the row back to draft). Receipts/Expenses intentionally excluded per the
+  above.
+
+## Draft/Real Table Architecture — Purchase Return (rollout, module 4 of 6)
+
+- Same architecture as Purchase, applied to Purchase Return — the two modules already mirrored
+  each other closely (draft purchase returns also have zero stock effect, and
+  `purchaseReturns.service.js#update()` already unconditionally blocked editing a posted return in
+  place), so no new design decisions were needed here.
+- **Backend:**
+  - `purchaseReturns.repository.js`: added `deleteReturn(transaction, returnId)`.
+  - `draftPurchaseReturns.repository.js`: added `updateDraftHeader`, `deleteDraftItems` (against
+    `dbo.draft_purchase_return_items`).
+  - `draftPurchaseReturns.service.js`: added `update(draftId, payload)` (no stock reconciliation)
+    and `confirmAll(ids, userId)`.
+  - `purchaseReturns.service.js`: added `unconfirm(id)` — reverses via `deleteLedgerAndStock`,
+    rebuilds a draft via `draftPurchaseReturnsRepository.insertDraft`/`insertDraftItems`, then
+    deletes the real row via the new `deleteReturn`. Requires `draftPurchaseReturnsRepository`
+    directly, same circular-require avoidance as the other modules.
+  - New IPC channel: `purchase-returns:unconfirm`; `draftPurchaseReturns.ipc.js` rewritten with
+    password-gated `remove`, new `update`, `confirmAll`.
+  - All backend files syntax-checked clean via `node -c`.
+- **Frontend (`PurchaseReturnPage.tsx`):** added the same Pending Posting panel as PurchasePage
+  (this page previously had none at all — every return saved straight to the real table with no
+  batching UI). `handleSave`/`handlePost`/`handleUnpost` rewired to the draft-table-backed
+  channels; added `loadDraftIntoForm`, `handleOpenUnposted`, `handlePostOneUnposted`,
+  `handlePostAll`, and a password-gated `handleDeleteUnposted` + `PasswordPromptModal`, all
+  mirroring PurchasePage.tsx. The page's existing PR-01 features (copy-from-prior-purchase,
+  last-purchased-rate lookup on blur) were preserved unchanged.
+- Full project `npx tsc -b --force` confirmed clean after these changes.
+- **Files:** `backend/src/repositories/purchaseReturns.repository.js`,
+  `backend/src/repositories/draftPurchaseReturns.repository.js`,
+  `backend/src/services/draftPurchaseReturns.service.js`,
+  `backend/src/services/purchaseReturns.service.js`,
+  `backend/src/ipc/draftPurchaseReturns.ipc.js`, `backend/src/ipc/purchaseReturns.ipc.js`,
+  `frontend/src/lib/api.ts`, `frontend/src/pages/PurchaseReturnPage.tsx`
+- **Not yet live-verified** — needs the same create→post→unpost→delete→Post-All run-through the
+  user did for Sale Bill before trusting it.

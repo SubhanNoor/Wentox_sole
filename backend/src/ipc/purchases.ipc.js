@@ -55,6 +55,17 @@ module.exports = function register() {
     }),
   );
 
+  // "Unpost" now moves the purchase back to draft_purchases — the real table strictly never
+  // holds an unposted document (and, per purchases:update's own comment above, editing a real row
+  // in place was never allowed anyway — this is now the ONLY way to edit a posted purchase again).
+  ipcMain.handle(
+    'purchases:unconfirm',
+    wrap((payload) => {
+      requireSession();
+      return service.unconfirm(payload.id);
+    }),
+  );
+
   // P-03: the purchases still awaiting posting, for the Post All confirmation list.
   ipcMain.handle(
     'purchases:listUnposted',

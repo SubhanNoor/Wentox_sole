@@ -11,14 +11,18 @@ const { withTransaction } = require('../db/pool');
 // All four payment modes are draftable (unlike draftReceipts — see migration
 // 004_draft_expenses_parity.sql's note: a CHEQUE_ENDORSED draft references an ALREADY-EXISTING
 // received cheque, so there's no chicken-egg problem the way a not-yet-existing CHEQUE receipt has).
-async function resolveTarget(payload) {
+// Identical to expenses.service.js#resolveTarget, including the UC-03 point 4 access guard — this
+// is now the path a new expense actually takes, so the guard has to be applied here, not only on
+// the real table's create().
+async function resolveTarget(payload, session) {
   if (payload.vendor_id) {
     const vendor = await vendorsService.getById(payload.vendor_id);
     if (!vendor.ba_id) throw ApiError.conflict('Vendor has no linked account yet', 'NO_VENDOR_ACCOUNT');
     return vendor.ba_id;
   }
   if (payload.ba_id) {
-    const account = await businessAccountsService.getById(payload.ba_id);
+    const account = await businessAccountsService.getById(payload.ba_id); // 404s if it doesn't exist
+    await businessAccountsService.assertAccessible(account.ba_id, session);
     return account.ba_id;
   }
   throw ApiError.badRequest('vendor_id or ba_id is required');
@@ -43,11 +47,8 @@ function validateHeader(payload) {
   }
 }
 
-async function create(payload, userId) {
-  validateHeader(payload);
-  const baId = await resolveTarget(payload);
-
-  const draftId = await withTransaction((transaction) => repository.insert(transaction, {
+function buildFields(payload, baId) {
+  return {
     expense_date: payload.expense_date,
     ba_id: baId,
     amount: payload.amount,
@@ -58,8 +59,50 @@ async function create(payload, userId) {
     issued_cheque_no: payload.payment_mode === 'CHEQUE_ISSUED' ? payload.issued_cheque_no : null,
     issued_cheque_date: payload.payment_mode === 'CHEQUE_ISSUED' ? payload.issued_cheque_date : null,
     remarks: payload.remarks,
+  };
+}
+
+// This is the channel every NEW expense comes in through now — an unposted expense lives here and
+// only moves into dbo.expenses when it is posted (confirm).
+//
+// UC-03 point 4 — a USER must not be able to pay a Bank Accounts or Directors-Drawings account
+// just because the screen that lists them is hidden. expenses.service#resolveTarget() applies this
+// on the real-table path; the same guard has to hold here, since this is now where an expense is
+// actually created. (resolveTarget below takes the session for exactly this reason.)
+async function create(payload, userId, session) {
+  validateHeader(payload);
+  const baId = await resolveTarget(payload, session);
+
+  const draftId = await withTransaction((transaction) => repository.insert(transaction, {
+    ...buildFields(payload, baId),
+    // PN-01: the voucher this line belongs to, if it was entered on one.
+    voucher_id: payload.voucher_id,
     created_by: userId,
   }));
+  return getById(draftId);
+}
+
+// Editing an unposted expense — the normal edit path now. Mirrors expenses.service.js#update()'s
+// rules, minus the POSTED_LOCK check: a draft is unposted by definition, so there is nothing to
+// lock.
+//
+// Blocked while pending_expense_id is set, for the same reason remove() is: a prior confirm()
+// attempt left a real expense (and possibly a real cheque disposition) that this draft is the only
+// pointer to, and editing the draft would silently desynchronise the two. Retry confirming it, or
+// resolve the stuck expense, first.
+async function update(draftId, payload, userId, session) {
+  const draft = await getById(draftId);
+  if (draft.pending_expense_id) {
+    throw ApiError.conflict(
+      'This draft has a stuck expense from a previous confirm attempt — retry confirming it, or resolve expense #' +
+      `${draft.pending_expense_id} directly, before editing this draft`,
+      'PENDING_EXPENSE_UNRESOLVED',
+    );
+  }
+  validateHeader(payload);
+  const baId = await resolveTarget(payload, session);
+
+  await withTransaction((transaction) => repository.updateHeader(transaction, draftId, buildFields(payload, baId)));
   return getById(draftId);
 }
 
@@ -126,6 +169,10 @@ async function confirm(draftId, userId, session) {
     issued_cheque_no: draft.issued_cheque_no,
     issued_cheque_date: draft.issued_cheque_date,
     remarks: draft.remarks,
+    // PN-01: the posted line stays on the voucher it was entered on, and keeps its place in that
+    // voucher's entry order.
+    voucher_id: draft.voucher_id,
+    created_at: draft.created_at,
   };
 
   let expenseId;
@@ -133,7 +180,7 @@ async function confirm(draftId, userId, session) {
     // Resuming a prior attempt — the expense already exists, don't create another one.
     expenseId = draft.pending_expense_id;
   } else {
-    const expense = await expensesService.create(payload, userId);
+    const expense = await expensesService.create(payload, userId, session);
     expenseId = expense.expense_id;
     if (draft.payment_mode === 'CHEQUE_ENDORSED') {
       await withTransaction((transaction) => repository.setPendingExpenseId(transaction, draftId, expenseId));
@@ -160,4 +207,4 @@ async function confirm(draftId, userId, session) {
   return posted;
 }
 
-module.exports = { create, getById, list, remove, confirm };
+module.exports = { create, getById, list, update, remove, confirm };

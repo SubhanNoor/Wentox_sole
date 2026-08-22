@@ -60,12 +60,25 @@ module.exports = function register() {
   );
 
   // Standalone unpost (not part of the edit flow — editing an already-posted bill now
-  // reverses+reapplies internally within update()).
+  // reverses+reapplies internally within update()). Kept for backward compatibility but no
+  // longer used by the frontend's normal flow — see unconfirm below, which is what "Unpost" now
+  // actually does (moves the bill back to draft_sale_bills instead of just clearing its ledger).
   ipcMain.handle(
     'sale-bills:unpost',
     wrap((payload) => {
       requireSession();
       return service.unpost(payload.id);
+    }),
+  );
+
+  // "Unpost" now means the bill goes back to being a draft — the real table strictly never holds
+  // an unposted document. Resolves the new draft row (not a SaleBillRow), so the frontend must
+  // treat the result as a draft going forward, not the same bill still sitting in sale_bills.
+  ipcMain.handle(
+    'sale-bills:unconfirm',
+    wrap((payload) => {
+      requireSession();
+      return service.unconfirm(payload.id);
     }),
   );
 

@@ -67,4 +67,14 @@ module.exports = function register() {
       return service.unpost(payload.id);
     }),
   );
+
+  // "Unpost" now moves the return back to draft_sale_returns — the real table strictly never
+  // holds an unposted document. Resolves the new draft row, not a SaleReturnRow.
+  ipcMain.handle(
+    'sale-returns:unconfirm',
+    wrap((payload) => {
+      requireSession();
+      return service.unconfirm(payload.id);
+    }),
+  );
 };

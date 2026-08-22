@@ -7,6 +7,11 @@
 const repository = require('../repositories/receiptVouchers.repository');
 const receiptsRepository = require('../repositories/receipts.repository');
 const receiptsService = require('./receipts.service');
+// A voucher's lines are split across two tables now: unposted ones in dbo.draft_receipts, posted
+// ones in dbo.receipts. Posting a line is draftReceipts.confirm() (draft -> real), unposting it is
+// receipts.unconfirm() (real -> draft); the per-line isolation and reporting below are unchanged.
+const draftReceiptsService = require('./draftReceipts.service');
+const draftReceiptsRepository = require('../repositories/draftReceipts.repository');
 const { withTransaction } = require('../db/pool');
 const ApiError = require('../errors/ApiError');
 const { today } = require('../utils/dates');
@@ -103,6 +108,10 @@ async function update(voucherId, payload, userId) {
       updated_by: userId,
     });
     await repository.syncLineDates(transaction, voucherId, payload.voucher_date);
+    // The unposted half of the voucher's lines lives in dbo.draft_receipts and has to move with
+    // the header too — update() is only reachable while the voucher is entirely UNPOSTED, so in
+    // practice this is the call that does the work and syncLineDates above is the no-op.
+    await draftReceiptsRepository.syncVoucherLineDates(transaction, voucherId, payload.voucher_date);
   });
 
   return getById(voucherId);
@@ -119,7 +128,7 @@ async function update(voucherId, payload, userId) {
 //
 // Sequential, not Promise.all: posting reads and writes live ledger/cheque state, and two lines
 // against the same account posting concurrently would interleave those reads.
-async function post(voucherId, session) {
+async function post(voucherId, userId, session) {
   const voucher = await getById(voucherId);
   if (voucher.lines.length === 0) {
     throw ApiError.badRequest('This voucher has no entries to post', 'EMPTY_VOUCHER');
@@ -129,15 +138,17 @@ async function post(voucherId, session) {
   const failed = [];
 
   for (const line of voucher.lines) {
+    // Already a real (posted) row — meets the caller's intent, same as the old ALREADY_POSTED skip.
+    if (line.draft_id == null) continue;
     try {
-      await receiptsService.post(line.receipt_id, session);
-      posted.push({ receipt_id: line.receipt_id, amount: Number(line.amount) });
+      const receipt = await draftReceiptsService.confirm(line.draft_id, userId, session);
+      posted.push({ receipt_id: receipt.receipt_id, draft_id: line.draft_id, amount: Number(line.amount) });
     } catch (err) {
-      // Already posted meets the caller's intent ("get this voucher posted") — not a failure.
       if (err.code === 'ALREADY_POSTED') continue;
-      if (!err.status) console.error(`receiptVouchers.post: unexpected failure on line ${line.receipt_id}:`, err);
+      if (!err.status) console.error(`receiptVouchers.post: unexpected failure on line ${line.draft_id}:`, err);
       failed.push({
-        receipt_id: line.receipt_id,
+        receipt_id: null,
+        draft_id: line.draft_id,
         account_name: line.account_name,
         amount: Number(line.amount),
         message: err.status ? err.message : 'Unexpected error while posting this entry.',
@@ -161,7 +172,7 @@ async function unpost(voucherId, session) {
   for (const line of voucher.lines) {
     if (line.status !== 'CONFIRMED') continue;
     try {
-      await receiptsService.unpost(line.receipt_id, session);
+      await receiptsService.unconfirm(line.receipt_id, session);
       unposted.push({ receipt_id: line.receipt_id, amount: Number(line.amount) });
     } catch (err) {
       if (!err.status) console.error(`receiptVouchers.unpost: unexpected failure on line ${line.receipt_id}:`, err);
@@ -191,7 +202,13 @@ async function remove(voucherId) {
 
   await withTransaction(async (transaction) => {
     for (const line of voucher.lines) {
-      await receiptsRepository.remove(transaction, line.receipt_id);
+      // An UNPOSTED voucher's lines are all drafts by the invariant; the real-row branch is kept
+      // so this stays correct for any row that predates the draft/real split.
+      if (line.draft_id != null) {
+        await draftReceiptsRepository.deleteDraft(transaction, line.draft_id);
+      } else {
+        await receiptsRepository.remove(transaction, line.receipt_id);
+      }
     }
     await repository.remove(transaction, voucherId);
   });

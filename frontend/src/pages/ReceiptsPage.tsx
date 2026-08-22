@@ -3,7 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
-import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptRow, ReceiptCreateInput, DraftReceiptRow, SettlementRow, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
+import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, DraftReceiptRow, SettlementRow, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { focusFirstField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
@@ -50,14 +50,16 @@ export default function ReceiptsPage() {
   const [regions, setRegions] = useState<RegionRow[]>([]);
   const [cities, setCities] = useState<CityRow[]>([]);
   const [banks, setBanks] = useState<BankAccountRow[]>([]);
-  const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [drafts, setDrafts] = useState<DraftReceiptRow[]>([]);
   const [lookupError, setLookupError] = useState('');
 
+  // The posted receipts themselves are no longer listed on this screen — the "Recorded Receipts"
+  // table shows what still needs posting, which now lives in dbo.draft_receipts (see
+  // sortedReceipts). This is kept as the surfacing point for a failed read of the real table, and
+  // as the trigger every mutation already calls; the rows are read by the ledger/report screens.
   const refreshReceipts = useCallback(async () => {
     const res = await api.receipts.list({});
-    if (res.ok) setReceipts(res.data);
-    else setLookupError('Failed to load receipts: ' + res.error.message);
+    if (!res.ok) setLookupError('Failed to load receipts: ' + res.error.message);
   }, []);
 
   const refreshSettlements = useCallback(async () => {
@@ -95,6 +97,9 @@ export default function ReceiptsPage() {
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
   const [receiptId, setReceiptId] = useState<number | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
+  // Which table `receiptId` points into. An unposted receipt now lives in dbo.draft_receipts and a
+  // posted one in dbo.receipts, so the id alone is ambiguous — this says which id space it is in.
+  const [entryIsDraft, setEntryIsDraft] = useState(false);
   const [date, setDate] = useState(today());
   const [baId, setBaId] = useState('');
   const [amount, setAmount] = useState<number>(0);
@@ -129,18 +134,28 @@ export default function ReceiptsPage() {
   const [previewBaId, setPreviewBaId] = useState<number | null>(null);
   const [previewEndorseBaId, setPreviewEndorseBaId] = useState<number | null>(null);
 
-  // RJ-06: delete a receipt entry, password-gated.
-  const [deleteTarget, setDeleteTarget] = useState<ReceiptRow | null>(null);
+  // RJ-06: delete a receipt entry, password-gated. An unposted receipt lives in dbo.draft_receipts
+  // and a posted one in dbo.receipts, so the target carries which table it is in — the id alone is
+  // ambiguous now. In practice only unposted rows are ever deletable (every delete button is gated
+  // on that), so `kind` is 'draft' for everything the UI offers; the 'receipt' branch is kept for
+  // any row predating the draft/real split.
+  type PendingDelete = { kind: 'draft' | 'receipt'; id: number; amount: number };
+  const [deleteTarget, setDeleteTarget] = useState<PendingDelete | null>(null);
   const handleDeleteConfirmed = async (password: string) => {
     if (!deleteTarget) return;
-    const res = await api.receipts.remove(deleteTarget.receipt_id, password);
+    const res = deleteTarget.kind === 'draft'
+      ? await api.draftReceipts.remove(deleteTarget.id, password)
+      : await api.receipts.remove(deleteTarget.id, password);
     setDeleteTarget(null);
     if (!res.ok) return fail('Failed to delete: ' + res.error.message);
     flash('Receipt deleted.');
     refreshReceipts();
+    refreshDrafts();
     // RJ-03: the deleted row may have been a line of the voucher on screen — re-read it so the grid
     // and the per-mode totals lose it too, instead of showing an entry that no longer exists.
-    if (voucher && deleteTarget.voucher_id === voucher.voucher_id) await refreshVoucher(voucher.voucher_id);
+    // The deleted row may have been a line of the voucher on screen; re-reading is cheap and
+    // unconditional now that the target no longer carries its own voucher_id.
+    if (voucher) await refreshVoucher(voucher.voucher_id);
     setBalanceRefreshKey(k => k + 1);
   };
 
@@ -356,6 +371,7 @@ export default function ReceiptsPage() {
   const clearEntryRow = () => {
     setMode('new');
     setReceiptId(null);
+    setEntryIsDraft(false);
     setReceiptStatus('DRAFT');
     setBaId('');
     setPreviewBaId(null);
@@ -400,18 +416,20 @@ export default function ReceiptsPage() {
     // header owns the date on this screen (there is one Date field, on the head).
     const linePayload = { ...payload, receipt_date: openVoucher.voucher_date, voucher_id: openVoucher.voucher_id };
 
-    const result = mode === 'edit' && receiptId != null
-      ? await api.receipts.update(receiptId, linePayload)
-      : await api.receipts.create(linePayload);
+    // A voucher line is saved UNPOSTED, so it goes into dbo.draft_receipts — the real receipts
+    // table only ever holds posted documents now. Posting the voucher is what moves each line
+    // across (draftReceipts.confirm), and unposting moves it back.
+    const result = mode === 'edit' && receiptId != null && entryIsDraft
+      ? await api.draftReceipts.update(receiptId, linePayload)
+      : await api.draftReceipts.create(linePayload);
 
     if (!result.ok) { fail('Failed to save entry: ' + result.error.message); return; }
 
-    // A confirmed real receipt supersedes whatever draftReceipts entry it came from.
-    if (loadedDraftId != null) {
-      await api.draftReceipts.remove(loadedDraftId);
-      refreshDrafts();
-    }
+    // Nothing to clean up: an unposted receipt IS a draft now, so loading one into the entry row
+    // and pressing Done edits that same row in place (the update() branch above) rather than
+    // creating a second copy that the original then had to be deleted to avoid duplicating.
     setLoadedDraftId(null);
+    refreshDrafts();
 
     const wasEdit = mode === 'edit';
     await refreshVoucher(openVoucher.voucher_id);
@@ -482,14 +500,17 @@ export default function ReceiptsPage() {
 
   // RJ-03: pull a committed line back into the entry row to correct it. Only while the line itself
   // is unposted — a posted line has ledger entries, and receipts:update rejects it outright.
-  const handleEditLine = (line: ReceiptRow) => {
-    if (line.status === 'CONFIRMED') {
+  const handleEditLine = (line: api.ReceiptVoucherLineRow) => {
+    if (line.status === 'CONFIRMED' || line.draft_id == null) {
       fail('Unpost this voucher before editing that entry.');
       return;
     }
     setMode('edit');
     setDocKind('RECEIPT');
-    setReceiptId(line.receipt_id);
+    // An unposted line lives in draft_receipts, so the id the entry row carries while editing is a
+    // draft_id — handleDone routes on entryIsDraft to know which table to write back to.
+    setEntryIsDraft(true);
+    setReceiptId(line.draft_id);
     setReceiptStatus(line.status);
     setBaId(String(line.ba_id));
     setPreviewBaId(line.ba_id);
@@ -531,58 +552,21 @@ export default function ReceiptsPage() {
     if (receiptId == null) return;
     const res = docKind === 'SETTLEMENT'
       ? await api.settlements.unpost(receiptId)
-      : await api.receipts.unpost(receiptId);
+      : await api.receipts.unconfirm(receiptId);
     if (!res.ok) { fail('Failed to unpost: ' + res.error.message); return; }
-    setReceiptStatus(res.data.status);
+    // unconfirm() resolves the NEW draft, so the entry row has to re-point at the draft id space.
+    if (docKind !== 'SETTLEMENT' && 'draft_id' in res.data) {
+      setReceiptId(res.data.draft_id);
+      setEntryIsDraft(true);
+      setReceiptStatus('DRAFT');
+    } else {
+      setReceiptStatus((res.data as { status: 'CONFIRMED' | 'DRAFT' }).status);
+    }
+    refreshDrafts();
     flash(docKind === 'SETTLEMENT' ? 'Endorsement unposted.' : 'Receipt unposted successfully.');
     if (docKind === 'SETTLEMENT') refreshSettlements(); else refreshReceipts();
     setBalanceRefreshKey(k => k + 1);
   };
-
-  const loadReceiptRow = async (rowIn: ReceiptRow) => {
-    // list() rows never carry cheque_no/cheque_date (only get()'s join does) — re-fetch
-    // full detail whenever a CHEQUE row is opened for view/edit.
-    let row = rowIn;
-    if (row.payment_mode === 'CHEQUE' && row.cheque_no === undefined) {
-      const res = await api.receipts.get(row.receipt_id);
-      if (!res.ok) { fail('Failed to load receipt: ' + res.error.message); return; }
-      row = res.data;
-    }
-
-    setDocKind('RECEIPT');
-    setIsEndorsed(false);
-    setEndorseToBaId('');
-    setReceiptId(row.receipt_id);
-    setReceiptStatus(row.status);
-    setDate(row.receipt_date.slice(0, 10));
-    setBaId(String(row.ba_id));
-    setAmount(row.amount);
-    setCommission(row.commission || 0);
-    setPaymentMode(row.payment_mode);
-    setBankId(row.bank_id != null ? String(row.bank_id) : '');
-    setDetails(row.details || '');
-    setChequeNo(row.cheque_no || '');
-    setChequeDate(row.cheque_date ? row.cheque_date.slice(0, 10) : '');
-    setChequeReceivedDate(row.cheque_received_date ? row.cheque_received_date.slice(0, 10) : '');
-    setRemarks(row.remarks || '');
-    setLoadedDraftId(null);
-    setSelectedDraftPick('');
-    setErrorMsg('');
-    setMode('view');
-
-    // RJ-03: opening a receipt from the records list also opens the voucher it belongs to, so its
-    // sibling entries, the per-mode totals and the voucher's Post/Un Post are all on screen —
-    // otherwise the user is looking at one line of a document with no way to reach the rest of it.
-    // Every receipt has a voucher (migration 022 backfilled the old ones), but voucher_id is
-    // nullable in the column, so this stays guarded rather than assuming.
-    if (row.voucher_id != null) await refreshVoucher(row.voucher_id);
-    else setVoucher(null);
-    setVoucherResult(null);
-  };
-
-
-
-
 
   const loadSettlementRow = (row: SettlementRow) => {
     setDocKind('SETTLEMENT');
@@ -614,23 +598,42 @@ export default function ReceiptsPage() {
   };
   */
 
-  const loadDraft = (row: DraftReceiptRow) => {
-    setMode('new');
-    setReceiptId(null);
+  // Pulls an unposted receipt into the entry row to correct it. It is edited IN PLACE now (mode
+  // 'edit' + entryIsDraft), not copied — every unposted receipt is a draft, so there is no longer a
+  // "cached scratch entry" that has to be turned into a separate real row and then deleted.
+  const loadDraft = async (row: DraftReceiptRow) => {
+    setMode('edit');
+    setDocKind('RECEIPT');
+    setEntryIsDraft(true);
+    setReceiptId(row.draft_id);
     setReceiptStatus('DRAFT');
     setDate(row.receipt_date.slice(0, 10));
     setBaId(String(row.ba_id));
+    setPreviewBaId(row.ba_id);
     setAmount(row.amount || 0);
     setCommission(row.commission || 0);
     setPaymentMode(row.payment_mode);
     setBankId(row.bank_id != null ? String(row.bank_id) : '');
     setDetails(row.details || '');
-    setChequeNo('');
-    setChequeDate('');
-    setChequeReceivedDate('');
+    setChequeNo(row.cheque_no || '');
+    setChequeDate(row.cheque_date ? row.cheque_date.slice(0, 10) : '');
+    setChequeReceivedDate(row.cheque_received_date ? row.cheque_received_date.slice(0, 10) : '');
     setRemarks(row.remarks || '');
+    setIsEndorsed(false);
+    setEndorseToBaId('');
     setLoadedDraftId(row.draft_id);
+    setSelectedDraftPick('');
     setErrorMsg('');
+
+    // Opening an entry also opens the voucher it belongs to, so its sibling entries, the per-mode
+    // totals and the voucher's Post/Un Post are all on screen — otherwise the user is looking at
+    // one line of a document with no way to reach the rest of it. A standalone draft (no voucher)
+    // simply clears the voucher pane.
+    if (row.voucher_id != null) await refreshVoucher(row.voucher_id);
+    else setVoucher(null);
+    setVoucherResult(null);
+
+    requestAnimationFrame(() => firstEntryFieldRef.current?.focus());
   };
 
 
@@ -652,9 +655,13 @@ export default function ReceiptsPage() {
   // CONFIRMED has done its job and belongs in the reports/ledger, not in a list whose whole
   // point was "here's what still needs attention." Same filter applied to `settlements` below,
   // which render into the same table.
+  // Unposted receipts now live in dbo.draft_receipts, so this reads the drafts rather than
+  // filtering the real table — which, by the new invariant, only ever holds CONFIRMED rows and so
+  // would always filter down to nothing. Same list, same meaning ("here's what still needs
+  // attention"), just read from where the rows actually are.
   const sortedReceipts = useMemo(
-    () => [...receipts].filter(r => r.status !== 'CONFIRMED').sort((a, b) => b.receipt_date.localeCompare(a.receipt_date)),
-    [receipts]
+    () => [...drafts].sort((a, b) => b.receipt_date.localeCompare(a.receipt_date)),
+    [drafts]
   );
 
   const unpostedSettlements = useMemo(
@@ -761,9 +768,9 @@ export default function ReceiptsPage() {
             {drafts.length > 0 && (
               <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-4 text-sm" data-no-print>
                 <div className="flex items-center gap-2">
-                  <span className="font-semibold text-slate-700">Saved Drafts:</span>
+                  <span className="font-semibold text-slate-700">Pending Posting:</span>
                   <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
-                    {drafts.length} incomplete receipt(s) cached
+                    {drafts.length} unposted receipt(s)
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
@@ -778,7 +785,7 @@ export default function ReceiptsPage() {
                     className="soleria-input py-1 px-2.5 text-xs bg-white border cursor-pointer font-medium"
                     style={{ width: '240px' }}
                   >
-                    <option value="">Select a draft to load...</option>
+                    <option value="">Select an entry to load...</option>
                     {drafts.map(d => (
                       <option key={d.draft_id} value={d.draft_id}>
                         {d.account_name || accountName(d.ba_id)} - {formatCurrency(d.amount)} ({formatDate(d.receipt_date)})
@@ -790,7 +797,7 @@ export default function ReceiptsPage() {
                     onClick={handleConfirmDraft}
                     className="text-xs text-emerald-700 hover:text-emerald-900 font-semibold transition-colors"
                   >
-                    Confirm Draft
+                    Post Selected
                   </button>
                 </div>
               </div>
@@ -1280,7 +1287,9 @@ export default function ReceiptsPage() {
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => setDeleteTarget(line)}
+                                      onClick={() => setDeleteTarget(line.draft_id != null
+                                        ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
+                                        : { kind: 'receipt', id: line.receipt_id as number, amount: Number(line.amount) })}
                                       title="Delete this entry (asks for your password)"
                                       className="text-rose-500 hover:text-rose-700 transition-colors"
                                     >
@@ -1364,10 +1373,13 @@ export default function ReceiptsPage() {
                       </tr>
                     </thead>
                     <tbody>
+                      {/* Every row here is an unposted receipt out of dbo.draft_receipts, so the
+                          status is DRAFT by construction — no per-row status test is needed any
+                          more, and clicking one opens it for editing in place. */}
                       {sortedReceipts.map(r => (
                         <tr
-                          key={r.receipt_id}
-                          onClick={() => loadReceiptRow(r)}
+                          key={r.draft_id}
+                          onClick={() => loadDraft(r)}
                           className="border-b hover:bg-slate-50/50 cursor-pointer"
                           style={{ borderColor: 'var(--border-table)' }}
                         >
@@ -1377,23 +1389,19 @@ export default function ReceiptsPage() {
                           <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
                           <td className="p-3 text-center text-[10px] font-bold uppercase text-slate-500">Receipt</td>
                           <td className="p-3 text-center">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
-                              r.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                            }`}>
-                              {r.status}
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded uppercase bg-slate-100 text-slate-500">
+                              DRAFT
                             </span>
                           </td>
                           <td className="p-3 text-center">
-                            {r.status !== 'CONFIRMED' && (
-                              <button
-                                type="button"
-                                onClick={e => { e.stopPropagation(); setDeleteTarget(r); }}
-                                title="Delete"
-                                className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
-                              >
-                                <Trash2 size={15} />
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              onClick={e => { e.stopPropagation(); setDeleteTarget({ kind: 'draft', id: r.draft_id, amount: Number(r.amount) }); }}
+                              title="Delete"
+                              className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
+                            >
+                              <Trash2 size={15} />
+                            </button>
                           </td>
                         </tr>
                       ))}

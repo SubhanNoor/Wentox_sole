@@ -99,6 +99,11 @@ function pairsOnHand(variantId) {
   return repository.pairsOnHand(variantId);
 }
 
+// Transaction-bound variant — see stock.repository.js#pairsOnHandTx for why this exists.
+function pairsOnHandTx(transaction, variantId) {
+  return repository.pairsOnHandTx(transaction, variantId);
+}
+
 async function reduceVendorStock(payload, userId) {
   if (!payload.vendor_id) throw ApiError.badRequest('vendor_id is required');
   if (!payload.material_id) throw ApiError.badRequest('material_id is required');
@@ -126,4 +131,4 @@ async function reduceVendorStock(payload, userId) {
   return { movement_id: movementId };
 }
 
-module.exports = { logProduction, adjust, movements, currentStock, pairsOnHand, reduceVendorStock };
+module.exports = { logProduction, adjust, movements, currentStock, pairsOnHand, pairsOnHandTx, reduceVendorStock };

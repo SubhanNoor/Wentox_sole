@@ -5,12 +5,13 @@ import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type {
   VendorRow, RegionRow, CityRow, PurchaseRow, PurchaseCreateInput, PurchaseItemInput,
-  UnpostedPurchaseRow, PostAllResult
+  DraftPurchaseRow, ConfirmAllResult
 } from '@/lib/api';
 import { formatDate, getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import { focusFirstField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
-import { Plus, Trash2, Save, ShoppingBag, Edit } from 'lucide-react';
+import { Plus, Trash2, Save, ShoppingBag, Edit, CheckCircle2 } from 'lucide-react';
+import PasswordPromptModal from '@/components/PasswordPromptModal';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
 
@@ -62,14 +63,16 @@ export default function PurchasePage() {
     else setLookupError('Failed to load purchases: ' + res.error.message);
   }, []);
 
-  // P-03: purchases saved but not yet in the ledger, so a run can be entered first and posted in
-  // one action at the end. Mirrors SB-06 on SaleBillPage.
-  const [unpostedPurchases, setUnpostedPurchases] = useState<UnpostedPurchaseRow[]>([]);
+  // Every saved-unposted purchase now lives in draft_purchases — the real purchases table
+  // strictly never holds an unposted document (same architecture change as Sale Bill/Sale
+  // Return). Mirrors SB-06 on SaleBillPage.
+  const [unpostedPurchases, setUnpostedPurchases] = useState<DraftPurchaseRow[]>([]);
   const [postAllBusy, setPostAllBusy] = useState(false);
-  const [postAllResult, setPostAllResult] = useState<PostAllResult<'purchase_id'> | null>(null);
+  const [postAllResult, setPostAllResult] = useState<ConfirmAllResult | null>(null);
+  const [postingDraftId, setPostingDraftId] = useState<number | null>(null);
 
   const refreshUnposted = useCallback(async () => {
-    const res = await api.purchases.listUnposted();
+    const res = await api.draftPurchases.list();
     if (res.ok) setUnpostedPurchases(res.data);
   }, []);
 
@@ -280,22 +283,26 @@ export default function PurchasePage() {
     };
   };
 
+  // Editing a POSTED purchase in place was never allowed here (purchases.service.js#update()
+  // always throws POSTED_LOCK on an is_posted row) — must unpost first, same as before. So under
+  // the draft-table model, mode==='edit' unconditionally means editing a draft: there's no
+  // "isEditingPosted" branch to worry about the way Sale Bill/Return have one.
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const payload = buildPayload();
     if (!payload) return;
 
     const result = mode === 'edit' && purchaseId != null
-      ? await api.purchases.update(purchaseId, payload)
-      : await api.purchases.create(payload);
+      ? await api.draftPurchases.update(purchaseId, payload)
+      : await api.draftPurchases.create(payload);
 
     if (!result.ok) {
       setErrorMsg('Failed to save purchase: ' + result.error.message);
       return;
     }
 
-    setPurchaseId(result.data.purchase_id);
-    setCurrentIsPosted(result.data.is_posted);
+    setPurchaseId(result.data.draft_id);
+    setCurrentIsPosted(false);
     // P-02: only a freshly created purchase counts as "part of this run" — an edit of an existing
     // one must not clear the form out from under the user when it posts.
     const isNewPurchase = mode !== 'edit';
@@ -304,7 +311,6 @@ export default function PurchasePage() {
     setSuccessMsg(mode === 'edit' ? 'Purchase updated successfully.' : 'Purchase recorded successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     setMode('view');
-    refreshPurchases();
     refreshUnposted(); // P-03: a newly saved purchase joins the pending-posting list immediately.
 
     // P-02: a plain Save is also "done with this purchase" — matches the same fix on
@@ -350,14 +356,18 @@ export default function PurchasePage() {
     setMode('view');
   };
 
+  // Post = confirm the draft: moves it from draft_purchases into the real purchases table,
+  // writing ledger + vendor stock, deleting the draft. Only reachable while !currentIsPosted, so
+  // purchaseId is always a draft_id here.
   const handlePost = async () => {
     if (purchaseId == null) return;
     const postedBillNo = billNo.trim();
-    const res = await api.purchases.post(purchaseId);
+    const res = await api.draftPurchases.confirm(purchaseId);
     if (!res.ok) {
       setErrorMsg('Failed to post purchase: ' + res.error.message);
       return;
     }
+    setPurchaseId(res.data.purchase_id);
     setCurrentIsPosted(true);
     // P-02: clear for the next purchase only if this one was entered in this run — one opened
     // from the list and posted there stays on screen. The message names the document, because
@@ -373,13 +383,11 @@ export default function PurchasePage() {
     refreshUnposted(); // P-03: it just left the pending list.
   };
 
-  // P-03: post the whole run. Each purchase posts in its own transaction on the backend, so one
-  // that can't post leaves the rest posted — hence reading `failed` rather than treating a
-  // resolved call as "all done".
+  // P-03: post the whole run via the real backend batch endpoint (draftPurchases.confirmAll).
   const handlePostAll = async () => {
     setPostAllBusy(true);
     setPostAllResult(null);
-    const res = await api.purchases.postAll();
+    const res = await api.draftPurchases.confirmAll();
     setPostAllBusy(false);
 
     if (!res.ok) {
@@ -392,24 +400,117 @@ export default function PurchasePage() {
       setTimeout(() => setSuccessMsg(''), 3000);
     }
     await Promise.all([refreshUnposted(), refreshPurchases()]);
-    if (purchaseId != null && res.data.posted.some(p => p.purchase_id === purchaseId)) setCurrentIsPosted(true);
+    // The draft open on screen (if any) may have just been posted — its id is gone either way
+    // (ConfirmAllResult doesn't carry the new purchase_id back), so reset rather than leave the
+    // form pointed at nothing.
+    if (purchaseId != null && !currentIsPosted && res.data.posted.some(p => p.draft_id === purchaseId)) {
+      handleNew();
+    }
   };
 
+  // "Unpost" now moves the purchase back to being a draft — the real purchases table strictly
+  // never holds an unposted document. The form now points at a different id (the new draft's).
   const handleUnpost = async () => {
     if (purchaseId == null) return;
-    const res = await api.purchases.unpost(purchaseId);
+    const res = await api.purchases.unconfirm(purchaseId);
     if (!res.ok) {
       setErrorMsg('Failed to unpost purchase: ' + res.error.message);
       return;
     }
+    setPurchaseId(res.data.draft_id);
     setCurrentIsPosted(false);
     setSuccessMsg('Purchase unposted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshPurchases();
+    refreshUnposted();
   };
 
+  // Pending Posting panel: opening a row loads that draft straight into the form — no password
+  // (drafts never needed one on this page; only a password-gated delete is new, below).
+  const loadDraftIntoForm = (draft: DraftPurchaseRow) => {
+    createdInThisRun.current = false;
+    setPurchaseId(draft.draft_id);
+    setCurrentIsPosted(false);
+    setDate(draft.purchase_date.slice(0, 10));
+    setVendorId(String(draft.vendor_id));
+    setBillNo(draft.bill_no || '');
+    setRemarks(draft.remarks || '');
+    setItems((draft.items || []).length
+      ? (draft.items || []).map(it => ({
+          uid: 'draftrow_' + it.line_no,
+          materialName: it.material_name || '',
+          unit: it.unit,
+          quantity: it.quantity,
+          pricePerUnit: it.price_per_unit,
+          totalPrice: it.total_price
+        }))
+      : [emptyItem()]);
+    setErrorMsg('');
+    setMode('edit');
+  };
+
+  const handleOpenUnposted = async (draftId: number) => {
+    const res = await api.draftPurchases.get(draftId);
+    if (!res.ok) {
+      setErrorMsg('Failed to load purchase: ' + res.error.message);
+      return;
+    }
+    loadDraftIntoForm(res.data);
+    setActiveTab('entry');
+  };
+
+  const handlePostOneUnposted = async (draftId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPostingDraftId(draftId);
+    const res = await api.draftPurchases.confirm(draftId);
+    setPostingDraftId(null);
+    if (!res.ok) {
+      setErrorMsg('Failed to post purchase: ' + res.error.message);
+      return;
+    }
+    setSuccessMsg(`Purchase ${res.data.bill_no || `#${res.data.purchase_id}`} posted.`);
+    setTimeout(() => setSuccessMsg(''), 3000);
+    await Promise.all([refreshUnposted(), refreshPurchases()]);
+    if (draftId === purchaseId && !currentIsPosted) {
+      setPurchaseId(res.data.purchase_id);
+      setCurrentIsPosted(true);
+    }
+  };
+
+  // Password-gated (verified server-side) — deleting a saved-unposted purchase is destructive
+  // with no reverse-never-erase trail, same guard level used on Sale Bill/Sale Return.
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const pendingDeleteDraftId = useRef<number | null>(null);
+
+  const handleDeleteUnposted = (draftId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    pendingDeleteDraftId.current = draftId;
+    setIsPasswordModalOpen(true);
+  };
+
+  const handleDeletePasswordSuccess = async (password: string) => {
+    setIsPasswordModalOpen(false);
+    const targetId = pendingDeleteDraftId.current;
+    pendingDeleteDraftId.current = null;
+    if (targetId == null) return;
+    const res = await api.draftPurchases.remove(targetId, password);
+    if (!res.ok) {
+      setErrorMsg('Failed to delete purchase: ' + res.error.message);
+      return;
+    }
+    setSuccessMsg('Purchase deleted successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    if (purchaseId === targetId && !currentIsPosted) handleNew();
+    refreshUnposted();
+  };
+
+  // Recorded Purchases (the tab below) shows only POSTED purchases — an unposted one hasn't
+  // actually happened yet (no ledger effect, stock only reserved), so it doesn't belong in the
+  // vendor's purchase record; it stays reachable via the Pending Posting panel above instead,
+  // same split as Sale Bill/Sale Return. Reported directly by the user after the identical fix
+  // on VendorSetupPage's purchase-history modal.
   const sortedPurchases = useMemo(() => {
-    return [...purchases].sort((a, b) => b.purchase_date.localeCompare(a.purchase_date));
+    return [...purchases].filter(p => p.is_posted).sort((a, b) => b.purchase_date.localeCompare(a.purchase_date));
   }, [purchases]);
 
   // Recorded Purchases moved to its own tab (was inline under the entry form on the same page —
@@ -494,13 +595,35 @@ export default function PurchasePage() {
             </div>
 
             {unpostedPurchases.length > 0 && (
-              <ul className="mt-3 space-y-0.5 max-h-32 overflow-y-auto">
+              <ul className="mt-3 space-y-0.5 max-h-40 overflow-y-auto">
                 {unpostedPurchases.map(p => (
-                  <li key={p.purchase_id} className="text-xs text-slate-600 flex gap-2">
-                    <span className="font-mono font-semibold">{p.bill_no || `#${p.purchase_id}`}</span>
+                  <li
+                    key={p.draft_id}
+                    onClick={() => handleOpenUnposted(p.draft_id)}
+                    className="text-xs text-slate-600 flex items-center gap-2 cursor-pointer hover:bg-amber-100/50 rounded px-1 py-0.5 -mx-1"
+                  >
+                    <span className="font-mono font-semibold">{p.bill_no || `#${p.draft_id}`}</span>
                     <span className="text-slate-400">{formatDate(p.purchase_date)}</span>
-                    <span className="truncate">{p.vendor_name || 'Unnamed Vendor'}</span>
+                    <span className="truncate">{vendors.find(v => v.vendor_id === p.vendor_id)?.name || 'Unnamed Vendor'}</span>
                     <span className="ml-auto font-mono">{formatCurrency(Number(p.total_value))}</span>
+                    <button
+                      type="button"
+                      title="Post this purchase"
+                      onClick={(e) => handlePostOneUnposted(p.draft_id, e)}
+                      disabled={postingDraftId === p.draft_id}
+                      className="flex-shrink-0 p-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                    >
+                      <CheckCircle2 size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      title="Delete this purchase (password required)"
+                      onClick={(e) => handleDeleteUnposted(p.draft_id, e)}
+                      disabled={postingDraftId === p.draft_id}
+                      className="flex-shrink-0 p-1 rounded bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                    >
+                      <Trash2 size={12} />
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -517,8 +640,8 @@ export default function PurchasePage() {
                 {postAllResult.failed.length > 0 && (
                   <ul className="mt-1.5 space-y-1">
                     {postAllResult.failed.map(f => (
-                      <li key={f.purchase_id} className="text-xs text-rose-700">
-                        <span className="font-mono font-semibold">{f.bill_no || `#${f.purchase_id}`}</span>
+                      <li key={f.draft_id} className="text-xs text-rose-700">
+                        <span className="font-mono font-semibold">{f.bill_no || `#${f.draft_id}`}</span>
                         {' — '}{f.message}
                       </li>
                     ))}
@@ -987,6 +1110,14 @@ export default function PurchasePage() {
             </form>
           </div>
         )}
+
+        <PasswordPromptModal
+          isOpen={isPasswordModalOpen}
+          onClose={() => { setIsPasswordModalOpen(false); pendingDeleteDraftId.current = null; }}
+          onSuccess={handleDeletePasswordSuccess}
+          title="Delete Unposted Purchase"
+          subtitle="Enter your password to permanently delete this unposted purchase."
+        />
 
       </div>
     </AppLayout>

@@ -47,18 +47,60 @@ async function findById(voucherId) {
 // Carries the issued-cheque columns as well as the endorsed-cheque join: an expense can be paid by
 // a cheque WE wrote (issued_cheque_no on the row) or by handing on a cheque we received
 // (cheque_id -> dbo.cheques), and the grid has to show either.
+// A voucher's lines now live in TWO tables: the posted ones in dbo.expenses and the unposted ones
+// in dbo.draft_expenses (the draft/real split — an unposted expense is never left in the real
+// table). This unions both halves into the single list the screen has always rendered, so nothing
+// upstream has to know there are two tables:
+//   - `status` is derived, not read: a real row is 'CONFIRMED' by the invariant, a draft is 'DRAFT'.
+//     expenseVouchers.service#deriveStatus() counts these exactly as before.
+//   - `expense_id` / `draft_id`: exactly one is set per line, naming which table it came from and
+//     which id the per-line actions must address.
+//   - a draft has no issued-cheque disposition yet, so those columns read as their at-rest values
+//     ('PENDING', no bounced/returned date) — the same values a freshly posted line carries.
+// Ordered by created_at so the two halves interleave in genuine entry order — confirm()/unconfirm()
+// carry created_at across, so a line keeps its position when it is posted or unposted.
 async function listLines(voucherId) {
   const result = await query(
-    `SELECT e.*, ba.name AS account_name, ba.code AS account_code,
+    `SELECT e.expense_id, CAST(NULL AS INT) AS draft_id,
+            e.expense_date, e.ba_id, e.amount, e.payment_mode, e.details,
+            e.cheque_id, e.bank_id, e.issued_cheque_no, e.issued_cheque_date,
+            e.remarks, e.voucher_id, e.created_at,
+            CAST(e.status AS VARCHAR(10)) AS status,
+            CAST(e.issued_cheque_status AS VARCHAR(20)) AS issued_cheque_status,
+            e.issued_cheque_bounced_date, e.issued_cheque_returned_date,
+            e.issued_cheque_return_reason,
+            ba.name AS account_name, ba.code AS account_code,
             b.name AS bank_name,
             ch.cheque_no AS endorsed_cheque_no, ch.cheque_date AS endorsed_cheque_date,
-            ch.cheque_status AS endorsed_cheque_status
+            CAST(ch.cheque_status AS VARCHAR(20)) AS endorsed_cheque_status
      FROM dbo.expenses e
      JOIN dbo.business_accounts ba ON ba.ba_id = e.ba_id
      LEFT JOIN dbo.bank_accounts b ON b.bank_id = e.bank_id
      LEFT JOIN dbo.cheques ch ON ch.cheque_id = e.cheque_id
      WHERE e.voucher_id = @voucherId
-     ORDER BY e.expense_id ASC`,
+
+     UNION ALL
+
+     SELECT CAST(NULL AS INT) AS expense_id, dexp.draft_id,
+            dexp.expense_date, dexp.ba_id, dexp.amount, dexp.payment_mode, dexp.details,
+            dexp.cheque_id, dexp.bank_id, dexp.issued_cheque_no, dexp.issued_cheque_date,
+            dexp.remarks, dexp.voucher_id, dexp.created_at,
+            CAST('DRAFT' AS VARCHAR(10)) AS status,
+            CAST('PENDING' AS VARCHAR(20)) AS issued_cheque_status,
+            CAST(NULL AS DATE) AS issued_cheque_bounced_date,
+            CAST(NULL AS DATE) AS issued_cheque_returned_date,
+            CAST(NULL AS NVARCHAR(500)) AS issued_cheque_return_reason,
+            ba.name AS account_name, ba.code AS account_code,
+            b.name AS bank_name,
+            ch.cheque_no AS endorsed_cheque_no, ch.cheque_date AS endorsed_cheque_date,
+            CAST(ch.cheque_status AS VARCHAR(20)) AS endorsed_cheque_status
+     FROM dbo.draft_expenses dexp
+     JOIN dbo.business_accounts ba ON ba.ba_id = dexp.ba_id
+     LEFT JOIN dbo.bank_accounts b ON b.bank_id = dexp.bank_id
+     LEFT JOIN dbo.cheques ch ON ch.cheque_id = dexp.cheque_id
+     WHERE dexp.voucher_id = @voucherId
+
+     ORDER BY created_at ASC, expense_id ASC, draft_id ASC`,
     { voucherId: { type: sql.Int, value: voucherId } },
   );
   return result.recordset;
@@ -88,17 +130,29 @@ async function list(filters = {}) {
     params.voucherNo = { type: sql.Int, value: filters.voucher_no };
   }
 
+  // Lines come from both dbo.expenses (posted) and dbo.draft_expenses (unposted) — see listLines()
+  // for why. The union is folded into a single derived table first so every aggregate below counts
+  // the whole voucher, not just its posted half (which would report a fully-unposted voucher as
+  // having no lines at all, and so read POSTED-of-zero rather than UNPOSTED).
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT v.*,
-            COUNT(e.expense_id) AS line_count,
-            SUM(CASE WHEN e.status = 'CONFIRMED' THEN 1 ELSE 0 END) AS confirmed_lines,
-            ISNULL(SUM(e.amount), 0) AS total_amount,
-            ISNULL(SUM(CASE WHEN e.payment_mode = 'CASH'   THEN e.amount ELSE 0 END), 0) AS total_cash,
-            ISNULL(SUM(CASE WHEN e.payment_mode IN ('CHEQUE_ISSUED','CHEQUE_ENDORSED') THEN e.amount ELSE 0 END), 0) AS total_cheque,
-            ISNULL(SUM(CASE WHEN e.payment_mode = 'ONLINE' THEN e.amount ELSE 0 END), 0) AS total_online
+    `WITH all_lines AS (
+       SELECT e.voucher_id, e.amount, e.payment_mode, 1 AS is_line,
+              CASE WHEN e.status = 'CONFIRMED' THEN 1 ELSE 0 END AS is_confirmed
+         FROM dbo.expenses e
+       UNION ALL
+       SELECT dexp.voucher_id, dexp.amount, dexp.payment_mode, 1 AS is_line, 0 AS is_confirmed
+         FROM dbo.draft_expenses dexp
+     )
+     SELECT v.*,
+            ISNULL(SUM(l.is_line), 0) AS line_count,
+            ISNULL(SUM(l.is_confirmed), 0) AS confirmed_lines,
+            ISNULL(SUM(l.amount), 0) AS total_amount,
+            ISNULL(SUM(CASE WHEN l.payment_mode = 'CASH'   THEN l.amount ELSE 0 END), 0) AS total_cash,
+            ISNULL(SUM(CASE WHEN l.payment_mode IN ('CHEQUE_ISSUED','CHEQUE_ENDORSED') THEN l.amount ELSE 0 END), 0) AS total_cheque,
+            ISNULL(SUM(CASE WHEN l.payment_mode = 'ONLINE' THEN l.amount ELSE 0 END), 0) AS total_online
      FROM dbo.expense_vouchers v
-     LEFT JOIN dbo.expenses e ON e.voucher_id = v.voucher_id
+     LEFT JOIN all_lines l ON l.voucher_id = v.voucher_id
      ${where}
      GROUP BY v.voucher_id, v.voucher_no, v.voucher_date, v.remarks,
               v.created_by, v.updated_by, v.created_at, v.updated_at

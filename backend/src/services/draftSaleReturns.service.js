@@ -72,6 +72,76 @@ function list(filters) {
   return repository.list(filters);
 }
 
+// Editing a draft (SB-06-follow-up, mirrored for returns: ALL saved-unposted returns are drafts
+// now, not just genuinely incomplete ones). Stock is reconciled unconditionally: release the old
+// lines' restoration (a negative reversing ADJUSTMENT — never delete the original row, same
+// reverse-never-erase pattern remove() below uses), then restore the new lines. No oversell check
+// needed here — restoring stock can never take it negative, unlike draftSaleBills' deduction.
+async function update(draftId, payload) {
+  const existing = await getById(draftId);
+  validateItems(payload.items);
+  if (!payload.customer_id) throw ApiError.badRequest('customer_id is required');
+  if (!payload.return_date) throw ApiError.badRequest('return_date is required');
+
+  const variantIds = [...new Set(payload.items.map((item) => item.variant_id))];
+  const packings = await repository.getVariantPackings(variantIds);
+  checkKnownVariants(variantIds, packings);
+
+  const lines = payload.items.map((item) => buildLine(item, packings.get(item.variant_id)));
+  const totals = buildTotals(lines, payload.invoice_discount);
+
+  const draft = {
+    return_date: payload.return_date,
+    store_id: payload.store_id,
+    customer_id: payload.customer_id,
+    sub_customer_id: payload.sub_customer_id,
+    bill_no: payload.bill_no,
+    gp_no: payload.gp_no,
+    bilty_no: payload.bilty_no,
+    adda_id: payload.adda_id,
+    remarks: payload.remarks,
+    invoice_discount: payload.invoice_discount || 0,
+    total_cartons: totals.totalCartons,
+    total_pairs: totals.totalPairs,
+    gross_value: totals.grossValue,
+    net_value: totals.netValue,
+  };
+
+  await withTransaction(async (transaction) => {
+    // Release the old lines' restoration first (negative reversing ADJUSTMENT).
+    await repository.insertStockMovements(
+      transaction,
+      existing.items.map((item) => ({
+        variant_id: item.variant_id,
+        movement_type: 'ADJUSTMENT',
+        qty_pairs: -item.pairs,
+        movement_date: existing.return_date,
+        source_type: 'DRAFT_SALE_RETURN',
+        source_id: draftId,
+      })),
+    );
+
+    await repository.updateDraftHeader(transaction, draftId, draft);
+    await repository.deleteDraftItems(transaction, draftId);
+    await repository.insertDraftItems(transaction, draftId, lines);
+
+    // Restore the new lines.
+    await repository.insertStockMovements(
+      transaction,
+      lines.map((line) => ({
+        variant_id: line.variant_id,
+        movement_type: 'ADJUSTMENT',
+        qty_pairs: line.pairs,
+        movement_date: draft.return_date,
+        source_type: 'DRAFT_SALE_RETURN',
+        source_id: draftId,
+      })),
+    );
+  });
+
+  return getById(draftId);
+}
+
 // Deleting a draft deducts the stock it restored back out (a negative reversing ADJUSTMENT — the
 // original restore row is never deleted, matching the schema's reverse-never-erase pattern
 // elsewhere), as if the return never happened.
@@ -168,4 +238,33 @@ async function confirm(draftId, userId) {
   return saleReturnsService.getById(returnId);
 }
 
-module.exports = { create, getById, list, remove, confirm };
+// Post All for returns — same contract as saleReturns.service.js#postAll would be / mirrors
+// draftSaleBills.service.js#confirmAll(): sequential, resolves {posted, failed, attempted}.
+async function confirmAll(ids, userId) {
+  const targets = Array.isArray(ids) && ids.length
+    ? ids.map((id) => ({ draft_id: id }))
+    : await list();
+
+  const posted = [];
+  const failed = [];
+
+  for (const target of targets) {
+    const draftId = target.draft_id;
+    try {
+      const ret = await confirm(draftId, userId);
+      posted.push({ draft_id: draftId, bill_no: ret.bill_no, net_value: ret.net_value });
+    } catch (err) {
+      if (!err.status) console.error(`confirmAll: unexpected failure on draft ${draftId}:`, err);
+      failed.push({
+        draft_id: draftId,
+        bill_no: target.bill_no ?? null,
+        message: err.status ? err.message : 'Unexpected error while posting this draft.',
+        code: err.code || 'INTERNAL',
+      });
+    }
+  }
+
+  return { posted, failed, attempted: targets.length };
+}
+
+module.exports = { create, getById, list, update, remove, confirm, confirmAll };

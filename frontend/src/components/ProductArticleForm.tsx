@@ -42,6 +42,11 @@ interface ProductArticleFormProps {
   /** Rendered right after Product Name — used by the single-product edit form's inline category picker. Omitted in the multi-article add workflow, where category is selected once above the whole list. */
   categorySlot?: ReactNode;
   errors?: ArticleFieldErrors;
+  /** Wired onto this row's LAST field (the final cost breakdown input) — the multi-article add
+   *  workflow uses it for its Shift+Enter/'.'+Enter "add another article" chord, mirroring
+   *  SaleBillPage/PurchasePage's item rows. Omitted by the single-product edit form, which has no
+   *  such row-adding concept. */
+  onLastFieldKeyDown?: (e: React.KeyboardEvent) => void;
 }
 
 /**
@@ -51,6 +56,7 @@ interface ProductArticleFormProps {
  */
 export default function ProductArticleForm({
   values, onChange, vendorList, vendorLocked, vendorLockedLabel, leadingSlot, categorySlot, errors,
+  onLastFieldKeyDown,
 }: ProductArticleFormProps) {
   const setCost = (key: CostFieldKey, value: number) =>
     onChange({ costs: { ...values.costs, [key]: value } });
@@ -139,7 +145,7 @@ export default function ProductArticleForm({
           <Hammer size={15} className="text-[#B08D57]" /> Production / Manufacturing Cost Breakdown (PKR)
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {COST_FIELDS.map(field => (
+          {COST_FIELDS.map((field, idx) => (
             <div key={field.key}>
               <label className="block text-xs text-slate-600 mb-0.5">{field.label}</label>
               <input
@@ -147,6 +153,7 @@ export default function ProductArticleForm({
                 value={values.costs[field.key] === 0 ? '' : values.costs[field.key]}
                 placeholder="0"
                 onChange={e => setCost(field.key, e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
+                onKeyDown={idx === COST_FIELDS.length - 1 ? onLastFieldKeyDown : undefined}
                 className="soleria-input text-xs font-semibold"
               />
             </div>

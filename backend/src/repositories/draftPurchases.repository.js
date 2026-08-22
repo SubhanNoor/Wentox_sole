@@ -93,4 +93,30 @@ async function deleteDraft(transaction, draftId) {
   await request.query('DELETE FROM dbo.draft_purchases WHERE draft_id = @draftId');
 }
 
-module.exports = { insertDraft, insertDraftItems, findById, list, deleteDraft };
+// Editing a draft (service.js#update()) — header fields only; items are always deleted+reinserted
+// by the caller, same as purchases.repository.js#updateHeader's sibling deleteItems/insertItems.
+async function updateDraftHeader(transaction, draftId, draft) {
+  const request = requestWithParams(transaction, {
+    draftId: { type: sql.Int, value: draftId },
+    purchaseDate: { type: sql.Date, value: draft.purchase_date },
+    vendorId: { type: sql.Int, value: draft.vendor_id },
+    billNo: { type: sql.VarChar(30), value: draft.bill_no ?? null },
+    remarks: { type: sql.NVarChar(500), value: draft.remarks ?? null },
+    totalValue: { type: sql.Decimal(14, 2), value: draft.total_value },
+  });
+  await request.query(`
+    UPDATE dbo.draft_purchases SET
+      purchase_date = @purchaseDate, vendor_id = @vendorId, bill_no = @billNo,
+      remarks = @remarks, total_value = @totalValue
+    WHERE draft_id = @draftId
+  `);
+}
+
+async function deleteDraftItems(transaction, draftId) {
+  const request = requestWithParams(transaction, { draftId: { type: sql.Int, value: draftId } });
+  await request.query('DELETE FROM dbo.draft_purchase_items WHERE draft_id = @draftId');
+}
+
+module.exports = {
+  insertDraft, insertDraftItems, findById, list, deleteDraft, updateDraftHeader, deleteDraftItems,
+};

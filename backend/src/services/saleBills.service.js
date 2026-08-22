@@ -13,6 +13,12 @@ const {
 } = require('./saleBillMath');
 const CODES = require('../constants/reservedAccounts');
 const { toISODate } = require('../utils/dates');
+// Repository, not service: draftSaleBills.service.js already requires this service (its own
+// confirm() calls insertConfirmed()/postLedgerAndStock() below), so requiring draftSaleBills's
+// SERVICE back here would be circular. Going one layer down to its repository for the plain
+// insert/stock-movement helpers unconfirm() needs avoids that without any business logic crossing
+// the boundary the wrong way.
+const draftSaleBillsRepository = require('../repositories/draftSaleBills.repository');
 
 // bilty_no/gp_no/adda_id are all optional at save time — dispatch details are often not known yet
 // when the bill is written up, and get filled in later via updateBiltyInfo() below (which still
@@ -297,6 +303,85 @@ async function unpost(id) {
   return getById(id);
 }
 
+// Reverse of draftSaleBills.service.js#confirm(): the real sale_bills table now strictly never
+// holds an unposted document (the whole point of this change), so "Unpost" has to fully undo the
+// move confirm() made, not just remove the ledger entries the old unpost() above did. Stock stays
+// reserved throughout — released here as a SALE_BILL row, then immediately re-reserved as a
+// DRAFT_SALE_BILL row for the new draft, net zero effect on actual on-hand stock, same as
+// confirm()'s own reservation handoff in the other direction.
+async function unconfirm(id) {
+  const bill = await getById(id);
+  if (!bill.is_posted) {
+    throw ApiError.conflict('Bill is not posted', 'NOT_POSTED');
+  }
+
+  const draftId = await withTransaction(async (transaction) => {
+    await repository.deleteLedgerEntries(transaction, id);
+    await repository.insertStockMovements(
+      transaction,
+      bill.items.map((item) => ({
+        variant_id: item.variant_id,
+        movement_type: 'ADJUSTMENT',
+        qty_pairs: item.pairs,
+        movement_date: bill.bill_date,
+        source_type: 'SALE_BILL',
+        source_id: id,
+      })),
+    );
+
+    const draft = {
+      bill_date: bill.bill_date,
+      store_id: bill.store_id,
+      customer_id: bill.customer_id,
+      sub_customer_id: bill.sub_customer_id,
+      main_ac_id: bill.main_ac_id,
+      delivery_type: bill.delivery_type,
+      delivery_address: bill.delivery_address,
+      bill_no: bill.bill_no,
+      gp_no: bill.gp_no,
+      bilty_no: bill.bilty_no,
+      adda_id: bill.adda_id,
+      remarks: bill.remarks,
+      invoice_discount: bill.invoice_discount,
+      total_cartons: bill.total_cartons,
+      total_pairs: bill.total_pairs,
+      gross_value: bill.gross_value,
+      net_value: bill.net_value,
+      created_by: bill.created_by,
+    };
+    const lines = bill.items.map((item) => ({
+      variant_id: item.variant_id,
+      cartons: item.cartons,
+      pairs: item.pairs,
+      rate: item.rate,
+      discount_percent: item.discount_percent,
+      discount_value: item.discount_value,
+      value: item.value,
+    }));
+
+    const newDraftId = await draftSaleBillsRepository.insertDraft(transaction, draft);
+    await draftSaleBillsRepository.insertDraftItems(transaction, newDraftId, lines);
+    await draftSaleBillsRepository.insertStockMovements(
+      transaction,
+      lines.map((line) => ({
+        variant_id: line.variant_id,
+        movement_type: 'ADJUSTMENT',
+        qty_pairs: -line.pairs,
+        movement_date: draft.bill_date,
+        source_type: 'DRAFT_SALE_BILL',
+        source_id: newDraftId,
+      })),
+    );
+
+    await repository.deleteItems(transaction, id);
+    await repository.deleteBill(transaction, id);
+
+    return newDraftId;
+  });
+
+  return draftSaleBillsRepository.findById(draftId);
+}
+
 // Pending Posting sidebar's Delete: only ever an UNPOSTED bill (nothing in ledger_entries yet —
 // a posted bill must be unposted first, same restriction as everywhere else financial gets
 // undone). Releases the stock create() reserved at save time, then removes the items and the
@@ -379,12 +464,19 @@ async function postLedgerAndStock(transaction, { billId, customerId, netValue, b
   // summed per variant first — the same article/color can legitimately appear on more than one
   // line (SB-02) — then checked against what's on hand before any of this bill's own movements
   // are written.
+  //
+  // pairsOnHandTx, not pairsOnHand: this runs inside `transaction`, and draftSaleBills.service.js#
+  // confirm() has already written a same-transaction stock_movements row for these variants
+  // (reversing the draft's own reservation) before calling here. Reading through the pool's own
+  // connection instead of the transaction's would try to read that uncommitted row from a
+  // separate connection and, under READ COMMITTED, block waiting on a commit this very call is
+  // blocking — a real deadlock, not just a slow query.
   const requestedByVariant = new Map();
   for (const item of items) {
     requestedByVariant.set(item.variant_id, (requestedByVariant.get(item.variant_id) || 0) + item.pairs);
   }
   for (const [variantId, requestedPairs] of requestedByVariant) {
-    const onHand = await stockService.pairsOnHand(variantId);
+    const onHand = await stockService.pairsOnHandTx(transaction, variantId);
     if (requestedPairs > onHand) {
       const variant = await productColorsService.getById(variantId);
       const article = await productsService.getById(variant.article_id);
@@ -475,6 +567,6 @@ async function updateBiltyInfo(billId, payload) {
 }
 
 module.exports = {
-  create, list, getById, update, post, unpost, remove, postLedgerAndStock, insertConfirmed,
+  create, list, getById, update, post, unpost, unconfirm, remove, postLedgerAndStock, insertConfirmed,
   biltySearch, updateBiltyInfo, lastSoldRate, listUnposted, postAll,
 };

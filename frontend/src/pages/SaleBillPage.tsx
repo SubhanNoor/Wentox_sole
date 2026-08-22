@@ -17,7 +17,7 @@ import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
   RegionRow, CityRow, SaleBillRow, SaleBillCreateInput, SaleBillItemInput, StockRow,
-  UnpostedBillRow, PostAllResult
+  DraftSaleBillRow, ConfirmAllResult
 } from '@/lib/api';
 
 interface UiItem {
@@ -180,41 +180,32 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   const [newCustomerRegionId, setNewCustomerRegionId] = useState('');
   const [newCustomerCityId, setNewCustomerCityId] = useState('');
 
-  // Drafts
-  const [drafts, setDrafts] = useState<SaleBillRow[]>([]);
-  const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
-
-  const refreshDrafts = useCallback(async () => {
-    const res = await api.draftSaleBills.list();
-    if (res.ok) setDrafts(res.data);
-  }, []);
-
-  // SB-06: bills that are saved but not yet in the ledger, so a run can be entered first and
-  // posted in one action at the end. Distinct from `drafts` above: a draft is an incomplete bill
-  // that isn't a sale_bills row yet, whereas these are real, complete bills simply awaiting posting.
-  const [unpostedBills, setUnpostedBills] = useState<UnpostedBillRow[]>([]);
+  // SB-06 (revised): every saved-unposted bill now lives in draft_sale_bills — the real
+  // sale_bills table strictly never holds an unposted document. This one list replaces what used
+  // to be two separate concepts ("Saved Drafts" for incomplete entries vs "Pending Posting" for
+  // complete-but-unposted ones) — there's no longer a meaningful distinction at the data level.
+  const [unpostedBills, setUnpostedBills] = useState<DraftSaleBillRow[]>([]);
   const [postAllBusy, setPostAllBusy] = useState(false);
-  const [postAllResult, setPostAllResult] = useState<PostAllResult<'bill_id'> | null>(null);
+  const [postAllResult, setPostAllResult] = useState<ConfirmAllResult | null>(null);
   // Pending Posting sidebar: which single bill is mid-post (disables just that row's Post button
   // rather than the whole panel).
   const [postingBillId, setPostingBillId] = useState<number | null>(null);
 
   const refreshUnposted = useCallback(async () => {
-    const res = await api.saleBills.listUnposted();
+    const res = await api.draftSaleBills.list();
     if (res.ok) setUnpostedBills(res.data);
   }, []);
 
-  // One mount effect for both lists rather than one each — they load together and nothing reads
-  // either before the other.
-  useEffect(() => { refreshDrafts(); refreshUnposted(); }, [refreshDrafts, refreshUnposted]);
+  useEffect(() => { refreshUnposted(); }, [refreshUnposted]);
 
-  // SB-06: post the whole run. Each bill posts in its own transaction on the backend, so one that
-  // can't post leaves the rest posted — which is why this reads `failed` instead of treating a
-  // resolved call as "all done". Failures stay unposted and can be fixed and posted again.
+  // SB-06: post the whole run. Each draft confirms in its own transaction on the backend, so one
+  // that can't confirm leaves the rest posted — which is why this reads `failed` instead of
+  // treating a resolved call as "all done". Failures stay as drafts and can be fixed and posted
+  // again.
   const handlePostAll = async () => {
     setPostAllBusy(true);
     setPostAllResult(null);
-    const res = await api.saleBills.postAll();
+    const res = await api.draftSaleBills.confirmAll();
     setPostAllBusy(false);
 
     if (!res.ok) {
@@ -226,10 +217,14 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       setSuccessMsg(`${res.data.posted.length} bill(s) posted.`);
       setTimeout(() => setSuccessMsg(''), 3000);
     }
-    // Stock moved and the pending list shrank — both have to catch up, and a bill currently open
-    // on screen may have just been posted by this run.
-    await Promise.all([refreshUnposted(), refreshStock(), refreshDrafts()]);
-    if (billId != null && res.data.posted.some(p => p.bill_id === billId)) setCurrentBillIsPosted(true);
+    // Stock moved and the pending list shrank — both have to catch up. If the draft currently open
+    // on screen was one of the ones just posted, its id no longer exists (it's a different bill_id
+    // now) — ConfirmAllResult doesn't carry the new id back, so rather than leave the form pointed
+    // at a draft that's gone, reset to a fresh one.
+    await Promise.all([refreshUnposted(), refreshStock()]);
+    if (billId != null && !currentBillIsPosted && res.data.posted.some(p => p.draft_id === billId)) {
+      handleNew();
+    }
   };
 
   // Region/city lists for the quick-add modals. citiesInRegion keeps the dependent filtering the
@@ -397,26 +392,69 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     }, 150);
   };
 
-  // Pending Posting sidebar: a bill row only carries the summary fields (UnpostedBillRow), so
-  // opening it for edit fetches the full row first, then reuses the same password-gated edit
-  // path as every other "edit an existing bill" entry point (Weekly/Monthly/Overall/Find tabs).
-  const handleOpenUnpostedBill = async (billId: number) => {
-    const res = await api.saleBills.get(billId);
+  // Loads a draft (the Pending Posting sidebar's rows are all drafts now) directly into the form
+  // for editing — no password, same convention drafts always had (only editing an already-POSTED
+  // bill is password-gated). mode='edit' with billId set to the draft's own id so Save routes to
+  // draftSaleBills.update() rather than create()-ing a second one.
+  const loadDraftIntoForm = (draft: DraftSaleBillRow) => {
+    createdInThisRun.current = false;
+    setBillId(draft.draft_id);
+    setCurrentBillIsPosted(false);
+    setDate(draft.bill_date.slice(0, 10));
+    setStoreId(draft.store_id != null ? String(draft.store_id) : '');
+    setCustomerId(String(draft.customer_id));
+    setSubCustomerId(draft.sub_customer_id != null ? String(draft.sub_customer_id) : '');
+    setDeliveryType(draft.delivery_type === 'CUSTOM' ? 'custom' : '1');
+    setCustomAddress(draft.delivery_address || '');
+    setBillNo(draft.bill_no || '');
+    setGpNo(draft.gp_no || '');
+    setBiltyNo(draft.bilty_no || '');
+    setAddaId(draft.adda_id != null ? String(draft.adda_id) : '');
+    setRemarks(draft.remarks || '');
+    setDueDate(''); // due_date doesn't exist on a draft — only applies once it's a real bill
+    setInvoiceDiscount(draft.invoice_discount || 0);
+
+    const loadedItems: UiItem[] = (draft.items || []).map(it => {
+      const article = products.find(p => p.code === it.article_code);
+      return {
+        uid: 'draftrow_' + it.line_no,
+        articleId: article?.article_id ?? null,
+        variantId: it.variant_id,
+        label: `${it.article_name || it.article_code || 'Article'} — ${it.color || ''}`,
+        packing: it.pairs && it.cartons ? it.pairs / it.cartons : 0,
+        cartons: it.cartons,
+        pairs: it.pairs,
+        rate: it.rate,
+        discountPercent: it.discount_percent,
+        discountValue: it.discount_value,
+        value: it.value
+      };
+    });
+    setItems(loadedItems.length ? loadedItems : [newUiItem()]);
+    loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
+
+    setMode('edit');
+    setErrorMsg('');
+  };
+
+  // Pending Posting sidebar: opening a row loads that draft straight into the form.
+  const handleOpenUnpostedBill = async (draftId: number) => {
+    const res = await api.draftSaleBills.get(draftId);
     if (!res.ok) {
       setErrorMsg('Failed to load bill: ' + res.error.message);
       return;
     }
+    loadDraftIntoForm(res.data);
     setActiveTab('billing');
-    await handleEditSpecificBill(res.data);
   };
 
   // Posts a single bill straight from the sidebar without loading it into the form — for the
   // common case of "this one's ready, the rest of the run isn't yet". stopPropagation keeps the
   // click from also triggering the row's own open-for-edit handler.
-  const handlePostOneUnposted = async (targetBillId: number, e: React.MouseEvent) => {
+  const handlePostOneUnposted = async (draftId: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    setPostingBillId(targetBillId);
-    const res = await api.saleBills.post(targetBillId);
+    setPostingBillId(draftId);
+    const res = await api.draftSaleBills.confirm(draftId);
     setPostingBillId(null);
     if (!res.ok) {
       setErrorMsg('Failed to post bill: ' + res.error.message);
@@ -424,8 +462,12 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     }
     setSuccessMsg(`Bill ${res.data.bill_no} posted.`);
     setTimeout(() => setSuccessMsg(''), 3000);
-    await Promise.all([refreshUnposted(), refreshStock(), refreshDrafts()]);
-    if (targetBillId === billId) setCurrentBillIsPosted(true);
+    await Promise.all([refreshUnposted(), refreshStock()]);
+    // The form was pointing at this exact draft — it's a real, posted bill now under a new id.
+    if (draftId === billId && !currentBillIsPosted) {
+      setBillId(res.data.bill_id);
+      setCurrentBillIsPosted(true);
+    }
   };
 
   // Initialize new bill if mode is new and not set
@@ -453,7 +495,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setMode('new');
     // SB-05: a blank form has nothing saved in it yet, so nothing to clear on post.
     createdInThisRun.current = false;
-    setSelectedDraftId(null);
     setBillId(null);
     setCurrentBillIsPosted(false);
     setDate(getTodayDate());
@@ -545,21 +586,45 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     };
   };
 
-  const executeSave = async (password?: string): Promise<SaleBillRow | null> => {
+  // Whichever bill is on screen, `billId`/`is_posted` route to one of two entirely different
+  // tables now: a POSTED document is a real sale_bills row (billId = bill_id); anything else is a
+  // draft_sale_bill row (billId = draft_id) — the real table strictly never holds an unposted
+  // document. This flag is what every save/post/unpost path below branches on.
+  const isEditingPostedBill = mode === 'edit' && currentBillIsPosted;
+
+  const executeSave = async (password?: string): Promise<SaleBillRow | DraftSaleBillRow | null> => {
     const payload = buildPayload();
     if (!payload) return null;
 
+    if (isEditingPostedBill && billId != null) {
+      const result = await api.saleBills.update(billId, password ? { ...payload, password } : payload);
+      if (!result.ok) {
+        setErrorMsg('Failed to save bill: ' + result.error.message);
+        return null;
+      }
+      setBillId(result.data.bill_id);
+      setCurrentBillIsPosted(true);
+      setSuccessMsg('Sale bill updated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+      setMode('view');
+      setErrorMsg('');
+      refreshStock();
+      return result.data;
+    }
+
+    // Every other save — a brand-new bill, or editing one that's still a draft — goes through the
+    // draft table now (draftSaleBills.service.js), not sale_bills directly.
     const result = mode === 'edit' && billId != null
-      ? await api.saleBills.update(billId, password ? { ...payload, password } : payload)
-      : await api.saleBills.create(payload);
+      ? await api.draftSaleBills.update(billId, payload)
+      : await api.draftSaleBills.create(payload);
 
     if (!result.ok) {
       setErrorMsg('Failed to save bill: ' + result.error.message);
       return null;
     }
 
-    setBillId(result.data.bill_id);
-    setCurrentBillIsPosted(result.data.is_posted);
+    setBillId(result.data.draft_id);
+    setCurrentBillIsPosted(false);
     // SB-05: only a freshly created bill counts as "part of this run" — an edit of an existing
     // bill must not clear the form out from under the user when it posts.
     if (mode !== 'edit') createdInThisRun.current = true;
@@ -567,25 +632,28 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setTimeout(() => setSuccessMsg(''), 3000);
     setMode('view');
     setErrorMsg('');
-    refreshDrafts();
     refreshStock();
     refreshUnposted(); // SB-06: a newly saved bill joins the pending-posting list immediately.
     return result.data;
   };
 
   const handleSave = async () => {
-    if (mode === 'edit') {
+    // Only editing an ALREADY-POSTED bill needs a password — editing a draft (complete or not)
+    // never did, same convention "Saved Drafts" always had.
+    if (isEditingPostedBill) {
       setPasswordActionType('save_bill');
       setIsPasswordModalOpen(true);
-    } else {
-      // SB-05: a plain Save is also "done with this bill" — the client's own workflow for a run of
-      // bills is save each one as a draft, then Post All at the end (SB-06), so this has to reset
-      // too, not only Save & Post. Reported directly by the user after testing the keyboard flow:
-      // Enter reached Save correctly, but the form then just sat on the saved bill instead of
-      // being ready for the next one.
-      const saved = await executeSave();
-      if (saved) readyForNextBill();
+      return;
     }
+    // SB-05: a plain Save is also "done with this bill" — the client's own workflow for a run of
+    // bills is save each one as a draft, then Post All at the end (SB-06), so this has to reset
+    // too, not only Save & Post. Reported directly by the user after testing the keyboard flow:
+    // Enter reached Save correctly, but the form then just sat on the saved bill instead of
+    // being ready for the next one. Only applies to a brand-new bill, though — editing an existing
+    // draft just goes back to viewing it, same as editing a posted bill does.
+    const wasNew = mode !== 'edit';
+    const saved = await executeSave();
+    if (saved && wasNew) readyForNextBill();
   };
 
   // SB-01: the whole save-and-post path is wrapped, because this is the button that "did nothing" on
@@ -606,19 +674,23 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     }
   };
 
+  // Only reachable while !currentBillIsPosted (the button itself is hidden otherwise), so `saved`
+  // is always a fresh/edited DRAFT here — there's no separate "post an already-real-unposted bill"
+  // step left; saving IS drafting, so Save & Post is draft-then-confirm in one click.
   const saveAndPost = async () => {
     const saved = await executeSave();
-    if (saved) {
-      const postRes = await api.saleBills.post(saved.bill_id);
+    if (saved && 'draft_id' in saved) {
+      const postRes = await api.draftSaleBills.confirm(saved.draft_id);
       if (!postRes.ok) {
-        // Saved but not posted: the bill exists and must stay on screen, so no reset here — the
+        // Saved but not posted: the draft exists and must stay on screen, so no reset here — the
         // user needs to see which bill failed and press Post again once it's fixed.
         setErrorMsg('Bill was saved, but posting failed: ' + postRes.error.message);
       } else {
+        setBillId(postRes.data.bill_id);
         setCurrentBillIsPosted(true);
         // SB-05: name the bill in the message, because the form is about to empty — otherwise the
         // screen clearing is the only feedback that anything was saved at all.
-        setSuccessMsg(`Bill ${saved.bill_no} saved & posted. Ready for the next one.`);
+        setSuccessMsg(`Bill ${postRes.data.bill_no} saved & posted. Ready for the next one.`);
         setTimeout(() => setSuccessMsg(''), 3000);
         refreshUnposted(); // SB-06: it just left the pending list.
         if (createdInThisRun.current) readyForNextBill();
@@ -627,37 +699,43 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   };
 
   const handlePostCurrentBill = async () => {
-    if (billId != null) {
-      const postedBillNo = billNo;
-      const res = await api.saleBills.post(billId);
-      if (!res.ok) {
-        setErrorMsg('Failed to post bill: ' + res.error.message);
+    if (billId == null) return;
+    const postedBillNo = billNo;
+    const res = await api.draftSaleBills.confirm(billId);
+    if (!res.ok) {
+      setErrorMsg('Failed to post bill: ' + res.error.message);
+    } else {
+      setBillId(res.data.bill_id);
+      setCurrentBillIsPosted(true);
+      refreshUnposted(); // SB-06: it just left the pending list.
+      // SB-05: clear for the next bill only if this one was entered in this run. A bill opened
+      // from the Find tab and posted there stays on screen — the user went to it deliberately.
+      if (createdInThisRun.current) {
+        setSuccessMsg(`Bill ${postedBillNo} posted. Ready for the next one.`);
+        readyForNextBill();
       } else {
-        setCurrentBillIsPosted(true);
-        refreshUnposted(); // SB-06: it just left the pending list.
-        // SB-05: clear for the next bill only if this one was entered in this run. A bill opened
-        // from the Find tab and posted there stays on screen — the user went to it deliberately.
-        if (createdInThisRun.current) {
-          setSuccessMsg(`Bill ${postedBillNo} posted. Ready for the next one.`);
-          readyForNextBill();
-        } else {
-          setSuccessMsg('Bill posted successfully.');
-        }
-        setTimeout(() => setSuccessMsg(''), 3000);
+        setSuccessMsg('Bill posted successfully.');
       }
+      setTimeout(() => setSuccessMsg(''), 3000);
     }
   };
 
+  // "Unpost" now moves the bill back to being a draft — the real sale_bills table strictly never
+  // holds an unposted document (mirrors confirm()'s move in the other direction). The form now
+  // points at a different id (the new draft's), so it's updated here rather than just flipping a
+  // flag the way the old ledger-only unpost did.
   const handleUnpostCurrentBill = async () => {
     if (billId == null) return;
-    const res = await api.saleBills.unpost(billId);
+    const res = await api.saleBills.unconfirm(billId);
     if (!res.ok) {
       setErrorMsg('Failed to unpost bill: ' + res.error.message);
       return;
     }
+    setBillId(res.data.draft_id);
     setCurrentBillIsPosted(false);
     setSuccessMsg('Bill unposted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
+    refreshUnposted();
   };
 
   const handleEditCurrentBill = () => {
@@ -682,7 +760,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       const targetId = pendingDeleteBillId.current;
       pendingDeleteBillId.current = null;
       if (targetId != null) {
-        const res = await api.saleBills.remove(targetId, password);
+        const res = await api.draftSaleBills.remove(targetId, password);
         if (!res.ok) {
           setErrorMsg('Failed to delete bill: ' + res.error.message);
         } else {
@@ -690,7 +768,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
           setTimeout(() => setSuccessMsg(''), 3000);
           // The bill on screen (if any) may have just been the one deleted — drop back to a
           // fresh form rather than leave it pointing at a bill that no longer exists.
-          if (billId === targetId) handleNew();
+          if (billId === targetId && !currentBillIsPosted) handleNew();
           await Promise.all([refreshUnposted(), refreshStock()]);
         }
       }
@@ -698,37 +776,13 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setPasswordActionType(null);
   };
 
-  // Pending Posting sidebar's Delete button — password-gated (verified server-side), same as
-  // editing an already-posted bill: this is destructive and unlike unposting/posting has no
-  // reverse-never-erase trail, so it needs the same guard.
-  const handleDeleteUnposted = (targetBillId: number, e: React.MouseEvent) => {
+  // Pending Posting sidebar's Delete button — password-gated (verified server-side): destructive,
+  // with no reverse-never-erase trail, same guard level as editing an already-posted bill.
+  const handleDeleteUnposted = (targetDraftId: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    pendingDeleteBillId.current = targetBillId;
+    pendingDeleteBillId.current = targetDraftId;
     setPasswordActionType('delete_unposted_bill');
     setIsPasswordModalOpen(true);
-  };
-
-  // handleSaveDraft removed along with the "Save Draft" button. Loading, confirming and deleting
-  // existing drafts all still work — only creating a new one from this form is gone. The backend
-  // draftSaleBills.create channel is untouched, so restoring the button is just re-adding this.
-
-  const handleConfirmDraft = async () => {
-    if (selectedDraftId == null) {
-      setErrorMsg('Please select a draft first.');
-      setTimeout(() => setErrorMsg(''), 2000);
-      return;
-    }
-    const res = await api.draftSaleBills.confirm(selectedDraftId);
-    if (!res.ok) {
-      setErrorMsg('Failed to confirm draft: ' + res.error.message);
-      return;
-    }
-    setSelectedDraftId(null);
-    await loadBillRow(res.data);
-    setMode('view');
-    setSuccessMsg('Draft confirmed & posted successfully.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-    refreshDrafts();
   };
 
   // Line Items Helper Actions — new rows go to the TOP, not the bottom: the newest article is
@@ -1169,8 +1223,8 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                   {postAllResult.failed.length > 0 && (
                     <ul className="mt-1.5 space-y-1">
                       {postAllResult.failed.map(f => (
-                        <li key={f.bill_id} className="text-xs text-rose-700">
-                          <span className="font-mono font-semibold">{f.bill_no || `#${f.bill_id}`}</span>
+                        <li key={f.draft_id} className="text-xs text-rose-700">
+                          <span className="font-mono font-semibold">{f.bill_no || `#${f.draft_id}`}</span>
                           {' — '}{f.message}
                         </li>
                       ))}
@@ -1187,26 +1241,28 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               )}
             </div>
 
-            {/* Flat list — every unposted bill, oldest first (same order the backend returns). */}
+            {/* Flat list — every draft (saved-unposted bill), oldest first (same order the
+                backend returns). Customer name is resolved locally since drafts don't carry a
+                joined name the way the old summary rows did. */}
             {unpostedBills.length > 0 && (
               <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
                 {unpostedBills.map(b => (
                   <li
-                    key={b.bill_id}
-                    onClick={() => handleOpenUnpostedBill(b.bill_id)}
+                    key={b.draft_id}
+                    onClick={() => handleOpenUnpostedBill(b.draft_id)}
                     className="px-3 py-2.5 text-xs flex items-center justify-between gap-2 cursor-pointer hover:bg-amber-50/60 transition-colors border-b border-slate-100 last:border-b-0"
                   >
                     <div className="min-w-0">
-                      <div className="font-mono font-semibold text-slate-700">{b.bill_no || `#${b.bill_id}`}</div>
-                      <div className="text-slate-400 truncate">{b.customer_name || 'Unnamed Customer'}</div>
+                      <div className="font-mono font-semibold text-slate-700">{b.bill_no || `#${b.draft_id}`}</div>
+                      <div className="text-slate-400 truncate">{customers.find(c => c.customer_id === b.customer_id)?.name || 'Unnamed Customer'}</div>
                       <div className="text-slate-400">{formatDate(b.bill_date)} · {formatCurrency(Number(b.net_value))}</div>
                     </div>
                     <div className="flex-shrink-0 flex flex-row items-center gap-1">
                       <button
                         type="button"
                         title="Post this bill"
-                        onClick={(e) => handlePostOneUnposted(b.bill_id, e)}
-                        disabled={postingBillId === b.bill_id}
+                        onClick={(e) => handlePostOneUnposted(b.draft_id, e)}
+                        disabled={postingBillId === b.draft_id}
                         className="p-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
                       >
                         <CheckCircle2 size={14} />
@@ -1214,8 +1270,8 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                       <button
                         type="button"
                         title="Delete this bill (password required)"
-                        onClick={(e) => handleDeleteUnposted(b.bill_id, e)}
-                        disabled={postingBillId === b.bill_id}
+                        onClick={(e) => handleDeleteUnposted(b.draft_id, e)}
+                        disabled={postingBillId === b.draft_id}
                         className="p-1.5 rounded-md bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
                       >
                         <Trash2 size={14} />
@@ -1253,69 +1309,10 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
           </div>
         )}
 
-        {/* Drafts Loader Panel */}
-        {mode !== 'view' && drafts.length > 0 && (
-          <div className="mb-3 p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-3 text-sm" data-no-print>
-            <div className="flex items-center gap-2">
-              <span className="font-semibold text-slate-700">Saved Drafts:</span>
-              <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
-                {drafts.length} incomplete bill(s)
-              </span>
-            </div>
-            <div className="flex items-center gap-3">
-              <select
-                value={selectedDraftId ?? ''}
-                onChange={e => {
-                  const draftId = e.target.value ? Number(e.target.value) : null;
-                  setSelectedDraftId(draftId);
-                  const selected = drafts.find(d => d.bill_id === draftId);
-                  if (selected) {
-                    loadBillRow(selected);
-                    setMode('new');
-                  }
-                }}
-                className="soleria-input py-1 px-2.5 text-xs bg-white border cursor-pointer font-medium"
-                style={{ width: '220px' }}
-              >
-                <option value="">Select a draft to load...</option>
-                {drafts.map(d => {
-                  const custName = customers.find(c => c.customer_id === d.customer_id)?.name || 'Unnamed Customer';
-                  return (
-                    <option key={d.bill_id} value={d.bill_id}>
-                      {d.bill_no || 'No Number'} - {custName} ({formatDate(d.bill_date)})
-                    </option>
-                  );
-                })}
-              </select>
-              <button
-                type="button"
-                onClick={handleConfirmDraft}
-                className="text-xs text-emerald-600 hover:text-emerald-800 font-semibold transition-colors"
-              >
-                Confirm Draft (Post)
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  if (selectedDraftId != null) {
-                    await api.draftSaleBills.remove(selectedDraftId);
-                    setSelectedDraftId(null);
-                    handleNew();
-                    refreshDrafts();
-                    setSuccessMsg('Draft deleted successfully.');
-                    setTimeout(() => setSuccessMsg(''), 2000);
-                  } else {
-                    setErrorMsg('Please select a draft first.');
-                    setTimeout(() => setErrorMsg(''), 2000);
-                  }
-                }}
-                className="text-xs text-rose-600 hover:text-rose-800 font-semibold transition-colors"
-              >
-                Delete Selected Draft
-              </button>
-            </div>
-          </div>
-        )}
+        {/* The old separate "Saved Drafts" loader panel is gone — every saved-unposted bill is a
+            draft now, so the Pending Posting sidebar (above, outside this form) covers exactly
+            the same ground: click a row to load it, a Post button per row, Post All, and a
+            password-gated Delete. Nothing left here needs its own picker. */}
 
 
         {/* Toolbar - data-no-print */}

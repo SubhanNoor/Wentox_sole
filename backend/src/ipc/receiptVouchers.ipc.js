@@ -35,7 +35,7 @@ module.exports = function register() {
   // must read `failed`; ok:true does not mean the whole voucher posted.
   ipcMain.handle('receipt-vouchers:post', wrap((payload) => {
     const session = requireSession();
-    return service.post(payload.id, session);
+    return service.post(payload.id, session.userId, session);
   }));
 
   // Reverses every posted line, with the same per-line reporting as post().

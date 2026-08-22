@@ -16,7 +16,8 @@ import PasswordPromptModal from '@/components/PasswordPromptModal';
 import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
-  SaleReturnRow, SaleReturnCreateInput, SaleReturnItemInput
+  SaleReturnRow, SaleReturnCreateInput, SaleReturnItemInput,
+  DraftSaleReturnRow, ConfirmAllResult
 } from '@/lib/api';
 
 interface UiItem {
@@ -102,7 +103,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   // Password Modal Protection State
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
-  const [passwordActionType, setPasswordActionType] = useState<'edit_return' | 'save_return' | 'save_and_post' | 'post_return' | null>(null);
+  const [passwordActionType, setPasswordActionType] = useState<'edit_return' | 'save_return' | 'save_and_post' | 'post_return' | 'delete_unposted_return' | null>(null);
 
   // Form State
   const [returnId, setReturnId] = useState<number | null>(null);
@@ -140,9 +141,11 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     [sortedCustomers]
   );
 
-  // Drafts
-  const [drafts, setDrafts] = useState<SaleReturnRow[]>([]);
-  const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
+  // Every saved-unposted return now lives in draft_sale_returns — the real sale_returns table
+  // strictly never holds an unposted document (same architecture change as Sale Bill). One list
+  // replaces what used to be "Saved Drafts" — there's no meaningful distinction anymore between
+  // an incomplete entry and a complete-but-unposted one.
+  const [drafts, setDrafts] = useState<DraftSaleReturnRow[]>([]);
 
   const refreshDrafts = useCallback(async () => {
     const res = await api.draftSaleReturns.list();
@@ -289,7 +292,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // Toolbar Actions
   const handleNew = () => {
     setMode('new');
-    setSelectedDraftId(null);
     setReturnId(null);
     setCurrentReturnIsPosted(false);
     setDate(getTodayDate());
@@ -342,21 +344,44 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     };
   };
 
-  const executeSave = async (password?: string): Promise<SaleReturnRow | null> => {
+  // Whichever return is on screen, `returnId`/`currentReturnIsPosted` route to one of two
+  // entirely different tables now: a POSTED document is a real sale_returns row (returnId =
+  // return_id); anything else is a draft_sale_return row (returnId = draft_id) — the real table
+  // strictly never holds an unposted document.
+  const isEditingPostedReturn = mode === 'edit' && currentReturnIsPosted;
+
+  const executeSave = async (password?: string): Promise<SaleReturnRow | DraftSaleReturnRow | null> => {
     const payload = buildPayload();
     if (!payload) return null;
 
+    if (isEditingPostedReturn && returnId != null) {
+      const result = await api.saleReturns.update(returnId, password ? { ...payload, password } : payload);
+      if (!result.ok) {
+        setErrorMsg('Failed to save return: ' + result.error.message);
+        return null;
+      }
+      setReturnId(result.data.return_id);
+      setCurrentReturnIsPosted(true);
+      setSuccessMsg('Sale return updated successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+      setMode('view');
+      setErrorMsg('');
+      return result.data;
+    }
+
+    // Every other save — a brand-new return, or editing one that's still a draft — goes through
+    // the draft table now (draftSaleReturns.service.js), not sale_returns directly.
     const result = mode === 'edit' && returnId != null
-      ? await api.saleReturns.update(returnId, password ? { ...payload, password } : payload)
-      : await api.saleReturns.create(payload);
+      ? await api.draftSaleReturns.update(returnId, payload)
+      : await api.draftSaleReturns.create(payload);
 
     if (!result.ok) {
       setErrorMsg('Failed to save return: ' + result.error.message);
       return null;
     }
 
-    setReturnId(result.data.return_id);
-    setCurrentReturnIsPosted(result.data.is_posted);
+    setReturnId(result.data.draft_id);
+    setCurrentReturnIsPosted(false);
     setSuccessMsg(mode === 'edit' ? 'Sale return updated successfully.' : 'New sale return saved successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     setMode('view');
@@ -366,7 +391,9 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   };
 
   const handleSave = () => {
-    if (mode === 'edit') {
+    // Only editing an ALREADY-POSTED return needs a password — editing a draft (complete or not)
+    // never did.
+    if (isEditingPostedReturn) {
       setPasswordActionType('save_return');
       setIsPasswordModalOpen(true);
     } else {
@@ -374,49 +401,60 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     }
   };
 
+  // Only reachable while !currentReturnIsPosted, so `saved` is always a fresh/edited DRAFT here —
+  // saving IS drafting now, so Save & Post is draft-then-confirm in one click.
   const handleSaveAndPost = async () => {
     const saved = await executeSave();
-    if (saved) {
-      const postRes = await api.saleReturns.post(saved.return_id);
+    if (saved && 'draft_id' in saved) {
+      const postRes = await api.draftSaleReturns.confirm(saved.draft_id);
       if (!postRes.ok) {
         setErrorMsg('Return was saved, but posting failed: ' + postRes.error.message);
       } else {
+        setReturnId(postRes.data.return_id);
         setCurrentReturnIsPosted(true);
         setSuccessMsg('Return saved & posted successfully.');
         setTimeout(() => setSuccessMsg(''), 3000);
+        refreshDrafts();
       }
     }
   };
 
   const handlePostCurrentReturn = async () => {
-    if (returnId != null) {
-      const res = await api.saleReturns.post(returnId);
-      if (!res.ok) {
-        setErrorMsg('Failed to post return: ' + res.error.message);
-      } else {
-        setCurrentReturnIsPosted(true);
-        setSuccessMsg('Return posted successfully.');
-        setTimeout(() => setSuccessMsg(''), 3000);
-      }
+    if (returnId == null) return;
+    const res = await api.draftSaleReturns.confirm(returnId);
+    if (!res.ok) {
+      setErrorMsg('Failed to post return: ' + res.error.message);
+    } else {
+      setReturnId(res.data.return_id);
+      setCurrentReturnIsPosted(true);
+      setSuccessMsg('Return posted successfully.');
+      setTimeout(() => setSuccessMsg(''), 3000);
+      refreshDrafts();
     }
   };
 
+  // "Unpost" now moves the return back to being a draft — the real sale_returns table strictly
+  // never holds an unposted document. The form now points at a different id (the new draft's).
   const handleUnpostCurrentReturn = async () => {
     if (returnId == null) return;
-    const res = await api.saleReturns.unpost(returnId);
+    const res = await api.saleReturns.unconfirm(returnId);
     if (!res.ok) {
       setErrorMsg('Failed to unpost return: ' + res.error.message);
       return;
     }
+    setReturnId(res.data.draft_id);
     setCurrentReturnIsPosted(false);
     setSuccessMsg('Return unposted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
+    refreshDrafts();
   };
 
   const handleEditCurrentReturn = () => {
     setPasswordActionType('edit_return');
     setIsPasswordModalOpen(true);
   };
+
+  const pendingDeleteReturnId = useRef<number | null>(null);
 
   const handlePasswordSuccess = async (password: string) => {
     setIsPasswordModalOpen(false);
@@ -431,6 +469,20 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       setTimeout(() => setSuccessMsg(''), 3000);
     } else if (passwordActionType === 'save_return') {
       await executeSave(password);
+    } else if (passwordActionType === 'delete_unposted_return') {
+      const targetId = pendingDeleteReturnId.current;
+      pendingDeleteReturnId.current = null;
+      if (targetId != null) {
+        const res = await api.draftSaleReturns.remove(targetId, password);
+        if (!res.ok) {
+          setErrorMsg('Failed to delete return: ' + res.error.message);
+        } else {
+          setSuccessMsg('Return deleted successfully.');
+          setTimeout(() => setSuccessMsg(''), 3000);
+          if (returnId === targetId && !currentReturnIsPosted) handleNew();
+          refreshDrafts();
+        }
+      }
     }
     setPasswordActionType(null);
   };
@@ -442,30 +494,62 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   };
   */
 
-  // Drafts sidebar (mirrors SaleBillPage's Pending Posting list): clicking a row loads that
-  // draft into the form; the small per-row Post/Delete buttons act on that draft directly
-  // instead of going through the select+selectedDraftId indirection the old horizontal panel
-  // used, so a row is fully self-contained.
+  // Pending Posting sidebar (every draft — no password to open/edit, same convention drafts
+  // always had; only editing an already-POSTED return is password-gated).
   const [draftActionBusyId, setDraftActionBusyId] = useState<number | null>(null);
   const [postAllDraftsBusy, setPostAllDraftsBusy] = useState(false);
-  const [postAllDraftsResult, setPostAllDraftsResult] = useState<{ posted: number; failed: { return_id: number; bill_no: string | null; message: string }[]; attempted: number } | null>(null);
+  const [postAllDraftsResult, setPostAllDraftsResult] = useState<ConfirmAllResult | null>(null);
 
-  const handleOpenDraftRow = (d: SaleReturnRow) => {
-    setSelectedDraftId(d.return_id);
-    loadReturnRow(d);
-    setMode('new');
+  const loadDraftIntoForm = (draft: DraftSaleReturnRow) => {
+    setReturnId(draft.draft_id);
+    setCurrentReturnIsPosted(false);
+    setDate(draft.return_date.slice(0, 10));
+    setStoreId(draft.store_id != null ? String(draft.store_id) : '');
+    setCustomerId(String(draft.customer_id));
+    setSubCustomerId(draft.sub_customer_id != null ? String(draft.sub_customer_id) : '');
+    setBillNo(draft.bill_no || '');
+    setGpNo(draft.gp_no || '');
+    setBiltyNo(draft.bilty_no || '');
+    setAddaId(draft.adda_id != null ? String(draft.adda_id) : '');
+    setRemarks(draft.remarks || '');
+    setInvoiceDiscount(draft.invoice_discount || 0);
+
+    const loadedItems: UiItem[] = (draft.items || []).map(it => {
+      const article = products.find(p => p.code === it.article_code);
+      return {
+        uid: 'draftrow_' + it.line_no,
+        articleId: article?.article_id ?? null,
+        variantId: it.variant_id,
+        label: `${it.article_name || it.article_code || 'Article'} — ${it.color || ''}`,
+        packing: it.pairs && it.cartons ? it.pairs / it.cartons : 0,
+        cartons: it.cartons,
+        pairs: it.pairs,
+        rate: it.rate,
+        discountPercent: it.discount_percent,
+        discountValue: it.discount_value,
+        value: it.value
+      };
+    });
+    setItems(loadedItems.length ? loadedItems : [newUiItem()]);
+    loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
+
+    setMode('edit');
+    setErrorMsg('');
   };
 
-  const handleConfirmDraftRow = async (returnId: number, e: React.MouseEvent) => {
+  const handleOpenDraftRow = (d: DraftSaleReturnRow) => {
+    loadDraftIntoForm(d);
+  };
+
+  const handleConfirmDraftRow = async (draftId: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    setDraftActionBusyId(returnId);
-    const res = await api.draftSaleReturns.confirm(returnId);
+    setDraftActionBusyId(draftId);
+    const res = await api.draftSaleReturns.confirm(draftId);
     setDraftActionBusyId(null);
     if (!res.ok) {
       setErrorMsg('Failed to confirm draft: ' + res.error.message);
       return;
     }
-    setSelectedDraftId(null);
     await loadReturnRow(res.data);
     setMode('view');
     setSuccessMsg('Draft confirmed & posted successfully.');
@@ -473,54 +557,35 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     refreshDrafts();
   };
 
-  const handleDeleteDraftRow = async (returnId: number, e: React.MouseEvent) => {
+  // Password-gated (verified server-side) — deleting a saved-unposted return is destructive with
+  // no reverse-never-erase trail, same guard level as editing an already-posted return.
+  const handleDeleteDraftRow = (draftId: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    setDraftActionBusyId(returnId);
-    const res = await api.draftSaleReturns.remove(returnId);
-    setDraftActionBusyId(null);
-    if (!res.ok) {
-      setErrorMsg('Failed to delete draft: ' + res.error.message);
-      return;
-    }
-    if (selectedDraftId === returnId) {
-      setSelectedDraftId(null);
-      handleNew();
-    }
-    refreshDrafts();
-    setSuccessMsg('Draft deleted successfully.');
-    setTimeout(() => setSuccessMsg(''), 2000);
+    pendingDeleteReturnId.current = draftId;
+    setPasswordActionType('delete_unposted_return');
+    setIsPasswordModalOpen(true);
   };
 
-  // Post All: there's no backend batch endpoint for sale returns the way saleBills.postAll()
-  // exists for bills (returns never get "saved unposted" the way bills do — a draft here IS the
-  // unposted state), so this confirms every draft sequentially client-side, each through the
-  // exact same draftSaleReturns.confirm() a single row's Post button uses. Sequential, not
-  // Promise.all, for the same reason saleBills.postAll() is: one draft failing to confirm must
-  // not affect the others, and the per-draft failure list is only useful read in order.
+  // Post All — every draft awaiting posting, in one action, via the real backend batch endpoint
+  // (draftSaleReturns.confirmAll — mirrors draftSaleBills.confirmAll).
   const handlePostAllDrafts = async () => {
     setPostAllDraftsBusy(true);
     setPostAllDraftsResult(null);
-    const targets = [...drafts];
-    let posted = 0;
-    const failed: { return_id: number; bill_no: string | null; message: string }[] = [];
-    for (const d of targets) {
-      const res = await api.draftSaleReturns.confirm(d.return_id);
-      if (res.ok) {
-        posted += 1;
-      } else {
-        failed.push({ return_id: d.return_id, bill_no: d.bill_no, message: res.error.message });
-      }
-    }
+    const res = await api.draftSaleReturns.confirmAll();
     setPostAllDraftsBusy(false);
-    setPostAllDraftsResult({ posted, failed, attempted: targets.length });
-    if (failed.length === 0) {
-      setSuccessMsg(`${posted} draft(s) posted.`);
+
+    if (!res.ok) {
+      setErrorMsg('Failed to post drafts: ' + res.error.message);
+      return;
+    }
+    setPostAllDraftsResult(res.data);
+    if (res.data.failed.length === 0) {
+      setSuccessMsg(`${res.data.posted.length} draft(s) posted.`);
       setTimeout(() => setSuccessMsg(''), 3000);
     }
     // If the draft open on screen was one of the ones that posted, its draft row is gone —
     // drop back to a fresh form rather than leave the screen pointing at nothing.
-    if (selectedDraftId != null && !failed.some(f => f.return_id === selectedDraftId)) {
-      setSelectedDraftId(null);
+    if (returnId != null && !currentReturnIsPosted && res.data.posted.some(p => p.draft_id === returnId)) {
       handleNew();
     }
     refreshDrafts();
@@ -898,21 +963,21 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             `2xl` up, since below that there generally isn't enough real margin for it to land in
             without spilling past the window edge. Clicking a row loads that draft into the form;
             the small Post/Delete buttons act on that row directly. */}
-        {mode !== 'view' && (drafts.length > 0 || postAllDraftsResult) && (
+        {(drafts.length > 0 || postAllDraftsResult) && (
           <aside
             className="hidden 2xl:block absolute top-0 w-64 space-y-3"
             style={{ right: 'calc(100% + 24px)' }}
             data-no-print
           >
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm">
+            <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
               <div className="flex items-center justify-between gap-2 mb-1">
-                <span className="font-semibold text-slate-700">Saved Drafts</span>
-                <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-bold">
+                <span className="font-semibold text-slate-700">Pending Posting</span>
+                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
                   {drafts.length}
                 </span>
               </div>
               <div className="text-xs text-slate-500 mb-3">
-                Incomplete returns — click to load, finish, then post.
+                Every saved-unposted return — click to load, finish, then post.
               </div>
               {drafts.length > 0 && (
                 <button
@@ -928,16 +993,16 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               {/* Stays on screen until dismissed — a run can post most drafts, and the ones that
                   failed are the whole point of the message. */}
               {postAllDraftsResult && (
-                <div className="mt-3 pt-3 border-t border-slate-200">
+                <div className="mt-3 pt-3 border-t border-amber-200">
                   <p className="text-xs font-semibold text-slate-700">
-                    {postAllDraftsResult.posted} of {postAllDraftsResult.attempted} posted
+                    {postAllDraftsResult.posted.length} of {postAllDraftsResult.attempted} posted
                     {postAllDraftsResult.failed.length > 0 && ` · ${postAllDraftsResult.failed.length} failed`}
                   </p>
                   {postAllDraftsResult.failed.length > 0 && (
                     <ul className="mt-1.5 space-y-1">
                       {postAllDraftsResult.failed.map(f => (
-                        <li key={f.return_id} className="text-xs text-rose-700">
-                          <span className="font-mono font-semibold">{f.bill_no || `#${f.return_id}`}</span>
+                        <li key={f.draft_id} className="text-xs text-rose-700">
+                          <span className="font-mono font-semibold">{f.bill_no || `#${f.draft_id}`}</span>
                           {' — '}{f.message}
                         </li>
                       ))}
@@ -958,10 +1023,10 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
               {drafts.map(d => {
                 const custName = customers.find(c => c.customer_id === d.customer_id)?.name || 'Unnamed Customer';
-                const busy = draftActionBusyId === d.return_id;
+                const busy = draftActionBusyId === d.draft_id;
                 return (
                   <li
-                    key={d.return_id}
+                    key={d.draft_id}
                     onClick={() => handleOpenDraftRow(d)}
                     className="px-3 py-2.5 text-xs flex items-center justify-between gap-2 cursor-pointer hover:bg-amber-50/60 transition-colors border-b border-slate-100 last:border-b-0"
                   >
@@ -974,7 +1039,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                       <button
                         type="button"
                         title="Post this draft"
-                        onClick={(e) => handleConfirmDraftRow(d.return_id, e)}
+                        onClick={(e) => handleConfirmDraftRow(d.draft_id, e)}
                         disabled={busy}
                         className="p-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
                       >
@@ -982,8 +1047,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                       </button>
                       <button
                         type="button"
-                        title="Delete this draft"
-                        onClick={(e) => handleDeleteDraftRow(d.return_id, e)}
+                        title="Delete this draft (password required)"
+                        onClick={(e) => handleDeleteDraftRow(d.draft_id, e)}
                         disabled={busy}
                         className="p-1.5 rounded-md bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
                       >

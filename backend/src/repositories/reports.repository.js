@@ -263,8 +263,15 @@ async function saleAggregateByCustomer(filters = {}) {
     jvDate.push('jv_date <= @dateTo');
     params.dateTo = { type: sql.Date, value: filters.date_to };
   }
-  const billWhere = billDate.length ? `WHERE ${billDate.join(' AND ')}` : '';
-  const returnWhere = returnDate.length ? `WHERE ${returnDate.join(' AND ')}` : '';
+  // Posted-only, same as receipts/settlements/JVs below (all already filter to CONFIRMED) —
+  // sale_bills/sale_returns have no stored status column, "posted" is derived from ledger_entries
+  // existing for the row, so that's what gates them here too. Without this, an unposted Sale Bill
+  // inflated "Total Sales" (and an unposted Sale Return inflated "Total Returns") before either had
+  // touched the ledger — same class of bug as vendorReportRows' purchases/purchase_returns below.
+  billDate.push("EXISTS (SELECT 1 FROM dbo.ledger_entries le WHERE le.source_type = 'SALE_BILL' AND le.source_id = sb2.bill_id)");
+  returnDate.push("EXISTS (SELECT 1 FROM dbo.ledger_entries le WHERE le.source_type = 'SALE_RETURN' AND le.source_id = sr2.return_id)");
+  const billWhere = `WHERE ${billDate.join(' AND ')}`;
+  const returnWhere = `WHERE ${returnDate.join(' AND ')}`;
   const receiptWhere = receiptDate.length ? `WHERE ${receiptDate.join(' AND ')}` : '';
   // Built from its own column name rather than string-replacing receiptWhere — that would only
   // swap the FIRST 'receipt_date' and leave the date_to half pointing at a column settlements
@@ -289,11 +296,11 @@ async function saleAggregateByCustomer(filters = {}) {
      LEFT JOIN dbo.cities ci ON ci.city_id = c.city_id
      LEFT JOIN (
        SELECT customer_id, SUM(net_value) AS total_sales, SUM(total_cartons) AS total_cartons
-       FROM dbo.sale_bills ${billWhere} GROUP BY customer_id
+       FROM dbo.sale_bills sb2 ${billWhere} GROUP BY customer_id
      ) sb ON sb.customer_id = c.customer_id
      LEFT JOIN (
        SELECT customer_id, SUM(net_value) AS total_returns
-       FROM dbo.sale_returns ${returnWhere} GROUP BY customer_id
+       FROM dbo.sale_returns sr2 ${returnWhere} GROUP BY customer_id
      ) sr ON sr.customer_id = c.customer_id
      -- Grouped by ba_id, not customer_id: since migration 014 a receipt names any business
      -- account. Joining back through customers.ba_id (UNIQUE) keeps this strictly customer money —
@@ -356,8 +363,16 @@ async function vendorReportRows(filters = {}) {
     allocDate.push('allocation_date <= @dateTo');
     params.dateTo = { type: sql.Date, value: filters.date_to };
   }
-  const purchaseWhere = purchaseDate.length ? `WHERE ${purchaseDate.join(' AND ')}` : '';
-  const returnWhere = returnDate.length ? `WHERE ${returnDate.join(' AND ')}` : '';
+  // Posted-only, same as every other bucket in this query (expenses/allocations/settlements/JVs
+  // below all filter to CONFIRMED/ACTIVE already) — purchases/purchase_returns have no stored
+  // status column (dropped, same as sale_bills/sale_returns), "posted" is derived from
+  // ledger_entries existing for the row, so that's what gates them here too. Without this, an
+  // unposted purchase inflated "Total Purchase" (and so the vendor's apparent balance) before it
+  // had ever touched the ledger — reported directly by the user.
+  purchaseDate.push("EXISTS (SELECT 1 FROM dbo.ledger_entries le WHERE le.source_type = 'PURCHASE' AND le.source_id = pp.purchase_id)");
+  returnDate.push("EXISTS (SELECT 1 FROM dbo.ledger_entries le WHERE le.source_type = 'PURCHASE_RETURN' AND le.source_id = ppr.return_id)");
+  const purchaseWhere = `WHERE ${purchaseDate.join(' AND ')}`;
+  const returnWhere = `WHERE ${returnDate.join(' AND ')}`;
   const expenseWhere = expenseDate.length ? `WHERE ${expenseDate.join(' AND ')}` : '';
   const allocWhere = [...allocDate, "disposition_type = 'VENDOR_PAYMENT'", "status = 'ACTIVE'"].join(' AND ');
   // Direct Settlement (migration 015): a debtor of ours paid this vendor on our behalf. No money
@@ -383,10 +398,10 @@ async function vendorReportRows(filters = {}) {
        ISNULL(jv.total_jv, 0) AS total_jv
      FROM dbo.vendors v
      LEFT JOIN (
-       SELECT vendor_id, SUM(total_value) AS total_purchase FROM dbo.purchases ${purchaseWhere} GROUP BY vendor_id
+       SELECT vendor_id, SUM(total_value) AS total_purchase FROM dbo.purchases pp ${purchaseWhere} GROUP BY vendor_id
      ) p ON p.vendor_id = v.vendor_id
      LEFT JOIN (
-       SELECT vendor_id, SUM(total_value) AS total_return FROM dbo.purchase_returns ${returnWhere} GROUP BY vendor_id
+       SELECT vendor_id, SUM(total_value) AS total_return FROM dbo.purchase_returns ppr ${returnWhere} GROUP BY vendor_id
      ) pr ON pr.vendor_id = v.vendor_id
      LEFT JOIN (
        SELECT ba.ba_id, SUM(e.amount) AS total_expense_payment

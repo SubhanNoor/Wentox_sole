@@ -3,11 +3,15 @@ import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
-import type { VendorRow, CityRow, PurchaseRow, PurchaseReturnRow, PurchaseReturnCreateInput, PurchaseReturnItemInput } from '@/lib/api';
+import type {
+  VendorRow, CityRow, PurchaseRow, PurchaseReturnRow, PurchaseReturnCreateInput, PurchaseReturnItemInput,
+  DraftPurchaseReturnRow, ConfirmAllResult
+} from '@/lib/api';
 import { formatDate, getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
 import { focusFirstField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
-import { Plus, Trash2, Save, Undo2, Edit } from 'lucide-react';
+import { Plus, Trash2, Save, Undo2, Edit, CheckCircle2 } from 'lucide-react';
+import PasswordPromptModal from '@/components/PasswordPromptModal';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
 
@@ -45,6 +49,19 @@ export default function PurchaseReturnPage() {
     else setLookupError('Failed to load purchase returns: ' + res.error.message);
   }, []);
 
+  // Every saved-unposted Purchase Return now lives in draft_purchase_returns — the real
+  // purchase_returns table strictly never holds an unposted document (same architecture change as
+  // Sale Bill/Sale Return/Purchase). Mirrors P-03 on PurchasePage.
+  const [unpostedReturns, setUnpostedReturns] = useState<DraftPurchaseReturnRow[]>([]);
+  const [postAllBusy, setPostAllBusy] = useState(false);
+  const [postAllResult, setPostAllResult] = useState<ConfirmAllResult | null>(null);
+  const [postingDraftId, setPostingDraftId] = useState<number | null>(null);
+
+  const refreshUnposted = useCallback(async () => {
+    const res = await api.draftPurchaseReturns.list();
+    if (res.ok) setUnpostedReturns(res.data);
+  }, []);
+
   useEffect(() => {
     (async () => {
       const [v, ct, pu] = await Promise.all([api.listVendors(), api.listCities(), api.purchases.list({})]);
@@ -55,7 +72,8 @@ export default function PurchaseReturnPage() {
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
     refreshReturns();
-  }, [refreshReturns]);
+    refreshUnposted();
+  }, [refreshReturns, refreshUnposted]);
 
   // Mode: 'view' | 'edit' | 'new'
   const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');
@@ -165,11 +183,11 @@ export default function PurchaseReturnPage() {
 
   const addItemRow = () => setItems(prev => [...prev, emptyItem()]);
 
-  // Keyboard entry without the mouse — same pattern as SaleBillPage/SaleReturnPage. G-01's generic
-  // Enter-walk already carries fields forward within a row and into an EXISTING next row; this only
-  // steps in at the boundary (Enter on the last field of the last row), where it appends a blank row
-  // and focuses into it. stopPropagation stops AppLayout's own window-level Enter handler from also
-  // firing on the same keydown and clicking Save before the new row exists.
+  // Keyboard entry without the mouse — same pattern as SaleBillPage/SaleReturnPage/PurchasePage.
+  // G-01's generic Enter-walk already carries fields forward within a row and into an EXISTING
+  // next row; this only steps in at the boundary (Enter on the last field of the last row), where
+  // it appends a blank row and focuses into it. stopPropagation stops AppLayout's own window-level
+  // Enter handler from also firing on the same keydown and clicking Save before the new row exists.
   const materialNameRefs = useRef<(HTMLInputElement | null)[]>([]);
   // '.' held while Enter is pressed is a genuine three-way chord alongside Shift+Enter/Ctrl+Enter
   // below — tracked via useHeldKey since '.' isn't a real modifier key with its own event flag.
@@ -252,27 +270,31 @@ export default function PurchaseReturnPage() {
     };
   };
 
+  // Editing a POSTED return in place was never allowed here (purchaseReturns.service.js#update()
+  // always throws POSTED_LOCK on an is_posted row) — must unpost first, same as Purchase. So under
+  // the draft-table model, mode==='edit' unconditionally means editing a draft: there's no
+  // "isEditingPosted" branch to worry about the way Sale Bill/Return have one.
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const payload = buildPayload();
     if (!payload) return;
 
     const result = mode === 'edit' && returnId != null
-      ? await api.purchaseReturns.update(returnId, payload)
-      : await api.purchaseReturns.create(payload);
+      ? await api.draftPurchaseReturns.update(returnId, payload)
+      : await api.draftPurchaseReturns.create(payload);
 
     if (!result.ok) {
       setErrorMsg('Failed to save purchase return: ' + result.error.message);
       return;
     }
 
-    setReturnId(result.data.return_id);
-    setCurrentIsPosted(result.data.is_posted);
+    setReturnId(result.data.draft_id);
+    setCurrentIsPosted(false);
     setErrorMsg('');
     setSuccessMsg(mode === 'edit' ? 'Purchase return updated successfully.' : 'Purchase return recorded successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     setMode('view');
-    refreshReturns();
+    refreshUnposted(); // P-03: a newly saved return joins the pending-posting list immediately.
   };
 
   const loadReturnRow = async (rowIn: PurchaseReturnRow) => {
@@ -312,34 +334,151 @@ export default function PurchaseReturnPage() {
     setMode('view');
   };
 
+  // Post = confirm the draft: moves it from draft_purchase_returns into the real purchase_returns
+  // table, writing ledger + vendor stock, deleting the draft. Only reachable while
+  // !currentIsPosted, so returnId is always a draft_id here.
   const handlePost = async () => {
     if (returnId == null) return;
-    const res = await api.purchaseReturns.post(returnId);
+    const res = await api.draftPurchaseReturns.confirm(returnId);
     if (!res.ok) {
       setErrorMsg('Failed to post purchase return: ' + res.error.message);
       return;
     }
+    setReturnId(res.data.return_id);
     setCurrentIsPosted(true);
     setSuccessMsg('Purchase return posted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshReturns();
+    refreshUnposted(); // P-03: it just left the pending list.
   };
 
+  // "Unpost" now moves the return back to being a draft — the real purchase_returns table strictly
+  // never holds an unposted document. The form now points at a different id (the new draft's).
   const handleUnpost = async () => {
     if (returnId == null) return;
-    const res = await api.purchaseReturns.unpost(returnId);
+    const res = await api.purchaseReturns.unconfirm(returnId);
     if (!res.ok) {
       setErrorMsg('Failed to unpost purchase return: ' + res.error.message);
       return;
     }
+    setReturnId(res.data.draft_id);
     setCurrentIsPosted(false);
     setSuccessMsg('Purchase return unposted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshReturns();
+    refreshUnposted();
   };
 
+  // P-03: post the whole run via the real backend batch endpoint (draftPurchaseReturns.confirmAll).
+  const handlePostAll = async () => {
+    setPostAllBusy(true);
+    setPostAllResult(null);
+    const res = await api.draftPurchaseReturns.confirmAll();
+    setPostAllBusy(false);
+
+    if (!res.ok) {
+      setErrorMsg('Failed to post purchase returns: ' + res.error.message);
+      return;
+    }
+    setPostAllResult(res.data);
+    if (res.data.failed.length === 0) {
+      setSuccessMsg(`${res.data.posted.length} purchase return(s) posted.`);
+      setTimeout(() => setSuccessMsg(''), 3000);
+    }
+    await Promise.all([refreshUnposted(), refreshReturns()]);
+    // The draft open on screen (if any) may have just been posted — its id is gone either way
+    // (ConfirmAllResult doesn't carry the new return_id back), so reset rather than leave the
+    // form pointed at nothing.
+    if (returnId != null && !currentIsPosted && res.data.posted.some(p => p.draft_id === returnId)) {
+      handleNew();
+    }
+  };
+
+  // Pending Posting panel: opening a row loads that draft straight into the form — no password
+  // (drafts never needed one on this page; only a password-gated delete is new, below).
+  const loadDraftIntoForm = (draft: DraftPurchaseReturnRow) => {
+    setReturnId(draft.draft_id);
+    setCurrentIsPosted(false);
+    setDate(draft.return_date.slice(0, 10));
+    setVendorId(String(draft.vendor_id));
+    setBillNo(draft.bill_no || '');
+    setRemarks(draft.remarks || '');
+    setCopyFromPurchaseId('');
+    const loaded = (draft.items || []).length
+      ? (draft.items || []).map(it => ({
+          uid: 'draftrow_' + it.line_no,
+          materialName: it.material_name || '',
+          unit: it.unit,
+          quantity: it.quantity,
+          pricePerUnit: it.price_per_unit,
+          totalPrice: it.total_price
+        }))
+      : [emptyItem()];
+    setItems(loaded);
+    resolvedNames.current = Object.fromEntries(loaded.map(it => [it.uid, it.materialName.trim()]));
+    setErrorMsg('');
+    setMode('edit');
+  };
+
+  const handleOpenUnposted = async (draftId: number) => {
+    const res = await api.draftPurchaseReturns.get(draftId);
+    if (!res.ok) {
+      setErrorMsg('Failed to load purchase return: ' + res.error.message);
+      return;
+    }
+    loadDraftIntoForm(res.data);
+    setActiveTab('entry');
+  };
+
+  const handlePostOneUnposted = async (draftId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPostingDraftId(draftId);
+    const res = await api.draftPurchaseReturns.confirm(draftId);
+    setPostingDraftId(null);
+    if (!res.ok) {
+      setErrorMsg('Failed to post purchase return: ' + res.error.message);
+      return;
+    }
+    setSuccessMsg(`Purchase return ${res.data.bill_no || `#${res.data.return_id}`} posted.`);
+    setTimeout(() => setSuccessMsg(''), 3000);
+    await Promise.all([refreshUnposted(), refreshReturns()]);
+    if (draftId === returnId && !currentIsPosted) {
+      setReturnId(res.data.return_id);
+      setCurrentIsPosted(true);
+    }
+  };
+
+  // Password-gated (verified server-side) — deleting a saved-unposted return is destructive with
+  // no reverse-never-erase trail, same guard level used on Sale Bill/Sale Return/Purchase.
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const pendingDeleteDraftId = useRef<number | null>(null);
+
+  const handleDeleteUnposted = (draftId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    pendingDeleteDraftId.current = draftId;
+    setIsPasswordModalOpen(true);
+  };
+
+  const handleDeletePasswordSuccess = async (password: string) => {
+    setIsPasswordModalOpen(false);
+    const targetId = pendingDeleteDraftId.current;
+    pendingDeleteDraftId.current = null;
+    if (targetId == null) return;
+    const res = await api.draftPurchaseReturns.remove(targetId, password);
+    if (!res.ok) {
+      setErrorMsg('Failed to delete purchase return: ' + res.error.message);
+      return;
+    }
+    setSuccessMsg('Purchase return deleted successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    if (returnId === targetId && !currentIsPosted) handleNew();
+    refreshUnposted();
+  };
+
+  // Recorded Purchase Returns (the tab below) shows only POSTED returns — same reasoning and
+  // same fix as PurchasePage's Recorded Purchases: an unposted return hasn't actually happened yet.
   const sortedReturns = useMemo(() => {
-    return [...returns].sort((a, b) => b.return_date.localeCompare(a.return_date));
+    return [...returns].filter(r => r.is_posted).sort((a, b) => b.return_date.localeCompare(a.return_date));
   }, [returns]);
 
   // Recorded Purchase Returns moved to its own tab (was inline under the entry form on the same
@@ -394,6 +533,98 @@ export default function PurchaseReturnPage() {
         )}
 
         {activeTab === 'entry' && (
+        <>
+        {/* P-03: Pending Posting panel — enter a run of returns, then post them all at the end
+            instead of one at a time. Mirrors the identical panel on PurchasePage. */}
+        {(unpostedReturns.length > 0 || postAllResult) && (
+          <div className="mb-6 p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm" data-no-print>
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-700">Pending Posting:</span>
+                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
+                  {unpostedReturns.length} return(s)
+                </span>
+                <span className="text-xs text-slate-500">
+                  {unpostedReturns.length > 0 && `Total ${formatCurrency(unpostedReturns.reduce((s, r) => s + Number(r.total_value), 0))}`}
+                </span>
+              </div>
+              {unpostedReturns.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handlePostAll}
+                  disabled={postAllBusy}
+                  className="px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                >
+                  {postAllBusy ? 'Posting…' : `Post All (${unpostedReturns.length})`}
+                </button>
+              )}
+            </div>
+
+            {unpostedReturns.length > 0 && (
+              <ul className="mt-3 space-y-0.5 max-h-40 overflow-y-auto">
+                {unpostedReturns.map(r => (
+                  <li
+                    key={r.draft_id}
+                    onClick={() => handleOpenUnposted(r.draft_id)}
+                    className="text-xs text-slate-600 flex items-center gap-2 cursor-pointer hover:bg-amber-100/50 rounded px-1 py-0.5 -mx-1"
+                  >
+                    <span className="font-mono font-semibold">{r.bill_no || `#${r.draft_id}`}</span>
+                    <span className="text-slate-400">{formatDate(r.return_date)}</span>
+                    <span className="truncate">{vendors.find(v => v.vendor_id === r.vendor_id)?.name || 'Unnamed Vendor'}</span>
+                    <span className="ml-auto font-mono">{formatCurrency(Number(r.total_value))}</span>
+                    <button
+                      type="button"
+                      title="Post this return"
+                      onClick={(e) => handlePostOneUnposted(r.draft_id, e)}
+                      disabled={postingDraftId === r.draft_id}
+                      className="flex-shrink-0 p-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                    >
+                      <CheckCircle2 size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      title="Delete this return (password required)"
+                      onClick={(e) => handleDeleteUnposted(r.draft_id, e)}
+                      disabled={postingDraftId === r.draft_id}
+                      className="flex-shrink-0 p-1 rounded bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {/* Stays until dismissed — a run can post 18 of 20, and the two that failed are the
+                whole point of the message. Never auto-hidden on a timer. */}
+            {postAllResult && (
+              <div className="mt-3 pt-3 border-t border-amber-200">
+                <p className="text-xs font-semibold text-slate-700">
+                  {postAllResult.posted.length} of {postAllResult.attempted} posted
+                  {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
+                </p>
+                {postAllResult.failed.length > 0 && (
+                  <ul className="mt-1.5 space-y-1">
+                    {postAllResult.failed.map(f => (
+                      <li key={f.draft_id} className="text-xs text-rose-700">
+                        <span className="font-mono font-semibold">{f.bill_no || `#${f.draft_id}`}</span>
+                        {' — '}{f.message}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setPostAllResult(null)}
+                  className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         <form onSubmit={handleSave} className="card-white p-6 bg-white border mb-8" data-no-print>
           <div className="flex items-center justify-between border-b pb-3 mb-5">
             <div className="flex items-center gap-2">
@@ -447,8 +678,8 @@ export default function PurchaseReturnPage() {
                     type="button"
                     onClick={async () => {
                       if (returnId == null) return;
-                      const res = await api.purchaseReturns.get(returnId);
-                      if (res.ok) await loadReturnRow(res.data);
+                      const res = await api.draftPurchaseReturns.get(returnId);
+                      if (res.ok) loadDraftIntoForm(res.data);
                     }}
                     className="btn-outline px-3 py-1.5 text-xs font-semibold"
                   >
@@ -680,6 +911,7 @@ export default function PurchaseReturnPage() {
             </button>
           )}
         </form>
+        </>
         )}
 
         {/* Recorded Purchase Returns — own tab now, with a from/to date filter (defaults to the
@@ -761,6 +993,14 @@ export default function PurchaseReturnPage() {
           )}
         </div>
         )}
+
+        <PasswordPromptModal
+          isOpen={isPasswordModalOpen}
+          onClose={() => { setIsPasswordModalOpen(false); pendingDeleteDraftId.current = null; }}
+          onSuccess={handleDeletePasswordSuccess}
+          title="Delete Unposted Purchase Return"
+          subtitle="Enter your password to permanently delete this unposted purchase return."
+        />
 
       </div>
     </AppLayout>

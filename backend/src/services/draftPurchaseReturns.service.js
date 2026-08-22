@@ -56,6 +56,42 @@ function list(filters) {
   return repository.list(filters);
 }
 
+// Editing a draft (now the normal "edit a saved-unposted return" path, not just for genuinely
+// incomplete entries). No stock to reconcile — draft purchase returns never touch Vendor Stock
+// (same reasoning as create() above) — just replace header/items.
+async function update(draftId, payload) {
+  await getById(draftId);
+
+  return withTransaction(async (transaction) => {
+    validateItems(payload.items);
+    validateHeader(payload);
+
+    const items = [];
+    for (const item of payload.items) {
+      const materialId = item.material_id
+        ?? await materialsRepository.resolveOrCreate(transaction, item.material_name, item.unit);
+      items.push({ ...item, material_id: materialId });
+    }
+
+    const lines = items.map((item) => buildLine(item));
+    const totals = buildTotals(lines);
+
+    const draft = {
+      return_date: payload.return_date,
+      vendor_id: payload.vendor_id,
+      bill_no: payload.bill_no,
+      remarks: payload.remarks,
+      total_value: totals.totalValue,
+    };
+
+    await repository.updateDraftHeader(transaction, draftId, draft);
+    await repository.deleteDraftItems(transaction, draftId);
+    await repository.insertDraftItems(transaction, draftId, lines);
+
+    return repository.findById(draftId);
+  });
+}
+
 // No stock to reverse (draft-create never touched vendor_stock_movements) — just delete the row.
 async function remove(draftId) {
   await getById(draftId);
@@ -103,4 +139,33 @@ async function confirm(draftId, userId) {
   return purchaseReturnsService.getById(returnId);
 }
 
-module.exports = { create, getById, list, remove, confirm };
+// Post All — same contract as draftPurchases.service.js#confirmAll(): sequential, resolves
+// { posted, failed, attempted }.
+async function confirmAll(ids, userId) {
+  const targets = Array.isArray(ids) && ids.length
+    ? ids.map((id) => ({ draft_id: id }))
+    : await list();
+
+  const posted = [];
+  const failed = [];
+
+  for (const target of targets) {
+    const draftId = target.draft_id;
+    try {
+      const ret = await confirm(draftId, userId);
+      posted.push({ draft_id: draftId, bill_no: ret.bill_no, total_value: ret.total_value });
+    } catch (err) {
+      if (!err.status) console.error(`confirmAll: unexpected failure on draft ${draftId}:`, err);
+      failed.push({
+        draft_id: draftId,
+        bill_no: target.bill_no ?? null,
+        message: err.status ? err.message : 'Unexpected error while posting this draft.',
+        code: err.code || 'INTERNAL',
+      });
+    }
+  }
+
+  return { posted, failed, attempted: targets.length };
+}
+
+module.exports = { create, getById, list, update, remove, confirm, confirmAll };

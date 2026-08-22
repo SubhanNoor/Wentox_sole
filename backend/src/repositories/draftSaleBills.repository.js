@@ -140,6 +140,46 @@ async function deleteDraft(transaction, draftId) {
   await request.query('DELETE FROM dbo.draft_sale_bills WHERE draft_id = @draftId');
 }
 
+// Editing a draft (service.js#update()) — header fields only; items are always deleted+reinserted
+// by the caller, same as saleBills.repository.js#updateHeader's sibling deleteItems/insertItems.
+async function updateDraftHeader(transaction, draftId, draft) {
+  const request = requestWithParams(transaction, {
+    draftId: { type: sql.Int, value: draftId },
+    billDate: { type: sql.Date, value: draft.bill_date },
+    storeId: { type: sql.Int, value: draft.store_id ?? null },
+    customerId: { type: sql.Int, value: draft.customer_id },
+    subCustomerId: { type: sql.Int, value: draft.sub_customer_id ?? null },
+    mainAcId: { type: sql.Int, value: draft.main_ac_id ?? null },
+    deliveryType: { type: sql.VarChar(10), value: draft.delivery_type },
+    deliveryAddress: { type: sql.NVarChar(300), value: draft.delivery_address ?? null },
+    billNo: { type: sql.VarChar(30), value: draft.bill_no ?? null },
+    gpNo: { type: sql.VarChar(30), value: draft.gp_no ?? null },
+    biltyNo: { type: sql.VarChar(30), value: draft.bilty_no ?? null },
+    addaId: { type: sql.Int, value: draft.adda_id ?? null },
+    remarks: { type: sql.NVarChar(500), value: draft.remarks ?? null },
+    invoiceDiscount: { type: sql.Decimal(12, 2), value: draft.invoice_discount },
+    totalCartons: { type: sql.Int, value: draft.total_cartons },
+    totalPairs: { type: sql.Int, value: draft.total_pairs },
+    grossValue: { type: sql.Decimal(14, 2), value: draft.gross_value },
+    netValue: { type: sql.Decimal(14, 2), value: draft.net_value },
+  });
+  await request.query(`
+    UPDATE dbo.draft_sale_bills SET
+      bill_date = @billDate, store_id = @storeId, customer_id = @customerId,
+      sub_customer_id = @subCustomerId, main_ac_id = @mainAcId, delivery_type = @deliveryType,
+      delivery_address = @deliveryAddress, bill_no = @billNo, gp_no = @gpNo, bilty_no = @biltyNo,
+      adda_id = @addaId, remarks = @remarks, invoice_discount = @invoiceDiscount,
+      total_cartons = @totalCartons, total_pairs = @totalPairs, gross_value = @grossValue,
+      net_value = @netValue
+    WHERE draft_id = @draftId
+  `);
+}
+
+async function deleteDraftItems(transaction, draftId) {
+  const request = requestWithParams(transaction, { draftId: { type: sql.Int, value: draftId } });
+  await request.query('DELETE FROM dbo.draft_sale_bill_items WHERE draft_id = @draftId');
+}
+
 // Same shape as saleBills.repository.insertStockMovements — kept as its own copy so this
 // repository doesn't depend on another feature's repository for a plain SQL insert.
 async function insertStockMovements(transaction, rows) {
@@ -166,4 +206,5 @@ async function insertStockMovements(transaction, rows) {
 
 module.exports = {
   getVariantPackings, insertDraft, insertDraftItems, findById, list, deleteDraft, insertStockMovements,
+  updateDraftHeader, deleteDraftItems,
 };

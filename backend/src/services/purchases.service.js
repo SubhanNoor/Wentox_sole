@@ -9,6 +9,10 @@ const { withTransaction } = require('../db/pool');
 const { buildLine, buildTotals, validateItems } = require('./purchaseMath');
 const CODES = require('../constants/reservedAccounts');
 const { toISODate } = require('../utils/dates');
+// Repository, not service — draftPurchases.service.js already requires this service the other
+// way (its confirm() calls insertConfirmed()/postLedgerAndStock()), so requiring its SERVICE back
+// here would be circular. Same reasoning as saleBills.service.js#unconfirm().
+const draftPurchasesRepository = require('../repositories/draftPurchases.repository');
 
 function validateHeader(payload) {
   if (!payload.vendor_id) throw ApiError.badRequest('vendor_id is required');
@@ -175,6 +179,50 @@ async function unpost(id) {
   return getById(id);
 }
 
+// Reverse of draftPurchases.service.js#confirm(): the real purchases table now strictly never
+// holds an unposted document, mirroring saleBills.service.js#unconfirm(). Draft purchases have no
+// stock effect (see draftPurchases.service.js#create()'s own comment), so unlike Sale Bill/Return
+// there's no reservation to hand off — deleteLedgerAndStock already removes both the ledger and
+// the vendor_stock_movements this purchase posted, in one call.
+async function unconfirm(id) {
+  const purchase = await getById(id);
+  if (!purchase.is_posted) {
+    throw ApiError.conflict('Purchase is not posted', 'NOT_POSTED');
+  }
+
+  const draftId = await withTransaction(async (transaction) => {
+    await repository.deleteLedgerAndStock(transaction, id);
+
+    const draft = {
+      purchase_date: purchase.purchase_date,
+      vendor_id: purchase.vendor_id,
+      bill_no: purchase.bill_no,
+      remarks: purchase.remarks,
+      total_value: purchase.total_value,
+      created_by: purchase.created_by,
+    };
+    const lines = purchase.items.map((item) => ({
+      material_id: item.material_id,
+      material_name: item.material_name,
+      unit: item.unit,
+      quantity: item.quantity,
+      weight: item.weight,
+      price_per_unit: item.price_per_unit,
+      total_price: item.total_price,
+    }));
+
+    const newDraftId = await draftPurchasesRepository.insertDraft(transaction, draft);
+    await draftPurchasesRepository.insertDraftItems(transaction, newDraftId, lines);
+
+    await repository.deleteItems(transaction, id);
+    await repository.deletePurchase(transaction, id);
+
+    return newDraftId;
+  });
+
+  return draftPurchasesRepository.findById(draftId);
+}
+
 // "[quantity] [unit] [material] @ [price_per_unit]" per line, joined with ", " for a multi-line
 // purchase — e.g. "200 kg MEG @ 230". Number(...).toString() rather than toLocaleString/toFixed
 // so a DECIMAL that came back as 200.000 prints as "200", matching the client's own sheet, not
@@ -269,6 +317,6 @@ function lastPurchasedRate(vendorId, materialName) {
 }
 
 module.exports = {
-  create, list, getById, update, post, unpost, postLedgerAndStock, insertConfirmed,
+  create, list, getById, update, post, unpost, unconfirm, postLedgerAndStock, insertConfirmed,
   lastPurchasedRate, listUnposted, postAll,
 };

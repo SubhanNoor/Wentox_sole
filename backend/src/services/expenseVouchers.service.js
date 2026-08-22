@@ -9,6 +9,11 @@
 const repository = require('../repositories/expenseVouchers.repository');
 const expensesRepository = require('../repositories/expenses.repository');
 const expensesService = require('./expenses.service');
+// A voucher's lines are split across two tables now: unposted ones in dbo.draft_expenses, posted
+// ones in dbo.expenses. Posting a line is draftExpenses.confirm() (draft -> real), unposting it is
+// expenses.unconfirm() (real -> draft); the per-line isolation and reporting below are unchanged.
+const draftExpensesService = require('./draftExpenses.service');
+const draftExpensesRepository = require('../repositories/draftExpenses.repository');
 const { withTransaction } = require('../db/pool');
 const ApiError = require('../errors/ApiError');
 const { today } = require('../utils/dates');
@@ -100,6 +105,10 @@ async function update(voucherId, payload, userId) {
       updated_by: userId,
     });
     await repository.syncLineDates(transaction, voucherId, payload.voucher_date);
+    // The unposted half of the voucher's lines lives in dbo.draft_expenses and has to move with
+    // the header too — update() is only reachable while the voucher is entirely UNPOSTED, so in
+    // practice this is the call that does the work and syncLineDates above is the no-op.
+    await draftExpensesRepository.syncVoucherLineDates(transaction, voucherId, payload.voucher_date);
   });
 
   return getById(voucherId);
@@ -124,16 +133,17 @@ async function post(voucherId, session) {
   const failed = [];
 
   for (const line of voucher.lines) {
+    // Already a real (posted) row — meets the caller's intent, same as the old ALREADY_POSTED skip.
+    if (line.draft_id == null) continue;
     try {
-      // expenses.service#post takes userId as well as session, unlike the receipts equivalent.
-      await expensesService.post(line.expense_id, session.userId, session);
-      posted.push({ expense_id: line.expense_id, amount: Number(line.amount) });
+      const expense = await draftExpensesService.confirm(line.draft_id, session.userId, session);
+      posted.push({ expense_id: expense.expense_id, draft_id: line.draft_id, amount: Number(line.amount) });
     } catch (err) {
-      // Already posted meets the caller's intent ("get this voucher posted") — not a failure.
       if (err.code === 'ALREADY_POSTED') continue;
-      if (!err.status) console.error(`expenseVouchers.post: unexpected failure on line ${line.expense_id}:`, err);
+      if (!err.status) console.error(`expenseVouchers.post: unexpected failure on line ${line.draft_id}:`, err);
       failed.push({
-        expense_id: line.expense_id,
+        expense_id: null,
+        draft_id: line.draft_id,
         account_name: line.account_name,
         amount: Number(line.amount),
         message: err.status ? err.message : 'Unexpected error while posting this entry.',
@@ -157,7 +167,7 @@ async function unpost(voucherId, session) {
   for (const line of voucher.lines) {
     if (line.status !== 'CONFIRMED') continue;
     try {
-      await expensesService.unpost(line.expense_id, session);
+      await expensesService.unconfirm(line.expense_id, session);
       unposted.push({ expense_id: line.expense_id, amount: Number(line.amount) });
     } catch (err) {
       if (!err.status) console.error(`expenseVouchers.unpost: unexpected failure on line ${line.expense_id}:`, err);
@@ -185,7 +195,13 @@ async function remove(voucherId) {
 
   await withTransaction(async (transaction) => {
     for (const line of voucher.lines) {
-      await expensesRepository.remove(transaction, line.expense_id);
+      // An UNPOSTED voucher's lines are all drafts by the invariant; the real-row branch is kept
+      // so this stays correct for any row that predates the draft/real split.
+      if (line.draft_id != null) {
+        await draftExpensesRepository.deleteDraft(transaction, line.draft_id);
+      } else {
+        await expensesRepository.remove(transaction, line.expense_id);
+      }
     }
     await repository.remove(transaction, voucherId);
   });

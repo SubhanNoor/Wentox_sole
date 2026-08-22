@@ -110,7 +110,13 @@ async function create(payload, userId, session) {
   validateHeader(payload);
   const baId = await resolveTarget(payload, session);
 
-  const id = await withTransaction((transaction) => repository.insert(transaction, { ...buildFields(payload, baId), created_by: userId }));
+  const id = await withTransaction((transaction) => repository.insert(transaction, {
+    ...buildFields(payload, baId),
+    created_by: userId,
+    // Only draftExpenses.service#confirm() passes this, to keep a posted line in its original place
+    // in the voucher's entry order; every other caller leaves it undefined (defaults to now).
+    created_at: payload.created_at,
+  }));
   return getById(id);
 }
 
@@ -256,6 +262,65 @@ async function unpost(expenseId, session) {
   return getById(expenseId);
 }
 
+// Reverse of draftExpenses.service.js#confirm(): moves a posted expense back out of dbo.expenses
+// and into dbo.draft_expenses, so the real table strictly only ever holds posted documents (same
+// architecture as saleBills/purchases/receipts #unconfirm()).
+//
+// Every guard unpost() applies still applies here, unchanged and for exactly the same reasons —
+// this is the same reversal, it just doesn't leave the row behind:
+//   - must be CONFIRMED
+//   - CHEQUE_ENDORSED is refused outright (USE_CHEQUE_REVERSAL): its real ledger effect belongs to
+//     a cheque_allocations row, and the only correct way to undo a cheque disposition is the
+//     cheque's own bounce/return-to-sender flow. Nothing about endorsement changes here.
+//   - a CHEQUE_ISSUED cheque that has already bounced/been returned is refused
+//     (ISSUED_CHEQUE_TERMINAL): deleteLedgerEntries() cannot tell the original post's rows apart
+//     from the reversal's, so unposting would erase the reversal history too.
+async function unconfirm(expenseId, session) {
+  const expense = await getById(expenseId);
+  if (expense.ba_id) await businessAccountsService.assertAccessible(expense.ba_id, session);
+  if (expense.status !== 'CONFIRMED') {
+    throw ApiError.conflict('Expense is not posted', 'NOT_POSTED');
+  }
+  if (expense.payment_mode === 'CHEQUE_ENDORSED') {
+    throw ApiError.conflict(
+      'A cheque-endorsed expense cannot be unposted directly — bounce or return the cheque itself instead',
+      'USE_CHEQUE_REVERSAL',
+    );
+  }
+  if (expense.payment_mode === 'CHEQUE_ISSUED' && expense.issued_cheque_status !== 'PENDING') {
+    throw ApiError.conflict(
+      `This cheque has already been ${expense.issued_cheque_status.toLowerCase()} — its ledger history cannot be unposted`,
+      'ISSUED_CHEQUE_TERMINAL',
+    );
+  }
+
+  const draftId = await withTransaction(async (transaction) => {
+    await repository.deleteLedgerEntries(transaction, expenseId);
+
+    const newDraftId = await draftExpensesRepository.insert(transaction, {
+      expense_date: expense.expense_date,
+      ba_id: expense.ba_id,
+      amount: expense.amount,
+      payment_mode: expense.payment_mode,
+      details: expense.details,
+      cheque_id: expense.cheque_id,
+      bank_id: expense.bank_id,
+      issued_cheque_no: expense.issued_cheque_no,
+      issued_cheque_date: expense.issued_cheque_date,
+      remarks: expense.remarks,
+      voucher_id: expense.voucher_id,
+      created_by: expense.created_by,
+      // Keeps the line where it was in its voucher's entry order.
+      created_at: expense.created_at,
+    });
+
+    await repository.remove(transaction, expenseId);
+    return newDraftId;
+  });
+
+  return draftExpensesRepository.findById(draftId);
+}
+
 // Shared reversal mechanics for a CHEQUE_ISSUED expense that bounces or is returned unpaid — the
 // mirror image of cheques.service.js#reverseCheque(), but for a cheque WE wrote instead of one we
 // endorsed on: there is no cheques/cheque_allocations row to touch, just this expense's own ledger
@@ -317,6 +382,6 @@ function listIssuedCheques(filters) {
 }
 
 module.exports = {
-  list, getById, create, update, remove, post, unpost,
+  list, getById, create, update, remove, post, unpost, unconfirm,
   bounceIssuedCheque, returnIssuedCheque, listReturnableIssuedCheques, listIssuedCheques,
 };

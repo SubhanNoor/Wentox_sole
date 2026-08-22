@@ -1,6 +1,6 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, query } = require('../db/pool');
+const { sql, query, requestWithParams } = require('../db/pool');
 
 // Effective packing per variant is COALESCE(article_colors.packing, articles.packing) — same rule
 // saleBills.repository.js#getVariantPackings uses.
@@ -130,6 +130,21 @@ async function pairsOnHand(variantId) {
   return Number(result.recordset[0].on_hand);
 }
 
+// Same query, bound to an in-flight transaction instead of a fresh pool connection. Needed
+// whenever a stock check has to run AFTER this same transaction has already written a
+// stock_movements row for the variant being checked (draftSaleBills.service.js#confirm(): it
+// reverses the draft's own reservation, then this check runs as part of postLedgerAndStock) —
+// the plain pool-connection pairsOnHand() would try to read that uncommitted row from a SEPARATE
+// connection and, under READ COMMITTED, block waiting for a commit that can't happen until this
+// very query returns. A genuine deadlock-shaped bug, not a hang that resolves on its own.
+async function pairsOnHandTx(transaction, variantId) {
+  const request = requestWithParams(transaction, { variantId: { type: sql.Int, value: variantId } });
+  const result = await request.query(
+    `SELECT ISNULL(SUM(qty_pairs), 0) AS on_hand FROM dbo.stock_movements WHERE variant_id = @variantId`,
+  );
+  return Number(result.recordset[0].on_hand);
+}
+
 // UC-30's manual reduction — current on-hand for one vendor+material+unit, so the service can
 // reject a reduction that would take it negative before writing the CONSUMPTION row.
 async function vendorMaterialOnHand(vendorId, materialId, unit) {
@@ -173,6 +188,7 @@ module.exports = {
   movements,
   currentStock,
   pairsOnHand,
+  pairsOnHandTx,
   vendorMaterialOnHand,
   insertVendorStockConsumption,
 };

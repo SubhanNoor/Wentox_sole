@@ -20,16 +20,21 @@ async function insert(transaction, expense) {
     // PN-01: the voucher this entry belongs to. Nullable in the column so migration 022's backfill
     // could populate it, but every line written through here carries one.
     voucherId: { type: sql.Int, value: expense.voucher_id ?? null },
+    // Carried across from the draft by draftExpenses.service#confirm() so a line that gets posted
+    // keeps its original position in its voucher's entry order (listLines orders the posted and
+    // unposted halves together by created_at). Defaults to now for every other caller.
+    createdAt: { type: sql.DateTime2, value: expense.created_at ?? null },
   });
   const result = await request.query(`
     INSERT INTO dbo.expenses (
       expense_date, ba_id, amount, payment_mode, details, cheque_id, bank_id,
-      issued_cheque_no, issued_cheque_date, remarks, status, created_by, voucher_id
+      issued_cheque_no, issued_cheque_date, remarks, status, created_by, voucher_id, created_at
     )
     OUTPUT inserted.expense_id
     VALUES (
       @expenseDate, @baId, @amount, @paymentMode, @details, @chequeId, @bankId,
-      @issuedChequeNo, @issuedChequeDate, @remarks, 'DRAFT', @createdBy, @voucherId
+      @issuedChequeNo, @issuedChequeDate, @remarks, 'DRAFT', @createdBy, @voucherId,
+      ISNULL(@createdAt, SYSUTCDATETIME())
     )
   `);
   return result.recordset[0].expense_id;

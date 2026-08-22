@@ -54,4 +54,16 @@ module.exports = function register() {
       return service.unpost(payload.id);
     }),
   );
+
+  // "Unpost" now moves the return back to draft_purchase_returns — the real table strictly never
+  // holds an unposted document (and, per purchase-returns:update's own comment above, editing a
+  // real row in place was never allowed anyway — this is now the ONLY way to edit a posted return
+  // again).
+  ipcMain.handle(
+    'purchase-returns:unconfirm',
+    wrap((payload) => {
+      requireSession();
+      return service.unconfirm(payload.id);
+    }),
+  );
 };

@@ -1,4 +1,6 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { focusFirstField } from '@/lib/fieldNav';
+import { useHeldKey } from '@/hooks/useHeldKey';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import type { ProductCosts, CostFieldKey } from '@/types';
@@ -166,6 +168,24 @@ export default function ProductSetupPage() {
   };
 
   const addArticle = () => setArticles(prev => [...prev, emptyArticleValues()]);
+
+  // Keyboard entry without the mouse — same pattern as SaleBillPage/SaleReturnPage/PurchasePage.
+  // Plain Enter on the last field of the last article already reaches G-01's own handler and
+  // submits the whole batch (Save All) — left completely alone, that's correct as-is. Shift+Enter,
+  // Ctrl+Enter, or '.'+Enter from the LAST field of ANY article row instead appends a new blank
+  // article at the end and focuses into it, so a run of new articles can be typed one after
+  // another without reaching for the mouse or the Add Article button.
+  const articleRowRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const periodHeld = useHeldKey('.');
+
+  function handleArticleLastFieldKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey || periodHeld.current)) return;
+    e.preventDefault();
+    e.stopPropagation(); // stop AppLayout's own Enter handler from also walking/submitting this keystroke
+    const newRowIndex = articles.length; // always the end, regardless of which row triggered this
+    addArticle();
+    requestAnimationFrame(() => focusFirstField(articleRowRefs.current[newRowIndex]));
+  }
 
   const removeArticle = (idx: number) => {
     setArticles(prev => prev.filter((_, i) => i !== idx));
@@ -555,7 +575,7 @@ export default function ProductSetupPage() {
                     </div>
 
                     {articles.map((article, idx) => (
-                      <div key={idx} className="rounded-xl border-2 border-slate-200 overflow-hidden">
+                      <div key={idx} ref={el => { articleRowRefs.current[idx] = el; }} className="rounded-xl border-2 border-slate-200 overflow-hidden">
                         <div className="flex items-center justify-between px-4 py-2.5 bg-[#111c2a]">
                           <span className="text-xs font-bold text-[#B08D57] uppercase tracking-wider">Article {idx + 1}</span>
                           <button
@@ -576,6 +596,7 @@ export default function ProductSetupPage() {
                             vendorLocked
                             vendorLockedLabel={systemVendor?.name || 'Manufacturing Product'}
                             errors={articleErrors[idx]}
+                            onLastFieldKeyDown={handleArticleLastFieldKeyDown}
                           />
                         </div>
                       </div>

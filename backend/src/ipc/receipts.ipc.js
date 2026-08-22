@@ -43,4 +43,12 @@ module.exports = function register() {
     const session = requireSession();
     return service.unpost(payload.id, session);
   }));
+
+  // "Unpost" now moves the receipt back to draft_receipts — the real table strictly never holds an
+  // unposted document. Every guard receipts:unpost applies still applies (a cheque already
+  // deposited/endorsed is still refused with CHEQUE_IN_USE).
+  ipcMain.handle('receipts:unconfirm', wrap((payload) => {
+    const session = requireSession();
+    return service.unconfirm(payload.id, session);
+  }));
 };

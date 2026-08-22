@@ -163,7 +163,11 @@ export default function VendorSetupPage() {
     setViewingVendorId(vendorId);
     setPurchasesLoading(true);
     api.purchases.list({ vendor_id: vendorId }).then(res => {
-      if (res.ok) setViewingPurchases(res.data);
+      // Posted-only: this is the vendor's purchase RECORD, not a work-in-progress list — an
+      // unposted purchase hasn't actually happened yet (no ledger effect, stock still just
+      // reserved), so showing it here read as a real purchase before it was one. Reported
+      // directly by the user.
+      if (res.ok) setViewingPurchases(res.data.filter(p => p.is_posted));
       setPurchasesLoading(false);
     });
   };

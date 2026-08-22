@@ -5,7 +5,7 @@ import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type {
   VendorRow, BankAccountRow, BusinessAccountRow, ChequeRow, ChequeAllocationRow,
-  ExpenseRow, ExpenseCreateInput, DraftExpenseRow, ExpensePaymentMode,
+  ExpenseCreateInput, DraftExpenseRow, ExpensePaymentMode,
   ExpenseVoucherRow, VoucherActionResult
 } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -32,14 +32,16 @@ export default function ExpensesPage() {
   const [banks, setBanks] = useState<BankAccountRow[]>([]);
   const [cheques, setCheques] = useState<ChequeRow[]>([]);
   const [allocationsByReceipt, setAllocationsByReceipt] = useState<Record<number, ChequeAllocationRow[]>>({});
-  const [expenseRows, setExpenseRows] = useState<ExpenseRow[]>([]);
   const [drafts, setDrafts] = useState<DraftExpenseRow[]>([]);
   const [lookupError, setLookupError] = useState('');
 
+  // The posted expenses themselves are no longer listed on this screen — the "Recorded Expenses"
+  // table shows what still needs posting, which now lives in dbo.draft_expenses (see
+  // sortedExpenses). This is kept as the surfacing point for a failed read of the real table, and
+  // as the trigger every mutation already calls; the rows are read by the ledger/report screens.
   const refreshExpenses = useCallback(async () => {
     const res = await api.expenses.list({});
-    if (res.ok) setExpenseRows(res.data);
-    else setLookupError('Failed to load expenses: ' + res.error.message);
+    if (!res.ok) setLookupError('Failed to load expenses: ' + res.error.message);
   }, []);
 
   const refreshDrafts = useCallback(async () => {
@@ -77,22 +79,33 @@ export default function ExpensesPage() {
     })();
     refreshExpenses();
     refreshDrafts();
+    refreshDrafts();
     refreshCheques();
   }, [refreshExpenses, refreshDrafts, refreshCheques]);
 
   // ── Real-expense form (mirrors ReceiptsPage.tsx's mode structure) ──
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
   const [expenseId, setExpenseId] = useState<number | null>(null);
+  // Which table `expenseId` points into. An unposted expense now lives in dbo.draft_expenses and a
+  // posted one in dbo.expenses, so the id alone is ambiguous — this says which id space it is in.
+  const [entryIsDraft, setEntryIsDraft] = useState(false);
   const [date, setDate] = useState(today());
   const [baId, setBaId] = useState('');
   // RJ-02/PN-01: previewed account while arrow-keying through the dropdown, for the live balance tooltip.
   const [previewBaId, setPreviewBaId] = useState<number | null>(null);
 
   // PN-01/RJ-06: delete an expense entry, password-gated.
-  const [deleteTarget, setDeleteTarget] = useState<ExpenseRow | null>(null);
+  // An unposted expense lives in dbo.draft_expenses and a posted one in dbo.expenses, so the
+  // target carries which table it is in — the id alone is ambiguous now. In practice only unposted
+  // rows are ever deletable (every delete button is gated on that), so `kind` is 'draft' for
+  // everything the UI offers; the 'expense' branch is kept for rows predating the draft/real split.
+  type PendingDelete = { kind: 'draft' | 'expense'; id: number; amount: number };
+  const [deleteTarget, setDeleteTarget] = useState<PendingDelete | null>(null);
   const handleDeleteConfirmed = async (password: string) => {
     if (!deleteTarget) return;
-    const res = await api.expenses.remove(deleteTarget.expense_id, password);
+    const res = deleteTarget.kind === 'draft'
+      ? await api.draftExpenses.remove(deleteTarget.id, password)
+      : await api.expenses.remove(deleteTarget.id, password);
     setDeleteTarget(null);
     if (!res.ok) return fail('Failed to delete: ' + res.error.message);
     flash('Expense deleted.');
@@ -254,6 +267,7 @@ export default function ExpensesPage() {
   const handleNew = () => {
     setMode('new');
     setExpenseId(null);
+    setEntryIsDraft(false);
     setDate(today());
     setBaId('');
     setAmount(0);
@@ -309,6 +323,7 @@ export default function ExpensesPage() {
   const clearEntryRow = () => {
     setMode('new');
     setExpenseId(null);
+    setEntryIsDraft(false);
     setBaId('');
     setPreviewBaId(null);
     setAmount(0);
@@ -337,18 +352,20 @@ export default function ExpensesPage() {
     // Every line carries the voucher's own date — the header owns the date on this screen.
     const linePayload = { ...payload, expense_date: openVoucher.voucher_date, voucher_id: openVoucher.voucher_id };
 
-    const result = mode === 'edit' && expenseId != null
-      ? await api.expenses.update(expenseId, linePayload)
-      : await api.expenses.create(linePayload);
+    // A voucher line is saved UNPOSTED, so it goes into dbo.draft_expenses — the real expenses
+    // table only ever holds posted documents now. Posting the voucher is what moves each line
+    // across (draftExpenses.confirm), and unposting moves it back.
+    const result = mode === 'edit' && expenseId != null && entryIsDraft
+      ? await api.draftExpenses.update(expenseId, linePayload)
+      : await api.draftExpenses.create(linePayload);
 
     if (!result.ok) { fail('Failed to save entry: ' + result.error.message); return; }
 
-    // A confirmed real expense supersedes whatever draftExpenses entry it came from.
-    if (loadedDraftId != null) {
-      await api.draftExpenses.remove(loadedDraftId);
-      refreshDrafts();
-    }
+    // Nothing to clean up: an unposted expense IS a draft now, so loading one into the entry row
+    // and pressing Done edits that same row in place rather than creating a second copy that the
+    // original then had to be deleted to avoid duplicating.
     setLoadedDraftId(null);
+    refreshDrafts();
 
     const wasEdit = mode === 'edit';
     const paidVendor = isVendorPayment ? linkedVendor?.name : null;
@@ -417,13 +434,16 @@ export default function ExpensesPage() {
 
   // PN-01: pull a committed line back into the entry row to correct it. Unposted lines only — a
   // posted line has ledger entries and expenses:update rejects it outright.
-  const handleEditLine = (line: ExpenseRow) => {
-    if (line.status === 'CONFIRMED') {
+  const handleEditLine = (line: api.ExpenseVoucherLineRow) => {
+    if (line.status === 'CONFIRMED' || line.draft_id == null) {
       fail('Unpost this voucher before editing that entry.');
       return;
     }
     setMode('edit');
-    setExpenseId(line.expense_id);
+    // An unposted line lives in draft_expenses, so the id the entry row carries while editing is a
+    // draft_id — handleDone routes on entryIsDraft to know which table to write back to.
+    setEntryIsDraft(true);
+    setExpenseId(line.draft_id);
     setBaId(String(line.ba_id));
     setPreviewBaId(line.ba_id);
     setAmount(Number(line.amount));
@@ -438,39 +458,6 @@ export default function ExpensesPage() {
     focusFirstEntryField();
   };
 
-  const loadExpenseRow = async (rowIn: ExpenseRow) => {
-    // list() rows never carry cheque_no/cheque_status (only get()'s join does) — re-fetch
-    // full detail whenever a CHEQUE_ENDORSED row is opened for view/edit.
-    let row = rowIn;
-    if (row.payment_mode === 'CHEQUE_ENDORSED' && row.cheque_no === undefined) {
-      const res = await api.expenses.get(row.expense_id);
-      if (!res.ok) { fail('Failed to load expense: ' + res.error.message); return; }
-      row = res.data;
-    }
-
-    setExpenseId(row.expense_id);
-    setDate(row.expense_date.slice(0, 10));
-    setBaId(String(row.ba_id));
-    setAmount(row.amount);
-    setPaymentMode(row.payment_mode);
-    setBankId(row.bank_id != null ? String(row.bank_id) : '');
-    setChequeId(row.cheque_id != null ? String(row.cheque_id) : '');
-    setIssuedChequeNo(row.issued_cheque_no || '');
-    setIssuedChequeDate(row.issued_cheque_date ? row.issued_cheque_date.slice(0, 10) : '');
-    setDetails(row.details || '');
-    setRemarks(row.remarks || '');
-    setLoadedDraftId(null);
-    setSelectedDraftPick('');
-    setErrorMsg('');
-    setMode('view');
-
-    // PN-01: opening an expense from the records list also opens the voucher it belongs to, so its
-    // sibling entries, the per-mode totals and the voucher's Post/Un Post are all on screen.
-    if (row.voucher_id != null) await refreshVoucher(row.voucher_id);
-    else setVoucher(null);
-    setVoucherResult(null);
-  };
-
   // PN-01: the per-expense handlePost/handleUnpost that used to live here are gone — posting is a
   // voucher-level action now (handlePostVoucher/handleUnpostVoucher above), and this screen has no
   // second document type that posts on its own. Their refreshCheques() call moved into those two,
@@ -483,11 +470,16 @@ export default function ExpensesPage() {
   };
   */
 
-  const loadDraft = (row: DraftExpenseRow) => {
-    setMode('new');
-    setExpenseId(null);
+  // Pulls an unposted expense into the entry row to correct it. It is edited IN PLACE now (mode
+  // 'edit' + entryIsDraft), not copied — every unposted expense is a draft, so there is no longer a
+  // "cached scratch entry" that has to be turned into a separate real row and then deleted.
+  const loadDraft = async (row: DraftExpenseRow) => {
+    setMode('edit');
+    setEntryIsDraft(true);
+    setExpenseId(row.draft_id);
     setDate(row.expense_date.slice(0, 10));
     setBaId(String(row.ba_id));
+    setPreviewBaId(row.ba_id);
     setAmount(row.amount || 0);
     setPaymentMode(row.payment_mode);
     setBankId(row.bank_id != null ? String(row.bank_id) : '');
@@ -497,7 +489,17 @@ export default function ExpensesPage() {
     setDetails(row.details || '');
     setRemarks(row.remarks || '');
     setLoadedDraftId(row.draft_id);
+    setSelectedDraftPick('');
     setErrorMsg('');
+
+    // Opening an entry also opens the voucher it belongs to, so its sibling entries, the per-mode
+    // totals and the voucher's Post/Un Post are all on screen. A standalone draft (no voucher)
+    // simply clears the voucher pane.
+    if (row.voucher_id != null) await refreshVoucher(row.voucher_id);
+    else setVoucher(null);
+    setVoucherResult(null);
+
+    focusFirstEntryField();
   };
 
 
@@ -518,9 +520,13 @@ export default function ExpensesPage() {
   // Recorded Expenses (below) shows only what's still awaiting posting — a CONFIRMED expense has
   // already done its job and belongs in the reports/ledger, not in a list whose whole point was
   // "here's what still needs attention." Mirrors the identical fix on ReceiptsPage.
+  // Unposted expenses now live in dbo.draft_expenses, so this reads the drafts rather than
+  // filtering the real table — which, by the new invariant, only ever holds CONFIRMED rows and so
+  // would always filter down to nothing. Same list, same meaning ("here's what still needs
+  // attention"), just read from where the rows actually are.
   const sortedExpenses = useMemo(
-    () => [...expenseRows].filter(r => r.status !== 'CONFIRMED').sort((a, b) => b.expense_date.localeCompare(a.expense_date)),
-    [expenseRows]
+    () => [...drafts].sort((a, b) => b.expense_date.localeCompare(a.expense_date)),
+    [drafts]
   );
 
   const accountName = useCallback((id: number) => {
@@ -603,9 +609,9 @@ export default function ExpensesPage() {
             {drafts.length > 0 && (
               <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-4 text-sm" data-no-print>
                 <div className="flex items-center gap-2">
-                  <span className="font-semibold text-slate-700">Saved Drafts:</span>
+                  <span className="font-semibold text-slate-700">Pending Posting:</span>
                   <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
-                    {drafts.length} incomplete expense(s) cached
+                    {drafts.length} unposted expense(s)
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
@@ -620,7 +626,7 @@ export default function ExpensesPage() {
                     className="soleria-input py-1 px-2.5 text-xs bg-white border cursor-pointer font-medium"
                     style={{ width: '240px' }}
                   >
-                    <option value="">Select a draft to load...</option>
+                    <option value="">Select an entry to load...</option>
                     {drafts.map(d => (
                       <option key={d.draft_id} value={d.draft_id}>
                         {accountName(d.ba_id)} - {formatCurrency(d.amount)} ({formatDate(d.expense_date)})
@@ -632,7 +638,7 @@ export default function ExpensesPage() {
                     onClick={handleConfirmDraft}
                     className="text-xs text-emerald-700 hover:text-emerald-900 font-semibold transition-colors"
                   >
-                    Confirm Draft
+                    Post Selected
                   </button>
                   <button
                     type="button"
@@ -1020,7 +1026,9 @@ export default function ExpensesPage() {
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => setDeleteTarget(line)}
+                                      onClick={() => setDeleteTarget(line.draft_id != null
+                                        ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
+                                        : { kind: 'expense', id: line.expense_id as number, amount: Number(line.amount) })}
                                       title="Delete this entry (asks for your password)"
                                       className="text-rose-500 hover:text-rose-700 transition-colors"
                                     >
@@ -1100,10 +1108,13 @@ export default function ExpensesPage() {
                       </tr>
                     </thead>
                     <tbody>
+                      {/* Every row here is an unposted expense out of dbo.draft_expenses, so the
+                          status is DRAFT by construction — no per-row status test is needed any
+                          more, and clicking one opens it for editing in place. */}
                       {sortedExpenses.map(r => (
                         <tr
-                          key={r.expense_id}
-                          onClick={() => loadExpenseRow(r)}
+                          key={r.draft_id}
+                          onClick={() => loadDraft(r)}
                           className="border-b hover:bg-slate-50/50 cursor-pointer"
                           style={{ borderColor: 'var(--border-table)' }}
                         >
@@ -1112,23 +1123,19 @@ export default function ExpensesPage() {
                           <td className="p-3 text-center text-xs text-slate-500">{r.payment_mode}</td>
                           <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
                           <td className="p-3 text-center">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
-                              r.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                            }`}>
-                              {r.status}
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded uppercase bg-slate-100 text-slate-500">
+                              DRAFT
                             </span>
                           </td>
                           <td className="p-3 text-center">
-                            {r.status !== 'CONFIRMED' && (
-                              <button
-                                type="button"
-                                onClick={e => { e.stopPropagation(); setDeleteTarget(r); }}
-                                title="Delete"
-                                className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
-                              >
-                                <Trash2 size={15} />
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              onClick={e => { e.stopPropagation(); setDeleteTarget({ kind: 'draft', id: r.draft_id, amount: Number(r.amount) }); }}
+                              title="Delete"
+                              className="p-1.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
+                            >
+                              <Trash2 size={15} />
+                            </button>
                           </td>
                         </tr>
                       ))}

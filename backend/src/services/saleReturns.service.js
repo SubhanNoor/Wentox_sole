@@ -10,6 +10,10 @@ const {
 } = require('./saleReturnMath');
 const CODES = require('../constants/reservedAccounts');
 const { toISODate } = require('../utils/dates');
+// Repository, not service — draftSaleReturns.service.js already requires this service the other
+// way (its confirm() calls insertConfirmed()/postLedgerAndStock()), so requiring its SERVICE back
+// here would be circular. Same reasoning as saleBills.service.js#unconfirm().
+const draftSaleReturnsRepository = require('../repositories/draftSaleReturns.repository');
 
 // bilty_no / gp_no / adda_id are dispatch details that are often unknown when the return is
 // recorded — the goods can come back before any bilty exists, or without going through an adda at
@@ -161,6 +165,81 @@ async function unpost(id) {
   return getById(id);
 }
 
+// Reverse of draftSaleReturns.service.js#confirm(): the real sale_returns table now strictly
+// never holds an unposted document, mirroring saleBills.service.js#unconfirm(). Stock stays
+// restored throughout — released here as a SALE_RETURN row (a negative ADJUSTMENT undoing the
+// positive one post() wrote), then immediately re-restored as a DRAFT_SALE_RETURN row for the new
+// draft, net zero effect on actual on-hand stock.
+async function unconfirm(id) {
+  const ret = await getById(id);
+  if (!ret.is_posted) {
+    throw ApiError.conflict('Return is not posted', 'NOT_POSTED');
+  }
+
+  const draftId = await withTransaction(async (transaction) => {
+    await repository.deleteLedgerEntries(transaction, id);
+    await repository.insertStockMovements(
+      transaction,
+      ret.items.map((item) => ({
+        variant_id: item.variant_id,
+        movement_type: 'ADJUSTMENT',
+        qty_pairs: -item.pairs,
+        movement_date: ret.return_date,
+        source_type: 'SALE_RETURN',
+        source_id: id,
+      })),
+    );
+
+    const draft = {
+      return_date: ret.return_date,
+      store_id: ret.store_id,
+      customer_id: ret.customer_id,
+      sub_customer_id: ret.sub_customer_id,
+      bill_no: ret.bill_no,
+      gp_no: ret.gp_no,
+      bilty_no: ret.bilty_no,
+      adda_id: ret.adda_id,
+      remarks: ret.remarks,
+      invoice_discount: ret.invoice_discount,
+      total_cartons: ret.total_cartons,
+      total_pairs: ret.total_pairs,
+      gross_value: ret.gross_value,
+      net_value: ret.net_value,
+      created_by: ret.created_by,
+    };
+    const lines = ret.items.map((item) => ({
+      variant_id: item.variant_id,
+      cartons: item.cartons,
+      pairs: item.pairs,
+      rate: item.rate,
+      discount_percent: item.discount_percent,
+      discount_value: item.discount_value,
+      value: item.value,
+    }));
+
+    const newDraftId = await draftSaleReturnsRepository.insertDraft(transaction, draft);
+    await draftSaleReturnsRepository.insertDraftItems(transaction, newDraftId, lines);
+    await draftSaleReturnsRepository.insertStockMovements(
+      transaction,
+      lines.map((line) => ({
+        variant_id: line.variant_id,
+        movement_type: 'ADJUSTMENT',
+        qty_pairs: line.pairs,
+        movement_date: draft.return_date,
+        source_type: 'DRAFT_SALE_RETURN',
+        source_id: newDraftId,
+      })),
+    );
+
+    await repository.deleteItems(transaction, id);
+    await repository.deleteReturn(transaction, id);
+
+    return newDraftId;
+  });
+
+  return draftSaleReturnsRepository.findById(draftId);
+}
+
 // Shared posting logic (schema §6 posting matrix, reverse of sale bill): debit SALES chart
 // account / credit CUSTOMER BA, positive SALE_RETURN stock movement per item. Used by
 // sale-returns:post and by draftSaleReturns.confirm (which posts immediately instead of leaving
@@ -232,5 +311,5 @@ async function getById(returnId) {
 }
 
 module.exports = {
-  create, list, getById, update, post, unpost, postLedgerAndStock, insertConfirmed,
+  create, list, getById, update, post, unpost, unconfirm, postLedgerAndStock, insertConfirmed,
 };

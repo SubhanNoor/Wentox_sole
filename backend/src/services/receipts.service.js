@@ -9,6 +9,10 @@ const { withTransaction } = require('../db/pool');
 const CODES = require('../constants/reservedAccounts');
 const { toISODate } = require('../utils/dates');
 const businessAccountsService = require('./businessAccounts.service');
+// Repository, not service — draftReceipts.service.js already requires this service the other way
+// (its confirm() calls insertReceipt()/postWithinTransaction()), so requiring its SERVICE back here
+// would be circular. Same reasoning as saleBills.service.js#unconfirm().
+const draftReceiptsRepository = require('../repositories/draftReceipts.repository');
 
 function validateHeader(payload) {
   if (!payload.ba_id) throw ApiError.badRequest('ba_id is required');
@@ -88,7 +92,13 @@ async function getById(receiptId) {
 // (which left a real orphaned DRAFT receipt, and a duplicate-receipt risk on retry, if post()
 // failed after create() had already committed — caught in debugger review).
 async function insertReceipt(transaction, payload, userId) {
-  const receiptId = await repository.insert(transaction, { ...buildFields(payload), created_by: userId });
+  const receiptId = await repository.insert(transaction, {
+    ...buildFields(payload),
+    created_by: userId,
+    // Only draftReceipts.service#confirm() passes this, to keep a posted line in its original
+    // place in the voucher's entry order; every other caller leaves it undefined (defaults to now).
+    created_at: payload.created_at,
+  });
 
   if (payload.payment_mode === 'CHEQUE') {
     const chequeId = await chequesRepository.insert(transaction, {
@@ -262,7 +272,69 @@ async function unpost(receiptId, session) {
   return getById(receiptId);
 }
 
+// Reverse of draftReceipts.service.js#confirm(): moves a posted receipt back out of dbo.receipts
+// and into dbo.draft_receipts, so the real table strictly only ever holds posted documents (same
+// architecture as saleBills/purchases/... #unconfirm()).
+//
+// Every guard unpost() applies still applies here, unchanged and for the same reasons — this is
+// the same reversal, it just doesn't leave the row behind:
+//   - must be CONFIRMED
+//   - a CHEQUE receipt whose cheque has moved past PENDING is refused (CHEQUE_IN_USE): its
+//     disposition owns ledger rows this would strand.
+//
+// Because that guard guarantees the cheque is still PENDING (never deposited, endorsed or
+// allocated), the cheques row can safely be dropped and its details carried onto the draft as
+// plain columns — exactly what remove() already does for an unposted cheque receipt, and the
+// reverse of what confirm() does on the way in. Re-confirming re-creates the cheques row through
+// insertReceipt(), the same single code path as always, so no cheque/endorse/bounce logic changes.
+async function unconfirm(receiptId, session) {
+  const receipt = await getById(receiptId);
+  await businessAccountsService.assertAccessible(receipt.ba_id, session);
+  if (receipt.status !== 'CONFIRMED') {
+    throw ApiError.conflict('Receipt is not posted', 'NOT_POSTED');
+  }
+  if (receipt.payment_mode === 'CHEQUE' && receipt.cheque_status && receipt.cheque_status !== 'PENDING') {
+    throw ApiError.conflict('This cheque has already been disposed of — reverse that first', 'CHEQUE_IN_USE');
+  }
+
+  const draftId = await withTransaction(async (transaction) => {
+    await repository.deleteLedgerEntries(transaction, receiptId);
+
+    const newDraftId = await draftReceiptsRepository.insert(transaction, {
+      receipt_date: receipt.receipt_date,
+      ba_id: receipt.ba_id,
+      amount: receipt.amount,
+      commission: receipt.commission,
+      payment_mode: receipt.payment_mode,
+      details: receipt.details,
+      bank_id: receipt.bank_id,
+      remarks: receipt.remarks,
+      // findById joins dbo.cheques, so these are the live cheque's own details for a CHEQUE
+      // receipt and NULL for CASH/ONLINE.
+      cheque_no: receipt.cheque_no,
+      cheque_date: receipt.cheque_date,
+      cheque_received_date: receipt.cheque_received_date,
+      voucher_id: receipt.voucher_id,
+      created_by: receipt.created_by,
+      // Keeps the line where it was in its voucher's entry order.
+      created_at: receipt.created_at,
+    });
+
+    if (receipt.payment_mode === 'CHEQUE' && receipt.cheque_id) {
+      // Circular FK pair: null out receipts.cheque_id first, then the cheques row, then the
+      // receipt itself — the same order remove() uses.
+      await repository.unlinkCheque(transaction, receiptId);
+      await chequesRepository.deleteCheque(transaction, receipt.cheque_id);
+    }
+
+    await repository.remove(transaction, receiptId);
+    return newDraftId;
+  });
+
+  return draftReceiptsRepository.findById(draftId);
+}
+
 module.exports = {
-  list, getById, create, update, remove, post, unpost, resolveDebitSide,
+  list, getById, create, update, remove, post, unpost, unconfirm, resolveDebitSide,
   insertReceipt, postWithinTransaction,
 };

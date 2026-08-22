@@ -174,12 +174,19 @@ async function list(filters = {}) {
     params.dateTo = { type: sql.Date, value: filters.date_to };
   }
 
+  // is_posted: plain SELECT * never carried this before (only get()/create()/update()/post()/
+  // unpost() computed it via isPosted()'s own separate query) — added here as a computed column so
+  // callers that list a vendor's/account's purchase HISTORY (VendorSetupPage's drill-down modal)
+  // can actually filter to posted-only instead of showing drafts that haven't happened yet.
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT * FROM dbo.purchases ${where} ORDER BY purchase_date DESC, purchase_id DESC`,
+    `SELECT p.*, CASE WHEN EXISTS (
+       SELECT 1 FROM dbo.ledger_entries le WHERE le.source_type = 'PURCHASE' AND le.source_id = p.purchase_id
+     ) THEN 1 ELSE 0 END AS is_posted
+     FROM dbo.purchases p ${where} ORDER BY purchase_date DESC, purchase_id DESC`,
     params,
   );
-  return result.recordset;
+  return result.recordset.map((r) => ({ ...r, is_posted: r.is_posted === 1 }));
 }
 
 // P-03: every purchase still awaiting posting, oldest first — the order they were entered is the
@@ -233,7 +240,16 @@ async function lastPurchasedRate(vendorId, materialName) {
   return row ? { price_per_unit: Number(row.price_per_unit), unit: row.unit } : null;
 }
 
+// Removing a real purchase entirely (only ever called on an unposted one —
+// purchases.service.js#unconfirm() deletes ledger/vendor-stock and items first, this table row
+// last).
+async function deletePurchase(transaction, purchaseId) {
+  const request = requestWithParams(transaction, { purchaseId: { type: sql.Int, value: purchaseId } });
+  await request.query('DELETE FROM dbo.purchases WHERE purchase_id = @purchaseId');
+}
+
 module.exports = {
   insert, insertItems, findById, isPosted, insertLedgerEntries, insertVendorStockMovements,
-  deleteItems, updateHeader, deleteLedgerAndStock, list, lastPurchasedRate, listUnposted,
+  deleteItems, updateHeader, deleteLedgerAndStock, deletePurchase, list, lastPurchasedRate,
+  listUnposted,
 };
