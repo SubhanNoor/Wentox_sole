@@ -1,26 +1,43 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
-import type { ReceiptRow, BusinessAccountRow, CityRow } from '@/lib/api';
+import type { ReceiptRow, BusinessAccountRow, ReceiptVoucherRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
-import { Calendar, Search, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check, MapPin } from 'lucide-react';
+import { Calendar, Search, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check, Undo2 } from 'lucide-react';
 
-export default function OverallReceiptsTab() {
+interface OverallReceiptsTabProps {
+  /** Called after a successful Unpost here — the parent (ReceiptsPage) switches back to Receipt
+   * Entry and loads that same voucher on screen, per the user (2026-08-26): pressing Unpost on a
+   * records page should land you where you can actually act on it, not leave you on a list the
+   * voucher no longer belongs to (unposted lines drop out of receipts.list(), the source of this
+   * tab's own data). */
+  onVoucherUnposted: (voucherId: number) => void | Promise<void>;
+}
+
+export default function OverallReceiptsTab({ onVoucherUnposted }: OverallReceiptsTabProps) {
   const [rows, setRows] = useState<ReceiptRow[]>([]);
   const [accounts, setAccounts] = useState<BusinessAccountRow[]>([]);
-  const [cities, setCities] = useState<CityRow[]>([]);
+  // Voucher headers (voucher_no, remarks, status) — the outer table now groups by VOUCHER, not
+  // account (corrected per the user, 2026-08-26: "select the voucher" — a voucher is the document
+  // here, an account is just one field on each of its lines). `rows` (receipts.list()) only ever
+  // carries posted lines, so this is a separate fetch purely for each group's own header info.
+  const [vouchers, setVouchers] = useState<ReceiptVoucherRow[]>([]);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  useEffect(() => {
-    (async () => {
-      const [r, c, ct] = await Promise.all([
-        api.receipts.list({ range: 'overall' }),
-        api.listBusinessAccounts(), api.listCities()
-      ]);
-      if (r.ok) setRows(r.data);
-      if (c.ok) setAccounts(c.data);
-      if (ct.ok) setCities(ct.data);
-    })();
-  }, []);
+  const refreshAll = async () => {
+    const [r, c, v] = await Promise.all([
+      api.receipts.list({ range: 'overall' }),
+      api.listBusinessAccounts(),
+      api.receiptVouchers.list({})
+    ]);
+    if (r.ok) setRows(r.data);
+    if (c.ok) setAccounts(c.data);
+    if (v.ok) setVouchers(v.data);
+  };
+
+  useEffect(() => { refreshAll(); }, []);
+
+  const voucherLookup = useMemo(() => new Map(vouchers.map(v => [v.voucher_id, v])), [vouchers]);
 
   // Filters
   const [nameQuery, setNameQuery] = useState('');
@@ -31,8 +48,8 @@ export default function OverallReceiptsTab() {
   const monthDropdownRef = useRef<HTMLDivElement>(null);
   const yearDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Selected customer for viewing details
-  const [selectedAccountId, setSelectedCustomerId] = useState<number | null>(null);
+  // Selected voucher for viewing its receipts
+  const [selectedVoucherId, setSelectedVoucherId] = useState<number | null>(null);
 
   const monthsList = [
     { value: '0', label: 'January' },
@@ -113,62 +130,83 @@ export default function OverallReceiptsTab() {
     });
   }, [rows, accounts, selectedYear, selectedMonth, nameQuery]);
 
-  const accountCardsData = useMemo(() => {
-    // Keyed on ba_id: a receipt names a business account, which may belong to a customer, a
-    // director, an employee or a bank (migration 014).
-    const groups: { [baId: number]: { account: BusinessAccountRow; receipts: ReceiptRow[]; totalAmount: number } } = {};
+  const voucherCardsData = useMemo(() => {
+    const groups: { [voucherId: number]: { voucherId: number; receipts: ReceiptRow[]; totalAmount: number } } = {};
 
     overallReceipts.forEach(r => {
-      if (!groups[r.ba_id]) {
-        const account = accounts.find(a => a.ba_id === r.ba_id) || {
-          ba_id: r.ba_id, code: '', name: r.account_name || 'Unknown Account', ac_id: 0,
-          region_id: null, city_id: null, opening_balance: null, opening_date: null,
-          status: 'ACTIVE' as const,
-        };
-        groups[r.ba_id] = {
-          account,
-          receipts: [],
-          totalAmount: 0
-        };
-      }
-
-      const grp = groups[r.ba_id];
+      const vid = r.voucher_id;
+      if (vid == null) return; // every receipt has one per migration 022's backfill — guard anyway
+      if (!groups[vid]) groups[vid] = { voucherId: vid, receipts: [], totalAmount: 0 };
+      const grp = groups[vid];
       grp.receipts.push(r);
       grp.totalAmount += r.amount;
     });
 
     return Object.values(groups).sort((a, b) => b.totalAmount - a.totalAmount);
-  }, [overallReceipts, accounts]);
+  }, [overallReceipts]);
 
-  const activeAccountDetails = useMemo(() => {
-    if (selectedAccountId == null) return null;
-    return accountCardsData.find(g => g.account.ba_id === selectedAccountId);
-  }, [selectedAccountId, accountCardsData]);
+  const activeVoucherDetails = useMemo(() => {
+    if (selectedVoucherId == null) return null;
+    return voucherCardsData.find(g => g.voucherId === selectedVoucherId);
+  }, [selectedVoucherId, voucherCardsData]);
 
-  if (selectedAccountId != null && activeAccountDetails) {
+  const activeVoucherHeader = selectedVoucherId != null ? voucherLookup.get(selectedVoucherId) : undefined;
+
+  // A voucher here is at least PARTIAL (these are posted receipts) — Unpost is offered whenever
+  // it isn't fully UNPOSTED already. Posting status belongs to the whole voucher, not one receipt
+  // in it (same correction as the Receipt Entry page itself).
+  const [unpostBusy, setUnpostBusy] = useState(false);
+  const handleUnpostVoucher = async () => {
+    if (selectedVoucherId == null) return;
+    setUnpostBusy(true);
+    const res = await api.receiptVouchers.unpost(selectedVoucherId);
+    setUnpostBusy(false);
+    if (!res.ok) { setErrorMsg('Failed to unpost voucher: ' + res.error.message); return; }
+    setErrorMsg('');
+    const voucherId = selectedVoucherId;
+    setSelectedVoucherId(null); // its lines just left receipts.list() — the group no longer exists here
+    await refreshAll();
+    await onVoucherUnposted(voucherId);
+  };
+
+  if (selectedVoucherId != null && activeVoucherDetails) {
     return (
       <div className="card-white p-6 bg-white border border-slate-200 shadow-sm rounded-xl animate-in fade-in slide-in-from-bottom-3 duration-300">
+        {errorMsg && (
+          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
+        )}
         <div className="flex items-center justify-between border-b pb-4 mb-4" style={{ borderColor: 'var(--border-color)' }}>
           <div className="flex items-center gap-3">
             <button
-              onClick={() => setSelectedCustomerId(null)}
+              onClick={() => setSelectedVoucherId(null)}
               className="bg-amber-50/80 hover:bg-amber-100/90 text-amber-900 border border-amber-200/80 rounded-xl px-4 py-2 text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs hover:shadow-xs"
             >
               <ArrowLeft size={16} /> Back to Receipts
             </button>
             <div>
               <h3 className="font-lora font-bold text-lg text-slate-800">
-                {activeAccountDetails.account.name} — Financial Receipts Ledger
+                Voucher #{activeVoucherHeader?.voucher_no ?? selectedVoucherId} — Financial Receipts Ledger
               </h3>
               <p className="text-xs text-slate-500 font-medium">
-                Account: #{activeAccountDetails.account.code || activeAccountDetails.account.ba_id}
+                {activeVoucherHeader?.remarks || 'No remarks'}
               </p>
             </div>
           </div>
 
-          <div className="text-right">
-            <span className="text-xs font-semibold text-slate-500 block uppercase">Total Receipts:</span>
-            <span className="font-mono font-bold text-emerald-800 text-lg">{formatCurrency(activeAccountDetails.totalAmount)}</span>
+          <div className="flex items-center gap-3">
+            <div className="text-right">
+              <span className="text-xs font-semibold text-slate-500 block uppercase">Total Receipts:</span>
+              <span className="font-mono font-bold text-emerald-800 text-lg">{formatCurrency(activeVoucherDetails.totalAmount)}</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleUnpostVoucher}
+              disabled={unpostBusy}
+              title="Unpost this whole voucher"
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white shadow-sm transition-all"
+            >
+              <Undo2 size={14} /> {unpostBusy ? 'Working…' : 'Unpost'}
+            </button>
           </div>
         </div>
 
@@ -185,7 +223,7 @@ export default function OverallReceiptsTab() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
-              {activeAccountDetails.receipts.map(r => (
+              {activeVoucherDetails.receipts.map(r => (
                 <tr key={r.receipt_id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="p-3.5 pl-4 font-mono text-slate-600">{formatDate(r.receipt_date)}</td>
                   <td className="p-3.5 text-center">
@@ -215,6 +253,9 @@ export default function OverallReceiptsTab() {
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1750 }}>
+      {errorMsg && (
+        <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
+      )}
       {/* Filter Toolbar Standard */}
       <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white shadow-2xs" style={{ borderColor: 'var(--border-color)' }}>
         <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
@@ -333,47 +374,45 @@ export default function OverallReceiptsTab() {
         </div>
       </div>
 
-      {/* RJ-05: account records as table rows, consistent with the rest of the app. */}
+      {/* RJ-05: voucher records as table rows — grouped by VOUCHER, not account (corrected per the
+          user 2026-08-26): Account/City columns removed, Date/Remarks (the voucher's own) added. */}
       <div className="card-white overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border-color)' }}>
         <table className="w-full text-left border-collapse text-sm">
           <thead>
             <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-              <th className="p-3 pl-4">Account</th>
-              <th className="p-3 text-center">City</th>
+              <th className="p-3 pl-4">C.Book No</th>
+              <th className="p-3">Date</th>
+              <th className="p-3">Remarks</th>
               <th className="p-3 text-center">Receipts</th>
               <th className="p-3 text-right pr-6">Total Jamma</th>
             </tr>
           </thead>
           <tbody>
-            {accountCardsData.length === 0 ? (
+            {voucherCardsData.length === 0 ? (
               <tr>
-                <td colSpan={4} className="text-center p-12 text-slate-400">
+                <td colSpan={5} className="text-center p-12 text-slate-400">
                   <Calendar size={40} className="text-slate-300 mb-2 mx-auto" />
                   <p className="font-lora text-base font-semibold text-slate-500 mb-1">No Receipts Found</p>
                   <p className="text-xs max-w-sm mx-auto">No receipts were logged matching your search filters.</p>
                 </td>
               </tr>
             ) : (
-              accountCardsData.map(data => {
-                const city = cities.find(c => c.city_id === data.account.city_id)?.name || 'Local';
-
+              voucherCardsData.map(data => {
+                const header = voucherLookup.get(data.voucherId);
                 return (
                   <tr
-                    key={data.account.ba_id}
-                    onClick={() => setSelectedCustomerId(data.account.ba_id)}
+                    key={data.voucherId}
+                    onClick={() => setSelectedVoucherId(data.voucherId)}
                     className="border-b hover:bg-slate-50/60 cursor-pointer transition-colors"
                     style={{ borderColor: 'var(--border-table)' }}
                   >
                     <td className="p-3 pl-4">
-                      <div className="font-lora font-bold text-slate-900">{data.account.name}</div>
-                      <div className="font-mono text-[11px] text-slate-400">Code: #{data.account.code || data.account.ba_id}</div>
+                      <div className="font-lora font-bold text-slate-900">#{header?.voucher_no ?? data.voucherId}</div>
                     </td>
-                    <td className="p-3 text-center">
-                      <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200/60 uppercase tracking-wider inline-flex items-center gap-1">
-                        <MapPin size={10} className="text-slate-400" />
-                        {city}
-                      </span>
+                    <td className="p-3 font-mono text-slate-600">
+                      {header ? formatDate(header.voucher_date) : formatDate(data.receipts[0]?.receipt_date)}
                     </td>
+                    <td className="p-3 text-slate-500 text-xs">{header?.remarks || '-'}</td>
                     <td className="p-3 text-center">
                       <span className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-900 px-2.5 py-1 rounded-full text-xs font-semibold border border-amber-200/80">
                         <FileText size={13} className="text-amber-600" />

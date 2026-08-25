@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
-import type { ExpenseRow, BusinessAccountRow } from '@/lib/api';
+import type { ExpenseRow, BusinessAccountRow, ExpenseVoucherRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
-import { Calendar, Search, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check } from 'lucide-react';
+import { Calendar, Search, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check, Undo2 } from 'lucide-react';
 
 function isChequeMode(mode: ExpenseRow['payment_mode']): boolean {
   return mode === 'CHEQUE_ENDORSED' || mode === 'CHEQUE_ISSUED';
@@ -18,20 +18,34 @@ function expenseModeLabel(mode: ExpenseRow['payment_mode']): string {
   }
 }
 
-export default function MonthlyExpensesTab() {
+interface MonthlyExpensesTabProps {
+  /** Called after a successful Unpost here — the parent (ExpensesPage) switches back to Expense
+   * Entry and loads that same voucher on screen, same correction made on Receipts (2026-08-26):
+   * posting status belongs to the whole voucher, and expenses.list() only ever returns posted
+   * lines, so the group this tab shows no longer exists here once unposted. */
+  onVoucherUnposted: (voucherId: number) => void | Promise<void>;
+}
+
+export default function MonthlyExpensesTab({ onVoucherUnposted }: MonthlyExpensesTabProps) {
   const [rows, setRows] = useState<ExpenseRow[]>([]);
   const [businessAccounts, setBusinessAccounts] = useState<BusinessAccountRow[]>([]);
+  const [vouchers, setVouchers] = useState<ExpenseVoucherRow[]>([]);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  useEffect(() => {
-    (async () => {
-      const [e, b] = await Promise.all([
-        api.expenses.list({ range: 'monthly' }),
-        api.listBusinessAccounts()
-      ]);
-      if (e.ok) setRows(e.data);
-      if (b.ok) setBusinessAccounts(b.data);
-    })();
-  }, []);
+  const refreshAll = async () => {
+    const [e, b, v] = await Promise.all([
+      api.expenses.list({ range: 'monthly' }),
+      api.listBusinessAccounts(),
+      api.expenseVouchers.list({})
+    ]);
+    if (e.ok) setRows(e.data);
+    if (b.ok) setBusinessAccounts(b.data);
+    if (v.ok) setVouchers(v.data);
+  };
+
+  useEffect(() => { refreshAll(); }, []);
+
+  const voucherLookup = useMemo(() => new Map(vouchers.map(v => [v.voucher_id, v])), [vouchers]);
 
   // Filters
   const [nameQuery, setNameQuery] = useState('');
@@ -39,8 +53,8 @@ export default function MonthlyExpensesTab() {
   const [isMonthDropdownOpen, setIsMonthDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Selected business account for viewing details
-  const [selectedBizId, setSelectedBizId] = useState<number | null>(null);
+  // Selected voucher for viewing its expenses
+  const [selectedVoucherId, setSelectedVoucherId] = useState<number | null>(null);
 
   const monthsList = [
     { value: '0', label: 'January' },
@@ -94,57 +108,80 @@ export default function MonthlyExpensesTab() {
     });
   }, [rows, businessAccounts, selectedMonth, nameQuery]);
 
-  const bizCardsData = useMemo(() => {
-    const groups: { [bizId: number]: { businessAccount: BusinessAccountRow; expenses: ExpenseRow[]; totalAmount: number } } = {};
+  const voucherCardsData = useMemo(() => {
+    const groups: { [voucherId: number]: { voucherId: number; expenses: ExpenseRow[]; totalAmount: number } } = {};
 
     monthlyExpenses.forEach(e => {
-      if (!groups[e.ba_id]) {
-        const biz = businessAccounts.find(b => b.ba_id === e.ba_id) ||
-          { ba_id: e.ba_id, code: '', name: 'General Expense Account', ac_id: 0, region_id: null, city_id: null, opening_balance: null, opening_date: null, status: 'ACTIVE' as const };
-        groups[e.ba_id] = {
-          businessAccount: biz,
-          expenses: [],
-          totalAmount: 0
-        };
-      }
-
-      const grp = groups[e.ba_id];
+      const vid = e.voucher_id;
+      if (vid == null) return; // every expense has one per migration 022's backfill — guard anyway
+      if (!groups[vid]) groups[vid] = { voucherId: vid, expenses: [], totalAmount: 0 };
+      const grp = groups[vid];
       grp.expenses.push(e);
       grp.totalAmount += e.amount;
     });
 
     return Object.values(groups).sort((a, b) => b.totalAmount - a.totalAmount);
-  }, [monthlyExpenses, businessAccounts]);
+  }, [monthlyExpenses]);
 
-  const activeBizDetails = useMemo(() => {
-    if (selectedBizId == null) return null;
-    return bizCardsData.find(c => c.businessAccount.ba_id === selectedBizId);
-  }, [selectedBizId, bizCardsData]);
+  const activeVoucherDetails = useMemo(() => {
+    if (selectedVoucherId == null) return null;
+    return voucherCardsData.find(g => g.voucherId === selectedVoucherId);
+  }, [selectedVoucherId, voucherCardsData]);
 
-  if (selectedBizId != null && activeBizDetails) {
+  const activeVoucherHeader = selectedVoucherId != null ? voucherLookup.get(selectedVoucherId) : undefined;
+
+  const [unpostBusy, setUnpostBusy] = useState(false);
+  const handleUnpostVoucher = async () => {
+    if (selectedVoucherId == null) return;
+    setUnpostBusy(true);
+    const res = await api.expenseVouchers.unpost(selectedVoucherId);
+    setUnpostBusy(false);
+    if (!res.ok) { setErrorMsg('Failed to unpost voucher: ' + res.error.message); return; }
+    setErrorMsg('');
+    const voucherId = selectedVoucherId;
+    setSelectedVoucherId(null); // its lines just left expenses.list() — the group no longer exists here
+    await refreshAll();
+    await onVoucherUnposted(voucherId);
+  };
+
+  if (selectedVoucherId != null && activeVoucherDetails) {
     return (
       <div className="card-white p-6 bg-white border border-slate-200 shadow-sm rounded-xl animate-in fade-in slide-in-from-bottom-3 duration-300">
+        {errorMsg && (
+          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
+        )}
         <div className="flex items-center justify-between border-b pb-4 mb-4" style={{ borderColor: 'var(--border-color)' }}>
           <div className="flex items-center gap-3">
             <button
-              onClick={() => setSelectedBizId(null)}
+              onClick={() => setSelectedVoucherId(null)}
               className="bg-amber-50/80 hover:bg-amber-100/90 text-amber-900 border border-amber-200/80 rounded-xl px-4 py-2 text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs hover:shadow-xs"
             >
               <ArrowLeft size={16} /> Back to Expenses
             </button>
             <div>
               <h3 className="font-lora font-bold text-lg text-slate-800">
-                {activeBizDetails.businessAccount.name} — Monthly Expenses
+                Voucher #{activeVoucherHeader?.voucher_no ?? selectedVoucherId} — Monthly Expenses
               </h3>
               <p className="text-xs text-slate-500 font-medium">
-                Code: {activeBizDetails.businessAccount.code}
+                {activeVoucherHeader?.remarks || 'No remarks'}
               </p>
             </div>
           </div>
 
-          <div className="text-right">
-            <span className="text-xs font-semibold text-slate-500 block uppercase">Total Monthly Expense:</span>
-            <span className="font-mono font-bold text-rose-800 text-lg">{formatCurrency(activeBizDetails.totalAmount)}</span>
+          <div className="flex items-center gap-3">
+            <div className="text-right">
+              <span className="text-xs font-semibold text-slate-500 block uppercase">Total Monthly Expense:</span>
+              <span className="font-mono font-bold text-rose-800 text-lg">{formatCurrency(activeVoucherDetails.totalAmount)}</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleUnpostVoucher}
+              disabled={unpostBusy}
+              title="Unpost this whole voucher"
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white shadow-sm transition-all"
+            >
+              <Undo2 size={14} /> {unpostBusy ? 'Working…' : 'Unpost'}
+            </button>
           </div>
         </div>
 
@@ -161,7 +198,7 @@ export default function MonthlyExpensesTab() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
-              {activeBizDetails.expenses.map(e => (
+              {activeVoucherDetails.expenses.map(e => (
                 <tr key={e.expense_id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="p-3.5 pl-4 font-mono text-slate-600">{formatDate(e.expense_date)}</td>
                   <td className="p-3.5 text-center">
@@ -197,6 +234,9 @@ export default function MonthlyExpensesTab() {
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1750 }}>
+      {errorMsg && (
+        <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
+      )}
       {/* Filter Toolbar Standard */}
       <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white shadow-2xs" style={{ borderColor: 'var(--border-color)' }}>
         <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
@@ -266,45 +306,46 @@ export default function MonthlyExpensesTab() {
         </div>
       </div>
 
-      {/* PN-01/RJ-05: business account records as table rows, consistent with the rest of the app. */}
+      {/* PN-01/RJ-05: voucher records as table rows — grouped by VOUCHER, not account (corrected
+          per the user 2026-08-26, same fix as Receipts): Account column removed, C.Book No/Date/
+          Remarks (the voucher's own) added. */}
       <div className="card-white overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border-color)' }}>
         <table className="w-full text-left border-collapse text-sm">
           <thead>
             <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-              <th className="p-3 pl-4">Account</th>
+              <th className="p-3 pl-4">C.Book No</th>
+              <th className="p-3">Date</th>
+              <th className="p-3">Remarks</th>
               <th className="p-3 text-center">Records</th>
               <th className="p-3 text-right pr-6">Total Expense</th>
             </tr>
           </thead>
           <tbody>
-            {bizCardsData.length === 0 ? (
+            {voucherCardsData.length === 0 ? (
               <tr>
-                <td colSpan={3} className="text-center p-12 text-slate-400">
+                <td colSpan={5} className="text-center p-12 text-slate-400">
                   <Calendar size={40} className="text-slate-300 mb-2 mx-auto" />
                   <p className="font-lora text-base font-semibold text-slate-500 mb-1">No Monthly Expenses Found</p>
                   <p className="text-xs max-w-sm mx-auto">No expenses were logged for this month matching your filters.</p>
                 </td>
               </tr>
             ) : (
-              bizCardsData.map(data => {
+              voucherCardsData.map(data => {
+                const header = voucherLookup.get(data.voucherId);
                 return (
                   <tr
-                    key={data.businessAccount.ba_id}
-                    onClick={() => setSelectedBizId(data.businessAccount.ba_id)}
+                    key={data.voucherId}
+                    onClick={() => setSelectedVoucherId(data.voucherId)}
                     className="border-b hover:bg-slate-50/60 cursor-pointer transition-colors"
                     style={{ borderColor: 'var(--border-table)' }}
                   >
                     <td className="p-3 pl-4">
-                      <div className="flex items-center gap-2">
-                        <span className="font-lora font-bold text-slate-900">{data.businessAccount.name}</span>
-                        {data.businessAccount.ac_code === '210001' && (
-                          <span className="text-[10px] font-semibold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-300 uppercase tracking-wider shrink-0">
-                            Vendor Payment
-                          </span>
-                        )}
-                      </div>
-                      <div className="font-mono text-[11px] text-slate-400">Code: {data.businessAccount.code}</div>
+                      <div className="font-lora font-bold text-slate-900">#{header?.voucher_no ?? data.voucherId}</div>
                     </td>
+                    <td className="p-3 font-mono text-slate-600">
+                      {header ? formatDate(header.voucher_date) : formatDate(data.expenses[0]?.expense_date)}
+                    </td>
+                    <td className="p-3 text-slate-500 text-xs">{header?.remarks || '-'}</td>
                     <td className="p-3 text-center">
                       <span className="inline-flex items-center gap-1.5 bg-rose-50 text-rose-900 px-2.5 py-1 rounded-full text-xs font-semibold border border-rose-200/80">
                         <FileText size={13} className="text-rose-600" />

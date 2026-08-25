@@ -2,12 +2,16 @@ import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
+import SearchModal from '@/components/SearchModal';
 import * as api from '@/lib/api';
-import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, DraftReceiptRow, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
+import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
-import { focusFirstField } from '@/lib/fieldNav';
+import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
-import { Save, Edit, Trash2 } from 'lucide-react';
+import {
+  Save, Edit, Trash2, Plus, CheckCircle2, Undo2, ChevronDown,
+  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight
+} from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
@@ -50,13 +54,17 @@ export default function ReceiptsPage() {
   const [regions, setRegions] = useState<RegionRow[]>([]);
   const [cities, setCities] = useState<CityRow[]>([]);
   const [banks, setBanks] = useState<BankAccountRow[]>([]);
-  const [drafts, setDrafts] = useState<DraftReceiptRow[]>([]);
   const [lookupError, setLookupError] = useState('');
 
-  const refreshDrafts = useCallback(async () => {
-    const res = await api.draftReceipts.list({});
-    if (res.ok) setDrafts(res.data);
-    else setLookupError('Failed to load drafts: ' + res.error.message);
+  // Every voucher ever created (list() rows — no `lines`), for First/Previous/Next/Last record
+  // navigation (frontend/pages_design.md §3), the System Voucher No. "next" preview, and the
+  // Pending Posting panel below (which lists VOUCHERS, not individual draft receipts — posting
+  // status belongs to the whole voucher, corrected per the user 2026-08-26; there is no longer a
+  // separate fetch of individual draftReceipts rows on this page for that reason).
+  const [allVouchers, setAllVouchers] = useState<ReceiptVoucherRow[]>([]);
+  const refreshAllVouchers = useCallback(async () => {
+    const res = await api.receiptVouchers.list({});
+    if (res.ok) setAllVouchers(res.data);
   }, []);
 
   useEffect(() => {
@@ -73,11 +81,18 @@ export default function ReceiptsPage() {
       if (bk.ok) setBanks(bk.data); else failures.push(bk.error.message);
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
-    refreshDrafts();
-  }, [refreshDrafts]);
+    refreshAllVouchers();
+  }, [refreshAllVouchers]);
 
   // ── Real-receipt form (mirrors PurchasePage.tsx's mode structure) ──
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
+  // First/Previous/Next/Last + Posted/Unposted dropdown (frontend/pages_design.md §3, mirrors
+  // PurchasePage exactly): always walks fully-POSTED vouchers (oldest first) — a still-unposted
+  // (or partly posted) voucher isn't a finished "record" to page through yet. `navFilter` isn't a
+  // data filter (both values browse the same posted list) — it arms which action you're browsing
+  // FOR: 'unposted' means "I'm here to Unpost the voucher I land on" and gates Unpost Voucher /
+  // Unpost Endorsement below; 'posted' is the default browsing/new-entry mode, where nav stays dull.
+  const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('posted');
   const [receiptId, setReceiptId] = useState<number | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
   const [date, setDate] = useState(today());
@@ -95,8 +110,6 @@ export default function ReceiptsPage() {
   // draftReceipts is a separate server-side feature (genuinely incomplete entries) —
   // distinct from a receipt's own DRAFT/CONFIRMED status above. Loading one just
   // fills the form; since draftReceipts has no update(), re-saving replaces it.
-  const [loadedDraftId, setLoadedDraftId] = useState<number | null>(null);
-  const [selectedDraftPick, setSelectedDraftPick] = useState('');
   // Bumped after anything that posts, so the balance panel re-reads instead of showing a stale figure.
   const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
 
@@ -121,21 +134,29 @@ export default function ReceiptsPage() {
   // ambiguous now. In practice only unposted rows are ever deletable (every delete button is gated
   // on that), so `kind` is 'draft' for everything the UI offers; the 'receipt' branch is kept for
   // any row predating the draft/real split.
-  type PendingDelete = { kind: 'draft' | 'receipt'; id: number; amount: number };
+  // 'voucher' deletes the WHOLE voucher (and every line with it) — the Pending Posting panel
+  // (below) offers this, not per-receipt delete: posting status belongs to the voucher, not to
+  // individual receipts (corrected per the user, 2026-08-26). Only reachable while the whole
+  // voucher is UNPOSTED (receiptVouchers.remove() rejects a PARTIAL one — some of its lines already
+  // have ledger entries).
+  type PendingDelete = { kind: 'draft' | 'receipt' | 'voucher'; id: number; amount: number };
   const [deleteTarget, setDeleteTarget] = useState<PendingDelete | null>(null);
   const handleDeleteConfirmed = async (password: string) => {
     if (!deleteTarget) return;
     const res = deleteTarget.kind === 'draft'
       ? await api.draftReceipts.remove(deleteTarget.id, password)
+      : deleteTarget.kind === 'voucher'
+      ? await api.receiptVouchers.remove(deleteTarget.id, password)
       : await api.receipts.remove(deleteTarget.id, password);
     setDeleteTarget(null);
     if (!res.ok) return fail('Failed to delete: ' + res.error.message);
-    flash('Receipt deleted.');
-    refreshDrafts();
-    // The deleted row may have been a line of the voucher on screen; re-reading is cheap and
-    // unconditional now that the target no longer carries its own voucher_id.
-    if (voucher) await refreshVoucher(voucher.voucher_id);
+    flash(deleteTarget.kind === 'voucher' ? 'Voucher deleted.' : 'Receipt deleted.');
+    refreshAllVouchers();
     setBalanceRefreshKey(k => k + 1);
+    // The deleted voucher may be the one open on screen — reset rather than leave the form
+    // pointed at a voucher that no longer exists. Any other delete just re-reads it.
+    if (deleteTarget.kind === 'voucher' && voucher?.voucher_id === deleteTarget.id) startNewVoucher();
+    else if (voucher) await refreshVoucher(voucher.voucher_id);
   };
 
   // ── RJ-03: the open voucher ──────────────────────────────────────────────────────────────────
@@ -181,15 +202,39 @@ export default function ReceiptsPage() {
   const PAYMENT_MODE_LABELS: Record<typeof PAYMENT_MODES[number], string> = { CASH: 'Cash', CHEQUE: 'Cheque', ONLINE: 'Online' };
   const paymentModeRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
-  function handlePaymentModeKeyDown(e: React.KeyboardEvent, idx: number) {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    e.preventDefault();
-    e.stopPropagation(); // don't also let AppLayout's own Left/Right field-walk fire on this keystroke
-    const nextIdx = e.key === 'ArrowRight' ? (idx + 1) % PAYMENT_MODES.length : (idx - 1 + PAYMENT_MODES.length) % PAYMENT_MODES.length;
+  // Selects a mode by index and moves the roving-tabindex focus with it — shared by the
+  // Left/Right cycling below and the letter-key shortcuts.
+  function selectPaymentModeAt(nextIdx: number) {
     const next = PAYMENT_MODES[nextIdx];
     setPaymentMode(next);
     if (next === 'CASH') setDetails('');
     paymentModeRefs.current[nextIdx]?.focus();
+  }
+
+  function handlePaymentModeKeyDown(e: React.KeyboardEvent, idx: number) {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      e.stopPropagation(); // don't also let AppLayout's own Left/Right field-walk fire on this keystroke
+      const nextIdx = e.key === 'ArrowRight' ? (idx + 1) % PAYMENT_MODES.length : (idx - 1 + PAYMENT_MODES.length) % PAYMENT_MODES.length;
+      selectPaymentModeAt(nextIdx);
+      return;
+    }
+    // Letter shortcuts: C for Cash/Cheque, O for Online. Both Cash and Cheque start with C, so a
+    // second C in a row (while already sitting on one of them) cycles to the other rather than
+    // doing nothing — matching how a native <select>'s type-ahead handles two options sharing a
+    // first letter. O is unambiguous (only Online starts with it) and always jumps there directly.
+    const key = e.key.toLowerCase();
+    if (key === 'c') {
+      e.preventDefault();
+      e.stopPropagation();
+      const onCashOrCheque = PAYMENT_MODES[idx] === 'CASH' || PAYMENT_MODES[idx] === 'CHEQUE';
+      const target = onCashOrCheque && PAYMENT_MODES[idx] === 'CASH' ? 'CHEQUE' : 'CASH';
+      selectPaymentModeAt(PAYMENT_MODES.indexOf(target));
+    } else if (key === 'o') {
+      e.preventDefault();
+      e.stopPropagation();
+      selectPaymentModeAt(PAYMENT_MODES.indexOf('ONLINE'));
+    }
   }
 
   // Endorse checkbox: Shift+Enter/Ctrl+Enter/'.'+Enter is the same "do the explicit extra thing"
@@ -199,6 +244,10 @@ export default function ReceiptsPage() {
   // unposted) if the checkbox happens to be the last field currently on screen.
   const periodHeld = useHeldKey('.');
   const endorseToWrapRef = useRef<HTMLDivElement>(null);
+  // Shown only while the checkbox itself has focus — a permanent caption under the checkbox was
+  // easy to miss (reported directly by the user, 2026-08-26); tying it to focus makes it appear
+  // exactly "when we are on the endorse checkbox".
+  const [isEndorseFocused, setIsEndorseFocused] = useState(false);
 
   function handleEndorseCheckboxKeyDown(e: React.KeyboardEvent) {
     if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey || periodHeld.current)) return;
@@ -251,6 +300,32 @@ export default function ReceiptsPage() {
       });
   }, [businessAccounts, regions, cities]);
 
+  // Account field opens a centered "find" modal (SearchModal) instead of SearchableSelect's small
+  // anchored panel — see frontend/pages_design.md §5. Enter (or Arrow Up/Down) on the field opens
+  // it; RJ-02's live balance preview still works via SearchModal's own onHighlightChange (added
+  // for this). Committing an account closes it and advances focus via the app's G-01 rule.
+  const accountTriggerRef = useRef<HTMLButtonElement>(null);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+
+  const openAccountModal = () => {
+    if (isViewMode) return;
+    setIsAccountModalOpen(true);
+  };
+
+  function handleAccountTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      openAccountModal();
+    }
+  }
+
+  function handleAccountSelect(newBaId: string) {
+    setBaId(newBaId);
+    setIsAccountModalOpen(false);
+    setPreviewBaId(null);
+    requestAnimationFrame(() => focusNextField(accountTriggerRef.current));
+  }
+
   const bankOptions = useMemo(
     () => banks.filter(b => b.is_active).map(b => ({ value: String(b.bank_id), label: b.name })),
     [banks]
@@ -275,8 +350,6 @@ export default function ReceiptsPage() {
     setChequeDate('');
     setChequeReceivedDate('');
     setRemarks('');
-    setLoadedDraftId(null);
-    setSelectedDraftPick('');
     setErrorMsg('');
   };
 
@@ -406,8 +479,7 @@ export default function ReceiptsPage() {
     // Nothing to clean up: an unposted receipt IS a draft now, so loading one into the entry row
     // and pressing Done edits that same row in place (the update() branch above) rather than
     // creating a second copy that the original then had to be deleted to avoid duplicating.
-    setLoadedDraftId(null);
-    refreshDrafts();
+    refreshAllVouchers(); // a first Done on a fresh entry just created a new voucher
 
     const wasEdit = mode === 'edit';
     await refreshVoucher(openVoucher.voucher_id);
@@ -441,6 +513,7 @@ export default function ReceiptsPage() {
     setVoucherResult(res.data);
     setVoucher(res.data.voucher);
     setBalanceRefreshKey(k => k + 1);
+    refreshAllVouchers();
 
     if (res.data.failed.length === 0) {
       flash(`Voucher ${voucher.voucher_no} posted — ${res.data.posted?.length ?? 0} entr${(res.data.posted?.length ?? 0) === 1 ? 'y' : 'ies'}. Ready for the next voucher.`);
@@ -459,6 +532,7 @@ export default function ReceiptsPage() {
     setVoucherResult(res.data);
     setVoucher(res.data.voucher);
     setBalanceRefreshKey(k => k + 1);
+    refreshAllVouchers();
     if (res.data.failed.length === 0) flash(`Voucher ${voucher.voucher_no} unposted.`);
   };
 
@@ -469,8 +543,70 @@ export default function ReceiptsPage() {
     setVoucher(null);
     setVoucherRemarks('');
     setVoucherResult(null);
+    setNavFilter('posted'); // back to default browsing/new-entry mode
     handleNew(); // resets every entry field and the date — one definition of "a blank entry row"
     requestAnimationFrame(() => firstEntryFieldRef.current?.focus());
+  };
+
+  // Preview of the System Voucher No. a brand-new voucher will get — voucher_no is ONE sequence
+  // across the whole receipt_vouchers table regardless of status (`MAX(voucher_no)+1`, allocated
+  // inside receiptVouchers.create() on the backend), unlike Purchase's split real-id/draft-id
+  // sequences, so this preview needs no draft/posted distinction.
+  const nextVoucherNo = useMemo(
+    () => Math.max(0, ...allVouchers.map(v => v.voucher_no)) + 1,
+    [allVouchers]
+  );
+
+  // Corrected per the user (2026-08-26): First/Previous/Next/Last browse the RECEIPTS (lines)
+  // already entered in the OPEN voucher, not other vouchers — "one voucher, many receipts, same
+  // C.Book No" (ref-pics/batch2/receipt jamma.png), so paging through them means paging through
+  // its own lines. `voucherLines` is already oldest-first (backend: ORDER BY created_at ASC), so
+  // First = the first receipt entered, Last = the most recent. To open a DIFFERENT voucher, use
+  // the records list/Pending Posting panel instead — these buttons stay inside the one on screen.
+  const currentLineIndex = !voucher || receiptId == null
+    ? -1
+    : voucherLines.findIndex(l => entryIsDraft ? l.draft_id === receiptId : l.receipt_id === receiptId);
+
+  const canNavPrevious = voucherLines.length > 0 && currentLineIndex !== 0;
+  const canNavNext = voucherLines.length > 0 && currentLineIndex !== voucherLines.length - 1;
+
+  // Lands on one receipt of the open voucher, read-only — same shape as handleEditLine below, but
+  // always allowed (a posted line can be browsed, just not edited from here — that still needs
+  // Unpost first) and lands in 'view' rather than 'edit'. Editing a specific one is still its own
+  // deliberate action via the grid's own Edit icon (handleEditLine), unposting the whole voucher
+  // via the toolbar's Unpost — this is purely for stepping through what's already in the voucher.
+  const loadLineForView = (line: api.ReceiptVoucherLineRow) => {
+    setMode('view');
+    setDocKind('RECEIPT');
+    setEntryIsDraft(line.draft_id != null);
+    setReceiptId(line.draft_id ?? line.receipt_id);
+    setReceiptStatus(line.status);
+    setBaId(String(line.ba_id));
+    setPreviewBaId(line.ba_id);
+    setAmount(Number(line.amount));
+    setCommission(Number(line.commission) || 0);
+    setPaymentMode(line.payment_mode);
+    setBankId(line.bank_id != null ? String(line.bank_id) : '');
+    setDetails(line.details || '');
+    setChequeNo(line.cheque_no || '');
+    setChequeDate(line.cheque_date ? line.cheque_date.slice(0, 10) : '');
+    setChequeReceivedDate(line.cheque_received_date ? line.cheque_received_date.slice(0, 10) : '');
+    setRemarks(line.remarks || '');
+    setIsEndorsed(false);
+    setErrorMsg('');
+  };
+
+  const handleNavFirst = () => { if (voucherLines.length) loadLineForView(voucherLines[0]); };
+  const handleNavLast = () => { if (voucherLines.length) loadLineForView(voucherLines[voucherLines.length - 1]); };
+  const handleNavPrevious = () => {
+    const targetIdx = currentLineIndex === -1 ? 0 : currentLineIndex - 1;
+    if (targetIdx < 0 || targetIdx >= voucherLines.length) return;
+    loadLineForView(voucherLines[targetIdx]);
+  };
+  const handleNavNext = () => {
+    const targetIdx = currentLineIndex === -1 ? 0 : currentLineIndex + 1;
+    if (targetIdx < 0 || targetIdx >= voucherLines.length) return;
+    loadLineForView(voucherLines[targetIdx]);
   };
 
   // RJ-03: pull a committed line back into the entry row to correct it. Only while the line itself
@@ -536,7 +672,6 @@ export default function ReceiptsPage() {
     } else {
       setReceiptStatus((res.data as { status: 'CONFIRMED' | 'DRAFT' }).status);
     }
-    refreshDrafts();
     flash(docKind === 'SETTLEMENT' ? 'Endorsement unposted.' : 'Receipt unposted successfully.');
     setBalanceRefreshKey(k => k + 1);
   };
@@ -548,62 +683,87 @@ export default function ReceiptsPage() {
   };
   */
 
-  // Pulls an unposted receipt into the entry row to correct it. It is edited IN PLACE now (mode
-  // 'edit' + entryIsDraft), not copied — every unposted receipt is a draft, so there is no longer a
-  // "cached scratch entry" that has to be turned into a separate real row and then deleted.
-  const loadDraft = async (row: DraftReceiptRow) => {
-    setMode('edit');
-    setDocKind('RECEIPT');
-    setEntryIsDraft(true);
-    setReceiptId(row.draft_id);
-    setReceiptStatus('DRAFT');
-    setDate(row.receipt_date.slice(0, 10));
-    setBaId(String(row.ba_id));
-    setPreviewBaId(row.ba_id);
-    setAmount(row.amount || 0);
-    setCommission(row.commission || 0);
-    setPaymentMode(row.payment_mode);
-    setBankId(row.bank_id != null ? String(row.bank_id) : '');
-    setDetails(row.details || '');
-    setChequeNo(row.cheque_no || '');
-    setChequeDate(row.cheque_date ? row.cheque_date.slice(0, 10) : '');
-    setChequeReceivedDate(row.cheque_received_date ? row.cheque_received_date.slice(0, 10) : '');
-    setRemarks(row.remarks || '');
-    setIsEndorsed(false);
-    setEndorseToBaId('');
-    setLoadedDraftId(row.draft_id);
-    setSelectedDraftPick('');
-    setErrorMsg('');
-
-    // Opening an entry also opens the voucher it belongs to, so its sibling entries, the per-mode
-    // totals and the voucher's Post/Un Post are all on screen — otherwise the user is looking at
-    // one line of a document with no way to reach the rest of it. A standalone draft (no voucher)
-    // simply clears the voucher pane.
-    if (row.voucher_id != null) await refreshVoucher(row.voucher_id);
-    else setVoucher(null);
-    setVoucherResult(null);
-
-    requestAnimationFrame(() => firstEntryFieldRef.current?.focus());
-  };
 
 
-
-  const handleConfirmDraft = async () => {
-    if (!selectedDraftPick) { fail('Please select a draft first.'); return; }
-    const id = Number(selectedDraftPick);
-    const res = await api.draftReceipts.confirm(id);
-    if (!res.ok) { fail('Failed to confirm draft: ' + res.error.message); return; }
-    if (loadedDraftId === id) handleNew();
-    setSelectedDraftPick('');
-    flash('Draft confirmed and posted as a receipt.');
-    refreshDrafts();
-    setBalanceRefreshKey(k => k + 1);
-  };
-
-  const accountName = useCallback(
-    (id: number) => businessAccounts.find(b => b.ba_id === id)?.name || 'Unknown Account',
-    [businessAccounts]
+  // Pending Posting panel (below, left sidebar) — same layout as PurchasePage, but listing
+  // VOUCHERS, not individual receipts: corrected per the user (2026-08-26) — a voucher is posted
+  // or unposted as a WHOLE, not one specific receipt independently of the others in it. Post one
+  // specific voucher, delete one (password-gated, whole voucher — only while entirely UNPOSTED),
+  // or Post All. No confirmAll()-equivalent exists for whole vouchers on the backend — Post All
+  // here is a client-side loop over receiptVouchers.post(), one voucher at a time, collecting the
+  // same posted/failed shape PurchasePage's real confirmAll() result carries.
+  const pendingVouchers = useMemo(
+    () => [...allVouchers].filter(v => v.status !== 'POSTED').sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no),
+    [allVouchers]
   );
+
+  // Opens a voucher straight into the read-only view on the Receipt Entry tab (its own lines +
+  // totals below) — same shape as PurchasePage's loadPurchaseRow. Editing a specific receipt
+  // inside it is still its own deliberate action via the grid's own Edit icon. Used by the Pending
+  // Posting sidebar (clicking a row) AND by the Weekly/Monthly/Overall records tabs after
+  // unposting a voucher there (see onVoucherUnposted below) — pressing Unpost on a records page
+  // now lands you back on Receipt Entry with that voucher on screen, per the user (2026-08-26),
+  // instead of leaving you on the records list where the just-unposted voucher no longer belongs.
+  const openVoucherInEntry = async (voucherId: number) => {
+    const res = await api.receiptVouchers.get(voucherId);
+    if (!res.ok) { fail('Failed to load voucher: ' + res.error.message); return; }
+    handleNew(); // resets every entry field AND the date — do this first, then override below
+    setVoucher(res.data);
+    setVoucherResult(null);
+    setDate(res.data.voucher_date);
+    setMode('view');
+  };
+
+  // Passed down to the records tabs: unposting a voucher there switches back to Receipt Entry and
+  // loads that same voucher on screen.
+  const handleVoucherUnpostedElsewhere = async (voucherId: number) => {
+    setActiveTab('entry');
+    await openVoucherInEntry(voucherId);
+    await refreshAllVouchers();
+  };
+
+  const [postingVoucherId, setPostingVoucherId] = useState<number | null>(null);
+  const [postAllVouchersBusy, setPostAllVouchersBusy] = useState(false);
+  const [postAllVouchersResult, setPostAllVouchersResult] = useState<{
+    posted: { voucher_id: number }[];
+    failed: { voucher_id: number; message: string }[];
+    attempted: number;
+  } | null>(null);
+
+  const handlePostOneVoucher = async (voucherId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPostingVoucherId(voucherId);
+    const res = await api.receiptVouchers.post(voucherId);
+    setPostingVoucherId(null);
+    if (!res.ok) { fail('Failed to post voucher: ' + res.error.message); return; }
+    flash(`Voucher ${res.data.voucher.voucher_no} posted.`);
+    refreshAllVouchers();
+    setBalanceRefreshKey(k => k + 1);
+    if (voucher?.voucher_id === voucherId) setVoucher(res.data.voucher);
+  };
+
+  const handlePostAllVouchers = async () => {
+    setPostAllVouchersBusy(true);
+    setPostAllVouchersResult(null);
+    const posted: { voucher_id: number }[] = [];
+    const failed: { voucher_id: number; message: string }[] = [];
+    for (const v of pendingVouchers) {
+      const res = await api.receiptVouchers.post(v.voucher_id);
+      if (res.ok) posted.push({ voucher_id: v.voucher_id });
+      else failed.push({ voucher_id: v.voucher_id, message: res.error.message });
+    }
+    setPostAllVouchersBusy(false);
+    setPostAllVouchersResult({ posted, failed, attempted: pendingVouchers.length });
+    refreshAllVouchers();
+    setBalanceRefreshKey(k => k + 1);
+    if (voucher && posted.some(p => p.voucher_id === voucher.voucher_id)) await refreshVoucher(voucher.voucher_id);
+    if (failed.length === 0) flash(`${posted.length} voucher(s) posted.`);
+  };
+
+  const handleDeleteVoucherClick = (v: ReceiptVoucherRow, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDeleteTarget({ kind: 'voucher', id: v.voucher_id, amount: Number(v.total_amount) });
+  };
 
   // Sub-tab switcher — lives in the top header bar next to the page title (AppLayout's
   // headerAction slot), same treatment as Sale Bill/Sale Return, so the content below the Quick
@@ -678,12 +838,129 @@ export default function ReceiptsPage() {
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
 
         {/* Tab Content */}
-        {activeTab === 'weekly' && <WeeklyReceiptsTab />}
-        {activeTab === 'monthly' && <MonthlyReceiptsTab />}
-        {activeTab === 'overall' && <OverallReceiptsTab />}
+        {activeTab === 'weekly' && <WeeklyReceiptsTab onVoucherUnposted={handleVoucherUnpostedElsewhere} />}
+        {activeTab === 'monthly' && <MonthlyReceiptsTab onVoucherUnposted={handleVoucherUnpostedElsewhere} />}
+        {activeTab === 'overall' && <OverallReceiptsTab onVoucherUnposted={handleVoucherUnpostedElsewhere} />}
 
         {activeTab === 'entry' && (
-          <div className="max-w-5xl mx-auto animate-fadeIn">
+          <div className="max-w-5xl mx-auto relative animate-fadeIn">
+
+            {/* Pending Posting — pinned outside the card's own left edge, same layout as
+                PurchasePage (frontend/pages_design.md): `absolute`, anchored via
+                `right: calc(100% + gap)` to this wrapper's left edge, so it can never affect the
+                card's width/position. Post a specific draft, delete one (password-gated, same
+                PasswordPromptModal the voucher-lines grid already uses), or Post All. Only shown
+                from `2xl` up — below that there usually isn't 280px of free margin for it to land
+                in. */}
+            {(pendingVouchers.length > 0 || postAllVouchersResult) && (
+              <aside
+                className="hidden 2xl:block absolute top-0 w-64 space-y-3"
+                style={{ right: 'calc(100% + 24px)' }}
+                data-no-print
+              >
+                <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="font-semibold text-slate-700">Pending Posting</span>
+                    <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
+                      {pendingVouchers.length}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500 mb-3">
+                    {pendingVouchers.length > 0 && `Total ${formatCurrency(pendingVouchers.reduce((s, v) => s + Number(v.total_amount), 0))}`}
+                  </div>
+                  {pendingVouchers.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handlePostAllVouchers}
+                      disabled={postAllVouchersBusy}
+                      className="w-full px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                    >
+                      {postAllVouchersBusy ? 'Posting…' : `Post All (${pendingVouchers.length})`}
+                    </button>
+                  )}
+
+                  {/* Stays until dismissed — a run can post 8 of 10, and the two that failed are
+                      the whole point of the message. Never auto-hidden on a timer. */}
+                  {postAllVouchersResult && (
+                    <div className="mt-3 pt-3 border-t border-amber-200">
+                      <p className="text-xs font-semibold text-slate-700">
+                        {postAllVouchersResult.posted.length} of {postAllVouchersResult.attempted} posted
+                        {postAllVouchersResult.failed.length > 0 && ` · ${postAllVouchersResult.failed.length} failed`}
+                      </p>
+                      {postAllVouchersResult.failed.length > 0 && (
+                        <ul className="mt-1.5 space-y-1">
+                          {postAllVouchersResult.failed.map(f => (
+                            <li key={f.voucher_id} className="text-xs text-rose-700">
+                              <span className="font-mono font-semibold">#{f.voucher_id}</span>
+                              {' — '}{f.message}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setPostAllVouchersResult(null)}
+                        className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Flat list — every not-fully-posted VOUCHER (UNPOSTED or PARTIAL), oldest first.
+                    Each row opens straight into the read-only view (its own lines + totals below),
+                    with inline Post/Delete acting on the WHOLE voucher — not one receipt in it — so
+                    a single ready one doesn't need to be opened first just to post it. Delete is
+                    hidden for a PARTIAL voucher: receiptVouchers.remove() only allows deleting one
+                    that's entirely UNPOSTED (some of a partial voucher's lines already have ledger
+                    entries). */}
+                {pendingVouchers.length > 0 && (
+                  <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
+                    {pendingVouchers.map(v => (
+                      <li
+                        key={v.voucher_id}
+                        onClick={() => openVoucherInEntry(v.voucher_id)}
+                        className="px-3 py-2.5 text-xs border-b border-slate-100 last:border-b-0 cursor-pointer hover:bg-amber-50/60 transition-colors"
+                      >
+                        <div className="min-w-0 flex items-start gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="font-mono font-semibold text-slate-700">
+                              #{v.voucher_no} {v.status === 'PARTIAL' && (
+                                <span className="ml-1 px-1 py-0.5 rounded text-[9px] font-bold uppercase bg-orange-100 text-orange-900">Partial</span>
+                              )}
+                            </div>
+                            <div className="text-slate-400">{v.line_count ?? 0} receipt{(v.line_count ?? 0) === 1 ? '' : 's'}</div>
+                            <div className="text-slate-400">{formatDate(v.voucher_date)} · {formatCurrency(Number(v.total_amount))}</div>
+                          </div>
+                          <button
+                            type="button"
+                            title="Post this voucher"
+                            onClick={(e) => handlePostOneVoucher(v.voucher_id, e)}
+                            disabled={postingVoucherId === v.voucher_id}
+                            className="flex-shrink-0 p-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                          >
+                            <CheckCircle2 size={12} />
+                          </button>
+                          {v.status === 'UNPOSTED' && (
+                            <button
+                              type="button"
+                              title="Delete this voucher (password required)"
+                              onClick={(e) => handleDeleteVoucherClick(v, e)}
+                              disabled={postingVoucherId === v.voucher_id}
+                              className="flex-shrink-0 p-1 rounded bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </aside>
+            )}
+
             {/* Banner Alerts */}
             {lookupError && (
               <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>
@@ -695,152 +972,148 @@ export default function ReceiptsPage() {
               <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
             )}
 
-            {/* Drafts Loader Panel */}
-            {drafts.length > 0 && (
-              <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-4 text-sm" data-no-print>
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-slate-700">Pending Posting:</span>
-                  <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
-                    {drafts.length} unposted receipt(s)
-                  </span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <select
-                    value={selectedDraftPick}
-                    onChange={e => {
-                      const draftId = e.target.value;
-                      setSelectedDraftPick(draftId);
-                      const selected = drafts.find(d => String(d.draft_id) === draftId);
-                      if (selected) loadDraft(selected);
-                    }}
-                    className="soleria-input py-1 px-2.5 text-xs bg-white border cursor-pointer font-medium"
-                    style={{ width: '240px' }}
-                  >
-                    <option value="">Select an entry to load...</option>
-                    {drafts.map(d => (
-                      <option key={d.draft_id} value={d.draft_id}>
-                        {d.account_name || accountName(d.ba_id)} - {formatCurrency(d.amount)} ({formatDate(d.receipt_date)})
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={handleConfirmDraft}
-                    className="text-xs text-emerald-700 hover:text-emerald-900 font-semibold transition-colors"
-                  >
-                    Post Selected
-                  </button>
-                </div>
-              </div>
-            )}
-
             {/* RJ-03: Toolbar — every action for the voucher on screen (Done, Post/Un Post, New
-                Voucher, and the endorsement's own Post/Unpost) lives in one dedicated bar above the
-                card, same shape as the Sale Bill page's toolbar, instead of being split between the
-                card header and a sticky footer inside the form. "Done" submits the form below via
-                the form="" attribute since the button itself now sits outside the <form> tag. */}
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-6 p-4 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
-              <div className="flex flex-wrap gap-2">
+                Voucher, the endorsement's own Post/Unpost, and record navigation) lives in one
+                dedicated bar above the card. Restyled per frontend/pages_design.md §1: small
+                square icon-over-label buttons instead of pill-shaped colored ones, matching
+                Purchase/Purchase Return. "Done" submits the form below via the form="" attribute
+                since the button itself now sits outside the <form> tag. */}
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
+              <div className="flex flex-wrap items-center gap-0.5">
                 {!isViewMode && (
-                  <button
-                    type="submit"
-                    form="receipt-entry-form"
-                    className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg"
-                  >
-                    <Save size={16} /> {mode === 'edit' ? 'Update Entry' : 'Done'}
+                  <button type="submit" form="receipt-entry-form" title={mode === 'edit' ? 'Update Entry' : 'Done'} className="toolbar-btn">
+                    <Save size={20} strokeWidth={2.5} className="text-blue-600" />
+                    <span>{mode === 'edit' ? 'Update' : 'Done'}</span>
                   </button>
                 )}
+                <button type="button" onClick={startNewVoucher} title="New Voucher" className="toolbar-btn">
+                  <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
+                  <span>New</span>
+                </button>
+
+                <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+                {/* Record navigation — always browses fully-posted vouchers; only active while the
+                    Posted/Unposted dropdown (right) says Unposted. See navFilter's own comment. */}
+                <button type="button" onClick={handleNavFirst} disabled={!canNavPrevious} title="First" className="toolbar-btn">
+                  <ChevronsLeft size={20} strokeWidth={2.5} className="text-amber-600" />
+                  <span>First</span>
+                </button>
+                <button type="button" onClick={handleNavPrevious} disabled={!canNavPrevious} title="Previous" className="toolbar-btn">
+                  <ChevronLeft size={20} strokeWidth={2.5} className="text-amber-600" />
+                  <span>Prev.</span>
+                </button>
+                <button type="button" onClick={handleNavNext} disabled={!canNavNext} title="Next" className="toolbar-btn">
+                  <ChevronRight size={20} strokeWidth={2.5} className="text-amber-600" />
+                  <span>Next</span>
+                </button>
+                <button type="button" onClick={handleNavLast} disabled={!canNavNext} title="Last" className="toolbar-btn">
+                  <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
+                  <span>Last</span>
+                </button>
+
+                <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
                 {/* Post/Unpost are voucher-level. Post needs at least one committed line; an empty
-                    voucher has nothing to post (the backend rejects it with EMPTY_VOUCHER). */}
-                {voucher && voucherLines.length > 0 && voucher.status !== 'POSTED' && (
-                  <button
-                    type="button"
-                    onClick={handlePostVoucher}
-                    disabled={voucherBusy}
-                    className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white shadow-sm transition-all"
-                  >
-                    {voucherBusy ? 'Posting…' : `Post Voucher (${voucherLines.length})`}
-                  </button>
-                )}
-                {voucher && voucherLines.length > 0 && voucher.status !== 'UNPOSTED' && (
-                  <button
-                    type="button"
-                    onClick={handleUnpostVoucher}
-                    disabled={voucherBusy}
-                    className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 text-white shadow-sm transition-all"
-                  >
-                    {voucherBusy ? 'Working…' : 'Un Post'}
-                  </button>
-                )}
-                {/* Endorsements post on their own, not with a voucher. */}
+                    voucher has nothing to post (the backend rejects it with EMPTY_VOUCHER). Unpost
+                    additionally requires navFilter === 'unposted' (see its own comment above). */}
+                <button
+                  type="button"
+                  onClick={handleUnpostVoucher}
+                  disabled={!voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy || navFilter !== 'unposted'}
+                  title={navFilter !== 'unposted' ? 'Switch the dropdown to Unposted first' : 'Unpost Voucher'}
+                  className="toolbar-btn"
+                >
+                  <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
+                  <span>Unpost</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePostVoucher}
+                  disabled={!voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy}
+                  title={voucherBusy ? 'Posting…' : `Post Voucher${voucherLines.length ? ` (${voucherLines.length})` : ''}`}
+                  className="toolbar-btn"
+                >
+                  <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
+                  <span>Post</span>
+                </button>
+
+                {/* Endorsements post on their own, not with a voucher — same Unpost gate applies. */}
                 {docKind === 'SETTLEMENT' && mode === 'view' && receiptId != null && (
                   isPosted ? (
                     <button
                       type="button"
                       onClick={handleUnpost}
-                      className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
+                      disabled={navFilter !== 'unposted'}
+                      title={navFilter !== 'unposted' ? 'Switch the dropdown to Unposted first' : 'Unpost Endorsement'}
+                      className="toolbar-btn"
                     >
-                      Unpost Endorsement
+                      <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
+                      <span>Unpost</span>
                     </button>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={handlePost}
-                      className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
-                    >
-                      Post Endorsement
+                    <button type="button" onClick={handlePost} title="Post Endorsement" className="toolbar-btn">
+                      <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
+                      <span>Post</span>
                     </button>
                   )
                 )}
-                <button
-                  type="button"
-                  onClick={startNewVoucher}
-                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
-                >
-                  New Voucher
-                </button>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-lora font-bold text-sm text-slate-900">
-                  {voucher
-                    ? `Receipt Voucher — C.Book No ${voucher.voucher_no}`
-                    : 'New Receipt Voucher'}
+              {/* Posted/Unposted — arms which action Previous/Next/First/Last (left) are for. */}
+              <select
+                value={navFilter}
+                onChange={e => setNavFilter(e.target.value as 'posted' | 'unposted')}
+                className="soleria-input soleria-input-compact cursor-pointer font-semibold"
+                style={{ width: 'auto' }}
+                title="Posted = add new vouchers. Unposted = browse posted vouchers to Unpost one."
+              >
+                <option value="posted">Posted</option>
+                <option value="unposted">Unposted</option>
+              </select>
+            </div>
+
+            {/* Voucher identity line — C.Book No, status, and editing badges. Kept as its own row
+                below the icon toolbar rather than crowded into it. */}
+            <div className="flex flex-wrap items-center gap-2 mb-6 px-1" data-no-print>
+              <span className="font-lora font-bold text-sm text-slate-900">
+                {voucher
+                  ? `Receipt Voucher — C.Book No ${voucher.voucher_no}`
+                  : 'New Receipt Voucher'}
+              </span>
+              {voucher && (
+                voucher.status === 'POSTED' ? (
+                  <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">
+                    Posted
+                  </span>
+                ) : voucher.status === 'PARTIAL' ? (
+                  <span
+                    className="px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-900"
+                    title="Some entries on this voucher are in the ledger and some are not — post it again to finish, or unpost to back it all out."
+                  >
+                    Partly Posted
+                  </span>
+                ) : (
+                  <span
+                    className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-900"
+                    title="Saved but not yet in the ledger — Post it to affect any balance or report."
+                  >
+                    Not Posted
+                  </span>
+                )
+              )}
+              {mode === 'edit' && receiptId != null && docKind === 'RECEIPT' && (
+                <span className="px-2 py-0.5 rounded text-xs font-semibold bg-sky-100 text-sky-800">
+                  Editing entry #{receiptId}
                 </span>
-                {voucher && (
-                  voucher.status === 'POSTED' ? (
-                    <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">
-                      Posted
-                    </span>
-                  ) : voucher.status === 'PARTIAL' ? (
-                    <span
-                      className="px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-900"
-                      title="Some entries on this voucher are in the ledger and some are not — post it again to finish, or unpost to back it all out."
-                    >
-                      Partly Posted
-                    </span>
-                  ) : (
-                    <span
-                      className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-900"
-                      title="Saved but not yet in the ledger — Post it to affect any balance or report."
-                    >
-                      Not Posted
-                    </span>
-                  )
-                )}
-                {mode === 'edit' && receiptId != null && docKind === 'RECEIPT' && (
-                  <span className="px-2 py-0.5 rounded text-xs font-semibold bg-sky-100 text-sky-800">
-                    Editing entry #{receiptId}
-                  </span>
-                )}
-                {/* An endorsement is not a voucher line — it lives in dbo.settlements, has no
-                    cash/bank leg and no voucher_id — so it keeps its own document-level badge. */}
-                {docKind === 'SETTLEMENT' && receiptId != null && (
-                  <span className="px-2 py-0.5 rounded text-xs font-semibold bg-violet-100 text-violet-800">
-                    Endorsement #{receiptId} · {isPosted ? 'Posted' : 'Not Posted'}
-                  </span>
-                )}
-              </div>
+              )}
+              {/* An endorsement is not a voucher line — it lives in dbo.settlements, has no
+                  cash/bank leg and no voucher_id — so it keeps its own document-level badge. */}
+              {docKind === 'SETTLEMENT' && receiptId != null && (
+                <span className="px-2 py-0.5 rounded text-xs font-semibold bg-violet-100 text-violet-800">
+                  Endorsement #{receiptId} · {isPosted ? 'Posted' : 'Not Posted'}
+                </span>
+              )}
             </div>
 
             {/* RJ-03: Entry Form Card — now the head of a VOUCHER, not a single receipt. Post and
@@ -854,133 +1127,117 @@ export default function ReceiptsPage() {
                   entry-identity fields (Voucher Remarks → Date → Account → Amount → Remarks), right
                   holds everything about how the money arrived (Payment Mode → Endorse → bank/cheque
                   detail) — so the two halves read as two related groups, not an arbitrary pairing. */}
-              <form id="receipt-entry-form" onSubmit={handleDone} className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 md:items-center">
-                <div className="flex flex-col gap-4">
-                  {/* RJ-03: head-level Remarks, alongside the Date field below. Editable only while
-                      the voucher is entirely unposted — once a line is in the ledger the header is
-                      locked server-side (POSTED_LOCK), so offering the field would be a lie. */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Voucher Remarks</label>
-                    <input
-                      type="text"
-                      value={voucher ? (voucher.remarks ?? '') : voucherRemarks}
-                      disabled={!!voucher && voucher.status !== 'UNPOSTED'}
-                      onChange={e => {
-                        if (!voucher) { setVoucherRemarks(e.target.value); return; }
-                        setVoucher({ ...voucher, remarks: e.target.value });
-                      }}
-                      onBlur={async e => {
-                        // Persisted on blur rather than per keystroke. Only meaningful once the
-                        // voucher exists — before the first Done there is no row to write to, so
-                        // the value is held locally and passed to create().
-                        if (!voucher || voucher.status !== 'UNPOSTED') return;
-                        const res = await api.receiptVouchers.update(voucher.voucher_id, {
-                          voucher_date: voucher.voucher_date,
-                          remarks: e.target.value.trim() || undefined,
-                        });
-                        if (res.ok) setVoucher(res.data);
-                      }}
-                      placeholder="Applies to the whole voucher (each entry has its own narration below)"
-                      className="soleria-input"
-                    />
-                  </div>
-
-                  {/* RJ-03: the Date is head-level — one date for the whole voucher, as on the
-                      client's screen. Locked once the voucher has a line, because every line already
-                      carries this date and moving it means moving them all (which the backend does,
-                      but only while nothing is posted). Editing it goes through the header update so
-                      the lines are carried with it. */}
+              <form id="receipt-entry-form" onSubmit={handleDone} className="flex flex-col gap-4">
+                {/* Row 1 — matches ref-pics/batch2/receipt jamma.png's own top row: Date, C.Book No
+                    and Remarks together (voucher-level fields), instead of split across two columns. */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* MASTER field, per the user (2026-08-26): Date/System Voucher No./Remarks are
+                      selected ONCE and locked for the whole voucher until "New Voucher" is
+                      pressed — Account/Narration/Payment Mode/Amount/Endorse are the DETAIL,
+                      re-entered fresh for every receipt. Locked the moment the voucher exists at
+                      all (first Done), not only once posted — there is no more "edit the header
+                      later" path, so the old persist-on-change call to receiptVouchers.update()
+                      for this field is gone too; only handleNew()/startNewVoucher() clear it. */}
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
                     <input
                       type="date"
                       value={voucher ? voucher.voucher_date : date}
-                      disabled={!!voucher && voucher.status !== 'UNPOSTED'}
-                      onChange={async e => {
-                        const next = e.target.value;
-                        setDate(next);
-                        if (!voucher || voucher.status !== 'UNPOSTED') return;
-                        const res = await api.receiptVouchers.update(voucher.voucher_id, {
-                          voucher_date: next,
-                          remarks: voucher.remarks ?? undefined,
-                        });
-                        if (res.ok) setVoucher(res.data);
-                        else fail('Failed to change the voucher date: ' + res.error.message);
-                      }}
+                      disabled={!!voucher}
+                      onChange={e => setDate(e.target.value)}
                       className="soleria-input font-semibold"
                     />
                   </div>
 
-                  {/* RJ-02: account picker + a small live balance tooltip next to it, updating as
-                      the user arrow-keys/hovers through the dropdown (falls back to the committed
-                      account once closed). Replaces the old below-the-field balance panel. */}
+                  {/* System Voucher No. (C.Book No) — voucher.voucher_no, assigned by the database
+                      (MAX+1 over the whole receipt_vouchers table), never typed. Read-only always,
+                      matching Purchase's own System Bill No. field — and every receipt added to
+                      this voucher below shares this SAME number, per the reference screenshot.
+                      Before the first Done creates the voucher, shows nextVoucherNo — a PREVIEW of
+                      what will be assigned, not the real number yet. */}
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      Select Account <span className="text-red-500 font-bold">*</span>
-                    </label>
-                    <div className="flex items-center gap-2">
-                      {/* RJ-03: ref target for the post-Done cursor return — this is the first
-                          field of the entry row. */}
-                      <div className="flex-1 min-w-0" ref={firstEntryFieldWrapRef}>
-                        <SearchableSelect
-                          options={accountOptions}
-                          value={baId}
-                          onChange={setBaId}
-                          onHighlightChange={val => setPreviewBaId(val ? Number(val) : null)}
-                          placeholder="Search account..."
-                          disabled={isViewMode}
-                        />
-                      </div>
-                      <AccountBalanceTooltip baId={previewBaId ?? (baId ? Number(baId) : null)} refreshKey={balanceRefreshKey} />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Amount Received (PKR)</label>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">System Voucher No. (C.Book No)</label>
                     <input
-                      type="number"
-                      min={0}
-                      value={amount || ''}
-                      disabled={isViewMode}
-                      onChange={e => setAmount(Math.max(0, parseInt(e.target.value) || 0))}
-                      placeholder="Enter amount in Rs..."
-                      className="soleria-input font-semibold font-mono"
+                      type="text"
+                      value={voucher ? `#${voucher.voucher_no}` : `#${nextVoucherNo} (pending)`}
+                      disabled
+                      readOnly
+                      className="soleria-input bg-slate-100 text-slate-500 font-mono"
                     />
                   </div>
 
-                  {/* Commission is customer-only (§7) — hidden for a director, employee, vendor or
-                      bank account, where a trade discount has no meaning. */}
-                  {selectedCustomer && !isEndorsed && (
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">
-                        Commission (PKR) <span className="text-slate-400 font-normal normal-case">— optional, reduces payable only</span>
-                      </label>
-                      <input
-                        type="number"
-                        min={0}
-                        value={commission || ''}
-                        disabled={isViewMode}
-                        onChange={e => setCommission(Math.max(0, parseInt(e.target.value) || 0))}
-                        placeholder="Enter commission given, if any..."
-                        className="soleria-input font-semibold font-mono"
-                      />
-                    </div>
-                  )}
-
-                </div>
-
-                <div className="flex flex-col gap-4">
-                  {/* RJ-01: Remarks moved into the right column, alongside how the money arrived. */}
+                  {/* MASTER field — see the Date field's own comment above. Locked the moment the
+                      voucher exists; only handleNew()/startNewVoucher() clear it. */}
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
-                    <textarea
+                    <input
+                      type="text"
+                      value={voucher ? (voucher.remarks ?? '') : voucherRemarks}
+                      disabled={!!voucher}
+                      onChange={e => setVoucherRemarks(e.target.value)}
+                      placeholder="Applies to the whole voucher (each receipt has its own narration below)"
+                      className="soleria-input"
+                    />
+                  </div>
+                </div>
+
+                {/* Row 2 — Account, full width and prominent, matching the ref screenshot's own
+                    A/C Code + Account Description row. RJ-02: a small live balance tooltip next to
+                    it, updating as the user arrow-keys/hovers through the picker (falls back to
+                    the committed account once closed). Opens a centered SearchModal
+                    (frontend/pages_design.md §5) rather than SearchableSelect's small anchored
+                    panel — Enter/Arrow Up/Down on the field opens it. */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    Select Account <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    {/* RJ-03: ref target for the post-Done cursor return — this is the first
+                        field of the entry row. */}
+                    <div className="flex-1 min-w-0" ref={firstEntryFieldWrapRef}>
+                      <button
+                        ref={accountTriggerRef}
+                        type="button"
+                        data-field-nav="true"
+                        disabled={isViewMode}
+                        onClick={openAccountModal}
+                        onKeyDown={handleAccountTriggerKeyDown}
+                        className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
+                      >
+                        <span className={baId ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
+                          {baId ? accountOptions.find(o => o.value === baId)?.label : 'Search account...'}
+                        </span>
+                        <ChevronDown size={16} className="text-slate-400" />
+                      </button>
+                      <SearchModal
+                        isOpen={isAccountModalOpen}
+                        title="Select Account"
+                        options={accountOptions}
+                        value={baId}
+                        onSelect={handleAccountSelect}
+                        onClose={() => { setIsAccountModalOpen(false); setPreviewBaId(null); }}
+                        onHighlightChange={val => setPreviewBaId(val ? Number(val) : null)}
+                        searchPlaceholder="Search account..."
+                      />
+                    </div>
+                    <AccountBalanceTooltip baId={previewBaId ?? (baId ? Number(baId) : null)} refreshKey={balanceRefreshKey} />
+                  </div>
+                </div>
+
+                {/* Row 3 — Narration, Payment Mode, Amount (and Commission, if applicable), grouped
+                    together as one row matching the ref screenshot's own Narration/Type/Amount row.
+                    Renamed from the old standalone "Remarks" field — this IS the per-receipt
+                    narration the reference calls it, distinct from the voucher-level Remarks above. */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Narration</label>
+                    <input
+                      type="text"
                       value={remarks}
                       disabled={isViewMode}
                       onChange={e => setRemarks(e.target.value)}
-                      placeholder="Enter remarks..."
+                      placeholder="Enter narration..."
                       className="soleria-input"
-                      rows={2}
-                      style={{ resize: 'none' }}
                     />
                   </div>
 
@@ -1014,6 +1271,53 @@ export default function ReceiptsPage() {
                     </div>
                   </div>
 
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Amount Received (PKR)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={amount || ''}
+                      disabled={isViewMode}
+                      onChange={e => setAmount(Math.max(0, parseInt(e.target.value) || 0))}
+                      placeholder="Enter amount in Rs..."
+                      className="soleria-input font-semibold font-mono"
+                    />
+                    {/* Current account balance alongside what's being entered right now, so the
+                        effect of this receipt is visible before committing it. */}
+                    {baId && (
+                      <div className="mt-1.5 flex items-center gap-2 text-[11px] text-slate-500">
+                        <span>Current:</span>
+                        <AccountBalanceTooltip baId={Number(baId)} refreshKey={balanceRefreshKey} />
+                        {amount > 0 && (
+                          <span className="font-mono font-semibold text-slate-700">
+                            + {formatCurrency(amount)} entering
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Commission is customer-only (§7) — hidden for a director, employee, vendor or
+                      bank account, where a trade discount has no meaning. */}
+                  {selectedCustomer && !isEndorsed && (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        Commission (PKR) <span className="text-slate-400 font-normal normal-case">— optional</span>
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={commission || ''}
+                        disabled={isViewMode}
+                        onChange={e => setCommission(Math.max(0, parseInt(e.target.value) || 0))}
+                        placeholder="Enter commission given, if any..."
+                        className="soleria-input font-semibold font-mono"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-4">
                   {/* Endorse — the payer settles by paying one of OUR creditors instead of paying
                       us. Available on every payment mode; the mode itself becomes information about
                       how those two transacted, since none of it reaches our accounts. */}
@@ -1025,6 +1329,8 @@ export default function ReceiptsPage() {
                         disabled={isViewMode || (mode === 'edit' && docKind === 'RECEIPT')}
                         onChange={e => { setIsEndorsed(e.target.checked); if (!e.target.checked) setEndorseToBaId(''); }}
                         onKeyDown={handleEndorseCheckboxKeyDown}
+                        onFocus={() => setIsEndorseFocused(true)}
+                        onBlur={() => setIsEndorseFocused(false)}
                         className="mt-0.5"
                       />
                       <span>
@@ -1036,6 +1342,14 @@ export default function ReceiptsPage() {
                           each one says where the money went. <strong>Nothing enters your cash, bank
                           or cheque drawer</strong>, so this never reaches the Cash Book.
                         </span>
+                        {/* Matches handleEndorseCheckboxKeyDown: plain Enter finishes the receipt
+                            (adds it to the voucher); Shift+Enter checks this box instead. Only
+                            shown while the checkbox itself has focus. */}
+                        {isEndorseFocused && (
+                          <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-1 rounded-md bg-blue-50 border border-blue-200 text-[11px] font-semibold text-blue-700">
+                            Shift+Enter to check this box · Enter alone adds the receipt
+                          </span>
+                        )}
                       </span>
                     </label>
 
@@ -1156,8 +1470,11 @@ export default function ReceiptsPage() {
               </form>
 
               {/* ── RJ-03: the voucher's committed entry lines ──────────────────────────────────
-                  Rows, not cards — the same grid the client's screen shows beneath the entry
-                  fields, so a voucher can be read back at a glance before posting. */}
+                  Merged back into the SAME card as the entry form, not a separate box below it
+                  (per the user, 2026-08-26 — a separate box just ate extra padding/border space
+                  for no benefit; this way there's more room to actually show entries). The same
+                  grid the client's screen shows, plus the Cheque/Online/Cash/Voucher totals in its
+                  own footer, so a voucher can be read back at a glance before posting. */}
               {voucherLines.length > 0 && (
                 <div className="mt-6 pt-5 border-t" style={{ borderColor: 'var(--border-color)' }}>
                   <div className="flex items-center justify-between mb-3">
@@ -1281,8 +1598,6 @@ export default function ReceiptsPage() {
             </div>
           </div>
         )}
-
-
 
       </div>
 
