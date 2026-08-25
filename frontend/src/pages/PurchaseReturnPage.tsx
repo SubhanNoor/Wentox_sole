@@ -1029,13 +1029,13 @@ export default function PurchaseReturnPage() {
         >
           <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-5">
             <Undo2 size={18} className="text-[#B08D57]" />
-            <h3 className="font-lora font-semibold text-lg text-slate-800">Raw Material Purchase Return</h3>
+            <h3 className="font-lora font-bold text-lg text-slate-900">Raw Material Purchase Return</h3>
           </div>
 
           {/* Header fields */}
           <div className="shrink-0 grid grid-cols-1 md:grid-cols-6 gap-4 mb-6">
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
+              <label className="block text-xs font-bold text-slate-900 mb-1">
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
               <input
@@ -1050,7 +1050,7 @@ export default function PurchaseReturnPage() {
             </div>
             {!isViewMode && (
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
+                <label className="block text-xs font-bold text-slate-900 mb-1">
                   Find Purchase to Return
                 </label>
                 {/* Big centered SearchModal, not SearchableSelect's small anchored panel — typing
@@ -1065,7 +1065,7 @@ export default function PurchaseReturnPage() {
                   onKeyDown={handleFindPurchaseTriggerKeyDown}
                   className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs min-h-[38px] text-left"
                 >
-                  <span className={copyFromPurchaseId ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
+                  <span className={copyFromPurchaseId ? 'text-black font-semibold' : 'text-slate-500'}>
                     {copyFromPurchaseId
                       ? priorPurchaseOptions.find(o => o.value === copyFromPurchaseId)?.label
                       : 'Manual entry'}
@@ -1089,7 +1089,7 @@ export default function PurchaseReturnPage() {
                   "Find Purchase to Return" search below, which looks up a PRIOR PURCHASE by its
                   own system/vendor bill no. — and from "Vendor Bill No." further along, which is
                   the vendor's own free-text invoice number for this return. */}
-              <label className="block text-xs font-medium text-slate-600 mb-1">System Bill No.</label>
+              <label className="block text-xs font-bold text-slate-900 mb-1">System Bill No.</label>
               <input
                 type="text"
                 value={returnId != null ? `#${returnId}` : `#${nextSystemBillNo} (pending)`}
@@ -1100,7 +1100,7 @@ export default function PurchaseReturnPage() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
+              <label className="block text-xs font-bold text-slate-900 mb-1">
                 Vendor <span className="text-red-500 font-bold">*</span>
               </label>
               <button
@@ -1113,7 +1113,7 @@ export default function PurchaseReturnPage() {
                 onKeyDown={handleVendorTriggerKeyDown}
                 className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
               >
-                <span className={selectedVendor ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
+                <span className={selectedVendor ? 'text-black font-semibold' : 'text-slate-500'}>
                   {selectedVendor ? vendorOptions.find(o => o.value === vendorId)?.label : 'Select vendor...'}
                 </span>
                 <ChevronDown size={16} className="text-slate-400" />
@@ -1134,7 +1134,7 @@ export default function PurchaseReturnPage() {
               )}
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Vendor Bill No.</label>
+              <label className="block text-xs font-bold text-slate-900 mb-1">Vendor Bill No.</label>
               <input
                 type="text"
                 value={billNo}
@@ -1153,7 +1153,7 @@ export default function PurchaseReturnPage() {
                   purchase to pull it from there, so it just stays blank until one is picked.
                   Corrected per the user (2026-08-26) — Remarks used to be free-typable while in
                   Manual entry, unlike Vendor/Vendor Bill No., which still are. */}
-              <label className="block text-xs font-medium text-slate-600 mb-1">Remarks</label>
+              <label className="block text-xs font-bold text-slate-900 mb-1">Remarks</label>
               <input
                 type="text"
                 value={remarks}
@@ -1174,7 +1174,7 @@ export default function PurchaseReturnPage() {
             <div className="shrink-0 mb-3 p-3 rounded-lg border bg-blue-50/40" style={{ borderColor: 'var(--border-color)' }}>
               <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
                 <div className="md:col-span-4">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
                     Material / Product Name <span className="text-red-500 font-bold">*</span>
                   </label>
                   <input
@@ -1191,7 +1191,7 @@ export default function PurchaseReturnPage() {
                   />
                 </div>
                 <div className="md:col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
                     Unit <span className="text-red-500 font-bold">*</span>
                   </label>
                   {isCustomUnit ? (
@@ -1234,7 +1234,7 @@ export default function PurchaseReturnPage() {
                   )}
                 </div>
                 <div className="md:col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
                     Quantity <span className="text-red-500 font-bold">*</span>
                   </label>
                   <input
@@ -1247,7 +1247,7 @@ export default function PurchaseReturnPage() {
                   />
                 </div>
                 <div className="md:col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
                     Price / Unit <span className="text-red-500 font-bold">*</span>
                   </label>
                   <input
@@ -1262,7 +1262,7 @@ export default function PurchaseReturnPage() {
                 </div>
                 <div className="md:col-span-2 flex items-end gap-2">
                   <div className="flex-1">
-                    <label className="block text-xs font-medium text-slate-600 mb-1">Value</label>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Value</label>
                     <div className="soleria-input flex items-center font-bold text-slate-800 bg-slate-100" style={{ fontSize: '13px' }}>
                       {formatCurrency(currentRowTotal)}
                     </div>
@@ -1355,10 +1355,10 @@ export default function PurchaseReturnPage() {
         {activeTab === 'records' && (
         <div className="card-white p-6 bg-white border">
           <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-            <h3 className="font-lora font-semibold text-lg text-slate-800">Recorded Purchase Returns</h3>
+            <h3 className="font-lora font-bold text-lg text-slate-900">Recorded Purchase Returns</h3>
             <div className="flex flex-wrap items-end gap-3" data-no-print>
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">From</label>
+                <label className="block text-xs font-bold text-slate-900 mb-1">From</label>
                 <input
                   type="date"
                   value={recordsDateFrom}
@@ -1368,7 +1368,7 @@ export default function PurchaseReturnPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">To</label>
+                <label className="block text-xs font-bold text-slate-900 mb-1">To</label>
                 <input
                   type="date"
                   value={recordsDateTo}

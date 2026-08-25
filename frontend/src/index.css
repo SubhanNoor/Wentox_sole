@@ -82,7 +82,9 @@ body {
   transition-duration: 150ms;
   border-color: var(--border-color);
   background: var(--card-surface);
-  color: var(--dark-heading);
+  /* Typed text reads as true black, not the dark-navy heading tint — flagged directly by the
+     user as too washed-out to read comfortably across a data-entry-heavy screen. */
+  color: #000000;
   font-family: 'Inter', sans-serif;
   min-width: 0;
   width: 100%;
@@ -92,6 +94,14 @@ body {
 .soleria-input:focus {
   border-color: var(--brand-gold);
   box-shadow: 0 0 0 3px rgba(176,141,87,0.15);
+}
+
+/* Placeholder ("text holder") text — darkened from the very light browser default so an empty
+   field's hint is actually legible at a glance, while staying visibly lighter than real typed
+   text so the two are never confused. */
+.soleria-input::placeholder {
+  color: #64748b; /* slate-500 */
+  opacity: 1;
 }
 
 /* Denser variant for line-item table cells (Cartons/Rate/Discount %) — same look, smaller box */

@@ -1139,7 +1139,7 @@ export default function ReceiptsPage() {
                       later" path, so the old persist-on-change call to receiptVouchers.update()
                       for this field is gone too; only handleNew()/startNewVoucher() clear it. */}
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Date</label>
                     <input
                       type="date"
                       value={voucher ? voucher.voucher_date : date}
@@ -1156,7 +1156,7 @@ export default function ReceiptsPage() {
                       Before the first Done creates the voucher, shows nextVoucherNo — a PREVIEW of
                       what will be assigned, not the real number yet. */}
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">System Voucher No. (C.Book No)</label>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">System Voucher No. (C.Book No)</label>
                     <input
                       type="text"
                       value={voucher ? `#${voucher.voucher_no}` : `#${nextVoucherNo} (pending)`}
@@ -1169,7 +1169,7 @@ export default function ReceiptsPage() {
                   {/* MASTER field — see the Date field's own comment above. Locked the moment the
                       voucher exists; only handleNew()/startNewVoucher() clear it. */}
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Remarks</label>
                     <input
                       type="text"
                       value={voucher ? (voucher.remarks ?? '') : voucherRemarks}
@@ -1188,7 +1188,7 @@ export default function ReceiptsPage() {
                     (frontend/pages_design.md §5) rather than SearchableSelect's small anchored
                     panel — Enter/Arrow Up/Down on the field opens it. */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
                     Select Account <span className="text-red-500 font-bold">*</span>
                   </label>
                   <div className="flex items-center gap-2">
@@ -1204,7 +1204,7 @@ export default function ReceiptsPage() {
                         onKeyDown={handleAccountTriggerKeyDown}
                         className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
                       >
-                        <span className={baId ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
+                        <span className={baId ? 'text-black font-semibold' : 'text-slate-500'}>
                           {baId ? accountOptions.find(o => o.value === baId)?.label : 'Search account...'}
                         </span>
                         <ChevronDown size={16} className="text-slate-400" />
@@ -1230,7 +1230,7 @@ export default function ReceiptsPage() {
                     narration the reference calls it, distinct from the voucher-level Remarks above. */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Narration</label>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Narration</label>
                     <input
                       type="text"
                       value={remarks}
@@ -1242,7 +1242,7 @@ export default function ReceiptsPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Payment Mode</label>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Payment Mode</label>
                     {/* G-01's Enter-walk only recognizes input/select/textarea/button[data-field-nav]
                         — these were plain button[type="button"] with none of those, so the walk
                         silently skipped the whole group (reported directly by the user: "it did
@@ -1272,7 +1272,7 @@ export default function ReceiptsPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Amount Received (PKR)</label>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Amount Received (PKR)</label>
                     <input
                       type="number"
                       min={0}
@@ -1301,7 +1301,7 @@ export default function ReceiptsPage() {
                       bank account, where a trade discount has no meaning. */}
                   {selectedCustomer && !isEndorsed && (
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      <label className="block text-xs font-bold text-slate-900 mb-1">
                         Commission (PKR) <span className="text-slate-400 font-normal normal-case">— optional</span>
                       </label>
                       <input
@@ -1355,7 +1355,7 @@ export default function ReceiptsPage() {
 
                     {isEndorsed && (
                       <div className="mt-3" ref={endorseToWrapRef}>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        <label className="block text-xs font-bold text-slate-900 mb-1">
                           Pay To <span className="text-red-500 font-bold">*</span>
                           <span className="text-slate-400 font-normal normal-case ml-1">— whoever you owe</span>
                         </label>
@@ -1380,7 +1380,7 @@ export default function ReceiptsPage() {
                   {/* Endorsed money never lands in one of our banks, so there is nothing to pick. */}
                   {paymentMode === 'ONLINE' && !isEndorsed && (
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      <label className="block text-xs font-bold text-slate-900 mb-1">
                         Received Into <span className="text-red-500 font-bold">*</span>
                       </label>
                       {bankOptions.length === 0 ? (
@@ -1408,7 +1408,7 @@ export default function ReceiptsPage() {
 
                   {paymentMode !== 'CASH' && (
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      <label className="block text-xs font-bold text-slate-900 mb-1">
                         {paymentMode === 'CHEQUE' ? 'Drawn On (customer\'s bank) / Details' : 'Online Reference Code / Details'}
                       </label>
                       <input
@@ -1425,7 +1425,7 @@ export default function ReceiptsPage() {
                   {paymentMode === 'CHEQUE' && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
                       <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        <label className="block text-xs font-bold text-slate-900 mb-1">
                           Cheque No. <span className="text-red-500 font-bold">*</span>
                         </label>
                         <input
@@ -1438,7 +1438,7 @@ export default function ReceiptsPage() {
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        <label className="block text-xs font-bold text-slate-900 mb-1">
                           Date on Cheque <span className="text-red-500 font-bold">*</span>
                         </label>
                         <input
@@ -1450,7 +1450,7 @@ export default function ReceiptsPage() {
                         />
                       </div>
                       <div className="sm:col-span-2">
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        <label className="block text-xs font-bold text-slate-900 mb-1">
                           Cheque Received Date
                         </label>
                         <input

@@ -902,7 +902,7 @@ export default function ExpensesPage() {
                       fresh for every payment. Locked the moment the voucher exists at all (first
                       Done), not only once posted. */}
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Date</label>
                     <input
                       ref={firstFieldRef}
                       type="date"
@@ -918,7 +918,7 @@ export default function ExpensesPage() {
                       Before the first Done creates the voucher, shows nextVoucherNo — a PREVIEW of
                       what will be assigned. */}
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">System Voucher No. (C.Book No)</label>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">System Voucher No. (C.Book No)</label>
                     <input
                       type="text"
                       value={voucher ? `#${voucher.voucher_no}` : `#${nextVoucherNo} (pending)`}
@@ -930,7 +930,7 @@ export default function ExpensesPage() {
 
                   {/* MASTER field — see the Date field's own comment above. */}
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Remarks</label>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Remarks</label>
                     <input
                       type="text"
                       value={voucher ? (voucher.remarks ?? '') : voucherRemarks}
@@ -945,7 +945,7 @@ export default function ExpensesPage() {
                 {/* Row 2 — Account, full width and prominent, matching the ref screenshot's own
                     A/C Code + Account Description row. */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
                     Select Account (Who to Pay) <span className="text-red-500 font-bold">*</span>
                   </label>
                   <div className="flex items-center gap-2">
@@ -959,7 +959,7 @@ export default function ExpensesPage() {
                         onKeyDown={handleAccountTriggerKeyDown}
                         className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
                       >
-                        <span className={baId ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
+                        <span className={baId ? 'text-black font-semibold' : 'text-slate-500'}>
                           {baId ? accountOptions.find(o => o.value === baId)?.label : 'Search account by name...'}
                         </span>
                         <ChevronDown size={16} className="text-slate-400" />
@@ -991,7 +991,7 @@ export default function ExpensesPage() {
                     the ref screenshot's own Narration/Type/Amount row. */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Narration</label>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Narration</label>
                     <input
                       type="text"
                       value={remarks}
@@ -1003,7 +1003,7 @@ export default function ExpensesPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Payment Mode</label>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Payment Mode</label>
                     <div className="grid grid-cols-4 gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
                       {PAYMENT_MODES.map((pm, idx) => (
                         <button
@@ -1023,7 +1023,7 @@ export default function ExpensesPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Amount Paid (PKR)</label>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Amount Paid (PKR)</label>
                     <input
                       type="number"
                       min={0}
@@ -1051,7 +1051,7 @@ export default function ExpensesPage() {
                 <div className="flex flex-col gap-4">
                   {(paymentMode === 'ONLINE' || paymentMode === 'CHEQUE_ISSUED') && (
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      <label className="block text-xs font-bold text-slate-900 mb-1">
                         Paid From Bank Account <span className="text-red-500 font-bold">*</span>
                       </label>
                       {bankOptions.length === 0 ? (
@@ -1073,7 +1073,7 @@ export default function ExpensesPage() {
                   {paymentMode === 'CHEQUE_ISSUED' && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
                       <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        <label className="block text-xs font-bold text-slate-900 mb-1">
                           Issued Cheque No. <span className="text-red-500 font-bold">*</span>
                         </label>
                         <input
@@ -1086,7 +1086,7 @@ export default function ExpensesPage() {
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        <label className="block text-xs font-bold text-slate-900 mb-1">
                           Date Written on Cheque <span className="text-red-500 font-bold">*</span>
                         </label>
                         <input
@@ -1102,7 +1102,7 @@ export default function ExpensesPage() {
 
                   {paymentMode === 'CHEQUE_ENDORSED' && (
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      <label className="block text-xs font-bold text-slate-900 mb-1">
                         Select Cheque to Hand Over <span className="text-red-500 font-bold">*</span>
                       </label>
                       {endorsableCheques.length === 0 ? (
@@ -1123,7 +1123,7 @@ export default function ExpensesPage() {
 
                   {paymentMode !== 'CASH' && (
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      <label className="block text-xs font-bold text-slate-900 mb-1">
                         {paymentMode === 'ONLINE' ? 'Online Reference Code / Details' : 'Details'}
                       </label>
                       <input

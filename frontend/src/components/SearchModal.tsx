@@ -112,7 +112,7 @@ export default function SearchModal({
         style={{ height: '80vh', maxHeight: '640px' }}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b shrink-0">
-          <h3 className="font-lora font-semibold text-xl text-slate-800">{title}</h3>
+          <h3 className="font-lora font-bold text-xl text-slate-900">{title}</h3>
           <button
             type="button"
             onClick={onClose}
@@ -131,7 +131,7 @@ export default function SearchModal({
             onChange={e => setSearch(e.target.value)}
             onKeyDown={handleSearchKeyDown}
             placeholder={searchPlaceholder}
-            className="w-full bg-transparent border-none outline-none text-base font-medium text-slate-800 placeholder-slate-400"
+            className="w-full bg-transparent border-none outline-none text-base font-medium text-black placeholder-slate-500"
           />
         </div>
         <div className="overflow-y-auto flex-1 py-1.5">
@@ -150,15 +150,17 @@ export default function SearchModal({
                   onClick={() => onSelect(opt.value)}
                   className={`w-full text-left px-5 py-3.5 text-base transition-colors flex items-center justify-between gap-3 ${
                     isSelected
-                      ? 'bg-[var(--brand-gold)] text-white font-semibold'
+                      ? 'bg-[var(--brand-gold)] text-white font-bold'
                       : isHighlighted
-                      ? 'bg-[#fbf7f0] text-[var(--brand-navy)]'
-                      : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'
+                      // Darkened from a barely-visible pale cream — flagged directly by the user
+                      // as too washed-out to tell apart from an unhighlighted row at a glance.
+                      ? 'bg-[var(--brand-navy)] text-white font-bold'
+                      : 'text-black hover:bg-[var(--brand-navy)] hover:text-white'
                   }`}
                 >
                   <span className="font-medium truncate">{opt.label}</span>
                   {opt.sublabel && (
-                    <span className={`text-sm shrink-0 ${isSelected ? 'text-white/80' : 'text-slate-400'}`}>
+                    <span className={`text-sm shrink-0 ${isSelected || isHighlighted ? 'text-white/80' : 'text-slate-500'}`}>
                       {opt.sublabel}
                     </span>
                   )}
