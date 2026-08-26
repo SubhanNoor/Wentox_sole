@@ -185,24 +185,45 @@ export default function PurchasePage() {
   );
 
   // Vendor field opens a centered "find" modal (SearchModal) instead of SearchableSelect's small
-  // anchored panel — the user wanted the full vendor list visible at once, not a dropdown. Enter
-  // (or Arrow Up/Down) on the field opens it; the search box inside it autofocuses and handles its
-  // own Up/Down-to-highlight, Enter-to-commit — same keyboard model as SearchableSelect, just in a
-  // bigger box. Committing a vendor closes the modal and advances focus via the app's G-01 rule,
-  // same as every other field-nav-aware control (focusNextField needs the trigger BUTTON, which is
-  // why it isn't just a plain <input> here).
-  const vendorTriggerRef = useRef<HTMLButtonElement>(null);
+  // anchored panel — the user wanted the full vendor list visible at once, not a dropdown. It's a
+  // real, typable <input> (2026-08-27, per the user: "I can write anything in the field and when
+  // I press enter modal pop up appears with matching results and I can also search in modal
+  // popup" — same pattern as Purchase Return's Vendor Bill No.): type a vendor name/city and press
+  // Enter (or Arrow Up/Down for the full list) to open the modal seeded with what's typed, and
+  // keep searching inside it. The small chevron button alongside it still opens the full list
+  // blank, for a plain click with nothing typed. Committing a vendor closes the modal, updates the
+  // displayed text to the picked vendor's label (see the sync effect below), and advances focus
+  // via the app's G-01 rule (focusNextField needs the trigger element, still true for an input).
+  const vendorTriggerRef = useRef<HTMLInputElement>(null);
   const [isVendorModalOpen, setIsVendorModalOpen] = useState(false);
+  const [vendorSearchText, setVendorSearchText] = useState('');
+  // Seeds the modal's search box when opened via Enter on the typed input (blank when opened via
+  // the chevron button or Arrow Up/Down instead).
+  const [vendorModalSeed, setVendorModalSeed] = useState('');
+
+  // Keeps the input's displayed text in sync with whatever vendorId actually is — covers every
+  // place vendorId gets set (picking one, New Purchase clearing it, loading a posted/draft
+  // record) without duplicating each of those call sites. Typing itself never touches vendorId,
+  // so this never fights the user mid-type — it only ever runs when the SELECTION changes.
+  useEffect(() => {
+    const opt = vendorOptions.find(o => o.value === vendorId);
+    setVendorSearchText(opt?.label ?? '');
+  }, [vendorId, vendorOptions]);
 
   const openVendorModal = () => {
     if (isViewMode) return;
+    setVendorModalSeed('');
     setIsVendorModalOpen(true);
   };
 
   function handleVendorTriggerKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       openVendorModal();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      setVendorModalSeed(vendorSearchText);
+      setIsVendorModalOpen(true);
     }
   }
 
@@ -1048,51 +1069,9 @@ export default function PurchasePage() {
               />
             </div>
             <div>
-              <div className="flex justify-between items-center mb-1">
-                <label className="block text-xs font-medium text-slate-600">
-                  Vendor <span className="text-red-500 font-bold">*</span>
-                </label>
-                {!isViewMode && (
-                  <button
-                    type="button"
-                    onClick={() => setIsAddVendorOpen(true)}
-                    className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102"
-                  >
-                    <Plus size={12} className="text-blue-600" />
-                    <span>Add New Vendor</span>
-                  </button>
-                )}
-              </div>
-              <button
-                ref={vendorTriggerRef}
-                type="button"
-                data-field-nav="true"
-                disabled={isViewMode}
-                onClick={openVendorModal}
-                onKeyDown={handleVendorTriggerKeyDown}
-                className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
-              >
-                <span className={selectedVendor ? 'text-black font-semibold' : 'text-slate-500'}>
-                  {selectedVendor ? vendorOptions.find(o => o.value === vendorId)?.label : 'Select vendor...'}
-                </span>
-                <ChevronDown size={16} className="text-slate-400" />
-              </button>
-              <SearchModal
-                isOpen={isVendorModalOpen}
-                title="Select Vendor"
-                options={vendorOptions}
-                value={vendorId}
-                onSelect={handleVendorSelect}
-                onClose={() => setIsVendorModalOpen(false)}
-                searchPlaceholder="Search vendors..."
-              />
-              {selectedVendor && (
-                <p className="text-[11px] text-slate-400 mt-1">
-                  {selectedVendor.phone || 'No Phone'} {selectedVendor.city_id != null ? `· ${cities.find(c => c.city_id === selectedVendor.city_id)?.name || ''}` : ''}
-                </p>
-              )}
-            </div>
-            <div>
+              {/* Vendor Bill No. before Vendor, per the user (2026-08-26): you're usually reading
+                  the vendor's own invoice number off a physical paper first, so it's the natural
+                  starting point — not the vendor picker. */}
               <label className="block text-xs font-bold text-slate-900 mb-1">Vendor Bill No.</label>
               <input
                 type="text"
@@ -1117,6 +1096,61 @@ export default function PurchasePage() {
               ) : billNo.trim() && vendorId ? (
                 <p className="text-[11px] text-emerald-600 font-semibold mt-1">Bill No. available</p>
               ) : null}
+            </div>
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="block text-xs font-bold text-slate-900">
+                  Vendor <span className="text-red-500 font-bold">*</span>
+                </label>
+                {!isViewMode && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAddVendorOpen(true)}
+                    className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102"
+                  >
+                    <Plus size={12} className="text-blue-600" />
+                    <span>Add New Vendor</span>
+                  </button>
+                )}
+              </div>
+              <div className="relative">
+                <input
+                  ref={vendorTriggerRef}
+                  type="text"
+                  data-field-nav="true"
+                  disabled={isViewMode}
+                  value={vendorSearchText}
+                  onChange={e => setVendorSearchText(e.target.value)}
+                  onKeyDown={handleVendorTriggerKeyDown}
+                  placeholder="Type a vendor name, or press Enter to search..."
+                  className="soleria-input pr-9"
+                  style={{ fontSize: '13px' }}
+                />
+                <button
+                  type="button"
+                  disabled={isViewMode}
+                  onClick={openVendorModal}
+                  title="Browse all vendors"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronDown size={16} />
+                </button>
+              </div>
+              <SearchModal
+                isOpen={isVendorModalOpen}
+                title="Select Vendor"
+                options={vendorOptions}
+                value={vendorId}
+                onSelect={handleVendorSelect}
+                onClose={() => setIsVendorModalOpen(false)}
+                searchPlaceholder="Search vendors..."
+                initialSearch={vendorModalSeed}
+              />
+              {selectedVendor && (
+                <p className="text-[11px] text-slate-400 mt-1">
+                  {selectedVendor.phone || 'No Phone'} {selectedVendor.city_id != null ? `· ${cities.find(c => c.city_id === selectedVendor.city_id)?.name || ''}` : ''}
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-900 mb-1">Remarks</label>

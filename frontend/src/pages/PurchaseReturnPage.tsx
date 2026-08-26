@@ -126,21 +126,44 @@ export default function PurchaseReturnPage() {
     [unpostedReturns]
   );
 
-  // Vendor field opens a centered "find" modal (SearchModal) instead of SearchableSelect's small
-  // anchored panel — see frontend/pages_design.md §5. Enter (or Arrow Up/Down) on the field opens
-  // it; committing a vendor closes it and advances focus via the app's G-01 rule.
-  const vendorTriggerRef = useRef<HTMLButtonElement>(null);
+  // Vendor field is a typable <input> (2026-08-27, matching PurchasePage.tsx: "do this purchase
+  // return page like before pressing enter we can type it and it shows us the result of that in
+  // modal pop up and we can also search for it") — type a vendor name/city and press Enter to
+  // open "Select Vendor" seeded with what's typed, with full search still available inside; Arrow
+  // Up/Down open it blank for the full list. The chevron button alongside it still opens the full
+  // list blank on a plain click. Committing a vendor closes the modal, updates the displayed text
+  // (see the sync effect below), and advances focus via the app's G-01 rule.
+  const vendorTriggerRef = useRef<HTMLInputElement>(null);
   const [isVendorModalOpen, setIsVendorModalOpen] = useState(false);
+  const [vendorSearchText, setVendorSearchText] = useState('');
+  // Seeds the modal's search box when opened via Enter on the typed input (blank when opened via
+  // the chevron button or Arrow Up/Down instead).
+  const [vendorModalSeed, setVendorModalSeed] = useState('');
+
+  // Keeps the input's displayed text in sync with whatever vendorId actually is — covers every
+  // place vendorId gets set (picking one, copying from a prior purchase, New Return clearing it,
+  // loading a posted/draft record) without duplicating each of those call sites. Typing itself
+  // never touches vendorId, so this never fights the user mid-type.
+  useEffect(() => {
+    const opt = vendorOptions.find(o => o.value === vendorId);
+    setVendorSearchText(opt?.label ?? '');
+  }, [vendorId, vendorOptions]);
 
   const openVendorModal = () => {
-    if (isViewMode) return;
+    if (isViewMode || isCopiedFromPurchase) return;
+    setVendorModalSeed('');
     setIsVendorModalOpen(true);
   };
 
   function handleVendorTriggerKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       openVendorModal();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (isViewMode || isCopiedFromPurchase) return;
+      setVendorModalSeed(vendorSearchText);
+      setIsVendorModalOpen(true);
     }
   }
 
@@ -182,7 +205,15 @@ export default function PurchaseReturnPage() {
   // its quantity can't exceed what was actually purchased — see articleAgainstPurchaseError below.
   const [sourcePurchaseItems, setSourcePurchaseItems] = useState<PurchaseItemRow[]>([]);
 
-  const handleCopyFromPurchase = async (purchaseIdStr: string) => {
+  // `copyItems` distinguishes the two ways a purchase gets attached here (2026-08-27, per the
+  // user's correction): picking one explicitly via "Find Purchase to Return" copies EVERYTHING,
+  // articles included (copyItems=true, the default) — that's a deliberate "return this whole
+  // bill" action. But typing a Vendor Bill No. that happens to match one, in Manual entry
+  // (handleBillNoBlur below), only auto-fills the MASTER fields — Vendor and Remarks. Articles in
+  // that case are still added one at a time by hand (copyItems=false): each is checked against
+  // `sourcePurchaseItems` as it's typed (articleAgainstPurchaseError) and, once matched by name,
+  // takes that source line's price — non-editable — while quantity stays free to type.
+  const handleCopyFromPurchase = async (purchaseIdStr: string, copyItems = true) => {
     setCopyFromPurchaseId(purchaseIdStr);
     if (!purchaseIdStr) {
       setSourcePurchaseItems([]);
@@ -201,41 +232,83 @@ export default function PurchaseReturnPage() {
     // visible nowhere but the picker's own trigger label. Reported directly by the user.
     setBillNo(purchase.bill_no || '');
     setRemarks(purchase.remarks || '');
+    // sourcePurchaseItems is kept regardless of copyItems — it's what every typed article gets
+    // validated (and, for the auto-lookup path, priced) against, whether or not the items array
+    // itself was auto-populated from it.
     setSourcePurchaseItems(purchase.items);
-    // Corrected per the user (2026-08-26): articles from the picked purchase DO show/auto-copy,
-    // same as vendor/bill no./remarks — the "not auto-copied" behavior only ever applies to Manual
-    // entry (which has nothing to copy from in the first place, so it was never really "not
-    // copying" anything). sourcePurchaseItems (above) still exists purely so any FURTHER edit —
-    // bumping a copied row's quantity, or adding an extra article afterward — stays validated
-    // against what was actually purchased (articleAgainstPurchaseError below).
-    setItems(purchase.items.map(it => ({
-      uid: newItemUid(),
-      materialName: it.material_name || '',
-      unit: it.unit,
-      quantity: it.quantity,
-      pricePerUnit: it.price_per_unit,
-      totalPrice: it.total_price
-    })));
+    if (copyItems) {
+      // Explicit "Find Purchase to Return" pick — articles DO auto-copy, same as vendor/bill
+      // no./remarks (2026-08-26 correction): the "not auto-copied" behavior only ever applies to
+      // Manual entry, which has nothing to copy from in the first place.
+      setItems(purchase.items.map(it => ({
+        uid: newItemUid(),
+        materialName: it.material_name || '',
+        unit: it.unit,
+        quantity: it.quantity,
+        pricePerUnit: it.price_per_unit,
+        totalPrice: it.total_price
+      })));
+    } else {
+      // Manual entry, auto-matched by typed bill no. — master fields only; articles are still
+      // added one at a time through the entry row below, each checked against sourcePurchaseItems.
+      setItems([]);
+    }
     setCurrentRow(emptyCurrentRow());
     setEditingUid(null);
     setIsCustomUnit(false);
   };
 
-  // Validates one article's name + quantity against `sourcePurchaseItems` — only while
+  // Manual-entry auto-lookup by typed Vendor Bill No. (2026-08-26, per the user: "when we enter
+  // the number the vendor name and remarks auto selected and no editable ... I am talking about
+  // in manual entries" — refined 2026-08-27: "manual entry" means only the MASTER fields
+  // auto-fill; articles are still added by hand, just checked against the matched bill and
+  // priced from it). Fires on blur (not every keystroke) so it doesn't fight the user mid-type.
+  // Only runs in Manual entry — once a purchase is already picked (isCopiedFromPurchase), the
+  // field is disabled anyway. An exact, case-insensitive match against a prior purchase's own
+  // bill_no reuses handleCopyFromPurchase with copyItems=false, so Vendor/Remarks lock exactly
+  // like the "Find Purchase to Return" picker does, but items stay empty for manual entry. No
+  // match, or an empty field, just leaves it as a free-typed Vendor Bill No. with nothing to lock.
+  const handleBillNoBlur = () => {
+    if (isCopiedFromPurchase) return;
+    const typed = billNo.trim().toLowerCase();
+    if (!typed) return;
+    const match = priorPurchases.find(p => (p.bill_no || '').trim().toLowerCase() === typed);
+    if (match) {
+      void handleCopyFromPurchase(String(match.purchase_id), false).then(() => {
+        // Master fields are done (Vendor/Remarks just auto-filled) — jump straight to the first
+        // article field so the user can start typing articles right away, per the user
+        // (2026-08-27): "the mouse auto move to the first entry of the article."
+        materialNameRef.current?.focus();
+      });
+    }
+  };
+
+  // Validates one article's name + PRICE + quantity against `sourcePurchaseItems` — only while
   // isCopiedFromPurchase (Manual entry has no purchase to validate against, so it's always
-  // unrestricted). `excludeUid` leaves the row currently being edited out of the "already used"
-  // running total, so re-editing a row's own quantity doesn't count itself twice.
-  function articleAgainstPurchaseError(materialName: string, quantity: number, excludeUid?: string | null): string | null {
+  // unrestricted). Matching by name alone isn't enough: the same purchase can list the same
+  // article twice at two different prices (e.g. two batches bought at different rates), and each
+  // price is its own pool of quantity to return against. So the match — and the "already used"
+  // running total — is keyed on name+price together; only quantity is free to differ from the
+  // source line, per the user (2026-08-26): "same article with the same price the quantity might
+  // differ." `excludeUid` leaves the row currently being edited out of the "already used" running
+  // total, so re-editing a row's own quantity doesn't count itself twice.
+  function articleAgainstPurchaseError(materialName: string, quantity: number, pricePerUnit: number, excludeUid?: string | null): string | null {
     if (!isCopiedFromPurchase) return null;
     const name = materialName.trim().toLowerCase();
     if (!name) return null;
 
-    const sourceItem = sourcePurchaseItems.find(it => (it.material_name || '').trim().toLowerCase() === name);
+    const sourceItem = sourcePurchaseItems.find(it =>
+      (it.material_name || '').trim().toLowerCase() === name && it.price_per_unit === pricePerUnit
+    );
     if (!sourceItem) {
+      const sameNameDifferentPrice = sourcePurchaseItems.some(it => (it.material_name || '').trim().toLowerCase() === name);
+      if (sameNameDifferentPrice) {
+        return `"${materialName.trim()}" was purchased at a different price — match the price it was bought at to return it.`;
+      }
       return `"${materialName.trim()}" was not on the purchased bill — it can't be returned against it.`;
     }
     const alreadyUsed = items
-      .filter(it => it.uid !== excludeUid && it.materialName.trim().toLowerCase() === name)
+      .filter(it => it.uid !== excludeUid && it.materialName.trim().toLowerCase() === name && it.pricePerUnit === pricePerUnit)
       .reduce((s, it) => s + it.quantity, 0);
     const remaining = sourceItem.quantity - alreadyUsed;
     if (quantity > remaining) {
@@ -249,21 +322,47 @@ export default function PurchaseReturnPage() {
   // the vendor's own bill no. or the system bill no. finds it (priorPurchaseOptions' label above
   // carries both). Placed as the very first field after Date: picking a purchase here fills the
   // vendor and items for you, so it doesn't need Vendor picked first the way it used to.
-  const findPurchaseTriggerRef = useRef<HTMLButtonElement>(null);
+  //
+  // Also a typable <input> (2026-08-27, same pattern as Vendor: "also apply it on manual entry
+  // field" — this is the field whose default/unset state literally reads "Manual entry"). Type
+  // and press Enter to open it seeded with what's typed, full search still available inside;
+  // Arrow Up/Down (or the chevron button) open it blank for the full list.
+  const findPurchaseTriggerRef = useRef<HTMLInputElement>(null);
   const [isFindPurchaseModalOpen, setIsFindPurchaseModalOpen] = useState(false);
+  const [findPurchaseSearchText, setFindPurchaseSearchText] = useState('');
+  const [findPurchaseModalSeed, setFindPurchaseModalSeed] = useState('');
+
+  // Syncs the displayed text to whatever purchase is actually picked (or "Manual entry" once
+  // cleared) — mirrors the Vendor field's own sync effect above.
+  useEffect(() => {
+    const opt = priorPurchaseOptions.find(o => o.value === copyFromPurchaseId);
+    setFindPurchaseSearchText(opt?.label ?? '');
+  }, [copyFromPurchaseId, priorPurchaseOptions]);
 
   const openFindPurchaseModal = () => {
     if (isViewMode) return;
+    setFindPurchaseModalSeed('');
     setIsFindPurchaseModalOpen(true);
   };
 
   function handleFindPurchaseTriggerKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       openFindPurchaseModal();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (isViewMode) return;
+      setFindPurchaseModalSeed(findPurchaseSearchText);
+      setIsFindPurchaseModalOpen(true);
     }
   }
 
+  // Vendor Bill No. no longer opens this modal on Enter (2026-08-27, per the user: "remove modal
+  // pop up from vendor bill number only add this manual entry field like we can type befoir
+  // pressing enter") — it's back to a plain typable field. The auto-match still happens, just on
+  // blur (handleBillNoBlur below), with no popup involved: an exact match against a prior
+  // purchase's own bill_no auto-fills Vendor/Remarks (master fields only, items stay manual),
+  // same as before this modal experiment.
   async function handleFindPurchaseSelect(purchaseIdStr: string) {
     setIsFindPurchaseModalOpen(false);
     await handleCopyFromPurchase(purchaseIdStr);
@@ -337,9 +436,9 @@ export default function PurchaseReturnPage() {
   // Quantity rather than only on commit, so the message (rendered below the entry row) appears
   // before the user even tries to commit, not as a surprise rejection afterward.
   const currentRowError = useMemo(
-    () => articleAgainstPurchaseError(currentRow.materialName, currentRow.quantity, editingUid),
+    () => articleAgainstPurchaseError(currentRow.materialName, currentRow.quantity, currentRow.pricePerUnit, editingUid),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentRow.materialName, currentRow.quantity, editingUid, isCopiedFromPurchase, sourcePurchaseItems, items]
+    [currentRow.materialName, currentRow.quantity, currentRow.pricePerUnit, editingUid, isCopiedFromPurchase, sourcePurchaseItems, items]
   );
 
   const commitCurrentRow = () => {
@@ -1057,21 +1156,29 @@ export default function PurchaseReturnPage() {
                     either the vendor's own bill no. or the system bill no. finds it (both are in
                     each option's label; see priorPurchaseOptions above). First field after Date:
                     picking a purchase here fills Vendor and the items for you. */}
-                <button
-                  ref={findPurchaseTriggerRef}
-                  type="button"
-                  data-field-nav="true"
-                  onClick={openFindPurchaseModal}
-                  onKeyDown={handleFindPurchaseTriggerKeyDown}
-                  className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs min-h-[38px] text-left"
-                >
-                  <span className={copyFromPurchaseId ? 'text-black font-semibold' : 'text-slate-500'}>
-                    {copyFromPurchaseId
-                      ? priorPurchaseOptions.find(o => o.value === copyFromPurchaseId)?.label
-                      : 'Manual entry'}
-                  </span>
-                  <ChevronDown size={16} className="text-slate-400" />
-                </button>
+                <div className="relative">
+                  <input
+                    ref={findPurchaseTriggerRef}
+                    type="text"
+                    data-field-nav="true"
+                    disabled={isViewMode}
+                    value={findPurchaseSearchText}
+                    onChange={e => setFindPurchaseSearchText(e.target.value)}
+                    onKeyDown={handleFindPurchaseTriggerKeyDown}
+                    placeholder="Manual entry — or type a vendor/bill no. to search..."
+                    className="soleria-input pr-9"
+                    style={{ fontSize: '13px' }}
+                  />
+                  <button
+                    type="button"
+                    disabled={isViewMode}
+                    onClick={openFindPurchaseModal}
+                    title="Browse all prior purchases"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <ChevronDown size={16} />
+                  </button>
+                </div>
                 <SearchModal
                   isOpen={isFindPurchaseModalOpen}
                   title="Find Purchase to Return"
@@ -1080,6 +1187,7 @@ export default function PurchaseReturnPage() {
                   onSelect={handleFindPurchaseSelect}
                   onClose={() => setIsFindPurchaseModalOpen(false)}
                   searchPlaceholder="Search by vendor or system bill no..."
+                  initialSearch={findPurchaseModalSeed}
                 />
               </div>
             )}
@@ -1100,24 +1208,53 @@ export default function PurchaseReturnPage() {
               />
             </div>
             <div>
+              {/* Vendor Bill No. before Vendor, mirroring PurchasePage.tsx (2026-08-26): you
+                  usually read this off the vendor's physical paper first. Plain typable field
+                  (2026-08-27, per the user: no modal popup here — "add this manual entry field
+                  like we can type befoir pressing enter"). In Manual entry, typing a number that
+                  matches a real purchase and then leaving the field auto-fills Vendor/Remarks
+                  from it (master fields only — items stay manual) — see handleBillNoBlur below. */}
+              <label className="block text-xs font-bold text-slate-900 mb-1">Vendor Bill No.</label>
+              <input
+                type="text"
+                value={billNo}
+                disabled={isViewMode || isCopiedFromPurchase}
+                title={isCopiedFromPurchase ? 'Copied from the purchase you picked above — switch to Manual entry to change it' : undefined}
+                onChange={e => setBillNo(e.target.value)}
+                onBlur={handleBillNoBlur}
+                placeholder="Vendor's own invoice #..."
+                className="soleria-input"
+                style={{ fontSize: '13px' }}
+              />
+            </div>
+            <div>
               <label className="block text-xs font-bold text-slate-900 mb-1">
                 Vendor <span className="text-red-500 font-bold">*</span>
               </label>
-              <button
-                ref={vendorTriggerRef}
-                type="button"
-                data-field-nav="true"
-                disabled={isViewMode || isCopiedFromPurchase}
-                title={isCopiedFromPurchase ? 'Set by the purchase you picked above — switch to Manual entry to change it' : undefined}
-                onClick={openVendorModal}
-                onKeyDown={handleVendorTriggerKeyDown}
-                className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
-              >
-                <span className={selectedVendor ? 'text-black font-semibold' : 'text-slate-500'}>
-                  {selectedVendor ? vendorOptions.find(o => o.value === vendorId)?.label : 'Select vendor...'}
-                </span>
-                <ChevronDown size={16} className="text-slate-400" />
-              </button>
+              <div className="relative">
+                <input
+                  ref={vendorTriggerRef}
+                  type="text"
+                  data-field-nav="true"
+                  disabled={isViewMode || isCopiedFromPurchase}
+                  title={isCopiedFromPurchase ? 'Set by the purchase you picked above — switch to Manual entry to change it' : undefined}
+                  value={vendorSearchText}
+                  onChange={e => setVendorSearchText(e.target.value)}
+                  onKeyDown={handleVendorTriggerKeyDown}
+                  placeholder="Type a vendor name, or press Enter to search..."
+                  className="soleria-input pr-9"
+                  style={{ fontSize: '13px' }}
+                />
+                <button
+                  type="button"
+                  disabled={isViewMode || isCopiedFromPurchase}
+                  onClick={openVendorModal}
+                  title="Browse all vendors"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronDown size={16} />
+                </button>
+              </div>
               <SearchModal
                 isOpen={isVendorModalOpen}
                 title="Select Vendor"
@@ -1126,25 +1263,13 @@ export default function PurchaseReturnPage() {
                 onSelect={handleVendorSelect}
                 onClose={() => setIsVendorModalOpen(false)}
                 searchPlaceholder="Search vendors..."
+                initialSearch={vendorModalSeed}
               />
               {selectedVendor && (
                 <p className="text-[11px] text-slate-400 mt-1">
                   {selectedVendor.phone || 'No Phone'} {selectedVendor.city_id != null ? `· ${cities.find(c => c.city_id === selectedVendor.city_id)?.name || ''}` : ''}
                 </p>
               )}
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-900 mb-1">Vendor Bill No.</label>
-              <input
-                type="text"
-                value={billNo}
-                disabled={isViewMode || isCopiedFromPurchase}
-                title={isCopiedFromPurchase ? 'Copied from the purchase you picked above — switch to Manual entry to change it' : undefined}
-                onChange={e => setBillNo(e.target.value)}
-                placeholder="Vendor's own invoice #..."
-                className="soleria-input"
-                style={{ fontSize: '13px' }}
-              />
             </div>
             <div>
               {/* Remarks is never hand-typed here — it's always the SOURCE purchase's own remarks,
@@ -1250,13 +1375,21 @@ export default function PurchaseReturnPage() {
                   <label className="block text-xs font-bold text-slate-900 mb-1">
                     Price / Unit <span className="text-red-500 font-bold">*</span>
                   </label>
+                  {/* Non-editable once matched against the original bill (2026-08-27, per the
+                      user: "take the price of the article only which non editable") — the price
+                      is always the source purchase's own rate for this article, filled in by
+                      fillRateFromLastPurchase on blur of Material name. `readOnly`, not
+                      `disabled`, so Enter still commits the row from here (handleRateKeyDown) —
+                      a disabled field can't be tabbed/Entered through. */}
                   <input
                     type="number"
                     min={0}
                     value={currentRow.pricePerUnit || ''}
-                    onChange={e => updateCurrentField('pricePerUnit', Number(e.target.value))}
+                    readOnly={isCopiedFromPurchase}
+                    title={isCopiedFromPurchase ? "Taken from the matched purchase's own rate for this article — not editable" : undefined}
+                    onChange={e => { if (!isCopiedFromPurchase) updateCurrentField('pricePerUnit', Number(e.target.value)); }}
                     onKeyDown={handleRateKeyDown}
-                    className="soleria-input text-center font-semibold"
+                    className={`soleria-input text-center font-semibold${isCopiedFromPurchase ? ' bg-slate-100 text-slate-500' : ''}`}
                     style={{ fontSize: '13px' }}
                   />
                 </div>
