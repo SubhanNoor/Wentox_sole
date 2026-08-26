@@ -246,8 +246,37 @@ try {
     $cmd = $conn.CreateCommand()
     $cmd.CommandText = "SELECT DB_ID(N'$escapedDbLiteral')"
     $alreadyRegistered = $cmd.ExecuteScalar()
+    $alreadyRegistered = ($alreadyRegistered -isnot [DBNull] -and $null -ne $alreadyRegistered)
 
-    if ($alreadyRegistered -isnot [DBNull] -and $null -ne $alreadyRegistered) {
+    # A FRESH install (PasswordFile provided — see its own doc comment above) finding a database
+    # already sitting on this machine means a previous Wentox install was uninstalled without ever
+    # dropping it (uninstalling never touches SQL Server) and this is a genuinely new install on
+    # top of it — most often someone locked out of a forgotten password, exactly like it happened
+    # once already. Ask, rather than either silently reusing old data with an old password
+    # (confusing) or silently erasing it (this app holds real business data — an update/repair
+    # NEVER reaches this prompt, only a fresh install, so nothing here can fire on a routine
+    # update). Defaults to Keep (Button1) if the user just presses Enter.
+    if (-not [string]::IsNullOrEmpty($PasswordFile) -and $alreadyRegistered) {
+      Add-Type -AssemblyName System.Windows.Forms | Out-Null
+      $choice = [System.Windows.Forms.MessageBox]::Show(
+        "An existing Wentox database was found on this PC, left over from a previous install (uninstalling Wentox does not remove it).$([Environment]::NewLine)$([Environment]::NewLine)Keep it and log in with your existing username/password, or erase it and start completely fresh (all sales, purchases, ledger history, and users will be permanently deleted)?$([Environment]::NewLine)$([Environment]::NewLine)Yes = Keep existing data     No = Erase and start fresh",
+        'Existing Wentox Database Found',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button1
+      )
+      if ($choice -eq [System.Windows.Forms.DialogResult]::No) {
+        Write-Log "user chose to erase the existing database '$DatabaseName' and start fresh"
+        $cmd = $conn.CreateCommand()
+        $cmd.CommandText = "ALTER DATABASE [$escapedDb] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$escapedDb];"
+        $cmd.ExecuteNonQuery() | Out-Null
+        $alreadyRegistered = $false ; # fall through to the create/attach branch below
+      } else {
+        Write-Log "user chose to keep the existing database '$DatabaseName'"
+      }
+    }
+
+    if ($alreadyRegistered) {
       Write-Log "database '$DatabaseName' already present"
     } else {
       $cmd = $conn.CreateCommand()
