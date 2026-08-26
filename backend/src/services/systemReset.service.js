@@ -83,8 +83,21 @@ async function resetDatabase(userId, password) {
 
   cleanupBackupFiles();
 
-  await migrate();
+  // seed() is deliberately NOT chained behind migrate()'s success. The database has already been
+  // dropped by this point, so a migrate() that throws here would skip seeding and leave the user
+  // locked out of the app they just reset — no admin, no way back in. Seeding is what restores
+  // admin/admin123, and it only needs tables schema.sql creates (which migrate applies first), so
+  // it runs regardless; a migration failure is re-thrown afterwards so the caller still hears
+  // about it, but never at the cost of a login.
+  let migrateError = null;
+  try {
+    await migrate();
+  } catch (err) {
+    migrateError = err;
+    console.error('Reset: migrate failed — seeding anyway so the app still has a login:', err);
+  }
   await seed();
+  if (migrateError) throw migrateError;
 
   // Recreates the backup mirror at the same configured folder and takes a first (now-empty) sync
   // — mirrors ensureInitialBackup()'s own startup behavior. "Remounted at the same path."

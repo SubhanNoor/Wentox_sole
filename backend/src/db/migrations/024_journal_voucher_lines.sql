@@ -55,9 +55,17 @@ FROM dbo.journal_vouchers jv;
 GO
 
 -- Guard rather than silently backfilling an unbalanced single-leg JV if the reserved account is
--- somehow missing (never happens on a seeded DB, but a silent no-op here would be far worse to
--- track down later than a loud failure now).
-IF NOT EXISTS (
+-- somehow missing — a silent no-op here would be far worse to track down later than a loud failure.
+--
+-- Only when there is actually something to backfill, though. On a BRAND-NEW database (a fresh
+-- install, or Settings > Reset Database, both of which migrate an empty database from scratch)
+-- dbo.journal_vouchers is empty, so the INSERT below is a no-op and the reserved account is not
+-- needed at all — but seed() has not run yet either, so an unconditional guard RAISERROR'd and
+-- took the whole migrate() down with it. main.js/systemReset.service.js then never reached their
+-- own seed() call on the following line, leaving the database with NO USERS AT ALL and the app
+-- rejecting every login. Reported directly by the user after a reinstall-and-erase.
+IF EXISTS (SELECT 1 FROM dbo.journal_vouchers)
+AND NOT EXISTS (
   SELECT 1 FROM dbo.chart_of_accounts ca
   JOIN dbo.business_accounts ba ON ba.ac_id = ca.ac_id
   WHERE ca.code = '400007' -- CODES.JOURNAL_VOUCHER, see constants/reservedAccounts.js

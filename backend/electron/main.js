@@ -61,11 +61,23 @@ app.whenReady().then(async () => {
   // pointed at isn't reachable yet (e.g. set up after install, before its first real launch),
   // this fails loudly to the console but still opens the window rather than block the app
   // entirely — login will just fail with a real connection error instead of a confusing hang.
+  //
+  // seed() gets its OWN try/catch rather than sharing migrate()'s. Chaining them meant any
+  // migration failure skipped seeding entirely, and the app then had no admin user to log in with
+  // — a locked-out install with no way back in short of hand-editing SQL (hit for real: a fresh
+  // install failed on 024_journal_voucher_lines and left zero users). seed() only touches tables
+  // schema.sql creates, and schema.sql always applies first, so it is worth attempting even when a
+  // later migration failed: a database missing one migration is recoverable, one with no users is
+  // not.
   try {
     await migrate();
+  } catch (err) {
+    console.error('Startup migrate failed — is SQL Server reachable?', err);
+  }
+  try {
     await seed();
   } catch (err) {
-    console.error('Startup migrate/seed failed — is SQL Server reachable?', err);
+    console.error('Startup seed failed — the app may have no user to log in with:', err);
   }
 
   registerIpcHandlers(); // every ipcMain.handle channel must exist before the renderer can call one
