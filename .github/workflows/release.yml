@@ -3,10 +3,16 @@ name: Release Windows build
 # Push a tag like v1.0.0 to trigger a build + GitHub Release, entirely on GitHub's own Windows
 # runner — no local Windows machine needed. electron-builder's publish step uses the built-in
 # GITHUB_TOKEN (scoped to this repo, provided automatically by Actions), not a personal PAT.
+# workflow_dispatch is a manual fallback: a tag push does not ALWAYS fire this (re-pushing a
+# deleted tag in particular can be deduped by GitHub and silently trigger nothing — hit for real
+# on v1.2.3, which left a tag with no build behind it). With this, the release can still be run by
+# hand from the Actions tab against any tag, instead of having to invent a new version number just
+# to coax a build out.
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
