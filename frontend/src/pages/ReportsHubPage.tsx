@@ -13,7 +13,7 @@ import OverallTrailContent from '@/pages/OverallTrailContent';
 type ReportTab =
   | 'sale-analysis' | 'sale-report' | 'vendor' | 'payment-trail'
   | 'account-ledger' | 'business-ledger' | 'cash-book' | 'product-ledger'
-  | 'overall-trail';
+  | 'overall-trail' | 'vendor-balances' | 'customer-balances';
 
 const TABS: { key: ReportTab; label: string }[] = [
   { key: 'sale-analysis', label: 'Sale Analysis' },
@@ -25,6 +25,10 @@ const TABS: { key: ReportTab; label: string }[] = [
   { key: 'cash-book', label: 'Cash Book' },
   { key: 'product-ledger', label: 'Product Ledger' },
   { key: 'overall-trail', label: 'Overall Trail' },
+  // Same Overall Trail content, just opened straight into its own Quick Filter pill (Account
+  // Reports menu, 2026-08-26) instead of the unfiltered "All Accounts" view.
+  { key: 'vendor-balances', label: 'Vendor Balances' },
+  { key: 'customer-balances', label: 'Customer Balances' },
 ];
 
 export default function ReportsHubPage() {
@@ -90,6 +94,8 @@ export default function ReportsHubPage() {
           {activeTab === 'cash-book' && <ReportCashBookContent />}
           {activeTab === 'product-ledger' && <ProductLedgerContent />}
           {activeTab === 'overall-trail' && <OverallTrailContent />}
+          {activeTab === 'vendor-balances' && <OverallTrailContent initialGroup="vendor" />}
+          {activeTab === 'customer-balances' && <OverallTrailContent initialGroup="customer" />}
         </div>
       </div>
     </AppLayout>

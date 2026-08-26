@@ -23,7 +23,7 @@ const FEATURES = [
   'groupAccounts', 'products', 'productColors', 'purchases', 'purchaseReturns', 'receipts',
   'receiptVouchers',
   'regions', 'reports', 'salaryRuns', 'saleBills', 'saleReturns', 'stages', 'stock', 'stores',
-  'subCustomers', 'transfers', 'settlements', 'journalVouchers', 'stockVouchers', 'deposits', 'updates', 'vendors', 'wageRuns',
+  'subCustomers', 'systemReset', 'transfers', 'settlements', 'journalVouchers', 'stockVouchers', 'deposits', 'updates', 'vendors', 'wageRuns',
   'zoom',
 ] as const;
 

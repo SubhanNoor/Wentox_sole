@@ -24,7 +24,15 @@
 > now derived by checking whether `ledger_entries`/`stock_movements` rows exist for that document
 > (`source_type`/`source_id`), instead of trusting a separately-stored flag. The CREATE TABLE
 > blocks for both tables below already reflect this — `sale_bills` carries `due_date` and no
-> `status`; `sale_returns` carries neither.
+> `status`; `sale_returns` carries neither. New `dbo.stock_vouchers`/`dbo.stock_voucher_lines` — a
+> manual "add stock" document (legacy Journal Entry-style bound-record screen): N lines, each a
+> finished-goods variant + cartons/pairs, under one Date/Store/Remarks header. Replaces the old
+> inline "+ Add Stock" flow on the Current Stock report (which recorded every manual addition AS
+> production); same architecture as Journal Voucher — one table, DRAFT by default, status flips to
+> CONFIRMED only on `post()`, which is the only thing that writes `stock_movements` (one row per
+> line, `movement_type='ADJUSTMENT'`, `source_type='STOCK_VOUCHER'`). Store is header-only/
+> informational — `stock_movements` has no `store_id` column and stays store-agnostic. The DDL is
+> not reproduced here — see `database/schema.sql` directly, same convention as `transfers` above.
 >
 > **Post-v4.3 amendments that DID need a numbered migration** (the database was already live by
 > then, so folding them into `database/schema.sql` alone would not have reached an installed copy —

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lora:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Lora:wght@500;600;700&display=swap');
 @import url("tailwindcss/base");
 @import url("tailwindcss/components");
 @import url("tailwindcss/utilities");
@@ -52,7 +52,7 @@
 }
 
 body {
-  font-family: 'Inter', sans-serif;
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
   color: var(--primary-text);
   background: var(--app-bg);
   -webkit-font-smoothing: antialiased;
@@ -64,7 +64,38 @@ body {
 }
 
 .font-inter {
-  font-family: 'Inter', sans-serif;
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+}
+
+/* Global touch-ups (2026-08-26, explicit request):
+   1. Every field's typed text reads as true black, and uses Arial — bare element selectors so
+      any input/select/textarea gets this even on a page that didn't reach for `.soleria-input`,
+      while staying LOW specificity so a component's own color class (e.g. a disabled field's
+      `text-gray-500`) still wins over it, same as `.soleria-input` already relies on.
+   2. Every field's own label reads as bold — `!important` because the vast majority of labels
+      site-wide carry Tailwind's `font-medium`/`font-semibold` utility, which is higher-specificity
+      than a bare `label` selector and would otherwise always win.
+   3. Native <select> dropdown lists and the browser's own text-selection highlight both go dark
+      navy/white instead of the OS-default light blue, to match the custom SearchModal/
+      SearchableSelect dropdowns (already brand-navy) rather than looking like a different app. */
+input, select, textarea {
+  color: #000000;
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+}
+
+label {
+  font-weight: 700 !important;
+}
+
+select option:checked,
+select option:hover {
+  background: var(--brand-navy) !important;
+  color: #ffffff !important;
+}
+
+::selection {
+  background: var(--brand-navy);
+  color: #ffffff;
 }
 
 /* Input focus state */
@@ -85,7 +116,7 @@ body {
   /* Typed text reads as true black, not the dark-navy heading tint — flagged directly by the
      user as too washed-out to read comfortably across a data-entry-heavy screen. */
   color: #000000;
-  font-family: 'Inter', sans-serif;
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
@@ -133,7 +164,7 @@ body {
   transition-duration: 150ms;
   background: var(--brand-gold);
   color: var(--brand-navy);
-  font-family: 'Inter', sans-serif;
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
 }
 
 .btn-gold:hover {
@@ -158,7 +189,7 @@ body {
   transition-duration: 150ms;
   background: var(--brand-navy);
   color: var(--app-bg);
-  font-family: 'Inter', sans-serif;
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
 }
 
 .btn-navy:hover {
@@ -180,7 +211,7 @@ body {
   border-color: #C9C4B8;
   color: var(--brand-navy);
   background: transparent;
-  font-family: 'Inter', sans-serif;
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
 }
 
 .btn-dashed:hover {
@@ -203,7 +234,7 @@ body {
   border-color: var(--brand-navy);
   color: var(--brand-navy);
   background: transparent;
-  font-family: 'Inter', sans-serif;
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
 }
 
 .btn-outline:hover {
@@ -254,7 +285,7 @@ body {
   border-color: var(--border-color);
   color: var(--error);
   background: transparent;
-  font-family: 'Inter', sans-serif;
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
 }
 
 .btn-danger:hover {
@@ -303,7 +334,7 @@ body {
   cursor: pointer;
   background: var(--brand-navy);
   color: var(--app-bg);
-  font-family: 'Inter', sans-serif;
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
 }
 
 .tab-pill-inactive {
@@ -315,7 +346,7 @@ body {
   cursor: pointer;
   background: var(--card-surface);
   color: var(--brand-navy);
-  font-family: 'Inter', sans-serif;
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
 }
 
 .tab-pill-inactive:hover {
@@ -354,7 +385,7 @@ body {
 /* Discount toggle pill */
 .discount-toggle-active {
   border: none;
-  font: 600 11px 'Inter', sans-serif;
+  font: 600 11px Arial, 'Helvetica Neue', Helvetica, sans-serif;
   padding: 0;
   width: 32px;
   height: 30px;
@@ -366,7 +397,7 @@ body {
 
 .discount-toggle-inactive {
   border: none;
-  font: 600 11px 'Inter', sans-serif;
+  font: 600 11px Arial, 'Helvetica Neue', Helvetica, sans-serif;
   padding: 0;
   width: 32px;
   height: 30px;

@@ -35,6 +35,7 @@ interface UiLine {
   variantId: number | null;
   label: string; // "Article Name — Color"
   articleCode: string;
+  categoryName: string;
   packing: number;
   cartons: number;
   pairs: number;
@@ -46,13 +47,14 @@ interface EntryLine {
   variantId: number | null;
   articleSearchText: string; // what's typed/shown in the Article Code field
   label: string;
+  categoryName: string;
   packing: number;
   cartons: number;
   pairs: number;
 }
 
 function emptyEntry(): EntryLine {
-  return { articleId: null, variantId: null, articleSearchText: '', label: '', packing: 0, cartons: 0, pairs: 0 };
+  return { articleId: null, variantId: null, articleSearchText: '', label: '', categoryName: '', packing: 0, cartons: 0, pairs: 0 };
 }
 
 export default function StockVoucherPage() {
@@ -216,17 +218,30 @@ export default function StockVoucherPage() {
   const [isAddingColor, setIsAddingColor] = useState(false);
   const [newColorName, setNewColorName] = useState('');
   const [creatingColor, setCreatingColor] = useState(false);
+  const newColorInputRef = useRef<HTMLInputElement>(null);
   // Every reset point (new line, row loaded for edit, commit, Cancel) changes entry.articleId —
   // fold back to the plain dropdown from any of them at once instead of by hand at each one.
   useEffect(() => {
     setIsAddingColor(false);
     setNewColorName('');
   }, [entry.articleId]);
+  // Explicit focus, not the input's own `autoFocus` — picking "+ Add New Color..." swaps this
+  // field in at the same moment the SearchModal it was picked from is unmounting, and that
+  // teardown was winning the race against the new input's autoFocus (reported by the user,
+  // 2026-08-26: it never actually landed focus). requestAnimationFrame runs after that unmount
+  // settles, same fix pattern used for every other modal-driven focus-hop on this page.
+  useEffect(() => {
+    if (isAddingColor) requestAnimationFrame(() => newColorInputRef.current?.focus());
+  }, [isAddingColor]);
 
   // Color field — same typable-trigger + centered SearchModal popup as Article/Store, per the
   // user (2026-08-26). Options include the "+ Add New Color..." sentinel above, which swaps the
   // whole field for a free-text input instead (handleEntryVariantChange detects it).
   const colorTriggerRef = useRef<HTMLInputElement>(null);
+  // Cartons sits directly under Color now (2026-08-26 layout request) and is also where focus
+  // lands once a freshly-created color is confirmed, so the "+ Add New Color" flow reads as one
+  // continuous hop: pick "+ Add New Color..." -> type name -> Enter -> straight into Cartons.
+  const cartonsInputRef = useRef<HTMLInputElement>(null);
   const [isColorModalOpen, setIsColorModalOpen] = useState(false);
   const [colorSearchText, setColorSearchText] = useState('');
   const [colorModalSeed, setColorModalSeed] = useState('');
@@ -281,6 +296,7 @@ export default function StockVoucherPage() {
       variantId: null,
       articleSearchText: product ? `${product.code} — ${product.name}` : '',
       label: product?.name || '',
+      categoryName: product?.category_name || '',
       packing: product?.packing || 0,
     }));
     setIsEntryArticleModalOpen(false);
@@ -345,6 +361,7 @@ export default function StockVoucherPage() {
         pairs: prev.cartons * packing,
       };
     });
+    requestAnimationFrame(() => cartonsInputRef.current?.focus());
   };
 
   const updateEntryCartons = (cartons: number) => {
@@ -366,6 +383,7 @@ export default function StockVoucherPage() {
       variantId: entry.variantId,
       label: entry.label,
       articleCode: product?.code || '',
+      categoryName: entry.categoryName,
       packing: entry.packing,
       cartons: entry.cartons,
       pairs: entry.pairs,
@@ -392,7 +410,7 @@ export default function StockVoucherPage() {
     const row = lines[idx];
     setEntry({
       articleId: row.articleId, variantId: row.variantId, articleSearchText: row.articleCode ? `${row.articleCode} — ${row.label.split(' — ')[0]}` : row.label,
-      label: row.label, packing: row.packing, cartons: row.cartons, pairs: row.pairs,
+      label: row.label, categoryName: row.categoryName, packing: row.packing, cartons: row.cartons, pairs: row.pairs,
     });
     setEditingIndex(idx);
     if (row.articleId != null) fetchVariants(row.articleId);
@@ -523,6 +541,9 @@ export default function StockVoucherPage() {
       variantId: l.variant_id,
       label: `${l.article_name || l.article_code || 'Article'} — ${l.color || ''}`,
       articleCode: l.article_code || '',
+      // Not returned by the lines join — looked up from the already-loaded products list by
+      // article_id, same as the entry strip does when an article is freshly picked.
+      categoryName: products.find(p => p.article_id === l.article_id)?.category_name || '',
       packing: l.pairs && l.cartons ? l.pairs / l.cartons : 0,
       cartons: l.cartons,
       pairs: l.pairs,
@@ -1062,8 +1083,14 @@ export default function StockVoucherPage() {
               below and resets the strip back to Article Code. */}
           {!isViewMode && (
           <div className="shrink-0 mb-3 p-3 rounded-lg border" style={{ background: 'rgba(176,141,87,0.06)', borderColor: 'var(--border-color)' }}>
-            <div className="grid gap-3 mb-2" style={{ gridTemplateColumns: '1fr 1.5fr 140px' }}>
-              <div className="relative">
+            <div
+              className="grid gap-3 mb-2"
+              style={{
+                gridTemplateColumns: '1fr 1.5fr 1fr 210px',
+                gridTemplateAreas: '"code name category color" ". . . cp"',
+              }}
+            >
+              <div className="relative" style={{ gridArea: 'code' }}>
                 <label className="block text-xs font-medium text-slate-600 mb-1">Article Code <span className="text-red-500 font-bold">*</span></label>
                 <input
                   ref={entryArticleTriggerRef}
@@ -1094,17 +1121,21 @@ export default function StockVoucherPage() {
                   searchPlaceholder="Search articles by code or name..."
                 />
               </div>
-              <div>
+              <div style={{ gridArea: 'name' }}>
                 <label className="block text-xs font-medium text-slate-600 mb-1">Product Name</label>
                 <input type="text" value={entry.label} disabled placeholder="—" className="soleria-input bg-gray-100 text-gray-500" style={{ fontSize: '13px' }} />
               </div>
-              <div>
+              <div style={{ gridArea: 'category' }}>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Category</label>
+                <input type="text" value={entry.categoryName} disabled placeholder="—" className="soleria-input bg-gray-100 text-gray-500" style={{ fontSize: '13px' }} />
+              </div>
+              <div style={{ gridArea: 'color' }}>
                 <label className="block text-xs font-medium text-slate-600 mb-1">Color <span className="text-red-500 font-bold">*</span></label>
                 {isAddingColor ? (
                   <div className="flex items-center gap-1.5">
                     <input
+                      ref={newColorInputRef}
                       type="text"
-                      autoFocus
                       value={newColorName}
                       onChange={e => setNewColorName(e.target.value)}
                       onKeyDown={e => {
@@ -1176,23 +1207,24 @@ export default function StockVoucherPage() {
                   </div>
                 )}
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3" style={{ maxWidth: '340px' }}>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Cartons <span className="text-red-500 font-bold">*</span></label>
-                <input
-                  type="number"
-                  value={entry.cartons || ''}
-                  min={0}
-                  onChange={e => updateEntryCartons(parseInt(e.target.value) || 0)}
-                  onKeyDown={handleEntryLastFieldKeyDown}
-                  className="soleria-input font-mono text-center"
-                  style={{ fontSize: '13px' }}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Pairs</label>
-                <input type="text" value={entry.pairs || '-'} disabled className="soleria-input bg-gray-100 text-gray-500 font-mono text-center" style={{ fontSize: '13px' }} />
+              <div className="grid grid-cols-2 gap-2" style={{ gridArea: 'cp' }}>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Cartons <span className="text-red-500 font-bold">*</span></label>
+                  <input
+                    ref={cartonsInputRef}
+                    type="number"
+                    value={entry.cartons || ''}
+                    min={0}
+                    onChange={e => updateEntryCartons(parseInt(e.target.value) || 0)}
+                    onKeyDown={handleEntryLastFieldKeyDown}
+                    className="soleria-input font-mono text-center"
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Pairs</label>
+                  <input type="text" value={entry.pairs || '-'} disabled className="soleria-input bg-gray-100 text-gray-500 font-mono text-center" style={{ fontSize: '13px' }} />
+                </div>
               </div>
             </div>
             {editingIndex != null && (
@@ -1220,6 +1252,7 @@ export default function StockVoucherPage() {
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3 pl-4" style={{ minWidth: '120px' }}>Article Code</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3">Article Description</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3" style={{ minWidth: '120px' }}>Category</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '110px' }}>Cartons</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: '110px' }}>Pairs</th>
                 </tr>
@@ -1234,13 +1267,14 @@ export default function StockVoucherPage() {
                   >
                     <td className="p-2 pl-4 font-mono text-xs text-slate-600">{line.articleCode || '—'}</td>
                     <td className="p-2 text-xs text-slate-800 font-semibold">{line.label || 'N/A'}</td>
+                    <td className="p-2 text-xs text-slate-600">{line.categoryName || '—'}</td>
                     <td className="p-2 text-center font-mono text-sm text-slate-700">{line.cartons}</td>
                     <td className="p-2 text-right font-mono text-sm text-slate-700">{line.pairs.toLocaleString()}</td>
                   </tr>
                 ))}
                 {lines.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="p-3 text-center text-xs text-slate-400">
+                    <td colSpan={5} className="p-3 text-center text-xs text-slate-400">
                       No lines added yet.
                     </td>
                   </tr>

@@ -11,15 +11,25 @@ import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreview
 
 type AccountGroupType = 'all' | 'customer' | 'vendor' | 'employee' | 'bank' | 'chart_account' | 'business_account';
 
-export default function OverallTrailContent() {
+interface OverallTrailContentProps {
+  /** Pre-selects the Quick Filter pill this content opens with — used by the Reports Hub's own
+   *  "Vendor Balances"/"Customer Balances" tabs (Account Reports menu, 2026-08-26) so each lands
+   *  straight on its own scope instead of the unfiltered "All Accounts" view. Still just the same
+   *  Quick Filter state underneath, so the pill row stays fully interactive afterward — this only
+   *  changes the starting point, not a lock. Defaults to 'all' — Overall Trail's original behavior.
+   */
+  initialGroup?: AccountGroupType;
+}
+
+export default function OverallTrailContent({ initialGroup = 'all' }: OverallTrailContentProps) {
   const [asOfDate, setAsOfDate] = useState(getTodayDate());
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedGroup, setSelectedGroup] = useState<AccountGroupType>('all');
+  const [selectedGroup, setSelectedGroup] = useState<AccountGroupType>(initialGroup);
   const [reportVisible, setReportVisible] = useState(true);
 
   const handleClearFilters = () => {
     setSearchQuery('');
-    setSelectedGroup('all');
+    setSelectedGroup(initialGroup);
     setAsOfDate(getTodayDate());
     setReportVisible(false);
   };

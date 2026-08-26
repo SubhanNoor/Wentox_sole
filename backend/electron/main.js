@@ -19,38 +19,11 @@ app.setName('Wentox');
 // app.whenReady()/any window is created.
 app.commandLine.appendSwitch('lang', 'en-GB');
 
-// Electron's DEFAULT menu carries zoomIn/zoomOut/resetZoom roles on Ctrl +/-/0. Those are removed
-// here, and nothing replaces them, because the app now owns zoom itself (ZoomControl.tsx -> the
-// zoom:set channel): with both in play a single keypress fires both paths, the window jumps two
-// steps, and the percentage shown on screen stops matching the window it describes. One code path
-// is the only way that stays honest.
-//
-// Everything else useful about the default menu is kept — Reload and Toggle DevTools especially,
-// which is how a packaged install gets diagnosed (localStorage inspection found the Quick Menu
-// bug), plus the Edit roles, without which Ctrl+C/V stop working in inputs on some platforms.
-function buildMenu() {
-  return Menu.buildFromTemplate([
-    {
-      label: 'Edit',
-      submenu: [
-        { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
-        { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
-      ],
-    },
-    {
-      label: 'View',
-      submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
-        { type: 'separator' },
-        { role: 'togglefullscreen' },
-      ],
-    },
-    { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'close' }] },
-  ]);
-}
-
+// Electron's DEFAULT menu carries zoomIn/zoomOut/resetZoom roles on Ctrl +/-/0, which conflicted
+// with the app's own zoom (ZoomControl.tsx -> the zoom:set channel) — a single keypress fired both
+// paths, so the window jumped two steps and the percentage shown on screen stopped matching the
+// window it described. This app.whenReady() below now clears the application menu entirely
+// (Menu.setApplicationMenu(null), 2026-08-26 — see that comment), which removes that conflict too.
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -97,7 +70,13 @@ app.whenReady().then(async () => {
 
   registerIpcHandlers(); // every ipcMain.handle channel must exist before the renderer can call one
 
-  Menu.setApplicationMenu(buildMenu()); // see buildMenu(): drops the built-in zoom accelerators
+  // No application menu at all (2026-08-26, explicit request) — the Edit/View/Window bar `buildMenu()`
+  // used to build is gone from the window entirely. Ctrl+C/V/X/A and Ctrl+Z/Y still work inside text
+  // inputs regardless (Chromium handles those natively at the input-field level, not through the app
+  // menu's Edit roles); the only things actually lost are Reload/Toggle DevTools/Fullscreen from a
+  // menu bar — DevTools is still reachable via F12/Ctrl+Shift+I, which Electron registers independent
+  // of any application menu.
+  Menu.setApplicationMenu(null);
 
   // Alerts job (Milestone 9.1 follow-up, later widened from "startup only" to a 15-minute repeat
   // per explicit request — a newly-due cheque/bill was going unnoticed for however long a session

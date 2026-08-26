@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
-import { Save, Lock, User, RefreshCw, Download, CheckCircle2, AlertTriangle, ShieldCheck, Cpu, Sparkles, Server, DatabaseBackup, HardDrive, FolderOpen } from 'lucide-react';
+import { Save, Lock, User, RefreshCw, Download, CheckCircle2, AlertTriangle, ShieldCheck, Cpu, Sparkles, Server, DatabaseBackup, HardDrive, FolderOpen, Trash2 } from 'lucide-react';
 
-type SettingsTab = 'credentials' | 'backup' | 'updates';
+type SettingsTab = 'credentials' | 'backup' | 'updates' | 'danger';
 type UpdateStatus = 'idle' | 'checking' | 'no-internet' | 'error' | 'up-to-date' | 'update-available' | 'downloading' | 'installed';
 
 export default function SettingsPage() {
@@ -12,12 +12,12 @@ export default function SettingsPage() {
   const isAdmin = state.currentUserRole === 'Admin';
 
   const [activeTab, setActiveTab] = useState<SettingsTab>(() => {
-    if (state.currentTab === 'backup' || state.currentTab === 'updates') return state.currentTab;
+    if (state.currentTab === 'backup' || state.currentTab === 'updates' || state.currentTab === 'danger') return state.currentTab;
     return isAdmin ? 'credentials' : 'updates';
   });
 
   useEffect(() => {
-    if (state.currentTab === 'credentials' || state.currentTab === 'backup' || state.currentTab === 'updates') {
+    if (state.currentTab === 'credentials' || state.currentTab === 'backup' || state.currentTab === 'updates' || state.currentTab === 'danger') {
       setActiveTab(state.currentTab);
     }
   }, [state.currentTab]);
@@ -235,8 +235,62 @@ export default function SettingsPage() {
   const formatSize = (bytes: number | null) =>
     bytes == null ? '' : `${(bytes / 1024 / 1024).toFixed(0)} MB`;
 
+  // Danger Zone — "Reset Database". A two-step password gate (re-enter, then re-enter again to
+  // confirm) in front of one irreversible action: both prompts are verified server-side via the
+  // same auth:verifyPassword check other sensitive actions use, and the final call re-verifies a
+  // third time inside systemReset.service.js itself — nobody reaches the wipe on a single typo.
+  const [resetStep, setResetStep] = useState<'closed' | 'password1' | 'password2' | 'running' | 'done'>('closed');
+  const [resetPassword1, setResetPassword1] = useState('');
+  const [resetPassword2, setResetPassword2] = useState('');
+  const [resetError, setResetError] = useState('');
+  const [resetBusy, setResetBusy] = useState(false);
+
+  const openResetFlow = () => {
+    setResetPassword1('');
+    setResetPassword2('');
+    setResetError('');
+    setResetStep('password1');
+  };
+
+  const closeResetFlow = () => {
+    setResetStep('closed');
+    setResetPassword1('');
+    setResetPassword2('');
+    setResetError('');
+    setResetBusy(false);
+  };
+
+  const handleResetStep1Next = async () => {
+    if (!resetPassword1) { setResetError('Enter your password.'); return; }
+    setResetBusy(true);
+    setResetError('');
+    const res = await api.verifyPassword(resetPassword1);
+    setResetBusy(false);
+    if (!res.ok) { setResetError(res.error?.message || 'Incorrect password.'); return; }
+    setResetStep('password2');
+  };
+
+  const handleResetConfirm = async () => {
+    if (!resetPassword2) { setResetError('Re-enter your password to confirm.'); return; }
+    setResetBusy(true);
+    setResetError('');
+    const res = await api.resetDatabase(resetPassword2);
+    if (!res.ok) {
+      setResetBusy(false);
+      setResetError(res.error?.message || 'Reset failed.');
+      return;
+    }
+    setResetBusy(false);
+    setResetStep('done');
+    // The server already dropped the session's own user row and logged it out — send the app
+    // straight back to the login screen rather than leaving stale state on screen.
+    setTimeout(() => {
+      dispatch({ type: 'LOGOUT' });
+    }, 2200);
+  };
+
   return (
-    <AppLayout pageTitle="Settings" subTabTitle={activeTab === 'backup' ? 'Backup' : activeTab === 'updates' ? 'Updates' : 'Credentials'} subTabId={activeTab}>
+    <AppLayout pageTitle="Settings" subTabTitle={activeTab === 'backup' ? 'Backup' : activeTab === 'updates' ? 'Updates' : activeTab === 'danger' ? 'Danger Zone' : 'Credentials'} subTabId={activeTab}>
       <div className="mx-auto" style={{ maxWidth: 900 }}>
 
         {/* Subpage Pill-Tabs — non-admins only ever get Check for Updates, no credentials tab at all */}
@@ -262,6 +316,13 @@ export default function SettingsPage() {
               className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${activeTab === 'updates' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <RefreshCw size={14} /> Check for Updates
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('danger')}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${activeTab === 'danger' ? 'bg-red-700 text-white shadow-sm' : 'text-red-600 hover:text-red-800'}`}
+            >
+              <Trash2 size={14} /> Danger Zone
             </button>
           </div>
         )}
@@ -469,6 +530,125 @@ export default function SettingsPage() {
                 against losing the computer, not against a mistake made earlier and noticed later.
               </p>
             </div>
+          </div>
+        )}
+
+        {/* SUBPAGE: Danger Zone — admin-only. One irreversible action behind a two-step password
+            re-entry, matching the double-confirmation the user asked for. */}
+        {isAdmin && activeTab === 'danger' && (
+          <div className="animate-in fade-in duration-200">
+            <div className="card-white p-6 md:p-8 bg-white border-2 border-red-200 max-w-xl mx-auto">
+              <div className="border-b border-red-100 pb-4 mb-6">
+                <h3 className="font-lora font-semibold text-lg text-red-700 flex items-center gap-2">
+                  <AlertTriangle size={20} className="text-red-600" /> Reset Database
+                </h3>
+                <p className="text-xs text-slate-500 font-medium">
+                  Admin only, and irreversible.
+                </p>
+              </div>
+
+              <p className="text-sm text-slate-700 leading-relaxed mb-4">
+                Permanently erases every record in the live database and the backup mirror —
+                customers, articles, bills, vouchers, ledger entries, everything — and restarts
+                every ID from 1, exactly like a fresh install. The backup mirror and any external
+                drive backup are flushed too and remounted empty at the same location. Only the
+                default admin login (<span className="font-mono">admin</span> / <span className="font-mono">admin123</span>)
+                and the base setup data survive.
+              </p>
+              <p className="text-sm text-red-700 font-semibold leading-relaxed mb-6">
+                There is no undo. Take an external drive backup first if there is any chance you
+                will want this data back.
+              </p>
+
+              <button
+                type="button"
+                onClick={openResetFlow}
+                className="flex items-center justify-center gap-2 px-6 py-2.5 text-xs font-bold rounded-lg bg-red-700 text-white hover:bg-red-800 cursor-pointer"
+              >
+                <Trash2 size={15} /> Reset Database…
+              </button>
+            </div>
+
+            {/* Step 1 — first password */}
+            {resetStep === 'password1' && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+                <div className="card-white bg-white p-6 max-w-sm w-full rounded-xl border-2 border-red-200">
+                  <h4 className="font-lora font-semibold text-base text-red-700 flex items-center gap-2 mb-1">
+                    <AlertTriangle size={18} /> Confirm Your Identity
+                  </h4>
+                  <p className="text-xs text-slate-500 mb-4">Type your password to continue.</p>
+                  <input
+                    type="password"
+                    autoFocus
+                    value={resetPassword1}
+                    onChange={e => setResetPassword1(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleResetStep1Next(); } }}
+                    placeholder="Password"
+                    className="soleria-input w-full mb-2"
+                  />
+                  {resetError && <p className="text-xs text-red-600 font-semibold mb-2">{resetError}</p>}
+                  <div className="flex justify-end gap-2 mt-4">
+                    <button type="button" onClick={closeResetFlow} className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900">
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetStep1Next}
+                      disabled={resetBusy}
+                      className="px-4 py-2 text-xs font-bold rounded-lg bg-red-700 text-white hover:bg-red-800 disabled:opacity-60"
+                    >
+                      {resetBusy ? 'Checking…' : 'Next'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Step 2 — second password, final confirmation */}
+            {resetStep === 'password2' && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+                <div className="card-white bg-white p-6 max-w-sm w-full rounded-xl border-2 border-red-300">
+                  <h4 className="font-lora font-semibold text-base text-red-700 flex items-center gap-2 mb-1">
+                    <AlertTriangle size={18} /> This Cannot Be Undone
+                  </h4>
+                  <p className="text-xs text-slate-500 mb-4">Type your password again to confirm the reset.</p>
+                  <input
+                    type="password"
+                    autoFocus
+                    value={resetPassword2}
+                    onChange={e => setResetPassword2(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleResetConfirm(); } }}
+                    placeholder="Password (again)"
+                    className="soleria-input w-full mb-2"
+                  />
+                  {resetError && <p className="text-xs text-red-600 font-semibold mb-2">{resetError}</p>}
+                  <div className="flex justify-end gap-2 mt-4">
+                    <button type="button" onClick={closeResetFlow} disabled={resetBusy} className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 disabled:opacity-60">
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetConfirm}
+                      disabled={resetBusy}
+                      className="px-4 py-2 text-xs font-bold rounded-lg bg-red-700 text-white hover:bg-red-800 disabled:opacity-60"
+                    >
+                      {resetBusy ? 'Resetting…' : 'Yes, Reset Everything'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Done — brief confirmation before the forced logout fires */}
+            {resetStep === 'done' && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+                <div className="card-white bg-white p-6 max-w-sm w-full rounded-xl border-2 border-green-200 text-center">
+                  <CheckCircle2 size={28} className="text-green-600 mx-auto mb-2" />
+                  <h4 className="font-lora font-semibold text-base text-slate-800 mb-1">Database Reset Complete</h4>
+                  <p className="text-xs text-slate-500">Returning to the login screen…</p>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

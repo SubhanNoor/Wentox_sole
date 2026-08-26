@@ -8,6 +8,23 @@ function getPool() {
   return poolPromise;
 }
 
+// Closes the app's own pooled connections and forgets the singleton, so the NEXT getPool() call
+// reconnects fresh. Needed before DDL that requires exclusive access to the whole database (e.g.
+// systemReset.service.js's DROP DATABASE) — a pool holding open connections against the database
+// being dropped would otherwise block ALTER DATABASE ... SET SINGLE_USER indefinitely. Safe to
+// call even if no pool was ever opened.
+async function closePool() {
+  if (!poolPromise) return;
+  const promise = poolPromise;
+  poolPromise = null;
+  try {
+    const pool = await promise;
+    await pool.close();
+  } catch (err) {
+    console.error('closePool: error closing pool (ignored):', err.message);
+  }
+}
+
 // Set whenever a write transaction commits against the main DB; backup.service reads/clears it to
 // decide whether the periodic sync has anything new to copy over. Plain writes via `query()`
 // (rare — reads mostly use it) aren't tracked, since every real write in this codebase goes
@@ -75,4 +92,4 @@ function applyParams(request, params) {
   }
 }
 
-module.exports = { sql, getPool, query, withTransaction, requestWithParams, consumeDirty, isDirty };
+module.exports = { sql, getPool, closePool, query, withTransaction, requestWithParams, consumeDirty, isDirty };

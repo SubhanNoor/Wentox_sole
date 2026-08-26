@@ -95,11 +95,21 @@ export const MENU_GROUPS: MenuGroup[] = [
     title: '3.ACCOUNT REPORTS',
     items: [
       // Left out for want of a page: 3.3 TRAIL BALANCES, 3.10 CHART OF ACCOUNTS LIST,
-      // 3.15 CUSTOMER AGING, 3.17 CUSTOMER BALANCES, 3.20 POST DATED CHEQUE POCKET.
-      { no: '3.1', label: 'MAIN ACCOUNTS LEDGER REPORT', page: 'reports', tab: 'account-ledger' },
+      // 3.15 CUSTOMER AGING, 3.20 POST DATED CHEQUE POCKET.
+      // 3.1/3.18 relabeled (2026-08-27) to match what the Reports Hub's own tab pill already
+      // called each one — "MAIN ACCOUNTS LEDGER REPORT"/"VENDORS BALANCES" only ever matched
+      // this menu, not the page that opened. 3.17 CUSTOMER BALANCES was the one legacy number
+      // in the "left out" list above with an actual number reserved for it (unlike 3.25 Vendor
+      // Balances, appended fresh, no legacy number ever covered a vendor-only counterpart) — both
+      // point at Overall Trail pre-filtered to Customers/Vendors respectively, and are placed
+      // next to each other (out of strict numeric order) per explicit request so the two
+      // "Balances" reports sit together rather than split across the list.
+      { no: '3.1', label: 'CUSTOMER REPORT', page: 'reports', tab: 'account-ledger' },
       { no: '3.9', label: 'BUSINESS ACCOUNT LEDGER (KHAATA)', page: 'reports', tab: 'business-ledger' },
       { no: '3.16', label: 'CASH BOOK SUMMARY', page: 'reports', tab: 'cash-book' },
-      { no: '3.18', label: 'VENDORS BALANCES', page: 'reports', tab: 'vendor' },
+      { no: '3.17', label: 'CUSTOMER BALANCES', page: 'reports', tab: 'customer-balances' },
+      { no: '3.25', label: 'VENDOR BALANCES', page: 'reports', tab: 'vendor-balances' },
+      { no: '3.18', label: 'VENDOR REPORT', page: 'reports', tab: 'vendor' },
       { no: '3.19', label: 'TRACK CHEQUE', page: 'cheque-return' },
       { no: '3.21', label: 'RECEIPTS AND PAYMENT TRAIL', page: 'reports', tab: 'payment-trail' },
       { no: '3.22', label: 'PAYMENT TRAIL ALL ACCOUNTS', page: 'reports', tab: 'overall-trail' },

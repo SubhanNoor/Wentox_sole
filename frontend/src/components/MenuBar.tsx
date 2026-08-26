@@ -161,17 +161,20 @@ export default function MenuBar({ currentPage, subTabId, isAdmin, onNavigate, on
                       onDragEnd={onDragEnd}
                       onClick={() => { setOpenIndex(null); onNavigate(item.page, item.tab); }}
                       title="Click to open · drag onto the Quick Menu to pin"
-                      className="flex w-full items-baseline gap-2.5 px-3.5 py-1.5 text-left text-[12.5px] transition-colors cursor-grab active:cursor-grabbing hover:bg-[#f0e6cf]"
+                      // Text color lives in these classes (not the inline `style` below) on purpose —
+                      // an inline style's color always beats a stylesheet `:hover` rule regardless of
+                      // specificity, so `hover:text-*` here silently never applied when it was set via
+                      // `style` instead (2026-08-26: the fix that "did nothing" twice in a row).
+                      className="group flex w-full items-baseline gap-2.5 px-3.5 py-1.5 text-left text-[12.5px] transition-colors cursor-grab active:cursor-grabbing text-[var(--dark-heading)] hover:bg-[var(--brand-navy-hover)] hover:text-[var(--brand-gold)]"
                       style={{
-                        color: 'var(--dark-heading)',
                         fontWeight:
-                          item.page === currentPage && (!item.tab || item.tab === subTabId) ? 700 : 500,
+                          item.page === currentPage && (!item.tab || item.tab === subTabId) ? 700 : 600,
                       }}
                     >
                       {/* Fixed-width number column so the labels line up as they did in the original. */}
                       <span
-                        className="font-mono shrink-0 text-right"
-                        style={{ width: 34, fontSize: '11px', color: 'rgba(17,28,42,0.55)' }}
+                        className="font-mono shrink-0 text-right text-[rgba(17,28,42,0.55)] group-hover:text-[rgba(176,141,87,0.75)]"
+                        style={{ width: 34, fontSize: '11px' }}
                       >
                         {item.no}
                       </span>

@@ -1829,6 +1829,9 @@ declare global {
         setUserActive: (payload: { id: number; is_active: boolean }) => Promise<ApiResult<{ ok: true }>>;
         resetPassword: (payload: { id: number; newPassword: string; password: string }) => Promise<ApiResult<{ ok: true }>>;
       };
+      systemReset: {
+        run: (payload: { password: string }) => Promise<ApiResult<{ ok: true }>>;
+      };
       saleBills: {
         create: (payload: SaleBillCreateInput) => Promise<ApiResult<SaleBillRow>>;
         list: (payload?: SaleBillListFilters) => Promise<ApiResult<SaleBillRow[]>>;
@@ -2357,6 +2360,15 @@ export async function updateCredentials(payload: { currentPassword: string; user
 export async function verifyPassword(password: string): Promise<ApiResult<{ ok: true }>> {
   if (!window.api) return NO_BRIDGE;
   return window.api.auth.verifyPassword({ password });
+}
+
+// Danger-zone "Reset Database" — drops and recreates both the main database and the backup
+// mirror, wiping every table and restarting every IDENTITY column at 1, then reseeds the admin
+// login + default setup data like a fresh install. Admin-only; the backend re-verifies `password`
+// against the calling admin's own login on top of the session role check.
+export async function resetDatabase(password: string): Promise<ApiResult<{ ok: true }>> {
+  if (!window.api) return NO_BRIDGE;
+  return window.api.systemReset.run({ password });
 }
 
 // ── Module 2: Sale Bill & Sale Return ──

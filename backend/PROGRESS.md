@@ -23,6 +23,48 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Stock Voucher — new document type, replacing the old inline "+ Add Stock" flow (new capability, not in the original milestone scope)
+
+### 2026-08-26 — Stock Voucher: full backend + frontend, same architecture as Journal Voucher
+- **What:** a new manual "add stock" document (legacy Journal Entry-style bound-record screen, per
+  the user): N lines, each a finished-goods article/color + cartons/pairs, under one Date/Store/
+  Remarks header. Replaces the old inline "+ Add Stock" flow on the Current Stock report
+  (`ReportStockPage.tsx`), which called `stock:log-production` and recorded every manual addition
+  AS production — this is its own document type instead, same architecture as Journal Voucher: one
+  table, DRAFT by default, status flips to CONFIRMED only on `post()`.
+- **Schema:** new `dbo.stock_vouchers`/`dbo.stock_voucher_lines`, folded directly into
+  `database/schema.sql` (no separate numbered migration — the database isn't live with this yet)
+  and noted in `System_architecture/database_schema_v4.3.md`'s "folded directly" amendments block.
+  `post()` writes one `dbo.stock_movements` row per line (`movement_type='ADJUSTMENT'`, already
+  unconstrained-sign — no `CK_stock_movements_type` change needed; `source_type='STOCK_VOUCHER'`,
+  `source_id=stock_voucher_id`); `unpost()` deletes those same rows by source_type+source_id, same
+  lookup convention `SALE_BILL`/`SALE_RETURN` movements already use. Store is header-only/
+  informational, confirmed with the user — `stock_movements` has no `store_id` column and stays
+  store-agnostic.
+- **Backend:** `stockVouchers.repository.js`/`.service.js`/`.ipc.js`, mirroring
+  `journalVouchers.*` layer-for-layer (list/get/create/update/remove/post/unpost/listUnposted/
+  postAll, DRAFT-only edit/delete, password-gated remove). Registered in `ipc/index.js` and added
+  to `frontend/src/lib/ipcBridge.ts`'s `FEATURES` allow-list.
+- **Frontend:** new `StockVoucherPage.tsx` — same icon toolbar (New/Delete/Edit/Done, First/Prev/
+  Next/Last, Print/Find, Un Post/Post), Posted/Unposted browse dropdown, Pending Posting sidebar,
+  auto system Number preview, and Post/Post-All-resets-to-a-fresh-blank-form convention as
+  `JournalVoucherPage.tsx`. Entry strip: Article Code (typable + `SearchModal`) → Product Name
+  (auto) → Color (typable + `SearchModal`, with a "+ Add New Color..." sentinel that resolves-or-
+  creates the `article_colors` row on the fly, same capability the old "+ Add Stock" flow had) →
+  Cartons (typed) → Pairs (auto-computed from packing, disabled). Enter on Cartons commits the line
+  and refocuses Article Code for the next one. Removed the old "+ Add Stock" button/column and its
+  modal from `ReportStockPage.tsx`'s Current Stock tab entirely (the `logProduction`-based flow) —
+  the unrelated Material Stock "reduce" flow (`stock.reduceVendorStock`) was left untouched.
+- **Navigation:** added `'stock-voucher'` to `NavPage` (`types/index.ts`), routed in `App.tsx`, and
+  listed in `lib/menu.ts` under `2.DATA ENTRY` as `2.24` (no legacy number — fresh addition).
+- Full project `npx tsc -b`/`vite build` and `node -c` on every touched backend file pass clean.
+- **Files:** `database/schema.sql`, `System_architecture/database_schema_v4.3.md`,
+  `backend/src/repositories/stockVouchers.repository.js`,
+  `backend/src/services/stockVouchers.service.js`, `backend/src/ipc/stockVouchers.ipc.js`,
+  `backend/src/ipc/index.js`, `frontend/src/lib/ipcBridge.ts`, `frontend/src/lib/api.ts`,
+  `frontend/src/pages/StockVoucherPage.tsx`, `frontend/src/pages/ReportStockPage.tsx`,
+  `frontend/src/types/index.ts`, `frontend/src/App.tsx`, `frontend/src/lib/menu.ts`
+
 ## Navigation
 
 ### 2026-08-18 — Dropdowns: focus and type, Enter selects and moves on
@@ -4834,3 +4876,49 @@ no logic** — every cheque / online / endorsement / bounce / voucher rule behav
 - Full project `npx tsc -b --force` and `node -c` on the touched backend file both pass clean.
 - **Files:** `backend/src/ipc/journalVouchers.ipc.js`, `frontend/src/lib/api.ts`,
   `frontend/src/pages/JournalVoucherPage.tsx`
+
+## Settings — Danger Zone: admin-only "Reset Database" (new capability, not in the original milestone scope)
+- **User request (2026-08-26):** a critical, admin-only settings action that wipes both the main
+  database and its backup, resetting every primary key back to 1, gated by asking for the admin's
+  password twice before running.
+- **Approach — drop & recreate, not per-table TRUNCATE:** with ~40 FK-linked tables, TRUNCATE in
+  dependency order plus `DBCC CHECKIDENT RESEED` per table would be fragile and easy to get wrong
+  as the schema grows. `DROP DATABASE` + re-running `migrate.js`'s own schema/migration apply +
+  `seeds/run.js`'s own seed is what the app already does on a truly fresh install, so reusing it
+  guarantees every `IDENTITY(1,1)` restarts at 1 and the result matches "a fresh install" exactly,
+  by construction rather than by hand-maintained per-table logic.
+- **`db/pool.js`:** added `closePool()` — closes and forgets the app's own singleton pool so the
+  next `getPool()` call reconnects fresh; needed before `DROP DATABASE` can get exclusive access
+  (an open pooled connection would otherwise block `ALTER DATABASE ... SET SINGLE_USER`).
+- **`services/systemReset.service.js`** (new, no repository file — this is server-admin DDL, same
+  shape as `backup.service.js`, not app-table CRUD): `resetDatabase(userId, password)` — (1)
+  re-verifies the password via `authService.verifyPassword` (the ipc layer already required an
+  ADMIN session; this is the destructive action's own explicit "prove it's you" gate), (2)
+  `closePool()`, (3) connects to `master` and drops the backup-mirror DB then the main DB (each
+  wrapped in `SET SINGLE_USER WITH ROLLBACK IMMEDIATE` first, exactly like `backup.service.js`
+  already does to the mirror before a `RESTORE`), (4) best-effort deletes the mirror's leftover
+  `.mdf`/`.ldf` files and, if an external backup folder is configured, its `.bak` +
+  `RESTORE-INSTRUCTIONS.txt` (SQL Server doesn't delete physical files on `DROP DATABASE`), (5)
+  calls `migrate()` then `seed()` (both already exported as reusable functions, not just CLI
+  scripts) to rebuild the main database from scratch — admin/user logins, reserved chart accounts,
+  default store, etc., (6) if a backup folder is configured, calls `backupService.sync()` to
+  recreate the mirror database and take a first (now-empty) backup at the same configured path —
+  "remounted at the same path," mirroring what `ensureInitialBackup()` already does on a fresh
+  install's first startup.
+- **`ipc/systemReset.ipc.js`** (new) + registered in `ipc/index.js`: single channel
+  `system-reset:run`, `requireRole('ADMIN')` then `service.resetDatabase(...)`, then
+  `session.logout()` — the session's own user row no longer exists post-wipe (fresh `IDENTITY`
+  rows), so the session is force-cleared rather than left stale.
+- **Frontend:** `lib/ipcBridge.ts`'s `FEATURES` gained `'systemReset'`; `lib/api.ts` gained the
+  `window.api.systemReset` declare-global block and a `resetDatabase(password)` export, next to
+  the existing `verifyPassword()` helper it reuses for the first of the two prompts.
+  `SettingsPage.tsx` gained a new admin-only "Danger Zone" tab (`SettingsTab` extended with
+  `'danger'`): a red-bordered card explaining the action, whose button opens a two-step modal flow
+  — step 1 re-enters the password (checked via the existing `auth:verifyPassword`), step 2
+  re-enters it again as final confirmation and calls `resetDatabase()`; on success a brief "Reset
+  Complete" modal shows before `dispatch({ type: 'LOGOUT' })` returns to the login screen.
+- Full project `npx tsc -b` and `npm run build` both pass clean; `node -c` on every touched
+  backend file passes clean.
+- **Files:** `backend/src/db/pool.js`, `backend/src/services/systemReset.service.js` (new),
+  `backend/src/ipc/systemReset.ipc.js` (new), `backend/src/ipc/index.js`,
+  `frontend/src/lib/ipcBridge.ts`, `frontend/src/lib/api.ts`, `frontend/src/pages/SettingsPage.tsx`
