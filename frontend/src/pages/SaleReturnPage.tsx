@@ -310,8 +310,9 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   };
 
   // ── Record navigation: First/Pre./Next/Last + Posted/Unposted dropdown — same mechanism as
-  // SaleBillPage §3. The dropdown isn't a data filter — both values browse the SAME posted-returns
-  // list; it only arms which action you're browsing *for* ('unposted' = "I'm here to Unpost").
+  // SaleBillPage. The dropdown is a REAL data filter: 'posted' pages through confirmed returns
+  // (dbo.sale_returns), 'unposted' through saved-but-not-yet-posted drafts (dbo.draft_sale_returns).
+  // See SaleBillPage's own comment for why this departs from pages_design.md §3.
   const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('posted');
   const [postedReturns, setPostedReturns] = useState<SaleReturnRow[]>([]);
 
@@ -322,29 +323,42 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   useEffect(() => { refreshPostedReturns(); }, [refreshPostedReturns]);
 
-  // saleReturns.list() returns newest-first — reverse for oldest-first, so First = earliest, Last
-  // = most recent.
+  // Both list() calls return newest-first — reversed for oldest-first, so First = earliest.
   const navPostedList = useMemo(() => [...postedReturns].reverse(), [postedReturns]);
+  const navUnpostedList = useMemo(() => [...drafts].reverse(), [drafts]);
 
+  // Whichever list the dropdown selects — this is what the nav buttons page through.
+  const navList = browseFilter === 'posted' ? navPostedList : navUnpostedList;
+
+  // -1 when the return on screen isn't in the ACTIVE list (unsaved, or a draft while the dropdown
+  // is on Posted and vice versa); the handlers treat that as "start from the beginning".
   const navIndex = useMemo(() => {
-    if (returnId == null || !currentReturnIsPosted) return -1;
-    return navPostedList.findIndex(r => r.return_id === returnId);
-  }, [returnId, currentReturnIsPosted, navPostedList]);
+    if (returnId == null) return -1;
+    return browseFilter === 'posted'
+      ? (currentReturnIsPosted ? navPostedList.findIndex(r => r.return_id === returnId) : -1)
+      : (!currentReturnIsPosted ? navUnpostedList.findIndex(r => r.draft_id === returnId) : -1);
+  }, [returnId, currentReturnIsPosted, browseFilter, navPostedList, navUnpostedList]);
 
-  const canBrowse = browseFilter === 'unposted' && navPostedList.length > 0;
+  const canBrowse = navList.length > 0;
   const canNavPrevious = canBrowse && navIndex !== 0;
-  const canNavNext = canBrowse && navIndex !== navPostedList.length - 1;
+  const canNavNext = canBrowse && navIndex !== navList.length - 1;
 
+  // Posted rows come from sale_returns, unposted ones from draft_sale_returns — each needs its
+  // own loader. Both open read-only; Edit stays a separate deliberate click.
   const goToNavIndex = async (idx: number) => {
-    if (idx < 0 || idx >= navPostedList.length) return;
-    await loadReturnRow(navPostedList[idx]);
-    setMode('view');
+    if (idx < 0 || idx >= navList.length) return;
+    if (browseFilter === 'posted') {
+      await loadReturnRow(navList[idx] as SaleReturnRow);
+      setMode('view');
+    } else {
+      loadDraftIntoForm(navList[idx] as DraftSaleReturnRow, { mode: 'view' });
+    }
   };
 
   const handleFirst = () => goToNavIndex(0);
   const handlePrev = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
   const handleNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
-  const handleLast = () => goToNavIndex(navPostedList.length - 1);
+  const handleLast = () => goToNavIndex(navList.length - 1);
 
   // Toolbar's Find button — a quick jump to any return (posted or unposted) by bill number or
   // customer name, searched client-side over the already-loaded browse lists.
@@ -736,7 +750,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // strictly never holds an unposted document.
   const isEditingPostedReturn = mode === 'edit' && currentReturnIsPosted;
 
-  const executeSave = async (password?: string): Promise<SaleReturnRow | DraftSaleReturnRow | null> => {
+  // `finalize` decides what the form does AFTER a successful save, and nothing else:
+  //   true  ("Done")  -> lock to view mode; the return stays fully on screen and Post lights up.
+  //   false ("Save")  -> stay editable so more articles can be added to the SAME return.
+  // Mirrors SaleBillPage's own executeSave — see its comment for why the non-finalize path flips
+  // mode to 'edit' rather than leaving it 'new' (otherwise the next Save creates a duplicate).
+  const executeSave = async (password?: string, finalize: boolean = true): Promise<SaleReturnRow | DraftSaleReturnRow | null> => {
     const payload = buildPayload();
     if (!payload) return null;
 
@@ -750,7 +769,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       setCurrentReturnIsPosted(true);
       setSuccessMsg('Sale return updated successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
-      setMode('view');
+      setMode(finalize ? 'view' : 'edit');
       setErrorMsg('');
       return result.data;
     }
@@ -770,40 +789,33 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setCurrentReturnIsPosted(false);
     setSuccessMsg(mode === 'edit' ? 'Sale return updated successfully.' : 'New sale return saved successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
-    setMode('view');
+    setMode(finalize ? 'view' : 'edit');
     setErrorMsg('');
     refreshDrafts();
     return result.data;
   };
 
-  const handleSave = () => {
+  // `finalize=false` is "Save" — persist and stay editable, so more articles can go onto the same
+  // return. `finalize=true` is "Done" — persist and lock to view mode, where the return stays
+  // fully on screen (every article still listed) and Post becomes available.
+  //
+  // Done used to be wired to handleSaveAndPost, i.e. it saved AND posted in a single click, so
+  // there was never a chance to review the finished return before it was committed. Posting is
+  // its own deliberate step now, matching Sale Bill (per the user, 2026-08-27).
+  const handleSave = (finalize: boolean = true) => {
     // Only editing an ALREADY-POSTED return needs a password — editing a draft (complete or not)
     // never did.
     if (isEditingPostedReturn) {
       setPasswordActionType('save_return');
       setIsPasswordModalOpen(true);
     } else {
-      executeSave();
+      executeSave(undefined, finalize);
     }
   };
 
-  // Only reachable while !currentReturnIsPosted, so `saved` is always a fresh/edited DRAFT here —
-  // saving IS drafting now, so Save & Post is draft-then-confirm in one click.
-  const handleSaveAndPost = async () => {
-    const saved = await executeSave();
-    if (saved && 'draft_id' in saved) {
-      const postRes = await api.draftSaleReturns.confirm(saved.draft_id);
-      if (!postRes.ok) {
-        setErrorMsg('Return was saved, but posting failed: ' + postRes.error.message);
-      } else {
-        setReturnId(postRes.data.return_id);
-        setCurrentReturnIsPosted(true);
-        setSuccessMsg('Return saved & posted successfully.');
-        setTimeout(() => setSuccessMsg(''), 3000);
-        refreshDrafts();
-      }
-    }
-  };
+  // (handleSaveAndPost removed 2026-08-27: the Done button was its only caller, and Done now saves
+  // WITHOUT posting so the finished return can be reviewed first — posting is handlePostCurrentReturn
+  // below, a separate deliberate click, same as Sale Bill.)
 
   const handlePostCurrentReturn = async () => {
     if (returnId == null) return;
@@ -898,7 +910,10 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   const [postAllDraftsBusy, setPostAllDraftsBusy] = useState(false);
   const [postAllDraftsResult, setPostAllDraftsResult] = useState<ConfirmAllResult | null>(null);
 
-  const loadDraftIntoForm = (draft: DraftSaleReturnRow) => {
+  // `opts.mode` lets the nav buttons open a draft READ-ONLY while browsing (look-then-decide),
+  // while every other caller keeps the original edit-on-open behaviour. Mirrors SaleBillPage's
+  // own loadDraftIntoForm signature.
+  const loadDraftIntoForm = (draft: DraftSaleReturnRow, opts: { mode?: 'edit' | 'view' } = {}) => {
     setReturnId(draft.draft_id);
     setCurrentReturnIsPosted(false);
     setDate(draft.return_date.slice(0, 10));
@@ -937,7 +952,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setCopyFromBillId('');
     setSourceBillItems([]);
 
-    setMode('edit');
+    setMode(opts.mode ?? 'edit');
     setErrorMsg('');
   };
 
@@ -1625,20 +1640,20 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               <span>Edit</span>
             </button>
             <button
-              type="submit"
-              onClick={handleSave}
+              type="button"
+              onClick={() => handleSave(false)}
               disabled={mode === 'view' || !isNecessaryFieldsFilled}
-              title="Save"
+              title="Save — keep editing this return"
               className="toolbar-btn"
             >
               <Save size={20} strokeWidth={2.5} className="text-blue-600" />
               <span>Save</span>
             </button>
             <button
-              type="button"
-              onClick={handleSaveAndPost}
-              disabled={mode === 'view' || !isNecessaryFieldsFilled || currentReturnIsPosted}
-              title="Save & Post"
+              type="submit"
+              onClick={() => handleSave(true)}
+              disabled={mode === 'view' || !isNecessaryFieldsFilled}
+              title="Done — finish this return, then Post it"
               className="toolbar-btn"
             >
               <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
@@ -1699,7 +1714,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             <button
               type="button"
               onClick={handleUnpostCurrentReturn}
-              disabled={mode !== 'view' || returnId == null || !currentReturnIsPosted || browseFilter !== 'unposted'}
+              // No longer gated on the dropdown — see SaleBillPage's Un Post button for why.
+              disabled={mode !== 'view' || returnId == null || !currentReturnIsPosted}
               title="Un Post — switch the dropdown to Unposted first"
               className="toolbar-btn"
             >
@@ -1792,10 +1808,10 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             onChange={e => setBrowseFilter(e.target.value as 'posted' | 'unposted')}
             className="soleria-input soleria-input-compact cursor-pointer font-semibold"
             style={{ width: 'auto' }}
-            title="Posted = add new returns. Unposted = browse posted returns to Unpost one."
+            title="Which returns First/Pre./Next/Last page through: posted returns, or saved-but-unposted drafts."
           >
-            <option value="posted">Posted</option>
-            <option value="unposted">Unposted</option>
+            <option value="posted">Posted ({postedReturns.length})</option>
+            <option value="unposted">Unposted ({drafts.length})</option>
           </select>
         </div>
 

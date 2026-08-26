@@ -599,8 +599,12 @@ export default function PurchaseReturnPage() {
   // always throws POSTED_LOCK on an is_posted row) — must unpost first, same as Purchase. So under
   // the draft-table model, mode==='edit' unconditionally means editing a draft: there's no
   // "isEditingPosted" branch to worry about the way Sale Bill/Return have one.
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // `finalize` decides what the form does AFTER a successful save, and nothing else:
+  //   true  ("Done")  -> lock to view mode; the return stays fully on screen and Post lights up.
+  //   false ("Save")  -> stay editable so more articles can be added to the SAME return.
+  // Mirrors PurchasePage's own doSave — see its comment for why the non-finalize path flips mode
+  // to 'edit' rather than leaving it 'new' (otherwise the next Save creates a duplicate draft).
+  const doSave = async (finalize: boolean) => {
     const payload = buildPayload();
     if (!payload) return;
 
@@ -618,8 +622,15 @@ export default function PurchaseReturnPage() {
     setErrorMsg('');
     setSuccessMsg(mode === 'edit' ? 'Purchase return updated successfully.' : 'Purchase return recorded successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
-    setMode('view');
+    setMode(finalize ? 'view' : 'edit');
     refreshUnposted(); // P-03: a newly saved return joins the pending-posting list immediately.
+  };
+
+  // The <form>'s own onSubmit — reached by the Done button (type="submit") and by the Enter-key
+  // walk finishing on the last field, both of which mean "I'm finished with this return".
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await doSave(true);
   };
 
   const loadReturnRow = async (rowIn: PurchaseReturnRow) => {
@@ -723,7 +734,9 @@ export default function PurchaseReturnPage() {
 
   // Pending Posting panel: opening a row loads that draft straight into the form — no password
   // (drafts never needed one on this page; only a password-gated delete is new, below).
-  const loadDraftIntoForm = (draft: DraftPurchaseReturnRow) => {
+  // `opts.mode` lets the nav buttons open a draft READ-ONLY while browsing (look-then-decide),
+  // while every other caller keeps the original edit-on-open behaviour.
+  const loadDraftIntoForm = (draft: DraftPurchaseReturnRow, opts: { mode?: 'edit' | 'view' } = {}) => {
     setReturnId(draft.draft_id);
     setCurrentIsPosted(false);
     setDate(draft.return_date.slice(0, 10));
@@ -745,7 +758,7 @@ export default function PurchaseReturnPage() {
     setIsCustomUnit(false);
     lastResolvedNameRef.current = '';
     setErrorMsg('');
-    setMode('edit');
+    setMode(opts.mode ?? 'edit');
   };
 
   const handleOpenUnposted = async (draftId: number) => {
@@ -809,42 +822,46 @@ export default function PurchaseReturnPage() {
     return [...returns].filter(r => r.is_posted).sort((a, b) => b.return_date.localeCompare(a.return_date));
   }, [returns]);
 
-  // First/Previous/Next/Last record navigation + Posted/Unposted dropdown (frontend/pages_design.md
-  // §3, mirrors PurchasePage exactly): always walks the POSTED returns (oldest first) — a
-  // draft-only (unposted) return isn't a "record" to page through yet; it's reachable via the
-  // Pending Posting panel above. `navFilter` isn't a data filter (both values browse the same
-  // posted list) — it arms which action you're browsing FOR: 'unposted' means "I'm here to Unpost
-  // the return I land on" (only posted returns are unpostable) and gates the Unpost button and
-  // Prev/Next/First/Last themselves; 'posted' is the default browsing/new-entry mode, where nav
-  // stays dull.
+  // First/Previous/Next/Last record navigation + Posted/Unposted dropdown, mirroring PurchasePage.
+  // `navFilter` is a REAL data filter: 'posted' pages through confirmed returns, 'unposted'
+  // through saved-but-not-yet-posted drafts. Departs from pages_design.md §3 (where both values
+  // browsed the posted list and 'unposted' merely armed the Unpost button, making the labels lie)
+  // on the user's explicit instruction, 2026-08-27 — same change as Sale Bill/Return/Purchase.
   const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('posted');
 
   const navPostedList = useMemo(() => [...sortedReturns].reverse(), [sortedReturns]);
+  const navUnpostedList = useMemo(() => [...unpostedReturns].reverse(), [unpostedReturns]);
 
+  // Whichever list the dropdown selects — this is what the nav buttons page through.
+  const navList = navFilter === 'posted' ? navPostedList : navUnpostedList;
+
+  // -1 when the return on screen isn't in the ACTIVE list (unsaved, or a draft while the dropdown
+  // is on Posted and vice versa); the handlers treat that as "start from the beginning".
   const navIndex = useMemo(() => {
-    if (!currentIsPosted || returnId == null) return -1;
-    return navPostedList.findIndex(r => r.return_id === returnId);
-  }, [currentIsPosted, returnId, navPostedList]);
+    if (returnId == null) return -1;
+    return navFilter === 'posted'
+      ? (currentIsPosted ? navPostedList.findIndex(r => r.return_id === returnId) : -1)
+      : (!currentIsPosted ? navUnpostedList.findIndex(r => r.draft_id === returnId) : -1);
+  }, [currentIsPosted, returnId, navFilter, navPostedList, navUnpostedList]);
 
-  const canNavPrevious = navFilter === 'unposted' && navPostedList.length > 0 && navIndex !== 0;
-  const canNavNext = navFilter === 'unposted' && navPostedList.length > 0 && navIndex !== navPostedList.length - 1;
+  const canNavPrevious = navList.length > 0 && navIndex !== 0;
+  const canNavNext = navList.length > 0 && navIndex !== navList.length - 1;
 
-  const handleNavFirst = async () => {
-    if (navPostedList.length) await loadReturnRow(navPostedList[0]);
+  // Posted rows come from purchase_returns, unposted ones from draft_purchase_returns — each needs
+  // its own loader. Both open read-only; Edit stays a separate deliberate click.
+  const goToNavIndex = async (idx: number) => {
+    if (idx < 0 || idx >= navList.length) return;
+    if (navFilter === 'posted') {
+      await loadReturnRow(navList[idx] as PurchaseReturnRow);
+    } else {
+      loadDraftIntoForm(navList[idx] as DraftPurchaseReturnRow, { mode: 'view' });
+    }
   };
-  const handleNavLast = async () => {
-    if (navPostedList.length) await loadReturnRow(navPostedList[navPostedList.length - 1]);
-  };
-  const handleNavPrevious = async () => {
-    const targetIdx = navIndex === -1 ? 0 : navIndex - 1;
-    if (targetIdx < 0 || targetIdx >= navPostedList.length) return;
-    await loadReturnRow(navPostedList[targetIdx]);
-  };
-  const handleNavNext = async () => {
-    const targetIdx = navIndex === -1 ? 0 : navIndex + 1;
-    if (targetIdx < 0 || targetIdx >= navPostedList.length) return;
-    await loadReturnRow(navPostedList[targetIdx]);
-  };
+
+  const handleNavFirst = () => goToNavIndex(0);
+  const handleNavLast = () => goToNavIndex(navList.length - 1);
+  const handleNavPrevious = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
+  const handleNavNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
 
   // Recorded Purchase Returns moved to its own tab (was inline under the entry form on the same
   // page, matching the identical PurchasePage fix). Date-range filter defaults to the last three
@@ -1042,14 +1059,24 @@ export default function PurchaseReturnPage() {
               <span>Edit</span>
             </button>
             <button
-              type="submit"
-              form="purchase-return-form"
+              type="button"
+              onClick={() => doSave(false)}
               disabled={isViewMode || !isValid}
-              title={mode === 'edit' ? 'Update Return' : 'Save Purchase Return'}
+              title="Save — keep editing this return"
               className="toolbar-btn"
             >
               <Save size={20} strokeWidth={2.5} className="text-blue-600" />
-              <span>{mode === 'edit' ? 'Update' : 'Save'}</span>
+              <span>Save</span>
+            </button>
+            <button
+              type="submit"
+              form="purchase-return-form"
+              disabled={isViewMode || !isValid}
+              title="Done — finish this return, then Post it"
+              className="toolbar-btn"
+            >
+              <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>Done</span>
             </button>
             <button
               type="button"
@@ -1092,8 +1119,9 @@ export default function PurchaseReturnPage() {
             <button
               type="button"
               onClick={handleUnpost}
-              disabled={!isViewMode || returnId == null || !currentIsPosted || navFilter !== 'unposted'}
-              title={navFilter !== 'unposted' ? 'Switch the dropdown to Unposted first' : 'Unpost'}
+              // No longer gated on the dropdown — see PurchasePage's Unpost button for why.
+              disabled={!isViewMode || returnId == null || !currentIsPosted}
+              title="Unpost — move this posted return back to drafts"
               className="toolbar-btn"
             >
               <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
@@ -1111,16 +1139,16 @@ export default function PurchaseReturnPage() {
             </button>
           </div>
 
-          {/* Posted/Unposted — arms which action Previous/Next/First/Last (left) are for. */}
+          {/* Posted/Unposted — picks which list Previous/Next/First/Last page through. */}
           <select
             value={navFilter}
             onChange={e => setNavFilter(e.target.value as 'posted' | 'unposted')}
             className="soleria-input soleria-input-compact cursor-pointer font-semibold"
             style={{ width: 'auto' }}
-            title="Posted = add new returns. Unposted = browse posted returns to Unpost one."
+            title="Which returns First/Prev./Next/Last page through: posted ones, or saved-but-unposted drafts."
           >
-            <option value="posted">Posted</option>
-            <option value="unposted">Unposted</option>
+            <option value="posted">Posted ({sortedReturns.length})</option>
+            <option value="unposted">Unposted ({unpostedReturns.length})</option>
           </select>
         </div>
 

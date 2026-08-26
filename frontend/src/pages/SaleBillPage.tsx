@@ -531,14 +531,17 @@ export default function SaleBillPage() {
     setErrorMsg('');
   };
 
-  // ── Record navigation: First/Pre./Next/Last + Posted/Unposted dropdown (pages_design.md §3) ──
-  // IMPORTANT, easy to get backwards: the dropdown is NOT a data filter — both values browse the
-  // SAME posted-records list. It only arms which action you're browsing *for*:
-  //   'posted'   (default) — normal browsing / new-entry mode. Prev/Next/First/Last are DULLED
-  //              here; the toolbar's job in this mode is adding new bills, not paging old ones.
-  //   'unposted' — "I'm here to Unpost." Only a posted bill can be unposted, so this mode is what
-  //              enables Prev/Next/First/Last to actually browse, and it's also what the Unpost
-  //              button itself checks before allowing the click.
+  // ── Record navigation: First/Pre./Next/Last + Posted/Unposted dropdown ──
+  // The dropdown is a REAL data filter, i.e. it picks which set of bills the nav buttons page
+  // through — 'posted' walks confirmed bills (dbo.sale_bills), 'unposted' walks saved-but-not-yet
+  // -posted drafts (dbo.draft_sale_bills).
+  //
+  // This deliberately departs from pages_design.md §3, which specified the dropdown as an "arming"
+  // control where BOTH values browsed the posted list and 'unposted' merely meant "I'm here to
+  // press Unpost". That made the labels lie: picking "Unposted" showed posted bills, and a bill
+  // you had just saved with Done could not be reached from the toolbar at all — only via Find or
+  // the Pending Posting sidebar. Changed on the user's explicit instruction (2026-08-27) so each
+  // option lists what its label says.
   const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('posted');
   const [postedBills, setPostedBills] = useState<SaleBillRow[]>([]);
 
@@ -549,35 +552,47 @@ export default function SaleBillPage() {
 
   useEffect(() => { refreshPosted(); }, [refreshPosted]);
 
-  // saleBills.list() returns newest-first (ORDER BY bill_date DESC, bill_id DESC) — reverse for
-  // oldest-first, so First = earliest, Last = most recent, matching the doc's own nav semantics.
+  // Both list() calls return newest-first (ORDER BY date DESC, id DESC) — reversed here for
+  // oldest-first, so First = earliest and Last = most recent.
   const navPostedList = useMemo(() => [...postedBills].reverse(), [postedBills]);
+  const navUnpostedList = useMemo(() => [...unpostedBills].reverse(), [unpostedBills]);
 
-  // Where the bill currently on screen sits in navPostedList — -1 while it's a brand-new,
-  // unsaved bill, or a not-yet-posted draft (nothing to browse back to).
+  // Whichever list the dropdown currently selects — this is what the nav buttons page through.
+  const navList = browseFilter === 'posted' ? navPostedList : navUnpostedList;
+
+  // Where the bill on screen sits in the ACTIVE list — -1 when it isn't in it at all (a brand-new
+  // unsaved bill, or a draft while the dropdown is on Posted and vice versa), which the handlers
+  // below treat as "start from the beginning".
   const navIndex = useMemo(() => {
-    if (billId == null || !currentBillIsPosted) return -1;
-    return navPostedList.findIndex(b => b.bill_id === billId);
-  }, [billId, currentBillIsPosted, navPostedList]);
+    if (billId == null) return -1;
+    return browseFilter === 'posted'
+      ? (currentBillIsPosted ? navPostedList.findIndex(b => b.bill_id === billId) : -1)
+      : (!currentBillIsPosted ? navUnpostedList.findIndex(b => b.draft_id === billId) : -1);
+  }, [billId, currentBillIsPosted, browseFilter, navPostedList, navUnpostedList]);
 
-  const canBrowse = browseFilter === 'unposted' && navPostedList.length > 0;
+  const canBrowse = navList.length > 0;
   const canNavPrevious = canBrowse && navIndex !== 0;
-  const canNavNext = canBrowse && navIndex !== navPostedList.length - 1;
+  const canNavNext = canBrowse && navIndex !== navList.length - 1;
 
-  // Loads whichever row sits at `idx` of navPostedList into the form, read-only — browsing is
+  // Loads whichever row sits at `idx` of the ACTIVE list into the form, read-only — browsing is
   // look-then-decide, same as opening any other existing bill; Edit still needs its own explicit
-  // click (and, for a posted bill, its own password gate on Save).
+  // click (and, for a posted bill, its own password gate on Save). Posted rows come from
+  // sale_bills, unposted ones from draft_sale_bills, so each needs its own loader.
   const goToNavIndex = async (idx: number) => {
-    if (idx < 0 || idx >= navPostedList.length) return;
-    await loadBillRow(navPostedList[idx]);
-    setMode('view');
+    if (idx < 0 || idx >= navList.length) return;
+    if (browseFilter === 'posted') {
+      await loadBillRow(navList[idx] as SaleBillRow);
+      setMode('view');
+    } else {
+      loadDraftIntoForm(navList[idx] as DraftSaleBillRow, { mode: 'view' });
+    }
   };
 
-  // navIndex === -1 (nothing loaded yet) behaves like First/jump to index 0, not a no-op.
+  // navIndex === -1 (nothing from this list loaded yet) behaves like First, not a no-op.
   const handleFirst = () => goToNavIndex(0);
   const handlePrev = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
   const handleNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
-  const handleLast = () => goToNavIndex(navPostedList.length - 1);
+  const handleLast = () => goToNavIndex(navList.length - 1);
 
   // Toolbar's Find button — a quick jump to any bill (posted or unposted) by bill number or
   // customer name, searched client-side over the already-loaded browse lists rather than a
@@ -757,7 +772,16 @@ export default function SaleBillPage() {
   // document. This flag is what every save/post/unpost path below branches on.
   const isEditingPostedBill = mode === 'edit' && currentBillIsPosted;
 
-  const executeSave = async (password?: string): Promise<SaleBillRow | DraftSaleBillRow | null> => {
+  // `finalize` decides what the form does AFTER a successful save, and nothing else:
+  //   true  ("Done")  -> lock to view mode; the bill stays fully on screen and Post lights up.
+  //   false ("Save")  -> stay editable so more articles can be added to the SAME bill.
+  // Either way the entered lines are kept — Done used to wipe the whole form, which is what made
+  // a finished bill's articles vanish before it could be posted (reported directly by the user).
+  //
+  // Note the mode flip to 'edit' on the non-finalize path: executeSave() below picks create() vs
+  // update() off `mode === 'edit' && billId != null`, so leaving a just-created bill in 'new' mode
+  // would make the NEXT Save create a second, duplicate bill instead of updating this one.
+  const executeSave = async (password?: string, finalize: boolean = true): Promise<SaleBillRow | DraftSaleBillRow | null> => {
     const payload = buildPayload();
     if (!payload) return null;
 
@@ -771,7 +795,7 @@ export default function SaleBillPage() {
       setCurrentBillIsPosted(true);
       setSuccessMsg('Sale bill updated successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
-      setMode('view');
+      setMode(finalize ? 'view' : 'edit');
       setErrorMsg('');
       refreshStock();
       return result.data;
@@ -795,17 +819,22 @@ export default function SaleBillPage() {
     if (mode !== 'edit') createdInThisRun.current = true;
     setSuccessMsg(mode === 'edit' ? 'Sale bill updated successfully.' : 'New sale bill saved successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
-    setMode('view');
+    setMode(finalize ? 'view' : 'edit');
     setErrorMsg('');
     refreshStock();
     refreshUnposted(); // SB-06: a newly saved bill joins the pending-posting list immediately.
     return result.data;
   };
 
-  // `advanceToNext=false` is the ref-pic's plain "Save" (persist and stay put, e.g. to keep
-  // working the same bill); `advanceToNext=true` is "Done" (persist and reset for the next bill,
-  // same behavior Save always had before Done existed as its own button).
-  const handleSave = async (advanceToNext: boolean = true) => {
+  // `finalize=false` is "Save" — persist and stay editable, so more articles can go onto the same
+  // bill. `finalize=true` is "Done" — persist and lock to view mode, where the bill stays fully on
+  // screen (every article still listed) and Post becomes available.
+  //
+  // Neither clears the form any more. Done previously called readyForNextBill(), which blanked
+  // everything the moment it was pressed, so a just-finished bill's articles disappeared before
+  // there was any chance to post it — reported directly by the user. Starting the next bill is
+  // now the New button's job alone, which is the only place it can't surprise anyone.
+  const handleSave = async (finalize: boolean = true) => {
     // Only editing an ALREADY-POSTED bill needs a password — editing a draft (complete or not)
     // never did, same convention "Saved Drafts" always had.
     if (isEditingPostedBill) {
@@ -813,15 +842,7 @@ export default function SaleBillPage() {
       setIsPasswordModalOpen(true);
       return;
     }
-    // SB-05: a plain Save is also "done with this bill" — the client's own workflow for a run of
-    // bills is save each one as a draft, then Post All at the end (SB-06), so this has to reset
-    // too, not only Save & Post. Reported directly by the user after testing the keyboard flow:
-    // Enter reached Save correctly, but the form then just sat on the saved bill instead of
-    // being ready for the next one. Only applies to a brand-new bill, though — editing an existing
-    // draft just goes back to viewing it, same as editing a posted bill does.
-    const wasNew = mode !== 'edit';
-    const saved = await executeSave();
-    if (saved && wasNew && advanceToNext) readyForNextBill();
+    await executeSave(undefined, finalize);
   };
 
   // SB-01: the whole save-and-post path is wrapped, because this is the button that "did nothing" on
@@ -1511,7 +1532,7 @@ export default function SaleBillPage() {
               type="button"
               onClick={() => handleSave(false)}
               disabled={mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded}
-              title="Save"
+              title="Save — keep editing this bill"
               className="toolbar-btn"
             >
               <Save size={20} strokeWidth={2.5} className="text-blue-600" />
@@ -1521,7 +1542,7 @@ export default function SaleBillPage() {
               type="submit"
               onClick={() => handleSave(true)}
               disabled={mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded}
-              title="Done"
+              title="Done — finish this bill, then Post it"
               className="toolbar-btn"
             >
               <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
@@ -1611,8 +1632,12 @@ export default function SaleBillPage() {
             <button
               type="button"
               onClick={handleUnpostCurrentBill}
-              disabled={mode !== 'view' || billId == null || !currentBillIsPosted || browseFilter !== 'unposted'}
-              title="Un Post — switch the dropdown to Unposted first"
+              // No longer gated on the dropdown: it used to require browseFilter === 'unposted'
+              // back when that value MEANT "I'm here to unpost". Now that the dropdown genuinely
+              // filters, requiring it would be backwards — "Unposted" lists drafts, none of which
+              // can be unposted. Being on a posted bill is the only real precondition.
+              disabled={mode !== 'view' || billId == null || !currentBillIsPosted}
+              title="Un Post — move this posted bill back to drafts"
               className="toolbar-btn"
             >
               <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
@@ -1740,10 +1765,10 @@ export default function SaleBillPage() {
             onChange={e => setBrowseFilter(e.target.value as 'posted' | 'unposted')}
             className="soleria-input soleria-input-compact cursor-pointer font-semibold"
             style={{ width: 'auto' }}
-            title="Posted = add new bills. Unposted = browse posted bills to Unpost one."
+            title="Which bills First/Pre./Next/Last page through: posted bills, or saved-but-unposted drafts."
           >
-            <option value="posted">Posted</option>
-            <option value="unposted">Unposted</option>
+            <option value="posted">Posted ({postedBills.length})</option>
+            <option value="unposted">Unposted ({unpostedBills.length})</option>
           </select>
         </div>
 

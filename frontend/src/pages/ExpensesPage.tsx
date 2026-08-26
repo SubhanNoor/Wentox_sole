@@ -9,11 +9,10 @@ import type {
   ExpenseCreateInput, ExpensePaymentMode,
   ExpenseVoucherRow, VoucherActionResult
 } from '@/lib/api';
-import { formatDate } from '@/lib/utils';
 import { focusNextField } from '@/lib/fieldNav';
 import {
   Save, Wallet, Edit, Trash2, Plus, CheckCircle2, Undo2, ChevronDown,
-  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight
+  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, PackageCheck, Search
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
@@ -82,11 +81,11 @@ export default function ExpensesPage() {
 
   // ── Real-expense form (mirrors ReceiptsPage.tsx's mode structure) ──
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
-  // First/Previous/Next/Last + Posted/Unposted dropdown (frontend/pages_design.md §3, mirrors
-  // Receipts exactly): browses the RECEIPTS — here, the individual PAYMENTS — already entered in
-  // the OPEN voucher, not other vouchers. `navFilter` arms which action you're browsing for:
-  // 'unposted' means "I'm here to Unpost this voucher" and gates the Unpost button; 'posted' is
-  // the default browsing/new-entry mode, where nav stays dull.
+  // First/Previous/Next/Last + Posted/Unposted dropdown, mirroring Receipts. `navFilter` is a REAL
+  // data filter and the buttons page through whole VOUCHERS: 'posted' walks fully-posted ones,
+  // 'unposted' walks those still awaiting posting (UNPOSTED or PARTIAL). Changed 2026-08-27 on the
+  // user's instruction, alongside removing the left-hand Pending Posting panel — see Receipts'
+  // own comment for the full history.
   const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('posted');
   const [expenseId, setExpenseId] = useState<number | null>(null);
   // Which table `expenseId` points into. An unposted expense now lives in dbo.draft_expenses and a
@@ -151,9 +150,13 @@ export default function ExpensesPage() {
   // PN-01: ref target for the post-Done cursor return — the first field of the entry row. The form
   // never unmounts between lines, so the app-wide G-01 auto-focus never re-fires and focus has to be
   // asked for.
+  //
+  // The selector is `[data-field-nav]`, NOT `button[data-field-nav]`: the account field used to be a
+  // SearchableSelect (button trigger) but is a typable <input> + SearchModal now, so the button-only
+  // selector matched nothing and focus fell through to Amount — reported directly by the user.
   const firstEntryFieldWrapRef = useRef<HTMLDivElement>(null);
   const focusFirstEntryField = () => requestAnimationFrame(() => {
-    firstEntryFieldWrapRef.current?.querySelector<HTMLElement>('button[data-field-nav]')?.focus();
+    firstEntryFieldWrapRef.current?.querySelector<HTMLElement>('[data-field-nav]')?.focus();
   });
 
   const refreshVoucher = async (voucherId: number) => {
@@ -505,50 +508,68 @@ export default function ExpensesPage() {
     focusFirstEntryField();
   };
 
-  // Corrected per the user (2026-08-26, same fix as Receipts): First/Previous/Next/Last browse
-  // the PAYMENTS (lines) already entered in the OPEN voucher, not other vouchers — "one voucher,
-  // many payments, same C.Book No" (ref-pics/batch2/payment naam.png). `voucherLines` is already
-  // oldest-first (backend: ORDER BY created_at ASC). To open a DIFFERENT voucher, use the Pending
-  // Posting panel instead — these buttons stay inside the one on screen.
-  const currentLineIndex = !voucher || expenseId == null
+  // Voucher-level navigation (2026-08-27, per the user: "match Sale Bill — page through whole
+  // vouchers"). Both lists oldest-first, so First = earliest voucher, Last = most recent.
+  const navPostedVouchers = useMemo(
+    () => [...allVouchers].filter(v => v.status === 'POSTED')
+      .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no),
+    [allVouchers]
+  );
+  const navUnpostedVouchers = useMemo(
+    () => [...allVouchers].filter(v => v.status !== 'POSTED')
+      .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no),
+    [allVouchers]
+  );
+  const navList = navFilter === 'posted' ? navPostedVouchers : navUnpostedVouchers;
+
+  // -1 when the voucher on screen isn't in the ACTIVE list — handlers treat that as "start over".
+  const navIndex = voucher == null
     ? -1
-    : voucherLines.findIndex(l => entryIsDraft ? l.draft_id === expenseId : l.expense_id === expenseId);
+    : navList.findIndex(v => v.voucher_id === voucher.voucher_id);
 
-  const canNavPrevious = voucherLines.length > 0 && currentLineIndex !== 0;
-  const canNavNext = voucherLines.length > 0 && currentLineIndex !== voucherLines.length - 1;
+  const canNavPrevious = navList.length > 0 && navIndex !== 0;
+  const canNavNext = navList.length > 0 && navIndex !== navList.length - 1;
 
-  // Lands on one payment of the open voucher, read-only — same shape as handleEditLine, but always
-  // allowed (a posted line can be browsed, just not edited — that still needs Unpost first) and
-  // lands in 'view' rather than 'edit'.
-  const loadLineForView = (line: api.ExpenseVoucherLineRow) => {
-    setMode('view');
-    setEntryIsDraft(line.draft_id != null);
-    setExpenseId(line.draft_id ?? line.expense_id);
-    setBaId(String(line.ba_id));
-    setPreviewBaId(line.ba_id);
-    setAmount(Number(line.amount));
-    setPaymentMode(line.payment_mode);
-    setBankId(line.bank_id != null ? String(line.bank_id) : '');
-    setChequeId(line.cheque_id != null ? String(line.cheque_id) : '');
-    setIssuedChequeNo(line.issued_cheque_no || '');
-    setIssuedChequeDate(line.issued_cheque_date ? line.issued_cheque_date.slice(0, 10) : '');
-    setDetails(line.details || '');
-    setRemarks(line.remarks || '');
-    setErrorMsg('');
+
+  // Opens whichever VOUCHER sits at `idx` of the active list, with all of its lines — the entries
+  // grid below the form is what shows them, which is why the left-hand Pending Posting panel could
+  // be dropped entirely (per the user, 2026-08-27).
+  const goToNavIndex = (idx: number) => {
+    if (idx < 0 || idx >= navList.length) return;
+    openVoucherInEntry(navList[idx].voucher_id);
   };
 
-  const handleNavFirst = () => { if (voucherLines.length) loadLineForView(voucherLines[0]); };
-  const handleNavLast = () => { if (voucherLines.length) loadLineForView(voucherLines[voucherLines.length - 1]); };
-  const handleNavPrevious = () => {
-    const targetIdx = currentLineIndex === -1 ? 0 : currentLineIndex - 1;
-    if (targetIdx < 0 || targetIdx >= voucherLines.length) return;
-    loadLineForView(voucherLines[targetIdx]);
+  // Toolbar "Find" — jump straight to any voucher (posted or not) by C.Book No, date or remarks,
+  // searched client-side over the already-loaded lists since both are in memory for the nav
+  // buttons anyway. Added 2026-08-27: the other transaction pages all had a Find and these two
+  // did not, which mattered more once the Pending Posting panel (the old way to reach a specific
+  // pending voucher by eye) was removed.
+  const [isFindOpen, setIsFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const findResults = useMemo(() => {
+    const q = findQuery.trim().toLowerCase();
+    if (!q) return [];
+    return [...navPostedVouchers, ...navUnpostedVouchers]
+      .filter(v =>
+        String(v.voucher_no).includes(q) ||
+        v.voucher_date.toLowerCase().includes(q) ||
+        (v.remarks || '').toLowerCase().includes(q))
+      .slice(0, 30);
+  }, [findQuery, navPostedVouchers, navUnpostedVouchers]);
+
+  const handleFindSelect = (v: { voucher_id: number; status: string }) => {
+    setIsFindOpen(false);
+    setFindQuery('');
+    // Point the dropdown at the list this voucher actually belongs to, so First/Prev./Next/Last
+    // keep working relative to where you just landed.
+    setNavFilter(v.status === 'POSTED' ? 'posted' : 'unposted');
+    openVoucherInEntry(v.voucher_id);
   };
-  const handleNavNext = () => {
-    const targetIdx = currentLineIndex === -1 ? 0 : currentLineIndex + 1;
-    if (targetIdx < 0 || targetIdx >= voucherLines.length) return;
-    loadLineForView(voucherLines[targetIdx]);
-  };
+
+  const handleNavFirst = () => goToNavIndex(0);
+  const handleNavLast = () => goToNavIndex(navList.length - 1);
+  const handleNavPrevious = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
+  const handleNavNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
 
   // Preview of the System Voucher No. a brand-new voucher will get — voucher_no is ONE sequence
   // across the whole expense_vouchers table regardless of status (MAX+1, allocated inside
@@ -584,12 +605,6 @@ export default function ExpensesPage() {
   // voucher, delete one (password-gated, whole voucher — only while entirely UNPOSTED), or Post
   // All. No confirmAll()-equivalent exists for whole vouchers on the backend — Post All here is a
   // client-side loop over expenseVouchers.post(), one voucher at a time.
-  const pendingVouchers = useMemo(
-    () => [...allVouchers].filter(v => v.status !== 'POSTED').sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no),
-    [allVouchers]
-  );
-
-  const [postingVoucherId, setPostingVoucherId] = useState<number | null>(null);
   const [postAllVouchersBusy, setPostAllVouchersBusy] = useState(false);
   const [postAllVouchersResult, setPostAllVouchersResult] = useState<{
     posted: { voucher_id: number }[];
@@ -597,31 +612,18 @@ export default function ExpensesPage() {
     attempted: number;
   } | null>(null);
 
-  const handlePostOneVoucher = async (voucherId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setPostingVoucherId(voucherId);
-    const res = await api.expenseVouchers.post(voucherId);
-    setPostingVoucherId(null);
-    if (!res.ok) { fail('Failed to post voucher: ' + res.error.message); return; }
-    flash(`Voucher ${res.data.voucher.voucher_no} posted.`);
-    refreshAllVouchers();
-    refreshCheques();
-    setBalanceRefreshKey(k => k + 1);
-    if (voucher?.voucher_id === voucherId) setVoucher(res.data.voucher);
-  };
-
   const handlePostAllVouchers = async () => {
     setPostAllVouchersBusy(true);
     setPostAllVouchersResult(null);
     const posted: { voucher_id: number }[] = [];
     const failed: { voucher_id: number; message: string }[] = [];
-    for (const v of pendingVouchers) {
+    for (const v of navUnpostedVouchers) {
       const res = await api.expenseVouchers.post(v.voucher_id);
       if (res.ok) posted.push({ voucher_id: v.voucher_id });
       else failed.push({ voucher_id: v.voucher_id, message: res.error.message });
     }
     setPostAllVouchersBusy(false);
-    setPostAllVouchersResult({ posted, failed, attempted: pendingVouchers.length });
+    setPostAllVouchersResult({ posted, failed, attempted: navUnpostedVouchers.length });
     refreshAllVouchers();
     refreshCheques();
     setBalanceRefreshKey(k => k + 1);
@@ -629,9 +631,12 @@ export default function ExpensesPage() {
     if (failed.length === 0) flash(`${posted.length} voucher(s) posted.`);
   };
 
-  const handleDeleteVoucherClick = (v: ExpenseVoucherRow, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setDeleteTarget({ kind: 'voucher', id: v.voucher_id, amount: Number(v.total_amount) });
+  // Deletes the voucher currently on screen (password-gated). Was a per-row button in the removed
+  // Pending Posting panel; a toolbar action now, so it targets the open voucher. Backend rejects
+  // deleting a PARTIAL voucher, hence the UNPOSTED-only gate on the button.
+  const handleDeleteVoucherClick = () => {
+    if (!voucher) return;
+    setDeleteTarget({ kind: 'voucher', id: voucher.voucher_id, amount: Number(voucher.total_amount) });
   };
 
   const accountName = useCallback((id: number) => {
@@ -700,108 +705,12 @@ export default function ExpensesPage() {
         {activeTab === 'entry' && (
           <div className="max-w-5xl mx-auto relative animate-fadeIn">
 
-            {/* Pending Posting — pinned outside the card's own left edge, same layout as
-                PurchasePage/Receipts (frontend/pages_design.md): `absolute`, anchored via
-                `right: calc(100% + gap)` to this wrapper's left edge. Only shown from `2xl` up. */}
-            {(pendingVouchers.length > 0 || postAllVouchersResult) && (
-              <aside
-                className="hidden 2xl:block absolute top-0 w-64 space-y-3"
-                style={{ right: 'calc(100% + 24px)' }}
-                data-no-print
-              >
-                <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
-                  <div className="flex items-center justify-between gap-2 mb-1">
-                    <span className="font-semibold text-slate-700">Pending Posting</span>
-                    <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
-                      {pendingVouchers.length}
-                    </span>
-                  </div>
-                  <div className="text-xs text-slate-500 mb-3">
-                    {pendingVouchers.length > 0 && `Total ${formatCurrency(pendingVouchers.reduce((s, v) => s + Number(v.total_amount), 0))}`}
-                  </div>
-                  {pendingVouchers.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={handlePostAllVouchers}
-                      disabled={postAllVouchersBusy}
-                      className="w-full px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                    >
-                      {postAllVouchersBusy ? 'Posting…' : `Post All (${pendingVouchers.length})`}
-                    </button>
-                  )}
-
-                  {postAllVouchersResult && (
-                    <div className="mt-3 pt-3 border-t border-amber-200">
-                      <p className="text-xs font-semibold text-slate-700">
-                        {postAllVouchersResult.posted.length} of {postAllVouchersResult.attempted} posted
-                        {postAllVouchersResult.failed.length > 0 && ` · ${postAllVouchersResult.failed.length} failed`}
-                      </p>
-                      {postAllVouchersResult.failed.length > 0 && (
-                        <ul className="mt-1.5 space-y-1">
-                          {postAllVouchersResult.failed.map(f => (
-                            <li key={f.voucher_id} className="text-xs text-rose-700">
-                              <span className="font-mono font-semibold">#{f.voucher_id}</span>
-                              {' — '}{f.message}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => setPostAllVouchersResult(null)}
-                        className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
-                      >
-                        Dismiss
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {pendingVouchers.length > 0 && (
-                  <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
-                    {pendingVouchers.map(v => (
-                      <li
-                        key={v.voucher_id}
-                        onClick={() => openVoucherInEntry(v.voucher_id)}
-                        className="px-3 py-2.5 text-xs border-b border-slate-100 last:border-b-0 cursor-pointer hover:bg-amber-50/60 transition-colors"
-                      >
-                        <div className="min-w-0 flex items-start gap-2">
-                          <div className="min-w-0 flex-1">
-                            <div className="font-mono font-semibold text-slate-700">
-                              #{v.voucher_no} {v.status === 'PARTIAL' && (
-                                <span className="ml-1 px-1 py-0.5 rounded text-[9px] font-bold uppercase bg-orange-100 text-orange-900">Partial</span>
-                              )}
-                            </div>
-                            <div className="text-slate-400">{v.line_count ?? 0} payment{(v.line_count ?? 0) === 1 ? '' : 's'}</div>
-                            <div className="text-slate-400">{formatDate(v.voucher_date)} · {formatCurrency(Number(v.total_amount))}</div>
-                          </div>
-                          <button
-                            type="button"
-                            title="Post this voucher"
-                            onClick={(e) => handlePostOneVoucher(v.voucher_id, e)}
-                            disabled={postingVoucherId === v.voucher_id}
-                            className="flex-shrink-0 p-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                          >
-                            <CheckCircle2 size={12} />
-                          </button>
-                          {v.status === 'UNPOSTED' && (
-                            <button
-                              type="button"
-                              title="Delete this voucher (password required)"
-                              onClick={(e) => handleDeleteVoucherClick(v, e)}
-                              disabled={postingVoucherId === v.voucher_id}
-                              className="flex-shrink-0 p-1 rounded bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          )}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </aside>
-            )}
+            {/* The left-hand "Pending Posting" panel that used to live here was removed
+                2026-08-27 at the user's request, same as Receipts: Payments should read like Sale
+                Bill, with the voucher and its entries in the main area rather than as cards off
+                to one side. Reaching another pending voucher is now the toolbar's
+                First/Prev./Next/Last, with the Posted/Unposted dropdown choosing which list —
+                and "Post All" moved into that same toolbar. */}
 
             {lookupError && (
               <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>
@@ -829,6 +738,18 @@ export default function ExpensesPage() {
                   <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
                   <span>New</span>
                 </button>
+                {/* Whole-voucher delete (password-gated). UNPOSTED only — the backend refuses to
+                    delete a PARTIAL voucher, since some of its lines already have ledger entries. */}
+                <button
+                  type="button"
+                  onClick={handleDeleteVoucherClick}
+                  disabled={!voucher || voucher.status !== 'UNPOSTED'}
+                  title="Delete this voucher (asks for your password)"
+                  className="toolbar-btn"
+                >
+                  <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
+                  <span>Delete</span>
+                </button>
 
                 <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
 
@@ -848,14 +769,23 @@ export default function ExpensesPage() {
                   <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
                   <span>Last</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setIsFindOpen(true)}
+                  title="Find a voucher by C.Book No, date or remarks"
+                  className="toolbar-btn"
+                >
+                  <Search size={20} strokeWidth={2.5} className="text-slate-600" />
+                  <span>Find</span>
+                </button>
 
                 <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
 
                 <button
                   type="button"
                   onClick={handleUnpostVoucher}
-                  disabled={!voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy || navFilter !== 'unposted'}
-                  title={navFilter !== 'unposted' ? 'Switch the dropdown to Unposted first' : 'Unpost Voucher'}
+                  disabled={!voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy}
+                  title="Unpost Voucher"
                   className="toolbar-btn"
                 >
                   <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
@@ -871,6 +801,17 @@ export default function ExpensesPage() {
                   <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
                   <span>Post</span>
                 </button>
+                {/* Moved here from the removed Pending Posting panel. */}
+                <button
+                  type="button"
+                  onClick={handlePostAllVouchers}
+                  disabled={navUnpostedVouchers.length === 0 || postAllVouchersBusy}
+                  title={postAllVouchersBusy ? 'Posting…' : `Post All (${navUnpostedVouchers.length})`}
+                  className="toolbar-btn"
+                >
+                  <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
+                  <span>Post All</span>
+                </button>
               </div>
 
               <select
@@ -878,11 +819,38 @@ export default function ExpensesPage() {
                 onChange={e => setNavFilter(e.target.value as 'posted' | 'unposted')}
                 className="soleria-input soleria-input-compact cursor-pointer font-semibold"
                 style={{ width: 'auto' }}
-                title="Posted = add new vouchers. Unposted = required to Unpost this one."
+                title="Which vouchers First/Prev./Next/Last page through: posted ones, or those still awaiting posting."
               >
-                <option value="posted">Posted</option>
-                <option value="unposted">Unposted</option>
+                <option value="posted">Posted ({navPostedVouchers.length})</option>
+                <option value="unposted">Unposted ({navUnpostedVouchers.length})</option>
               </select>
+
+              {/* Post All's outcome — stays until dismissed, since the failures are the point.
+                  Previously lived in the removed Pending Posting panel. */}
+              {postAllVouchersResult && (
+                <div className="w-full mt-2 pt-2 border-t text-xs" style={{ borderColor: 'var(--border-color)' }}>
+                  <p className="font-semibold text-slate-700">
+                    {postAllVouchersResult.posted.length} of {postAllVouchersResult.attempted} posted
+                    {postAllVouchersResult.failed.length > 0 && ` · ${postAllVouchersResult.failed.length} failed`}
+                    <button
+                      type="button"
+                      onClick={() => setPostAllVouchersResult(null)}
+                      className="ml-2 text-slate-500 hover:text-slate-700 font-semibold"
+                    >
+                      Dismiss
+                    </button>
+                  </p>
+                  {postAllVouchersResult.failed.length > 0 && (
+                    <ul className="mt-1 space-y-0.5">
+                      {postAllVouchersResult.failed.map(f => (
+                        <li key={f.voucher_id} className="text-rose-700">
+                          <span className="font-mono font-semibold">#{f.voucher_id}</span>{' — '}{f.message}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-2 mb-6 px-1" data-no-print>
@@ -1327,6 +1295,50 @@ export default function ExpensesPage() {
         title="Delete Expense"
         subtitle={deleteTarget ? `Confirm your password to permanently delete this ${formatCurrency(deleteTarget.amount)} expense. This cannot be undone.` : undefined}
       />
+
+      {/* Find Voucher — jump to any voucher by C.Book No, date or remarks. */}
+      {isFindOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
+            <h3 className="font-lora font-bold text-lg text-slate-800 mb-4">Find Voucher</h3>
+            <input
+              type="text"
+              value={findQuery}
+              onChange={e => setFindQuery(e.target.value)}
+              placeholder="C.Book No, date (YYYY-MM-DD) or remarks..."
+              className="soleria-input w-full font-semibold mb-3"
+              autoFocus
+            />
+            <ul className="max-h-72 overflow-y-auto border rounded-lg divide-y" style={{ borderColor: 'var(--border-color)' }}>
+              {findResults.map(v => (
+                <li
+                  key={v.voucher_id}
+                  onClick={() => handleFindSelect(v)}
+                  className="px-3 py-2 text-xs cursor-pointer hover:bg-amber-50/60 flex items-center justify-between gap-2"
+                >
+                  <span className="font-mono font-semibold text-slate-700">#{v.voucher_no}</span>
+                  <span className="text-slate-400 truncate">{v.voucher_date} · {formatCurrency(Number(v.total_amount))}</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${v.status === 'POSTED' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                    {v.status === 'POSTED' ? 'posted' : 'unposted'}
+                  </span>
+                </li>
+              ))}
+              {findQuery.trim() && findResults.length === 0 && (
+                <li className="px-3 py-3 text-xs text-slate-400 text-center">No matching vouchers.</li>
+              )}
+            </ul>
+            <div className="flex justify-end mt-4">
+              <button
+                type="button"
+                onClick={() => { setIsFindOpen(false); setFindQuery(''); }}
+                className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm font-semibold"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppLayout>
   );
 }

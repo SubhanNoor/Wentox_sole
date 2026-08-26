@@ -56,9 +56,10 @@ tightly in one strip — **not** the app's usual pill-shaped colored action butt
   border` (white background) — nav+action buttons in a `flex flex-wrap items-center gap-0.5` on
   the left, the Posted/Unposted `<select>` (§3) on the right via `justify-between`.
 
-Button order (left → right), matching the ref image: **New, Delete (selected line), Edit, Save/
-Update, Cancel** | divider | **First, Prev., Next, Last** | divider | **Unpost, Post**. Every
+Button order (left → right), matching the ref image: **New, Delete (selected line), Edit, Save,
+Done, Cancel** | divider | **First, Prev., Next, Last** | divider | **Unpost, Post**. Every
 button always renders — only `disabled` changes per state, never whole groups mounting/unmounting.
+(Save/Done replaced the single Save/Update button on 2026-08-27 — see §2.)
 
 ---
 
@@ -67,48 +68,84 @@ button always renders — only `disabled` changes per state, never whole groups 
 - State shape: `mode: 'view' | 'edit' | 'new'` (not a `masterLocked` boolean). `isViewMode = mode
   === 'view'`. Master fields get `disabled={isViewMode}` — they lock the moment a record is saved
   (mode flips to `'view'`), unlock on Edit (`mode = 'edit'`) or New.
-- A freshly-saved record clears back to blank and refocuses the first master field
-  (`readyForNextPurchase`-style helper) so a run of entries can be typed without touching the
-  mouse. Keep the *working date* across that reset — only truly reset it on an explicit "New"
-  click (`startNewPurchase`-style helper, focuses the first field instead of restoring the date).
+- **Saving never clears the form.** Two buttons, differing only in what happens *after* a
+  successful save — both keep every entered line on screen:
+  - **Save** (`finalize=false`) — stays editable, so more articles can go onto the SAME record.
+  - **Done** (`finalize=true`) — locks to `'view'`, where the record stays fully visible and
+    **Post** lights up. Posting is always its own deliberate click.
+
+  ```tsx
+  const doSave = async (finalize: boolean) => {
+    /* ...create-or-update... */
+    setMode(finalize ? 'view' : 'edit');   // NOT 'view' unconditionally
+  };
+  ```
+
+  The `'edit'` on the non-finalize path is load-bearing: the create-vs-update choice reads
+  `mode === 'edit' && recordId != null`, so leaving a just-created record in `'new'` mode makes the
+  next Save create a **second, duplicate draft**.
+
+  > **Superseded (2026-08-27).** Previously a freshly-saved record cleared back to blank and
+  > refocused the first master field (`readyForNextPurchase`-style helper) so a run of entries
+  > could be typed without touching the mouse. Reported by the user as a bug: a finished record's
+  > articles vanished the instant Save/Done was pressed, before it could be reviewed or posted.
+  > Starting the next record is now the **New** button's job alone (`startNewPurchase`-style
+  > helper). The reset helper still exists for the post-Post path, which does still clear.
 
 ---
 
 ## 3. Record navigation: First / Previous / Next / Last + Posted/Unposted dropdown
 
-**Important, and easy to get backwards**: the dropdown is **not** a data filter — both values
-browse the *same* posted-records list (`[...sortedRecords].reverse()` for oldest-first, i.e.
-First = earliest). It only arms which action you're browsing *for*:
+The dropdown **is a real data filter** — it picks which set of records Prev/Next/First/Last page
+through. Each option lists what its label says, and shows a live count:
 
-- `'posted'` (default) — normal browsing / new-entry mode. Prev/Next/First/Last are **dulled**
-  (disabled) here — the toolbar's job in this mode is adding new records, not paging through old
-  ones.
-- `'unposted'` — "I'm here to Unpost." Only a *posted* record can be unposted, so this mode is
-  what enables Prev/Next/First/Last to actually browse, and it's also what the Unpost button
-  itself checks before allowing the click.
+- `'posted'` (default) — pages through confirmed records (the real table).
+- `'unposted'` — pages through saved-but-not-yet-posted **drafts** (the `draft_*` table).
+
+> **Superseded (2026-08-27).** This section previously specified the dropdown as an *arming*
+> control: both values browsed the posted list, and `'unposted'` only meant "I'm here to press
+> Unpost", with Prev/Next/First/Last dulled on `'posted'`. That was changed on the user's explicit
+> instruction because the labels lied — picking "Unposted" showed *posted* records, and a record
+> just saved with Save/Done could not be reached from the toolbar at all (only via Find or the
+> Pending Posting panel). Don't "fix" it back.
 
 ```tsx
 const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('posted');
+
+// Both list() calls return newest-first — reversed for oldest-first, so First = earliest.
 const navPostedList = useMemo(() => [...sortedRecords].reverse(), [sortedRecords]);
+const navUnpostedList = useMemo(() => [...unpostedRecords].reverse(), [unpostedRecords]);
+const navList = navFilter === 'posted' ? navPostedList : navUnpostedList;
+
+// -1 when the record on screen isn't in the ACTIVE list (unsaved, or a draft while the dropdown
+// is on Posted and vice versa) — handlers treat that as "start from the beginning".
 const navIndex = useMemo(() => {
-  if (!currentIsPosted || recordId == null) return -1;
-  return navPostedList.findIndex(r => r.record_id === recordId);
-}, [currentIsPosted, recordId, navPostedList]);
-const canNavPrevious = navFilter === 'unposted' && navPostedList.length > 0 && navIndex !== 0;
-const canNavNext = navFilter === 'unposted' && navPostedList.length > 0 && navIndex !== navPostedList.length - 1;
+  if (recordId == null) return -1;
+  return navFilter === 'posted'
+    ? (currentIsPosted ? navPostedList.findIndex(r => r.record_id === recordId) : -1)
+    : (!currentIsPosted ? navUnpostedList.findIndex(r => r.draft_id === recordId) : -1);
+}, [currentIsPosted, recordId, navFilter, navPostedList, navUnpostedList]);
+
+const canNavPrevious = navList.length > 0 && navIndex !== 0;
+const canNavNext = navList.length > 0 && navIndex !== navList.length - 1;
 ```
 
-`handleNavFirst/Previous/Next/Last` just index into `navPostedList` and call the page's existing
-`loadRecordRow`-style loader (`navIndex === -1` — nothing loaded yet — behaves like First/jump to
-index 0, not a no-op).
+The two lists come from different tables, so `goToNavIndex` needs **both** loaders — the posted
+row goes through `loadRecordRow`, the draft through `loadDraftIntoForm(row, { mode: 'view' })`.
+That `opts.mode` param exists precisely so browsing opens a draft **read-only** (look-then-decide)
+while every other caller keeps the original edit-on-open behaviour; Edit stays a deliberate click.
 
 **Unpost gating + editable landing**:
 
 ```tsx
-disabled={!isViewMode || recordId == null || !currentIsPosted || navFilter !== 'unposted'}
+disabled={!isViewMode || recordId == null || !currentIsPosted}
 ```
 
-and on success, `handleUnpost` must call `setMode('edit')` (not leave it on `'view'`) — the user
+Note there is **no `navFilter` condition** — that only made sense while `'unposted'` meant "I'm
+here to unpost". Now the Unposted list holds drafts, none of which *can* be unposted, so gating on
+it would be backwards. Being on a posted record is the only real precondition.
+
+On success, `handleUnpost` must call `setMode('edit')` (not leave it on `'view'`) — the user
 explicitly wants the editable screen immediately after unposting, not a read-only one.
 
 **Dropdown box** — do not force an inline `height` on `.soleria-input`; it fights the class's own

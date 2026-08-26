@@ -462,8 +462,19 @@ export default function PurchasePage() {
   // always throws POSTED_LOCK on an is_posted row) — must unpost first, same as before. So under
   // the draft-table model, mode==='edit' unconditionally means editing a draft: there's no
   // "isEditingPosted" branch to worry about the way Sale Bill/Return have one.
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // `finalize` decides what the form does AFTER a successful save, and nothing else:
+  //   true  ("Done")  -> lock to view mode; the purchase stays fully on screen and Post lights up.
+  //   false ("Save")  -> stay editable so more articles can be added to the SAME purchase.
+  //
+  // Neither clears the form. Save used to call readyForNextPurchase() here, which blanked
+  // everything the instant it was pressed — so a finished purchase's articles vanished before it
+  // could be reviewed or posted (reported directly by the user, 2026-08-27, for the identical
+  // behaviour on Sale Bill). Starting the next purchase is the New button's job alone.
+  //
+  // Note the mode flip to 'edit' on the non-finalize path: the create-vs-update choice above reads
+  // `mode === 'edit' && purchaseId != null`, so leaving a just-created purchase in 'new' mode would
+  // make the NEXT Save create a second, duplicate draft instead of updating this one.
+  const doSave = async (finalize: boolean) => {
     const payload = buildPayload();
     if (!payload) return;
 
@@ -480,19 +491,19 @@ export default function PurchasePage() {
     setCurrentIsPosted(false);
     // P-02: only a freshly created purchase counts as "part of this run" — an edit of an existing
     // one must not clear the form out from under the user when it posts.
-    const isNewPurchase = mode !== 'edit';
-    if (isNewPurchase) createdInThisRun.current = true;
+    if (mode !== 'edit') createdInThisRun.current = true;
     setErrorMsg('');
     setSuccessMsg(mode === 'edit' ? 'Purchase updated successfully.' : 'Purchase recorded successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
-    setMode('view');
+    setMode(finalize ? 'view' : 'edit');
     refreshUnposted(); // P-03: a newly saved purchase joins the pending-posting list immediately.
+  };
 
-    // P-02: a plain Save is also "done with this purchase" — matches the same fix on
-    // SaleBillPage. The workflow is save each purchase as a draft, then Post All at the end
-    // (P-03), so resetting only after Post (not after a plain Save) left the form sitting on
-    // the saved purchase instead of being ready for the next one.
-    if (isNewPurchase) readyForNextPurchase();
+  // The <form>'s own onSubmit — reached by the Done button (type="submit") and by the Enter-key
+  // walk finishing on the last field, both of which mean "I'm finished with this purchase".
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await doSave(true);
   };
 
   const loadPurchaseRow = async (rowIn: PurchaseRow) => {
@@ -604,7 +615,9 @@ export default function PurchasePage() {
 
   // Pending Posting panel: opening a row loads that draft straight into the form — no password
   // (drafts never needed one on this page; only a password-gated delete is new, below).
-  const loadDraftIntoForm = (draft: DraftPurchaseRow) => {
+  // `opts.mode` lets the nav buttons open a draft READ-ONLY while browsing (look-then-decide),
+  // while every other caller keeps the original edit-on-open behaviour.
+  const loadDraftIntoForm = (draft: DraftPurchaseRow, opts: { mode?: 'edit' | 'view' } = {}) => {
     createdInThisRun.current = false;
     setPurchaseId(draft.draft_id);
     setCurrentIsPosted(false);
@@ -624,7 +637,7 @@ export default function PurchasePage() {
     setEditingUid(null);
     setIsCustomUnit(false);
     setErrorMsg('');
-    setMode('edit');
+    setMode(opts.mode ?? 'edit');
   };
 
   const handleOpenUnposted = async (draftId: number) => {
@@ -691,48 +704,51 @@ export default function PurchasePage() {
     return [...purchases].filter(p => p.is_posted).sort((a, b) => b.purchase_date.localeCompare(a.purchase_date));
   }, [purchases]);
 
-  // First/Previous/Next/Last record navigation (ref-pics/batch2/sale bill.png) — always walks the
-  // POSTED bills (oldest first), since those are the only records that can be reached this way:
-  // a draft-only (unposted) bill has no ledger effect yet and isn't a "record" to page through —
-  // it's still reachable via the Pending Posting panel above. `navFilter` isn't a data filter here
-  // (both values browse the same posted list) — it arms which action you're browsing FOR:
-  // 'unposted' means "I'm here to Unpost the bill I land on" (only posted bills are unpostable,
-  // hence browsing posted bills under an "Unposted" label — confirmed with the user 2026-08-25),
-  // and gates the Unpost button below; 'posted' is the default browsing/new-entry mode.
+  // First/Previous/Next/Last record navigation. `navFilter` (the Posted/Unposted dropdown) is a
+  // REAL data filter: 'posted' pages through confirmed purchases, 'unposted' through saved-but-not
+  // -yet-posted drafts.
+  //
+  // This departs from the earlier design (and pages_design.md §3), where BOTH values browsed the
+  // posted list and 'unposted' merely armed the Unpost button. That made the labels lie — picking
+  // "Unposted" showed posted bills, and a purchase just saved with Save couldn't be reached from
+  // the toolbar at all. Changed on the user's explicit instruction (2026-08-27), same as Sale Bill
+  // and Sale Return.
   const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('posted');
 
   const navPostedList = useMemo(() => [...sortedPurchases].reverse(), [sortedPurchases]);
+  const navUnpostedList = useMemo(() => [...unpostedPurchases].reverse(), [unpostedPurchases]);
 
+  // Whichever list the dropdown selects — this is what the nav buttons page through.
+  const navList = navFilter === 'posted' ? navPostedList : navUnpostedList;
+
+  // -1 when the purchase on screen isn't in the ACTIVE list (unsaved, or a draft while the
+  // dropdown is on Posted and vice versa); the handlers treat that as "start from the beginning".
   const navIndex = useMemo(() => {
-    if (!currentIsPosted || purchaseId == null) return -1;
-    return navPostedList.findIndex(p => p.purchase_id === purchaseId);
-  }, [currentIsPosted, purchaseId, navPostedList]);
+    if (purchaseId == null) return -1;
+    return navFilter === 'posted'
+      ? (currentIsPosted ? navPostedList.findIndex(p => p.purchase_id === purchaseId) : -1)
+      : (!currentIsPosted ? navUnpostedList.findIndex(p => p.draft_id === purchaseId) : -1);
+  }, [currentIsPosted, purchaseId, navFilter, navPostedList, navUnpostedList]);
 
-  // Previous/Next/First/Last only browse anything while navFilter is 'unposted' (i.e. "I'm here to
-  // Unpost a bill") — while it's 'posted', the toolbar's job is adding new bills, not paging
-  // through old ones, so navigation goes dull rather than staying active. Confirmed with the user
-  // 2026-08-25.
-  const canNavPrevious = navFilter === 'unposted' && navPostedList.length > 0 && navIndex !== 0;
-  const canNavNext = navFilter === 'unposted' && navPostedList.length > 0 && navIndex !== navPostedList.length - 1;
+  const canNavPrevious = navList.length > 0 && navIndex !== 0;
+  const canNavNext = navList.length > 0 && navIndex !== navList.length - 1;
 
-  const handleNavFirst = async () => {
-    if (navPostedList.length) await loadPurchaseRow(navPostedList[0]);
+  // Posted rows come from purchases, unposted ones from draft_purchases — each needs its own
+  // loader. Both open read-only; Edit stays a separate deliberate click.
+  const goToNavIndex = async (idx: number) => {
+    if (idx < 0 || idx >= navList.length) return;
+    if (navFilter === 'posted') {
+      await loadPurchaseRow(navList[idx] as PurchaseRow);
+    } else {
+      loadDraftIntoForm(navList[idx] as DraftPurchaseRow, { mode: 'view' });
+    }
   };
-  const handleNavLast = async () => {
-    if (navPostedList.length) await loadPurchaseRow(navPostedList[navPostedList.length - 1]);
-  };
-  const handleNavPrevious = async () => {
-    // No current position yet (navIndex -1) — Previous behaves like First rather than doing
-    // nothing, same convention as handleNavNext below.
-    const targetIdx = navIndex === -1 ? 0 : navIndex - 1;
-    if (targetIdx < 0 || targetIdx >= navPostedList.length) return;
-    await loadPurchaseRow(navPostedList[targetIdx]);
-  };
-  const handleNavNext = async () => {
-    const targetIdx = navIndex === -1 ? 0 : navIndex + 1;
-    if (targetIdx < 0 || targetIdx >= navPostedList.length) return;
-    await loadPurchaseRow(navPostedList[targetIdx]);
-  };
+
+  const handleNavFirst = () => goToNavIndex(0);
+  const handleNavLast = () => goToNavIndex(navList.length - 1);
+  // No current position yet (navIndex -1) — Previous/Next behave like First rather than no-ops.
+  const handleNavPrevious = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
+  const handleNavNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
 
   // Toolbar "Delete" now targets the selected ARTICLE (the row clicked into the entry fields
   // below), not the whole bill — bill deletion stays where it was, password-gated in the Pending
@@ -940,14 +956,24 @@ export default function PurchasePage() {
               <span>Edit</span>
             </button>
             <button
-              type="submit"
-              form="purchase-entry-form"
+              type="button"
+              onClick={() => doSave(false)}
               disabled={isViewMode || !isValid}
-              title={mode === 'edit' ? 'Update Purchase' : 'Save Purchase'}
+              title="Save — keep editing this purchase"
               className="toolbar-btn"
             >
               <Save size={20} strokeWidth={2.5} className="text-blue-600" />
-              <span>{mode === 'edit' ? 'Update' : 'Save'}</span>
+              <span>Save</span>
+            </button>
+            <button
+              type="submit"
+              form="purchase-entry-form"
+              disabled={isViewMode || !isValid}
+              title="Done — finish this purchase, then Post it"
+              className="toolbar-btn"
+            >
+              <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>Done</span>
             </button>
             <button
               type="button"
@@ -990,8 +1016,12 @@ export default function PurchasePage() {
             <button
               type="button"
               onClick={handleUnpost}
-              disabled={!isViewMode || purchaseId == null || !currentIsPosted || navFilter !== 'unposted'}
-              title={navFilter !== 'unposted' ? 'Switch the dropdown to Unposted first' : 'Unpost'}
+              // No longer gated on the dropdown: that made sense only while 'unposted' MEANT
+              // "I'm here to unpost". Now the dropdown genuinely filters, and its Unposted list
+              // holds drafts — none of which can be unposted. Being on a posted purchase is the
+              // only real precondition.
+              disabled={!isViewMode || purchaseId == null || !currentIsPosted}
+              title="Unpost — move this posted purchase back to drafts"
               className="toolbar-btn"
             >
               <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
@@ -1009,20 +1039,19 @@ export default function PurchasePage() {
             </button>
           </div>
 
-          {/* Posted/Unposted — arms which action Previous/Next/First/Last (left) are for; see the
-              comment on canNavPrevious/canNavNext above. Uses soleria-input-compact rather than a
-              forced inline height on the full-size soleria-input — that combination fought the
-              class's own padding/line-height and clipped the text, which is what "doesn't appear
-              properly" was. */}
+          {/* Posted/Unposted — picks which list Previous/Next/First/Last page through. Uses
+              soleria-input-compact rather than a forced inline height on the full-size
+              soleria-input — that combination fought the class's own padding/line-height and
+              clipped the text, which is what "doesn't appear properly" was. */}
           <select
             value={navFilter}
             onChange={e => setNavFilter(e.target.value as 'posted' | 'unposted')}
             className="soleria-input soleria-input-compact cursor-pointer font-semibold"
             style={{ width: 'auto' }}
-            title="Posted = add new bills. Unposted = browse posted bills to Unpost one."
+            title="Which purchases First/Prev./Next/Last page through: posted ones, or saved-but-unposted drafts."
           >
-            <option value="posted">Posted</option>
-            <option value="unposted">Unposted</option>
+            <option value="posted">Posted ({sortedPurchases.length})</option>
+            <option value="unposted">Unposted ({unpostedPurchases.length})</option>
           </select>
         </div>
 
