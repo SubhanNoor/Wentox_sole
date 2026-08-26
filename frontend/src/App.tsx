@@ -64,14 +64,15 @@ export default function App() {
       return <PurchasePage />;
     case 'purchase-return':
       return <PurchaseReturnPage />;
+    // Weekly/Monthly/Overall/Find tabs were removed from Sale Bill's own redesign (replaced by
+    // the Posted/Unposted browse dropdown + First/Pre./Next/Last right on the bill form) — these
+    // routes still exist for old NAVIGATE targets (e.g. cheque due-date alerts) and just land on
+    // the same page now.
     case 'find-bill':
-      return <SaleBillPage initialTab="find" />;
     case 'weekly-records':
-      return <SaleBillPage initialTab="weekly" />;
     case 'monthly-records':
-      return <SaleBillPage initialTab="monthly" />;
     case 'overall-records':
-      return <SaleBillPage initialTab="overall" />;
+      return <SaleBillPage />;
     case 'receipts-jamma':
       return <ReceiptsPage />;
     case 'expenses-entry':

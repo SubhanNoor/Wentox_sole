@@ -1,23 +1,23 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import WeeklyTab from '@/components/WeeklyTab';
-import MonthlyTab from '@/components/MonthlyTab';
-import OverallTab from '@/components/OverallTab';
-import FindTab from '@/components/FindTab';
-import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import {
+  Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit, AlertTriangle, CheckCircle2,
+  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, LogOut, Search, X, Undo2, FilePlus2,
+  PackageCheck, ChevronDown
+} from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { formatDate, getTodayDate } from '@/lib/utils';
-import { focusFirstField } from '@/lib/fieldNav';
-import { useHeldKey } from '@/hooks/useHeldKey';
+import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
+import SearchModal from '@/components/SearchModal';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
   RegionRow, CityRow, SaleBillRow, SaleBillCreateInput, SaleBillItemInput, StockRow,
-  DraftSaleBillRow, ConfirmAllResult
+  DraftSaleBillRow, ConfirmAllResult, BusinessAccountRow
 } from '@/lib/api';
 
 interface UiItem {
@@ -58,18 +58,8 @@ function recalcItem(item: UiItem): UiItem {
   return { ...item, pairs, discountValue, value };
 }
 
-export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 'billing' | 'weekly' | 'monthly' | 'overall' | 'find' }) {
-  const { state } = useApp();
-
-  const [activeTab, setActiveTab] = useState<'billing' | 'weekly' | 'monthly' | 'overall' | 'find'>(() => {
-    return (state.currentTab as any) || initialTab;
-  });
-
-  useEffect(() => {
-    if (state.currentTab && ['billing', 'weekly', 'monthly', 'overall', 'find'].includes(state.currentTab)) {
-      setActiveTab(state.currentTab as any);
-    }
-  }, [state.currentTab]);
+export default function SaleBillPage() {
+  const { state, dispatch } = useApp();
 
   // ── Real lookup data ──
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
@@ -81,14 +71,18 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   const [cities, setCities] = useState<CityRow[]>([]);
   const [variantsByArticle, setVariantsByArticle] = useState<Record<number, ProductVariantRow[]>>({});
   const [stockRows, setStockRows] = useState<StockRow[]>([]);
+  // "Main A/C" (ref-pic) — the customer's linked business account's PARENT chart account
+  // (ac_code/ac_name), e.g. "552000010 / CUSTOMERS ACCOUNTS" — distinct from the customer's own
+  // account code shown in the Customer field.
+  const [businessAccounts, setBusinessAccounts] = useState<BusinessAccountRow[]>([]);
   const [lookupError, setLookupError] = useState('');
 
   useEffect(() => {
     (async () => {
-      const [c, sc, p, st, ad, rg, ct, stRes] = await Promise.all([
+      const [c, sc, p, st, ad, rg, ct, stRes, baRes] = await Promise.all([
         api.listCustomers(), api.listSubCustomers(), api.listProducts(),
         api.listStores(), api.listAddas(), api.listRegions(), api.listCities(),
-        api.reports.stock()
+        api.reports.stock(), api.listBusinessAccounts()
       ]);
       const failures: string[] = [];
       if (c.ok) setCustomers(c.data); else failures.push(c.error.message);
@@ -99,6 +93,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       if (rg.ok) setRegions(rg.data); else failures.push(rg.error.message);
       if (ct.ok) setCities(ct.data); else failures.push(ct.error.message);
       if (stRes.ok) setStockRows(stRes.data);
+      if (baRes.ok) setBusinessAccounts(baRes.data);
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
   }, []);
@@ -142,7 +137,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
   // Password Modal Protection State
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
-  const [passwordActionType, setPasswordActionType] = useState<'save_bill' | 'save_and_post' | 'post_bill' | 'delete_unposted_bill' | null>(null);
+  const [passwordActionType, setPasswordActionType] = useState<'save_bill' | 'save_and_post' | 'post_bill' | 'delete_unposted_bill' | 'edit_item_row' | null>(null);
 
   // Form State
   const [billId, setBillId] = useState<number | null>(null);
@@ -163,6 +158,21 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   const [items, setItems] = useState<UiItem[]>([]);
 
   const [deliveryType, setDeliveryType] = useState<'1' | 'custom'>('1');
+  // Ref-pic's literal "Delivery" field: a typed code, where "1" means SAME/direct delivery and
+  // anything else means a custom destination (Sub-Customer picked separately still resolves to a
+  // real sub_customer_id — the backend has no other way to identify a delivery destination).
+  const [deliveryCode, setDeliveryCode] = useState('1');
+  const handleDeliveryCodeChange = (code: string) => {
+    setDeliveryCode(code);
+    const same = code.trim() === '1';
+    setDeliveryType(same ? '1' : 'custom');
+    if (same) {
+      setSubCustomerId('');
+      setCustomAddress('');
+    } else if (!subCustomerId) {
+      setSubCustomerId(subCustomers[0] ? String(subCustomers[0].sub_customer_id) : '');
+    }
+  };
   const [customAddress, setCustomAddress] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -187,9 +197,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
   const [unpostedBills, setUnpostedBills] = useState<DraftSaleBillRow[]>([]);
   const [postAllBusy, setPostAllBusy] = useState(false);
   const [postAllResult, setPostAllResult] = useState<ConfirmAllResult | null>(null);
-  // Pending Posting sidebar: which single bill is mid-post (disables just that row's Post button
-  // rather than the whole panel).
-  const [postingBillId, setPostingBillId] = useState<number | null>(null);
 
   const refreshUnposted = useCallback(async () => {
     const res = await api.draftSaleBills.list();
@@ -221,7 +228,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     // on screen was one of the ones just posted, its id no longer exists (it's a different bill_id
     // now) — ConfirmAllResult doesn't carry the new id back, so rather than leave the form pointed
     // at a draft that's gone, reset to a fresh one.
-    await Promise.all([refreshUnposted(), refreshStock()]);
+    await Promise.all([refreshUnposted(), refreshPosted(), refreshStock()]);
     if (billId != null && !currentBillIsPosted && res.data.posted.some(p => p.draft_id === billId)) {
       handleNew();
     }
@@ -270,6 +277,16 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
   const selectedCustomer = useMemo(() => customers.find(c => c.customer_id === Number(customerId)), [customers, customerId]);
 
+  // Customer field's SearchModal (pages_design.md §5) — the page's main "party" field.
+  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
+  const customerTriggerRef = useRef<HTMLButtonElement>(null);
+
+  // "Main A/C" — the customer's linked business account's parent chart account (ac_code/ac_name).
+  const selectedMainAc = useMemo(() => {
+    if (selectedCustomer?.ba_id == null) return null;
+    return businessAccounts.find(b => b.ba_id === selectedCustomer.ba_id) ?? null;
+  }, [businessAccounts, selectedCustomer]);
+
   const isCustomDelivery = useMemo(() => deliveryType === 'custom', [deliveryType]);
 
   const stockExceededRows = useMemo(() => {
@@ -310,15 +327,15 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
 
   const pendingDeleteBillId = useRef<number | null>(null);
 
-  // G-01: auto-focus the first field (Date) whenever the billing tab becomes the active view and
-  // is editable — this page's entry area isn't wrapped in a <form>, so AppLayout's global
-  // auto-focus mechanism (which only looks inside <form> elements) has nothing to find here.
+  // G-01: auto-focus the first field (Date) whenever the page becomes editable — this page's
+  // entry area isn't wrapped in a <form>, so AppLayout's global auto-focus mechanism (which only
+  // looks inside <form> elements) has nothing to find here.
   const firstFieldRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    if (activeTab === 'billing' && mode !== 'view') {
+    if (mode !== 'view') {
       requestAnimationFrame(() => firstFieldRef.current?.focus());
     }
-  }, [activeTab, mode]);
+  }, [mode]);
 
   const loadBillRow = async (rowIn: SaleBillRow) => {
     // list()/biltySearch() rows never carry items (only get() does) — the tabs pass those
@@ -343,6 +360,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setCustomerId(String(row.customer_id));
     setSubCustomerId(row.sub_customer_id != null ? String(row.sub_customer_id) : '');
     setDeliveryType(row.delivery_type === 'CUSTOM' ? 'custom' : '1');
+    setDeliveryCode(row.delivery_type === 'CUSTOM' ? '2' : '1');
     setCustomAddress(row.delivery_address || '');
     setBillNo(row.bill_no);
     setGpNo(row.gp_no || '');
@@ -368,36 +386,21 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         value: it.value
       };
     });
-    setItems(loadedItems.length ? loadedItems : [newUiItem()]);
+    setItems(loadedItems);
+    setEntry(newUiItem());
+    setEditingIndex(null);
 
     // Pre-warm the variant cache for each loaded item's article so the picker works immediately if edited
     loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
     setErrorMsg('');
   };
 
-  // No password prompt here — Save (handleSave, mode==='edit') already asks for one before the
-  // update actually goes through, so gating entry into edit mode too meant asking twice for one
-  // edit (reported directly by the user: edit then update each prompted separately).
-  const handleEditSpecificBill = async (bill: SaleBillRow) => {
-    await loadBillRow(bill);
-    setActiveTab('billing');
-    setMode('edit');
-  };
-
-  const handlePrintSpecificBill = async (bill: SaleBillRow) => {
-    await loadBillRow(bill);
-    setIsPrintingSingle(true);
-    setTimeout(() => {
-      window.print();
-      setIsPrintingSingle(false);
-    }, 150);
-  };
 
   // Loads a draft (the Pending Posting sidebar's rows are all drafts now) directly into the form
   // for editing — no password, same convention drafts always had (only editing an already-POSTED
   // bill is password-gated). mode='edit' with billId set to the draft's own id so Save routes to
   // draftSaleBills.update() rather than create()-ing a second one.
-  const loadDraftIntoForm = (draft: DraftSaleBillRow) => {
+  const loadDraftIntoForm = (draft: DraftSaleBillRow, opts: { mode?: 'edit' | 'view' } = {}) => {
     createdInThisRun.current = false;
     setBillId(draft.draft_id);
     setCurrentBillIsPosted(false);
@@ -406,6 +409,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setCustomerId(String(draft.customer_id));
     setSubCustomerId(draft.sub_customer_id != null ? String(draft.sub_customer_id) : '');
     setDeliveryType(draft.delivery_type === 'CUSTOM' ? 'custom' : '1');
+    setDeliveryCode(draft.delivery_type === 'CUSTOM' ? '2' : '1');
     setCustomAddress(draft.delivery_address || '');
     setBillNo(draft.bill_no || '');
     setGpNo(draft.gp_no || '');
@@ -431,53 +435,123 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         value: it.value
       };
     });
-    setItems(loadedItems.length ? loadedItems : [newUiItem()]);
+    setItems(loadedItems);
+    setEntry(newUiItem());
+    setEditingIndex(null);
     loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
 
-    setMode('edit');
+    setMode(opts.mode ?? 'edit');
     setErrorMsg('');
   };
 
-  // Pending Posting sidebar: opening a row loads that draft straight into the form.
-  const handleOpenUnpostedBill = async (draftId: number) => {
-    const res = await api.draftSaleBills.get(draftId);
-    if (!res.ok) {
-      setErrorMsg('Failed to load bill: ' + res.error.message);
-      return;
-    }
-    loadDraftIntoForm(res.data);
-    setActiveTab('billing');
+  // ── Record navigation: First/Pre./Next/Last + Posted/Unposted dropdown (pages_design.md §3) ──
+  // IMPORTANT, easy to get backwards: the dropdown is NOT a data filter — both values browse the
+  // SAME posted-records list. It only arms which action you're browsing *for*:
+  //   'posted'   (default) — normal browsing / new-entry mode. Prev/Next/First/Last are DULLED
+  //              here; the toolbar's job in this mode is adding new bills, not paging old ones.
+  //   'unposted' — "I'm here to Unpost." Only a posted bill can be unposted, so this mode is what
+  //              enables Prev/Next/First/Last to actually browse, and it's also what the Unpost
+  //              button itself checks before allowing the click.
+  const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('posted');
+  // Ref-pic's Master/Detail radios. Both sections render at all times — the article entry strip
+  // has to stay reachable no matter which radio is picked, so this only tracks which one is
+  // selected for display (matching the ref pic's own toggle look); it doesn't hide either section.
+  const [viewSection, setViewSection] = useState<'master' | 'detail'>('master');
+  const [postedBills, setPostedBills] = useState<SaleBillRow[]>([]);
+
+  const refreshPosted = useCallback(async () => {
+    const res = await api.saleBills.list();
+    if (res.ok) setPostedBills(res.data);
+  }, []);
+
+  useEffect(() => { refreshPosted(); }, [refreshPosted]);
+
+  // saleBills.list() returns newest-first (ORDER BY bill_date DESC, bill_id DESC) — reverse for
+  // oldest-first, so First = earliest, Last = most recent, matching the doc's own nav semantics.
+  const navPostedList = useMemo(() => [...postedBills].reverse(), [postedBills]);
+
+  // Where the bill currently on screen sits in navPostedList — -1 while it's a brand-new,
+  // unsaved bill, or a not-yet-posted draft (nothing to browse back to).
+  const navIndex = useMemo(() => {
+    if (billId == null || !currentBillIsPosted) return -1;
+    return navPostedList.findIndex(b => b.bill_id === billId);
+  }, [billId, currentBillIsPosted, navPostedList]);
+
+  const canBrowse = browseFilter === 'unposted' && navPostedList.length > 0;
+  const canNavPrevious = canBrowse && navIndex !== 0;
+  const canNavNext = canBrowse && navIndex !== navPostedList.length - 1;
+
+  // Loads whichever row sits at `idx` of navPostedList into the form, read-only — browsing is
+  // look-then-decide, same as opening any other existing bill; Edit still needs its own explicit
+  // click (and, for a posted bill, its own password gate on Save).
+  const goToNavIndex = async (idx: number) => {
+    if (idx < 0 || idx >= navPostedList.length) return;
+    await loadBillRow(navPostedList[idx]);
+    setMode('view');
   };
 
-  // Posts a single bill straight from the sidebar without loading it into the form — for the
-  // common case of "this one's ready, the rest of the run isn't yet". stopPropagation keeps the
-  // click from also triggering the row's own open-for-edit handler.
-  const handlePostOneUnposted = async (draftId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setPostingBillId(draftId);
-    const res = await api.draftSaleBills.confirm(draftId);
-    setPostingBillId(null);
-    if (!res.ok) {
-      setErrorMsg('Failed to post bill: ' + res.error.message);
+  // navIndex === -1 (nothing loaded yet) behaves like First/jump to index 0, not a no-op.
+  const handleFirst = () => goToNavIndex(0);
+  const handlePrev = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
+  const handleNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
+  const handleLast = () => goToNavIndex(navPostedList.length - 1);
+
+  // Toolbar's Find button — a quick jump to any bill (posted or unposted) by bill number or
+  // customer name, searched client-side over the already-loaded browse lists rather than a
+  // round-trip, since both lists are small enough to already be in memory for First/Pre/Next/Last.
+  const [isFindOpen, setIsFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const findResults = useMemo(() => {
+    const q = findQuery.trim().toLowerCase();
+    if (!q) return [];
+    const matches = (b: { bill_no: string | null; customer_id: number }) =>
+      (b.bill_no || '').toLowerCase().includes(q) ||
+      (customers.find(c => c.customer_id === b.customer_id)?.name || '').toLowerCase().includes(q);
+    const posted = postedBills.filter(matches).map(row => ({ filter: 'posted' as const, row }));
+    const unposted = unpostedBills.filter(matches).map(row => ({ filter: 'unposted' as const, row }));
+    return [...posted, ...unposted].slice(0, 30);
+  }, [findQuery, postedBills, unpostedBills, customers]);
+
+  const handleFindSelect = async (filter: 'posted' | 'unposted', row: SaleBillRow | DraftSaleBillRow) => {
+    setIsFindOpen(false);
+    setFindQuery('');
+    if (filter === 'posted') {
+      await loadBillRow(row as SaleBillRow);
+      setMode('view');
+    } else {
+      loadDraftIntoForm(row as DraftSaleBillRow, { mode: 'view' });
+    }
+  };
+
+  // Toolbar's Delete button — the current on-screen bill, password-gated the same way the old
+  // Pending Posting sidebar's per-row Delete was. Only ever a draft: a posted bill has to be
+  // Un Posted first (mirrors the fact that sale_bills never holds an unposted document).
+  const handleDeleteCurrentBill = () => {
+    if (billId == null || currentBillIsPosted) return;
+    pendingDeleteBillId.current = billId;
+    setPasswordActionType('delete_unposted_bill');
+    setIsPasswordModalOpen(true);
+  };
+
+  // Delete is dual-purpose per pages_design.md §4: "no per-row delete button [in the grid] —
+  // deleting a line item is a toolbar action, enabled only while a row is selected (editingIndex
+  // set)". With a row selected, Delete removes THAT line item; with none selected, it falls back
+  // to this page's own whole-bill delete (a capability the reference build didn't need to cover).
+  const handleDeleteAction = () => {
+    if (editingIndex != null) {
+      handleRemoveItemRow(editingIndex);
       return;
     }
-    setSuccessMsg(`Bill ${res.data.bill_no} posted.`);
-    setTimeout(() => setSuccessMsg(''), 3000);
-    await Promise.all([refreshUnposted(), refreshStock()]);
-    // The form was pointing at this exact draft — it's a real, posted bill now under a new id.
-    if (draftId === billId && !currentBillIsPosted) {
-      setBillId(res.data.bill_id);
-      setCurrentBillIsPosted(true);
-    }
+    handleDeleteCurrentBill();
   };
 
   // Initialize new bill if mode is new and not set
   useEffect(() => {
-    if (activeTab === 'billing' && mode === 'new' && billId === null && stores.length > 0) {
+    if (mode === 'new' && billId === null && stores.length > 0) {
       handleNew();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, mode, billId, stores]);
+  }, [mode, billId, stores]);
 
   // Calculations
   const totalCartons = useMemo(() => items.reduce((sum, item) => sum + (item.cartons || 0), 0), [items]);
@@ -503,6 +577,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setCustomerId('');
     setSubCustomerId('');
     setDeliveryType('1');
+    setDeliveryCode('1');
     setCustomAddress('');
     setIsAddSubCustomerOpen(false);
     setNewSubCustomerName('');
@@ -513,7 +588,9 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setRemarks('');
     setDueDate('');
     setInvoiceDiscount(0);
-    setItems([newUiItem()]);
+    setItems([]);
+    setEntry(newUiItem());
+    setEditingIndex(null);
     setErrorMsg('');
   };
 
@@ -638,7 +715,10 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     return result.data;
   };
 
-  const handleSave = async () => {
+  // `advanceToNext=false` is the ref-pic's plain "Save" (persist and stay put, e.g. to keep
+  // working the same bill); `advanceToNext=true` is "Done" (persist and reset for the next bill,
+  // same behavior Save always had before Done existed as its own button).
+  const handleSave = async (advanceToNext: boolean = true) => {
     // Only editing an ALREADY-POSTED bill needs a password — editing a draft (complete or not)
     // never did, same convention "Saved Drafts" always had.
     if (isEditingPostedBill) {
@@ -654,7 +734,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     // draft just goes back to viewing it, same as editing a posted bill does.
     const wasNew = mode !== 'edit';
     const saved = await executeSave();
-    if (saved && wasNew) readyForNextBill();
+    if (saved && wasNew && advanceToNext) readyForNextBill();
   };
 
   // SB-01: the whole save-and-post path is wrapped, because this is the button that "did nothing" on
@@ -694,6 +774,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         setSuccessMsg(`Bill ${postRes.data.bill_no} saved & posted. Ready for the next one.`);
         setTimeout(() => setSuccessMsg(''), 3000);
         refreshUnposted(); // SB-06: it just left the pending list.
+        refreshPosted();
         if (createdInThisRun.current) readyForNextBill();
       }
     }
@@ -709,6 +790,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
       setBillId(res.data.bill_id);
       setCurrentBillIsPosted(true);
       refreshUnposted(); // SB-06: it just left the pending list.
+      refreshPosted();
       // SB-05: clear for the next bill only if this one was entered in this run. A bill opened
       // from the Find tab and posted there stays on screen — the user went to it deliberately.
       if (createdInThisRun.current) {
@@ -734,9 +816,13 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     }
     setBillId(res.data.draft_id);
     setCurrentBillIsPosted(false);
+    // pages_design.md §3: land on the editable screen immediately after unposting, not a
+    // read-only one — the whole point of unposting is to go fix something.
+    setMode('edit');
     setSuccessMsg('Bill unposted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshUnposted();
+    refreshPosted();
   };
 
   // Entering edit mode never needs its own password prompt anymore — Save (handleSave,
@@ -767,38 +853,169 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
           await Promise.all([refreshUnposted(), refreshStock()]);
         }
       }
+    } else if (passwordActionType === 'edit_item_row') {
+      const idx = pendingRowEditIndex.current;
+      pendingRowEditIndex.current = null;
+      if (idx != null) {
+        setMode('edit');
+        loadRowIntoEntry(idx);
+      }
     }
     setPasswordActionType(null);
   };
 
-  // Pending Posting sidebar's Delete button — password-gated (verified server-side): destructive,
-  // with no reverse-never-erase trail, same guard level as editing an already-posted bill.
-  const handleDeleteUnposted = (targetDraftId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    pendingDeleteBillId.current = targetDraftId;
-    setPasswordActionType('delete_unposted_bill');
-    setIsPasswordModalOpen(true);
+  // ── Detail entry strip (ref-pic bound-record pattern) ──
+  // A single "current record" (`entry`) sits in its own strip above the committed-items table —
+  // NOT one of the table's own rows. Typing an article, cartons, rate, D%/DV and pressing Enter
+  // on the last field commits it into `items` (appending, or replacing `editingIndex` when a
+  // table row was clicked to re-open it) and resets the strip, ready for the next article,
+  // without ever touching the master fields above. This mirrors legacy grid-bound-entry software
+  // (the ref-pic's own UI) more directly than editing cells inline inside the table itself.
+  const [entry, setEntry] = useState<UiItem>(newUiItem());
+  // null while the strip is adding a brand-new row; the table index being replaced once a
+  // committed row has been clicked back open for editing (see handleRowClick below).
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const entryProductCellRef = useRef<HTMLDivElement>(null);
+  const pendingRowEditIndex = useRef<number | null>(null);
+  // Product field's SearchModal — same pattern as Customer's (pages_design.md §5): type the
+  // article code, Enter opens a big centered popup to pick from, matching stock shown per row.
+  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+  const productTriggerRef = useRef<HTMLInputElement>(null);
+  // What's currently typed into the Product field itself — separate from `entry.articleId`/
+  // `entry.label` (the committed selection) so the field can keep showing free-typed text right
+  // up until Enter opens the modal with it as the initial filter.
+  const [productSearchText, setProductSearchText] = useState('');
+
+  const handleEntryArticleChange = async (articleIdStr: string) => {
+    const articleId = articleIdStr ? Number(articleIdStr) : null;
+    const product = articleId != null ? products.find(p => p.article_id === articleId) : undefined;
+    setEntry(prev => recalcItem({
+      ...prev,
+      articleId,
+      variantId: null,
+      label: product?.name || '',
+      packing: product?.packing || 0,
+      rate: product?.sale_price ?? prev.rate
+    }));
+    if (articleId != null) await fetchVariants(articleId);
   };
 
-  // Line Items Helper Actions — new rows go to the TOP, not the bottom: the newest article is
-  // what the user is looking at and typing into, so it should be the one visible without
-  // scrolling down through everything already entered (item table only shows ~2 rows before it
-  // scrolls internally — see its wrapper below).
-  const handleAddItemRow = () => setItems([newUiItem(), ...items]);
+  // Keeps the Product field's displayed text in sync with `entry.articleId` from every reset
+  // point at once (new row, row loaded for editing, commit, Cancel) instead of setting
+  // `productSearchText` by hand at each one.
+  useEffect(() => {
+    const product = entry.articleId != null ? products.find(p => p.article_id === entry.articleId) : undefined;
+    setProductSearchText(product?.code ?? '');
+  }, [entry.articleId, products]);
 
-  // Keyboard entry of a whole bill without touching the mouse: G-01's generic Enter-walk already
-  // carries a row's own fields forward and hops into the NEXT row correctly (it's a plain DOM-order
-  // walk, and the next row's fields are already there to walk into). The one thing it cannot do is
-  // create a row that doesn't exist yet — so this only steps in at the boundary, when Enter is
-  // pressed on the LAST field of the LAST row: it inserts a blank row at the top and focuses into
-  // it, same as WageRunPage's WR-02. Every other Enter press on this grid is left alone.
-  //
-  // stopPropagation matters here: AppLayout's own window-level Enter handler runs on the same
-  // keydown right after this one, reading the SAME e.target — and setItems() hasn't re-rendered
-  // yet, so as far as that handler can tell this input is still the form's last field. Without
-  // stopPropagation it would also see idx-is-last and, in the same tick, click the Save & Post
-  // button — posting a bill in the middle of appending a row to it.
-  const articleCellRefs = useRef<(HTMLTableCellElement | null)[]>([]);
+  const handleEntryVariantChange = (variantIdStr: string) => {
+    if (entry.articleId == null) return;
+    const variantId = variantIdStr ? Number(variantIdStr) : null;
+    const variant = variantsByArticle[entry.articleId]?.find(v => v.variant_id === variantId);
+    const product = products.find(p => p.article_id === entry.articleId);
+    setEntry(prev => recalcItem({
+      ...prev,
+      variantId,
+      label: variant ? `${product?.name || ''} — ${variant.color}` : (product?.name || ''),
+      packing: variant?.packing ?? product?.packing ?? prev.packing,
+      rate: product?.sale_price ?? prev.rate
+    }));
+  };
+
+  const updateEntryNumericField = (field: 'cartons' | 'rate' | 'discountPercent' | 'discountValue', val: number) => {
+    setEntry(prev => {
+      const next = { ...prev, [field]: val };
+      const gross = next.cartons * next.packing * next.rate;
+      if (field === 'discountValue') {
+        next.discountPercent = gross > 0 ? parseFloat(((val / gross) * 100).toFixed(1)) : 0;
+      }
+      return recalcItem(next);
+    });
+  };
+
+  // Same stock-limit rule as the whole-bill check below, scoped to just the strip's own variant:
+  // other committed rows already reserve some of that stock, so what's left is (available minus
+  // whatever they've already claimed) — the row being re-edited (editingIndex) doesn't double-count
+  // against itself.
+  const entryStockCheck = useMemo(() => {
+    if (entry.variantId == null || entry.cartons <= 0) return null;
+    const stockInfo = getStockInfo(entry.articleId, entry.variantId);
+    const available = stockInfo ? stockInfo.cartons : 0;
+    const otherReserved = items.reduce(
+      (sum, it, i) => (i !== editingIndex && it.variantId === entry.variantId) ? sum + it.cartons : sum,
+      0
+    );
+    const totalReq = otherReserved + entry.cartons;
+    return totalReq > available ? { available, totalReq } : null;
+  }, [entry, items, editingIndex, getStockInfo]);
+
+  // Commits the strip's current entry into the table — appends a new row, or overwrites
+  // `editingIndex` when the strip is re-editing a row clicked open from the table. Stock-blocked
+  // entries refuse to commit at all (per spec: "do not allow adding the row"), not just warn.
+  const handleCommitEntryRow = () => {
+    if (entry.articleId == null || entry.variantId == null) {
+      setErrorMsg('Select an article and color before adding the row.');
+      return;
+    }
+    if (entry.cartons <= 0) { setErrorMsg('Cartons must be greater than 0.'); return; }
+    if (entry.rate <= 0) { setErrorMsg('Rate must be greater than 0.'); return; }
+    if (entryStockCheck) {
+      setErrorMsg(`Cannot add row: ${entryStockCheck.totalReq} cartons requested exceeds ${entryStockCheck.available} in stock.`);
+      return;
+    }
+    setErrorMsg('');
+    if (editingIndex != null) {
+      setItems(prev => prev.map((it, i) => i === editingIndex ? entry : it));
+    } else {
+      setItems(prev => [...prev, entry]);
+    }
+    setEditingIndex(null);
+    setEntry(newUiItem());
+    requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
+  };
+
+  // Enter on the strip's LAST field (DV) commits the row and resets the strip — every other Enter
+  // press within the strip is left to G-01's normal field-walk. stopPropagation keeps AppLayout's
+  // own window-level Enter handler from also acting on the same keydown once setEntry/setItems
+  // have fired (it reads the same e.target, which hasn't re-rendered away yet).
+  function handleEntryLastFieldKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    e.stopPropagation();
+    handleCommitEntryRow();
+  }
+
+  // Loads an already-committed row back into the strip for editing (table row click). Posted
+  // bills are password-gated first (see handleRowClick); drafts and brand-new bills load straight
+  // in, matching the convention that only a POSTED bill's edits ever need a password.
+  const loadRowIntoEntry = (idx: number) => {
+    const row = items[idx];
+    setEntry(row);
+    setEditingIndex(idx);
+    if (row.articleId != null) fetchVariants(row.articleId);
+    requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
+  };
+
+  const handleRowClick = (idx: number) => {
+    if (isViewMode && currentBillIsPosted) {
+      pendingRowEditIndex.current = idx;
+      setPasswordActionType('edit_item_row');
+      setIsPasswordModalOpen(true);
+      return;
+    }
+    if (isViewMode) setMode('edit');
+    loadRowIntoEntry(idx);
+  };
+
+  const handleRemoveItemRow = (idx: number) => {
+    setItems(prev => prev.filter((_, i) => i !== idx));
+    if (editingIndex === idx) {
+      setEditingIndex(null);
+      setEntry(newUiItem());
+    } else if (editingIndex != null && idx < editingIndex) {
+      setEditingIndex(editingIndex - 1);
+    }
+  };
 
   // Invoice card fills whatever vertical space is left in the viewport below it, so the item
   // table (flex-1 inside it) gets to grow and the Remarks/Calculations footer lands at the
@@ -825,84 +1042,6 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     window.addEventListener('resize', recompute);
     return () => window.removeEventListener('resize', recompute);
   }, [mode, hasStockExceeded]);
-  // '.' held while Enter is pressed is a genuine three-way chord alongside Shift+Enter/Ctrl+Enter
-  // below — tracked via useHeldKey since '.' isn't a real modifier key with its own event flag.
-  // Typing '.' alone (a decimal point) never triggers this: by the time Enter is a separate,
-  // later keypress, '.' has already been released. Any single stray "." that types into the field
-  // during the chord itself is harmless — the input is fully controlled by the numeric state, so
-  // the very next render overwrites it back to the real number regardless.
-  const periodHeld = useHeldKey('.');
-
-  function handleLastFieldKeyDown(e: React.KeyboardEvent) {
-    // Plain Enter is deliberately left alone here: it now does exactly what every other field
-    // does — walk to whatever's next via AppLayout's own G-01 handler, and eventually reach
-    // Save/Post. An earlier version hijacked it to always append a new line, which meant a plain
-    // Enter on the last field could never actually finish and save a bill — reported directly by
-    // the user after trying it.
-    //
-    // Adding a line is its own explicit action instead: Shift+Enter, Ctrl+Enter, or '.'+Enter, from
-    // the last field of ANY row (not only the last one) — always inserts at the top, same as the
-    // "+ Add Item Row" button, and focuses into the new row. Shift+Enter is distinct from its
-    // other meaning inside a Remarks textarea (insert a literal newline) — different field, no
-    // collision.
-    if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey || periodHeld.current)) return;
-    e.preventDefault();
-    e.stopPropagation(); // stop AppLayout's own Enter handler from also walking this keystroke
-    handleAddItemRow();
-    requestAnimationFrame(() => focusFirstField(articleCellRefs.current[0])); // new row is always index 0 now
-  }
-
-  // A bill always needs at least one row to type into, so deleting the last remaining one clears
-  // its fields back to blank instead of removing the row itself (keeping its uid, so the row
-  // doesn't remount and lose focus).
-  const handleRemoveItemRow = (idx: number) => {
-    if (items.length <= 1) {
-      setItems(prev => prev.map((it, i) => i === idx ? { ...newUiItem(), uid: it.uid } : it));
-      return;
-    }
-    setItems(items.filter((_, i) => i !== idx));
-  };
-
-  const handleArticleChange = async (idx: number, articleIdStr: string) => {
-    const articleId = articleIdStr ? Number(articleIdStr) : null;
-    const product = articleId != null ? products.find(p => p.article_id === articleId) : undefined;
-    setItems(prev => prev.map((it, i) => i === idx ? recalcItem({
-      ...it,
-      articleId,
-      variantId: null,
-      label: product?.name || '',
-      packing: product?.packing || 0,
-      rate: product?.sale_price ?? it.rate
-    }) : it));
-    if (articleId != null) await fetchVariants(articleId);
-  };
-
-  const handleVariantChange = (idx: number, variantIdStr: string) => {
-    const item = items[idx];
-    if (item.articleId == null) return;
-    const variantId = variantIdStr ? Number(variantIdStr) : null;
-    const variant = variantsByArticle[item.articleId]?.find(v => v.variant_id === variantId);
-    const product = products.find(p => p.article_id === item.articleId);
-    setItems(prev => prev.map((it, i) => i === idx ? recalcItem({
-      ...it,
-      variantId,
-      label: variant ? `${product?.name || ''} — ${variant.color}` : (product?.name || ''),
-      packing: variant?.packing ?? product?.packing ?? it.packing,
-      rate: product?.sale_price ?? it.rate
-    }) : it));
-  };
-
-  const updateNumericField = (idx: number, field: 'cartons' | 'rate' | 'discountPercent' | 'discountValue', val: number) => {
-    setItems(prev => prev.map((item, i) => {
-      if (i !== idx) return item;
-      let next = { ...item, [field]: val };
-      const gross = next.cartons * next.packing * next.rate;
-      if (field === 'discountValue') {
-        next.discountPercent = gross > 0 ? parseFloat(((val / gross) * 100).toFixed(1)) : 0;
-      }
-      return recalcItem(next);
-    }));
-  };
 
   const isViewMode = mode === 'view';
 
@@ -926,6 +1065,7 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     setCustomers(prev => [...prev, res.data]);
     setCustomerId(String(res.data.customer_id));
     setDeliveryType('1');
+    setDeliveryCode('1');
     setSubCustomerId('');
     setCustomAddress('');
     setIsAddCustomerOpen(false);
@@ -1149,178 +1289,11 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
     );
   }
 
-  // Sub-tab switcher — lives in the top header bar next to the page title (AppLayout's
-  // headerAction slot), not as a separate row inside the content area, so the content below the
-  // Quick Menu bar starts immediately at the Pending Posting / Save-Post row instead of losing a
-  // whole row's height to a tab bar first.
-  const tabBar = (
-    <div className="flex gap-1.5" data-no-print>
-      <button
-        onClick={() => { setActiveTab('billing'); handleNew(); }}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-          activeTab === 'billing' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
-        }`}
-      >
-        New Sale Bill
-      </button>
-      <button
-        onClick={() => setActiveTab('weekly')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-          activeTab === 'weekly' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
-        }`}
-      >
-        Weekly Records
-      </button>
-      <button
-        onClick={() => setActiveTab('monthly')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-          activeTab === 'monthly' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
-        }`}
-      >
-        Monthly Records
-      </button>
-      <button
-        onClick={() => setActiveTab('overall')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-          activeTab === 'overall' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
-        }`}
-      >
-        Overall Records
-      </button>
-      <button
-        onClick={() => setActiveTab('find')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-          activeTab === 'find' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
-        }`}
-      >
-        Find &amp; Update Bill
-      </button>
-    </div>
-  );
-
   return (
-    <AppLayout pageTitle="Sale Bill" headerAction={tabBar}>
+    <AppLayout pageTitle="Sale Bill">
       <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
 
-        {/* SB-06: Pending Posting — a flat vertical list of every unposted bill (no customer
-            grouping), pinned outside the card's own left edge rather than inside its layout, so
-            it can never change the card's width/position: it's `absolute`, anchored via
-            `right: calc(100% + gap)` to the LEFT edge of this very `relative` wrapper (the card's
-            own boundary), not to the viewport or a guessed margin — wherever the card's edge
-            actually lands, this sits just outside it, and being `absolute` it's out of flow, so
-            it has zero effect on the card. Only shown from `2xl` up, since below that there
-            usually isn't 280px of real margin free for it to land in without spilling past the
-            window edge. Clicking a bill opens it in the form for editing (same password-gated
-            path as every other edit entry point); the small Post button on a row posts just that
-            bill without leaving the list. "Post All" is unchanged. */}
-        {(unpostedBills.length > 0 || postAllResult) && (
-          <aside
-            className="hidden 2xl:block absolute top-0 w-64 space-y-3"
-            style={{ right: 'calc(100% + 24px)' }}
-            data-no-print
-          >
-            <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <span className="font-semibold text-slate-700">Pending Posting</span>
-                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
-                  {unpostedBills.length}
-                </span>
-              </div>
-              <div className="text-xs text-slate-500 mb-3">
-                {unpostedBills.length > 0 && `Total ${formatCurrency(unpostedBills.reduce((s, b) => s + Number(b.net_value), 0))}`}
-              </div>
-              {unpostedBills.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handlePostAll}
-                  disabled={postAllBusy}
-                  className="w-full px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                >
-                  {postAllBusy ? 'Posting…' : `Post All (${unpostedBills.length})`}
-                </button>
-              )}
-
-              {/* The result stays on screen until dismissed — a run can post 18 of 20 bills, and
-                  the two that failed are the whole point of the message. */}
-              {postAllResult && (
-                <div className="mt-3 pt-3 border-t border-amber-200">
-                  <p className="text-xs font-semibold text-slate-700">
-                    {postAllResult.posted.length} of {postAllResult.attempted} posted
-                    {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
-                  </p>
-                  {postAllResult.failed.length > 0 && (
-                    <ul className="mt-1.5 space-y-1">
-                      {postAllResult.failed.map(f => (
-                        <li key={f.draft_id} className="text-xs text-rose-700">
-                          <span className="font-mono font-semibold">{f.bill_no || `#${f.draft_id}`}</span>
-                          {' — '}{f.message}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setPostAllResult(null)}
-                    className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Flat list — every draft (saved-unposted bill), oldest first (same order the
-                backend returns). Customer name is resolved locally since drafts don't carry a
-                joined name the way the old summary rows did. */}
-            {unpostedBills.length > 0 && (
-              <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
-                {unpostedBills.map(b => (
-                  <li
-                    key={b.draft_id}
-                    onClick={() => handleOpenUnpostedBill(b.draft_id)}
-                    className="px-3 py-2.5 text-xs flex items-center justify-between gap-2 cursor-pointer hover:bg-amber-50/60 transition-colors border-b border-slate-100 last:border-b-0"
-                  >
-                    <div className="min-w-0">
-                      <div className="font-mono font-semibold text-slate-700">{b.bill_no || `#${b.draft_id}`}</div>
-                      <div className="text-slate-400 truncate">{customers.find(c => c.customer_id === b.customer_id)?.name || 'Unnamed Customer'}</div>
-                      <div className="text-slate-400">{formatDate(b.bill_date)} · {formatCurrency(Number(b.net_value))}</div>
-                    </div>
-                    <div className="flex-shrink-0 flex flex-row items-center gap-1">
-                      <button
-                        type="button"
-                        title="Post this bill"
-                        onClick={(e) => handlePostOneUnposted(b.draft_id, e)}
-                        disabled={postingBillId === b.draft_id}
-                        className="p-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                      >
-                        <CheckCircle2 size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        title="Delete this bill (password required)"
-                        onClick={(e) => handleDeleteUnposted(b.draft_id, e)}
-                        disabled={postingBillId === b.draft_id}
-                        className="p-1.5 rounded-md bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </aside>
-        )}
-
-        {/* Tab contents (records & find) */}
-        <div>
-          {activeTab === 'weekly' && <WeeklyTab onEditBill={handleEditSpecificBill} onPrintBill={handlePrintSpecificBill} />}
-          {activeTab === 'monthly' && <MonthlyTab onEditBill={handleEditSpecificBill} onPrintBill={handlePrintSpecificBill} />}
-          {activeTab === 'overall' && <OverallTab onEditBill={handleEditSpecificBill} onPrintBill={handlePrintSpecificBill} />}
-          {activeTab === 'find' && <FindTab onEditBill={handleEditSpecificBill} onPrintBill={handlePrintSpecificBill} />}
-        </div>
-
-        <form onSubmit={e => e.preventDefault()} className={activeTab === 'billing' ? 'block' : 'hidden'}>
+        <form onSubmit={e => e.preventDefault()}>
 
         {/* Banner Messages */}
         {lookupError && (
@@ -1337,72 +1310,117 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
           </div>
         )}
 
-        {/* The old separate "Saved Drafts" loader panel is gone — every saved-unposted bill is a
-            draft now, so the Pending Posting sidebar (above, outside this form) covers exactly
-            the same ground: click a row to load it, a Post button per row, Post All, and a
-            password-gated Delete. Nothing left here needs its own picker. */}
-
 
         {/* Toolbar - data-no-print */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
-          {/* Every action always renders (ref-pic style) — only `disabled` changes per state,
-              instead of whole button groups mounting/unmounting per `mode`. */}
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={handleNew} className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none">
-              New Bill
-            </button>
-            <button
-              type="submit"
-              onClick={handleSave}
-              disabled={mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded}
-              className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-sm font-inter disabled:pointer-events-none ${
-                mode !== 'view' && isNecessaryFieldsFilled && !hasStockExceeded
-                  ? 'bg-[#111c2a] text-[#B08D57] border border-[#B08D57] cursor-pointer hover:bg-[#1a293d]'
-                  : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
-              }`}
-            >
-              <Save size={16} /> {mode === 'edit' ? 'Update Bill' : 'Save Bill'}
+          {/* Icon-over-label toolbar buttons, per System_architecture/pages_design.md §1 — small
+              square buttons (`.toolbar-btn`), colored icon on top, tiny bold label underneath,
+              packed tightly in one strip, dividers between logical groups. Every action always
+              renders — only `disabled` changes per state, never whole groups mounting/unmounting.
+              Icon color signals the action's nature (not the button background): emerald =
+              create/confirm, rose = delete/destructive, sky = edit, blue = save, slate = cancel/
+              neutral, amber = navigation. */}
+          <div className="flex flex-wrap items-center gap-0.5">
+            <button type="button" onClick={handleNew} title="New" className="toolbar-btn">
+              <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>New</span>
             </button>
             <button
               type="button"
-              onClick={handleSaveAndPost}
-              disabled={mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded || currentBillIsPosted}
-              className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              onClick={handleDeleteAction}
+              disabled={editingIndex != null ? isViewMode : (mode !== 'view' || billId == null || currentBillIsPosted)}
+              title={editingIndex != null ? 'Delete selected article' : 'Delete'}
+              className="toolbar-btn"
             >
-              Save &amp; Post
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('view')}
-              disabled={mode !== 'edit'}
-              className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-            >
-              Cancel Edit
+              <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
+              <span>Delete</span>
             </button>
             <button
               type="button"
               onClick={handleEditCurrentBill}
               disabled={mode !== 'view' || billId == null}
-              className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title="Edit"
+              className="toolbar-btn"
             >
-              <Edit size={16} /> Edit Bill
+              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
+              <span>Edit</span>
             </button>
             <button
               type="button"
-              onClick={handlePostCurrentBill}
-              disabled={mode !== 'view' || billId == null || currentBillIsPosted}
-              className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              onClick={() => handleSave(false)}
+              disabled={mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded}
+              title="Save"
+              className="toolbar-btn"
             >
-              Post Bill
+              <Save size={20} strokeWidth={2.5} className="text-blue-600" />
+              <span>Save</span>
+            </button>
+            <button
+              type="submit"
+              onClick={() => handleSave(true)}
+              disabled={mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded}
+              title="Done"
+              className="toolbar-btn"
+            >
+              <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>Done</span>
             </button>
             <button
               type="button"
-              onClick={handleUnpostCurrentBill}
-              disabled={mode !== 'view' || billId == null || !currentBillIsPosted}
-              className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              onClick={() => setMode('view')}
+              disabled={mode !== 'edit'}
+              title="Cancel Edit"
+              className="toolbar-btn"
             >
-              Unpost Bill
+              <X size={20} strokeWidth={2.5} className="text-slate-500" />
+              <span>Cancel</span>
             </button>
+
+            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            <button
+              type="button"
+              onClick={handleFirst}
+              disabled={!canBrowse}
+              title="First"
+              className="toolbar-btn"
+            >
+              <ChevronsLeft size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>First</span>
+            </button>
+            <button
+              type="button"
+              onClick={handlePrev}
+              disabled={!canNavPrevious}
+              title="Pre."
+              className="toolbar-btn"
+            >
+              <ChevronLeft size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Pre.</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleNext}
+              disabled={!canNavNext}
+              title="Next"
+              className="toolbar-btn"
+            >
+              <ChevronRight size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Next</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleLast}
+              disabled={!canBrowse}
+              title="Last"
+              className="toolbar-btn"
+            >
+              <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Last</span>
+            </button>
+
+            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
             <button
               type="button"
               onClick={() => {
@@ -1410,17 +1428,92 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 setTimeout(() => { window.print(); setIsPrintingSingle(false); }, 100);
               }}
               disabled={mode !== 'view' || billId == null}
-              className="px-4 py-2 text-sm font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-700 shadow-sm transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title="Print"
+              className="toolbar-btn"
             >
-              <Printer size={16} /> Print Invoice
+              <Printer size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Print</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setIsFindOpen(true)}
+              title="Find"
+              className="toolbar-btn"
+            >
+              <Search size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Find</span>
+            </button>
+
+            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            <button
+              type="button"
+              onClick={handleUnpostCurrentBill}
+              disabled={mode !== 'view' || billId == null || !currentBillIsPosted || browseFilter !== 'unposted'}
+              title="Un Post — switch the dropdown to Unposted first"
+              className="toolbar-btn"
+            >
+              <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
+              <span>Un Post</span>
+            </button>
+            <button
+              type="button"
+              onClick={handlePostCurrentBill}
+              disabled={mode !== 'view' || billId == null || currentBillIsPosted}
+              title="Post"
+              className="toolbar-btn"
+            >
+              <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>Post</span>
+            </button>
+
+            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            <button
+              type="button"
+              onClick={() => dispatch({ type: 'NAVIGATE', page: 'home' })}
+              title="Exit"
+              className="toolbar-btn"
+            >
+              <LogOut size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Exit</span>
+            </button>
+
+            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            {/* Extra convenience actions, not in the ref-pic's own set — kept, just styled the
+                same way, since nothing asked for them to go away. */}
+            <button
+              type="button"
+              onClick={handleSaveAndPost}
+              disabled={mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded || currentBillIsPosted}
+              title="Save & Post"
+              className="toolbar-btn"
+            >
+              <FilePlus2 size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>Save+Post</span>
+            </button>
+            {unpostedBills.length > 0 && (
+              <button
+                type="button"
+                onClick={handlePostAll}
+                disabled={postAllBusy}
+                title={`Post All (${unpostedBills.length})`}
+                className="toolbar-btn"
+              >
+                <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
+                <span>Post All</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => exportToPDF()}
               disabled={mode !== 'view' || billId == null}
-              className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title="Export PDF"
+              className="toolbar-btn"
             >
-              <FileDown size={16} /> Export PDF
+              <FileDown size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>PDF</span>
             </button>
             <button
               type="button"
@@ -1430,11 +1523,35 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 exportRowsToExcel(`sale-bill-${billNo || billId}`, headers, rows);
               }}
               disabled={mode !== 'view' || billId == null}
-              className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title="Export Excel"
+              className="toolbar-btn"
             >
-              <FileSpreadsheet size={16} /> Export Excel
+              <FileSpreadsheet size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Excel</span>
             </button>
           </div>
+
+          {/* Post All result — a run can post 18 of 20 bills, and the two that failed are the
+              whole point of the message, so it stays on screen until dismissed. */}
+          {postAllResult && (
+            <div className="w-full mt-2 pt-2 border-t text-xs" style={{ borderColor: 'var(--border-color)' }}>
+              <p className="font-semibold text-slate-700">
+                {postAllResult.posted.length} of {postAllResult.attempted} posted
+                {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
+                <button type="button" onClick={() => setPostAllResult(null)} className="ml-2 text-slate-500 hover:text-slate-700 font-semibold">Dismiss</button>
+              </p>
+              {postAllResult.failed.length > 0 && (
+                <ul className="mt-1 space-y-0.5">
+                  {postAllResult.failed.map(f => (
+                    <li key={f.draft_id} className="text-rose-700">
+                      <span className="font-mono font-semibold">{f.bill_no || `#${f.draft_id}`}</span>
+                      {' — '}{f.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           {mode === 'edit' && (
             <div className="text-sm font-semibold text-slate-500 font-inter">
@@ -1448,6 +1565,33 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
               Bill {currentBillIsPosted ? 'Posted' : 'Saved'} Successfully!
             </div>
           )}
+        </div>
+
+        {/* Title bar (ref-pic row directly under the icon toolbar) — Master/Detail radios
+            (display-only, see viewSection above — both sections always stay visible/reachable)
+            centered, Posted/Unposted browse dropdown (drives First/Pre/Next/Last) on the right. */}
+        <div className="flex items-center justify-between gap-3 mb-2 px-1" data-no-print>
+          <span className="font-lora font-semibold text-sm text-slate-600">SALE BILL</span>
+          <div className="flex items-center gap-3 text-xs font-semibold text-slate-600">
+            <label className="flex items-center gap-1 cursor-pointer">
+              <input type="radio" name="sb-master-detail" checked={viewSection === 'master'} onChange={() => setViewSection('master')} />
+              Master
+            </label>
+            <label className="flex items-center gap-1 cursor-pointer">
+              <input type="radio" name="sb-master-detail" checked={viewSection === 'detail'} onChange={() => setViewSection('detail')} />
+              Detail
+            </label>
+          </div>
+          <select
+            value={browseFilter}
+            onChange={e => setBrowseFilter(e.target.value as 'posted' | 'unposted')}
+            className="soleria-input soleria-input-compact cursor-pointer font-semibold"
+            style={{ width: 'auto' }}
+            title="Posted = add new bills. Unposted = browse posted bills to Unpost one."
+          >
+            <option value="posted">Posted</option>
+            <option value="unposted">Unposted</option>
+          </select>
         </div>
 
         {/* Invoice Layout — height pinned to the remaining viewport space (see invoiceCardHeight
@@ -1473,25 +1617,45 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
             </div>
           </div>
 
-          {/* Header fields — one dense grid, label-left per field (matches the legacy app's
-              layout), instead of stacked label-above-input fields split across bordered cards. */}
-          <div className="shrink-0 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }}>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
-                System No.
-              </label>
-              <input type="text" value={billId ?? 'Unsaved'} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
+          {/* Master section — a CSS grid with explicit `gridArea` placement per field, so the
+              VISUAL row/column a field sits in (matching the ref pic exactly) is independent of
+              its position in the JSX/DOM. The ref pic is really TWO columns: a wide left region
+              (3 equal columns — No./Date/Store, Customer code+name, Main A/C code+name, Remarks,
+              Delivery code+name, Sub Cust.) and a narrow right column (Bill No./GP No./Bilty
+              No./Adda Code, stacked). Every row uses the SAME 4-column template below, so labels
+              and boxes line up in straight columns top to bottom exactly like the ref pic — that
+              alignment is the whole reason this uses one grid instead of per-row flex rows.
+              Keyboard flow (G-01's Enter-walk, a plain DOM-order walk) must go Date → Store →
+              Customer → Remarks → Delivery → Sub Cust → Bill No. → GP No. → Bilty No. → Adda
+              Code — an order that does NOT match these visual rows, so the JSX below is written
+              in TAB order and each field is pinned to its ref-pic visual cell with `gridArea`.
+              Always visible — see the note on `viewSection` above for why the Master/Detail
+              radios don't hide this. */}
+          <div
+            className="shrink-0 grid gap-x-3 gap-y-1.5 mb-2 pb-2 border-b"
+            style={{
+              borderColor: 'var(--border-table)',
+              gridTemplateColumns: '1fr 1fr 1fr 190px',
+              gridTemplateAreas: `
+                "sysno     date       store      billno"
+                "custcode  custname   custname   gpno"
+                "maincode  mainname   mainname   biltyno"
+                "remarks   remarks    remarks     addacode"
+                "delivcode delivname  delivname  ."
+                "subcust   subcust    subcust    ."
+              `
+            }}
+          >
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'date' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
               <input type="date" ref={firstFieldRef}
             value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
-                From Store <span className="text-red-500 font-bold">*</span>
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'store' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
+                From&gt;
               </label>
               {/* Was a native <select>. SearchableSelect so this field behaves like every other
                   lookup on the screen: focus it and type, Enter selects and moves on. */}
@@ -1504,30 +1668,52 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 disabled={isViewMode}
               />
             </div>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
-                Manual Bill No. <span className="text-red-500 font-bold">*</span>
-              </label>
-              <input type="text" value={billNo} disabled={isViewMode} onChange={e => setBillNo(e.target.value)} className="soleria-input soleria-input-compact" />
-            </div>
 
-            <div className="flex items-center gap-2 md:col-span-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            {/* Customer — the page's main "party" field, per pages_design.md §5: a SearchModal
+                trigger (big centered popup, whole list at once) instead of SearchableSelect's
+                small anchored panel. Enter/Arrow Up/Down on the trigger opens it; typing any
+                substring of the name (e.g. "ahmad footwear") filters inside the modal. Customer
+                Code auto-fills from the selection. */}
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'custname' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Customer <span className="text-red-500 font-bold">*</span>
               </label>
               <div className="flex-1">
-                <SearchableSelect
+                <button
+                  ref={customerTriggerRef}
+                  type="button"
+                  data-field-nav="true"
+                  disabled={isViewMode}
+                  onClick={() => setIsCustomerModalOpen(true)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setIsCustomerModalOpen(true);
+                    }
+                  }}
+                  className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
+                >
+                  <span className={selectedCustomer ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
+                    {selectedCustomer ? customerOptions.find(o => o.value === customerId)?.label ?? selectedCustomer.name : 'Select customer...'}
+                  </span>
+                  <ChevronDown size={16} className="text-slate-400" />
+                </button>
+                <SearchModal
+                  isOpen={isCustomerModalOpen}
+                  title="Select Customer"
                   options={customerOptions}
                   value={customerId}
-                  onChange={(val) => {
+                  onSelect={(val) => {
                     setCustomerId(val);
                     setDeliveryType('1');
+                    setDeliveryCode('1');
                     setSubCustomerId('');
                     setCustomAddress('');
+                    setIsCustomerModalOpen(false);
+                    requestAnimationFrame(() => focusNextField(customerTriggerRef.current));
                   }}
-                  placeholder="Select customer..."
+                  onClose={() => setIsCustomerModalOpen(false)}
                   searchPlaceholder="Search customer by name..."
-                  disabled={isViewMode}
                 />
                 {selectedCustomer && selectedCustomer.ba_id == null && (
                   <p className="text-[10px] text-amber-600 mt-0.5 font-semibold">
@@ -1546,74 +1732,90 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 </button>
               )}
             </div>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                Customer Code
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'custcode' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Customer
               </label>
-              <input type="text" value={customerId} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
+              <input type="text" value={selectedCustomer?.account_code ?? ''} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
             </div>
 
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'remarks' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Remarks
+              </label>
+              <input type="text" value={remarks} disabled={isViewMode} onChange={e => setRemarks(e.target.value)} placeholder="Enter any sales remarks..." className="soleria-input soleria-input-compact" />
+            </div>
+
+            {/* Delivery: a typed code, "1" = SAME (direct) — anything else opens the Sub Cust.
+                field for a custom destination. The middle box mirrors the ref-pic's auto-filled
+                delivery NAME, read-only. */}
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'delivcode' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Delivery
               </label>
-              <select
-                value={isCustomDelivery ? 'custom' : '1'}
+              <input
+                type="text"
+                value={deliveryCode}
                 disabled={isViewMode}
-                onChange={e => {
-                  const val = e.target.value as '1' | 'custom';
-                  setDeliveryType(val);
-                  if (val === '1') {
-                    setSubCustomerId('');
-                    setCustomAddress('');
-                  } else {
-                    setSubCustomerId(subCustomers[0] ? String(subCustomers[0].sub_customer_id) : '');
-                  }
-                }}
-                className="soleria-input soleria-input-compact cursor-pointer"
-              >
-                <option value="1">SAME (Direct)</option>
-                <option value="custom">Custom Agent / Sub-Customer</option>
-              </select>
+                onChange={e => handleDeliveryCodeChange(e.target.value)}
+                className="soleria-input soleria-input-compact"
+              />
             </div>
-            {isCustomDelivery && (
-              <div className="flex items-center gap-2">
-                <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                  Sub-Customer <span className="text-red-500 font-bold">*</span>
-                </label>
-                <div className="flex-1">
-                  <SearchableSelect
-                    options={subCustomers.map(sc => ({ value: String(sc.sub_customer_id), label: sc.name }))}
-                    value={subCustomerId}
-                    onChange={setSubCustomerId}
-                    placeholder="Select sub-customer..."
-                    searchPlaceholder="Search sub-customers..."
-                    disabled={isViewMode}
-                  />
-                </div>
-                {!isViewMode && (
-                  <button
-                    type="button"
-                    onClick={() => setIsAddSubCustomerOpen(true)}
-                    className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102 shrink-0"
-                  >
-                    <Plus size={11} className="text-blue-600" />
-                    <span>New</span>
-                  </button>
-                )}
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'delivname' }}>
+              <input
+                type="text"
+                value={deliveryType === '1' ? 'SAME' : (subCustomers.find(sc => String(sc.sub_customer_id) === subCustomerId)?.name || '')}
+                disabled
+                className="soleria-input soleria-input-compact bg-emerald-50 text-emerald-700 font-semibold border-emerald-200"
+              />
+            </div>
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'subcust' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Sub Cust.
+              </label>
+              <div className="flex-1">
+                <SearchableSelect
+                  options={subCustomers.map(sc => ({ value: String(sc.sub_customer_id), label: sc.name }))}
+                  value={subCustomerId}
+                  onChange={setSubCustomerId}
+                  placeholder="Select sub-customer..."
+                  searchPlaceholder="Search sub-customers..."
+                  disabled={isViewMode || deliveryType === '1'}
+                />
               </div>
-            )}
-            {isCustomDelivery && (
-              <div className="flex items-center gap-2 md:col-span-2">
-                <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                  Custom Address
-                </label>
-                <input type="text" value={customAddress} disabled={isViewMode} onChange={e => setCustomAddress(e.target.value)} placeholder="Enter custom delivery address..." className="soleria-input soleria-input-compact" />
-              </div>
-            )}
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                Transport Adda
+              {!isViewMode && deliveryType !== '1' && (
+                <button
+                  type="button"
+                  onClick={() => setIsAddSubCustomerOpen(true)}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102 shrink-0"
+                >
+                  <Plus size={11} className="text-blue-600" />
+                  <span>New</span>
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'billno' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
+                Bill No. <span className="text-red-500 font-bold">*</span>
+              </label>
+              <input type="text" value={billNo} disabled={isViewMode} onChange={e => setBillNo(e.target.value)} className="soleria-input soleria-input-compact" />
+            </div>
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'gpno' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                GP No.
+              </label>
+              <input type="text" value={gpNo} disabled={isViewMode} onChange={e => setGpNo(e.target.value)} className="soleria-input soleria-input-compact" />
+            </div>
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'biltyno' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Bilty No.
+              </label>
+              <input type="text" value={biltyNo} disabled={isViewMode} onChange={e => setBiltyNo(e.target.value)} className="soleria-input soleria-input-compact" />
+            </div>
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'addacode' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Adda Code
               </label>
               <SearchableSelect
                 options={addaOptions}
@@ -1624,20 +1826,32 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
                 disabled={isViewMode}
               />
             </div>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                Gate Pass No.
+
+            {/* Main A/C: the customer's linked business account's PARENT chart account — purely
+                informational, derived, never edited directly. Placed after Adda Code in DOM (it's
+                excluded from the tab walk since both its inputs are disabled) so it doesn't
+                interrupt the Enter sequence above, even though visually it's ref-pic's row 3. */}
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'maincode' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Main A/C
               </label>
-              <input type="text" value={gpNo} disabled={isViewMode} onChange={e => setGpNo(e.target.value)} className="soleria-input soleria-input-compact" />
+              <input type="text" value={selectedMainAc?.ac_code ?? ''} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
             </div>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                Bilty No.
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'mainname' }}>
+              <input type="text" value={selectedMainAc?.ac_name ?? ''} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
+            </div>
+
+            {/* System No. — the auto-generated internal bill number, previously not shown; now
+                visible per spec, still disabled/never typed into. */}
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'sysno' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
+                No. &gt;&gt;&gt;&gt;
               </label>
-              <input type="text" value={biltyNo} disabled={isViewMode} onChange={e => setBiltyNo(e.target.value)} className="soleria-input soleria-input-compact" />
+              <input type="text" value={billId ?? 'Unsaved'} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
           </div>
 
+          <>{/* Detail section — see the note on `viewSection` above for why this always renders. */}
           {/* Stock Limit Warning Banner */}
           {hasStockExceeded && !isViewMode && (
             <div className="shrink-0 flex items-center justify-between p-2.5 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-semibold mb-3 shadow-sm animate-in fade-in slide-in-from-top-2">
@@ -1654,246 +1868,266 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
             </div>
           )}
 
-          {/* Product Items Table — flex-1 so it grows to fill whatever space invoiceCardHeight
-              (above) leaves after every other section takes its natural size; this is what pins
-              the footer to the bottom of the screen instead of trailing off after just 2-3 rows.
-              `min-height: 0` overrides flexbox's default min-height:auto, which would otherwise
-              let this box's own content (as it grows past the flex space) stretch the whole card
-              instead of scrolling internally. The header row is `sticky` within this scroll box
-              so it stays visible past the first screenful of rows. SearchableSelect's own dropdown
-              is rendered via a `fixed`-position React portal (see its source), so it isn't clipped
-              by this box's `overflow-y: auto` even when a select near the bottom edge is opened. */}
+          {/* Entry strip (ref-pic bound-record pattern) — Row 1: Product/Product Name/Packing/
+              Stock In Hand. Row 2: Cartons/Pairs/Rate/D%/DV/Value. This is the ONE "current
+              record" being typed; Enter on DV commits it into the table below (handleCommitEntryRow)
+              and resets the strip. Clicking a table row loads it back in here for editing. */}
+          {!isViewMode && (
+          <div className="shrink-0 mb-2 p-2 rounded-lg border bg-slate-50/60" style={{ borderColor: 'var(--border-color)' }}>
+            {/* Same 4-column template as the master grid above (wide left region + narrow right
+                column) so Product's row lines up with Customer/Main A/C's columns, and
+                Packing/Stock In Hand land in the same right-column position as Bill No./GP
+                No./Bilty No./Adda Code. */}
+            <div className="grid gap-x-3 gap-y-1.5 mb-1.5" style={{ gridTemplateColumns: '1fr 1fr 1fr 190px' }}>
+              <div ref={entryProductCellRef} className="flex items-center gap-1.5">
+                <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Product <span className="text-red-500 font-bold">*</span></label>
+                <div className="flex-1">
+                  {/* A real text input, not a button — type a full code/name or any substring,
+                      then Enter opens the modal already filtered to matches (instead of opening
+                      empty and typing inside it). Arrow Up/Down still open it too (unfiltered, or
+                      filtered by whatever's already typed). */}
+                  <input
+                    ref={productTriggerRef}
+                    type="text"
+                    value={productSearchText}
+                    onChange={e => setProductSearchText(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setIsProductModalOpen(true);
+                      }
+                    }}
+                    placeholder="Type article code or name..."
+                    className="soleria-input soleria-input-compact"
+                  />
+                  <SearchModal
+                    isOpen={isProductModalOpen}
+                    title="Select Article"
+                    options={products.map(p => {
+                      const agg = getStockInfo(p.article_id, null);
+                      return {
+                        value: String(p.article_id),
+                        label: `${p.code} — ${p.name}`,
+                        sublabel: agg ? `Stock: ${agg.cartons} ctn / ${agg.pairs} prs` : undefined
+                      };
+                    })}
+                    value={entry.articleId != null ? String(entry.articleId) : ''}
+                    initialSearch={productSearchText}
+                    onSelect={(val) => {
+                      handleEntryArticleChange(val);
+                      setIsProductModalOpen(false);
+                      requestAnimationFrame(() => focusNextField(productTriggerRef.current));
+                    }}
+                    onClose={() => setIsProductModalOpen(false)}
+                    searchPlaceholder="Search articles by code or name..."
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <input type="text" value={entry.label} disabled placeholder="Product name" className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Color <span className="text-red-500 font-bold">*</span></label>
+                <div className="flex-1">
+                  <SearchableSelect
+                    options={(entry.articleId != null ? variantsByArticle[entry.articleId] || [] : []).map(v => ({ value: String(v.variant_id), label: v.color }))}
+                    value={entry.variantId != null ? String(entry.variantId) : ''}
+                    onChange={handleEntryVariantChange}
+                    placeholder="Color..."
+                    searchPlaceholder="Search colors..."
+                    disabled={entry.articleId == null}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Packing</label>
+                  <input type="text" value={entry.packing || '-'} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 text-center" />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Stock In Hand</label>
+                  {(() => {
+                    const stockInfo = getStockInfo(entry.articleId, entry.variantId);
+                    return (
+                      <input type="text" value={stockInfo ? `${stockInfo.cartons} Ctn / ${stockInfo.pairs} Prs` : '-'} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 text-center" />
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 md:grid-cols-6 gap-2 items-end">
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Cartons <span className="text-red-500 font-bold">*</span></label>
+                <input
+                  type="number"
+                  value={entry.cartons || ''}
+                  min={1}
+                  onChange={e => updateEntryNumericField('cartons', parseInt(e.target.value) || 0)}
+                  className={`soleria-input soleria-input-compact text-center font-mono ${entryStockCheck ? 'border-2 border-red-500 bg-rose-50 text-red-700 font-bold' : ''}`}
+                />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Pairs</label>
+                <input type="text" value={entry.pairs || '-'} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 text-center" />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Rate <span className="text-red-500 font-bold">*</span></label>
+                <input
+                  type="number"
+                  value={entry.rate || ''}
+                  min={0}
+                  onChange={e => updateEntryNumericField('rate', parseInt(e.target.value) || 0)}
+                  className="soleria-input soleria-input-compact text-right font-mono"
+                />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">D%</label>
+                <input
+                  type="number"
+                  value={entry.discountPercent || ''}
+                  min={0}
+                  max={100}
+                  onChange={e => updateEntryNumericField('discountPercent', parseFloat(e.target.value) || 0)}
+                  className="soleria-input soleria-input-compact text-center font-mono"
+                />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">DV</label>
+                <input
+                  type="number"
+                  value={entry.discountValue || ''}
+                  min={0}
+                  onChange={e => updateEntryNumericField('discountValue', parseFloat(e.target.value) || 0)}
+                  onKeyDown={handleEntryLastFieldKeyDown}
+                  className="soleria-input soleria-input-compact text-right font-mono"
+                />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Value</label>
+                <input type="text" value={formatCurrency(entry.value)} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-600 text-right font-semibold" />
+              </div>
+            </div>
+            {entryStockCheck && (
+              <div className="mt-1.5 text-[11px] font-bold text-red-600 flex items-center gap-1">
+                <AlertTriangle size={12} className="shrink-0" />
+                <span>Exceeds Stock! {entryStockCheck.totalReq} cartons requested, only {entryStockCheck.available} in hand — row will not be added.</span>
+              </div>
+            )}
+            {/* Editing banner, per pages_design.md §4 — the row stays visible (highlighted) in
+                the grid below the whole time it's being edited, not pulled out; Cancel here
+                discards the in-progress edit, same as the toolbar's Cancel Edit for the bill as
+                a whole. Deleting this row is the toolbar's own Delete button, not a control here. */}
+            {editingIndex != null && (
+              <div className="mt-1.5 flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-xs">
+                <span className="text-blue-700 font-semibold">Editing an existing article — Update to save, or cancel.</span>
+                <button type="button" onClick={() => { setEditingIndex(null); setEntry(newUiItem()); }} className="text-blue-600 hover:text-blue-800 font-semibold underline">
+                  Cancel
+                </button>
+              </div>
+            )}
+            <div className="mt-1.5 flex items-center gap-2">
+              <button type="button" onClick={handleCommitEntryRow} className="px-3 py-1 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d]">
+                {editingIndex != null ? 'Update Row' : 'Add Row'}
+              </button>
+            </div>
+          </div>
+          )}
+
+          {/* Committed line items — read-only list, matching ref-pic's columns exactly. Click a
+              row to load it back into the entry strip above for editing (password-gated first if
+              the bill is already posted — see handleRowClick). No per-row delete button, per
+              pages_design.md §4 — deleting a line item is the toolbar's own Delete button,
+              enabled only while a row is selected here. */}
           <div className="flex-1 min-h-0 mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b text-[11px] font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 pl-3" style={{ minWidth: '190px' }}>Article <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 pl-3" style={{ width: '130px', minWidth: '110px' }}>Color <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 pl-3" style={{ minWidth: '190px' }}>Product Name</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '80px' }}>Packing</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ minWidth: '110px' }}>Stock in Hand</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px', minWidth: '76px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px', minWidth: '64px' }}>Pairs</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '110px', minWidth: '96px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '100px', minWidth: '72px' }}>D%</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '110px' }}>D. Value</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px' }}>Cartons</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px' }}>Pairs</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '100px' }}>Rate</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '130px' }}>Value</th>
-                  {!isViewMode && <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '50px' }}></th>}
                 </tr>
               </thead>
               <tbody>
-                {items.map((item, idx) => {
-                  const variantOptions = (item.articleId != null ? variantsByArticle[item.articleId] || [] : [])
-                    .map(v => ({ value: String(v.variant_id), label: v.color }));
-                  return (
-                    <tr key={item.uid} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                      {/* Article select */}
-                      <td className="p-1 pl-3" ref={el => { articleCellRefs.current[idx] = el; }}>
-                        {isViewMode ? (
-                          <span className="font-semibold text-slate-800 text-[13px] pl-2">{item.label || 'N/A'}</span>
-                        ) : (
-                          <SearchableSelect
-                            options={products.map(p => ({ value: String(p.article_id), label: `${p.name} (${p.code})` }))}
-                            value={item.articleId != null ? String(item.articleId) : ''}
-                            onChange={val => handleArticleChange(idx, val)}
-                            placeholder="Select article..."
-                            searchPlaceholder="Search articles..."
-                          />
-                        )}
-                      </td>
-
-                      {/* Color / Variant select */}
-                      <td className="p-1 pl-3">
-                        {isViewMode ? (
-                          <span className="text-slate-600 text-[13px]">{variantOptions.find(v => v.value === String(item.variantId))?.label || '-'}</span>
-                        ) : (
-                          <SearchableSelect
-                            options={variantOptions}
-                            value={item.variantId != null ? String(item.variantId) : ''}
-                            onChange={val => handleVariantChange(idx, val)}
-                            placeholder="Color..."
-                            searchPlaceholder="Search colors..."
-                            disabled={item.articleId == null}
-                          />
-                        )}
-                      </td>
-
-                      {/* Packing */}
-                      <td className="p-1 text-center font-mono text-sm text-slate-600">
-                        {item.packing || '-'}
-                      </td>
-
-                      {/* Stock in Hand — Cartons & Pairs, one line */}
-                      <td className="p-1 text-center font-mono">
-                        {(() => {
-                          const stockInfo = getStockInfo(item.articleId, item.variantId);
-                          if (!stockInfo) return <span className="text-slate-400 text-xs">—</span>;
-                          const hasStock = stockInfo.cartons > 0 || stockInfo.pairs > 0;
-                          return (
-                            <span className={`text-xs whitespace-nowrap ${hasStock ? 'text-slate-700' : 'text-rose-500'}`} title="Current Stock in Hand">
-                              <span className="font-bold">{stockInfo.cartons}</span> Ctn / <span className="font-bold">{stockInfo.pairs}</span> Prs
-                            </span>
-                          );
-                        })()}
-                      </td>
-
-                      {/* Cartons */}
-                      <td className="p-1">
-                        <input
-                          type="number"
-                          value={item.cartons || ''}
-                          disabled={isViewMode}
-                          min={1}
-                          onChange={e => updateNumericField(idx, 'cartons', parseInt(e.target.value) || 0)}
-                          className={`soleria-input soleria-input-compact text-center font-mono ${
-                            stockExceededRows[item.uid] ? 'border-2 border-red-500 bg-rose-50 text-red-700 font-bold focus:ring-2 focus:ring-red-300' : ''
-                          }`}
-                          style={{ border: isViewMode ? (stockExceededRows[item.uid] ? '2 border-red-500' : 'none') : undefined, background: isViewMode ? (stockExceededRows[item.uid] ? '#fef2f2' : 'transparent') : undefined }}
-                        />
-                        {stockExceededRows[item.uid] && (
-                          <div className="text-[10px] font-bold text-red-600 mt-0.5 flex items-center justify-center gap-1 animate-in fade-in" title="Requested cartons exceed available stock in hand">
-                            <AlertTriangle size={11} className="shrink-0 text-red-500" />
-                            <span>Exceeds Stock! (Max: {stockExceededRows[item.uid].available} Ctn)</span>
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Pairs */}
-                      <td className="p-1 text-center font-mono text-sm font-semibold text-slate-700">
-                        {item.pairs || '-'}
-                      </td>
-
-                      {/* Rate */}
-                      <td className="p-1">
-                        <input
-                          type="number"
-                          value={item.rate || ''}
-                          disabled={isViewMode}
-                          min={0}
-                          onChange={e => updateNumericField(idx, 'rate', parseInt(e.target.value) || 0)}
-                          className="soleria-input soleria-input-compact text-right font-mono"
-                          style={{ border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
-                        />
-                      </td>
-
-                      {/* Discount % */}
-                      <td className="p-1">
-                        <input
-                          type="number"
-                          value={item.discountPercent || ''}
-                          disabled={isViewMode}
-                          min={0}
-                          max={100}
-                          onChange={e => updateNumericField(idx, 'discountPercent', parseFloat(e.target.value) || 0)}
-                          onKeyDown={handleLastFieldKeyDown}
-                          className="soleria-input soleria-input-compact text-center font-mono"
-                          style={{ border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
-                        />
-                      </td>
-
-                      {/* Discount Value — Calculated from Discount % */}
-                      <td className="p-1 text-right font-mono text-xs font-semibold text-slate-700">
-                        {item.discountValue > 0 ? item.discountValue.toLocaleString() : '-'}
-                      </td>
-
-                      {/* Row Total Value */}
-                      <td className="p-1 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>
-                        {formatCurrency(item.value)}
-                      </td>
-
-                      {/* Delete Action */}
-                      {!isViewMode && (
-                        <td className="p-1 text-center">
-                          <button type="button" onClick={() => handleRemoveItemRow(idx)} className="text-red-500 hover:text-red-700 p-1" title="Remove row (clears fields if it's the last one)">
-                            <Trash2 size={16} />
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  );
-                })}
+                {items.map((item, idx) => (
+                  <tr
+                    key={item.uid}
+                    onClick={() => handleRowClick(idx)}
+                    className={`border-b cursor-pointer hover:bg-slate-50/50 ${idx === editingIndex ? 'bg-blue-50' : ''}`}
+                    style={{ borderColor: 'var(--border-table)' }}
+                  >
+                    <td className="p-1 pl-3 font-semibold text-slate-800 text-[13px]">{item.label || 'N/A'}</td>
+                    <td className="p-1 text-center font-mono text-sm text-slate-600">{item.packing || '-'}</td>
+                    <td className="p-1 text-center font-mono text-sm text-slate-700">{item.cartons}</td>
+                    <td className="p-1 text-center font-mono text-sm font-semibold text-slate-700">{item.pairs || '-'}</td>
+                    <td className="p-1 text-right font-mono text-sm text-slate-700">{item.rate.toLocaleString()}</td>
+                    <td className="p-1 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(item.value)}</td>
+                  </tr>
+                ))}
+                {items.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="p-3 text-center text-xs text-slate-400">
+                      No articles added yet.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
+          </>
 
-          {/* Add Row Button */}
-          {!isViewMode && (
-            <button type="button" onClick={handleAddItemRow} className="shrink-0 btn-dashed flex items-center gap-1 mb-2 px-3 py-1">
-              <Plus size={14} /> Add Item Row
-            </button>
-          )}
-
-          {/* Bottom Section: Remarks & Calculations — pinned to the bottom of the screen by the
-              item table's flex-1 above (see invoiceCardHeight). Kept compact (small textarea,
-              tight gaps) in its own right too — the due-date helper text was the one line worth
-              dropping entirely rather than shrinking further, since the field label + optional
-              tag already say enough. */}
-          <div className="shrink-0 grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
-            {/* Remarks / Notes, with Payment Due Date stacked directly beneath it */}
-            <div className="flex flex-col gap-1.5">
-              <div className="flex flex-col gap-1">
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Remarks / Notes
-                </label>
-                <textarea
-                  value={remarks}
-                  disabled={isViewMode}
-                  onChange={e => setRemarks(e.target.value)}
-                  placeholder="Enter any sales remarks..."
-                  className="soleria-input w-full font-inter"
-                  rows={2}
-                  style={{ fontSize: '13px', resize: 'none', minHeight: '52px' }}
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Payment Due Date <span className="text-slate-400 font-normal normal-case">— optional</span>
-                </label>
-                <input type="date"
-              value={dueDate} disabled={isViewMode} onChange={e => setDueDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }} />
-                <p className="text-[10px] text-slate-400 leading-tight">
-                  Blank = no fixed terms, no overdue alert.
-                </p>
-              </div>
+          {/* Bottom Section: Payment Due Date + ref-pic's flat totals row (Total Cartons | Total
+              Pairs | Invoice Discount | Total Value | Rs.) — replaces the old dark "Calculations"
+              box, which isn't in the ref pic; these are plain compact fields matching the rest of
+              the page's field style. Pinned to the bottom of the screen by the item table's flex-1
+              above (see invoiceCardHeight). */}
+          <div className="shrink-0 flex flex-wrap items-end justify-between gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
+            <div className="flex flex-col gap-1">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Payment Due Date <span className="text-slate-400 font-normal normal-case">— optional</span>
+              </label>
+              <input type="date"
+            value={dueDate} disabled={isViewMode} onChange={e => setDueDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px', maxWidth: '220px' }} />
+              <p className="text-[10px] text-slate-400 leading-tight">
+                Blank = no fixed terms, no overdue alert.
+              </p>
             </div>
 
-            {/* Calculations Box */}
-            <div className="flex flex-col justify-between p-2 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md">
-              <div className="text-xs font-semibold uppercase tracking-wider border-b pb-1 mb-1.5 text-slate-400 border-slate-800">
-                Calculations
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cartons</label>
+                <input type="text" value={totalCartons} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-center font-mono font-semibold" style={{ width: '90px' }} />
               </div>
-              <div className="flex flex-col gap-1 font-inter text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Total Cartons:</span>
-                  <span className="font-semibold font-mono">{totalCartons}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Total Pairs:</span>
-                  <span className="font-semibold font-mono">{totalPairs}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Gross Total:</span>
-                  <span className="font-semibold font-mono">{formatCurrency(itemsTotalValue)}</span>
-                </div>
-                <div className="flex justify-between items-center mt-1">
-                  <span className="text-slate-400">Inv. Discount:</span>
-                  {isViewMode ? (
-                    <span className="font-semibold font-mono">{formatCurrency(invoiceDiscount)}</span>
-                  ) : (
-                    <input
-                      type="number"
-                      value={invoiceDiscount || ''}
-                      onChange={e => setInvoiceDiscount(Math.max(0, parseInt(e.target.value) || 0))}
-                      className="soleria-input text-right font-mono py-0.5 px-2 border focus:ring-amber-500"
-                      style={{ width: '85px', fontSize: '12px', background: '#111c2a', color: '#ffffff', borderColor: '#334155' }}
-                    />
-                  )}
-                </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Pairs</label>
+                <input type="text" value={totalPairs} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-center font-mono font-semibold" style={{ width: '90px' }} />
               </div>
-              <div className="flex justify-between items-center border-t pt-1.5 mt-1.5 border-[#1e293b]">
-                <span className="font-bold text-[11px] uppercase tracking-wider text-slate-400">Net Amount:</span>
-                <span className="text-xl font-bold font-mono text-[#B08D57] font-extrabold">
-                  {formatCurrency(finalTotalValue)}
-                </span>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Invoice Discount</label>
+                <input
+                  type="number"
+                  value={invoiceDiscount || ''}
+                  disabled={isViewMode}
+                  onChange={e => setInvoiceDiscount(Math.max(0, parseInt(e.target.value) || 0))}
+                  className="soleria-input soleria-input-compact text-right font-mono"
+                  style={{ width: '110px' }}
+                />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Value</label>
+                <input type="text" value={formatCurrency(itemsTotalValue)} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '130px' }} />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Rs.</label>
+                <input
+                  type="text"
+                  value={formatCurrency(finalTotalValue)}
+                  disabled
+                  className="soleria-input soleria-input-compact text-right font-mono font-bold"
+                  style={{ width: '140px', color: 'var(--brand-gold)', background: '#111c2a', borderColor: '#334155' }}
+                />
               </div>
             </div>
           </div>
@@ -1902,6 +2136,48 @@ export default function SaleBillPage({ initialTab = 'billing' }: { initialTab?: 
         </form>
 
       </div>
+
+      {/* Find Bill Modal — jump to any posted or unposted bill by bill number or customer name */}
+      {isFindOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
+            <h3 className="font-lora font-bold text-lg text-slate-800 mb-4">Find Bill</h3>
+            <input
+              type="text"
+              value={findQuery}
+              onChange={e => setFindQuery(e.target.value)}
+              placeholder="Bill No. or customer name..."
+              className="soleria-input w-full font-semibold mb-3"
+              autoFocus
+            />
+            <ul className="max-h-72 overflow-y-auto border rounded-lg divide-y" style={{ borderColor: 'var(--border-color)' }}>
+              {findResults.map(({ filter, row }) => (
+                <li
+                  key={`${filter}-${'bill_id' in row ? row.bill_id : row.draft_id}`}
+                  onClick={() => handleFindSelect(filter, row)}
+                  className="px-3 py-2 text-xs cursor-pointer hover:bg-amber-50/60 flex items-center justify-between gap-2"
+                >
+                  <span className="font-mono font-semibold text-slate-700">{row.bill_no || `#${'bill_id' in row ? row.bill_id : row.draft_id}`}</span>
+                  <span className="text-slate-400 truncate">{customers.find(c => c.customer_id === row.customer_id)?.name || 'Unnamed Customer'}</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${filter === 'posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{filter}</span>
+                </li>
+              ))}
+              {findQuery.trim() && findResults.length === 0 && (
+                <li className="px-3 py-3 text-xs text-slate-400 text-center">No matching bills.</li>
+              )}
+            </ul>
+            <div className="flex justify-end mt-4">
+              <button
+                type="button"
+                onClick={() => { setIsFindOpen(false); setFindQuery(''); }}
+                className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm font-semibold"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add New Sub-Customer Modal */}
       {isAddSubCustomerOpen && (
