@@ -32,7 +32,9 @@ const DEFAULT_SHORTCUTS: QuickShortcut[] = [
   { id: 'default_expenses-entry', label: 'Payments', page: 'expenses-entry' },
   { id: 'default_cash-book', label: 'Cash Book', page: 'reports', tab: 'cash-book' },
   { id: 'default_business-ledger', label: 'Ledger', page: 'reports', tab: 'business-ledger' },
-  { id: 'default_report-stock', label: 'Stock', page: 'report-stock' },
+  // Stock Voucher is the module's main entry point now (per the user, 2026-08-26) — one "Stock"
+  // shortcut, same as before, just pointing at the new page instead of Current Stock Report.
+  { id: 'default_stock-voucher', label: 'Stock', page: 'stock-voucher' },
   { id: 'default_search-customer', label: 'Search Customer', page: 'search-customer' },
   { id: 'default_backup', label: 'Backup', page: 'settings', tab: 'backup' },
 ];
@@ -46,7 +48,7 @@ const DEFAULT_SHORTCUTS: QuickShortcut[] = [
 // it should only be bumped when the defaults themselves change.
 const SHORTCUTS_STORAGE_KEY = 'wento_quick_shortcuts_clean_v3';
 const SHORTCUTS_SEED_KEY = 'wento_quick_shortcuts_seed';
-const SHORTCUTS_SEED_VERSION = '2026-08-15';
+const SHORTCUTS_SEED_VERSION = '2026-08-26c';
 
 function loadShortcuts(): QuickShortcut[] {
   if (localStorage.getItem(SHORTCUTS_SEED_KEY) !== SHORTCUTS_SEED_VERSION) {

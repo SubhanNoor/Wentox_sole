@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchModal from '@/components/SearchModal';
-import SearchableSelect from '@/components/SearchableSelect';
 import { focusNextField } from '@/lib/fieldNav';
 import * as api from '@/lib/api';
 import type {
@@ -56,6 +56,7 @@ function emptyEntry(): EntryLine {
 }
 
 export default function StockVoucherPage() {
+  const { dispatch } = useApp();
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [stores, setStores] = useState<StoreRow[]>([]);
   const [variantsByArticle, setVariantsByArticle] = useState<Record<number, ProductVariantRow[]>>({});
@@ -208,6 +209,51 @@ export default function StockVoucherPage() {
   const [isEntryArticleModalOpen, setIsEntryArticleModalOpen] = useState(false);
   const [entryArticleModalSeed, setEntryArticleModalSeed] = useState('');
 
+  // "+ Add New Color" — a sentinel option in the Color dropdown swaps it for a free-text input;
+  // confirming resolves-or-creates the article_colors row via the same endpoint the old Current
+  // Stock "+ Add Stock" flow used, then selects it like any other color.
+  const NEW_COLOR_SENTINEL = '__new_color__';
+  const [isAddingColor, setIsAddingColor] = useState(false);
+  const [newColorName, setNewColorName] = useState('');
+  const [creatingColor, setCreatingColor] = useState(false);
+  // Every reset point (new line, row loaded for edit, commit, Cancel) changes entry.articleId —
+  // fold back to the plain dropdown from any of them at once instead of by hand at each one.
+  useEffect(() => {
+    setIsAddingColor(false);
+    setNewColorName('');
+  }, [entry.articleId]);
+
+  // Color field — same typable-trigger + centered SearchModal popup as Article/Store, per the
+  // user (2026-08-26). Options include the "+ Add New Color..." sentinel above, which swaps the
+  // whole field for a free-text input instead (handleEntryVariantChange detects it).
+  const colorTriggerRef = useRef<HTMLInputElement>(null);
+  const [isColorModalOpen, setIsColorModalOpen] = useState(false);
+  const [colorSearchText, setColorSearchText] = useState('');
+  const [colorModalSeed, setColorModalSeed] = useState('');
+  useEffect(() => {
+    const variants = entry.articleId != null ? variantsByArticle[entry.articleId] || [] : [];
+    const variant = variants.find(v => v.variant_id === entry.variantId);
+    setColorSearchText(variant?.color ?? '');
+  }, [entry.variantId, entry.articleId, variantsByArticle]);
+  const openColorModal = () => {
+    if (isViewMode || entry.articleId == null) return;
+    setColorModalSeed('');
+    setIsColorModalOpen(true);
+  };
+  function handleColorTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      openColorModal();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isViewMode || entry.articleId == null) return;
+      setColorModalSeed(colorSearchText);
+      setIsColorModalOpen(true);
+    }
+  }
+
   const openEntryArticleModal = () => {
     if (isViewMode) return;
     setEntryArticleModalSeed('');
@@ -244,6 +290,11 @@ export default function StockVoucherPage() {
 
   const handleEntryVariantChange = (variantIdStr: string) => {
     if (entry.articleId == null) return;
+    if (variantIdStr === NEW_COLOR_SENTINEL) {
+      setNewColorName('');
+      setIsAddingColor(true);
+      return;
+    }
     const variantId = variantIdStr ? Number(variantIdStr) : null;
     const variant = variantsByArticle[entry.articleId]?.find(v => v.variant_id === variantId);
     const product = products.find(p => p.article_id === entry.articleId);
@@ -253,6 +304,43 @@ export default function StockVoucherPage() {
         ...prev,
         variantId,
         label: variant ? `${product?.name || ''} — ${variant.color}` : (product?.name || ''),
+        packing,
+        pairs: prev.cartons * packing,
+      };
+    });
+  };
+
+  // Resolves-or-creates the article_colors row for the typed name, refreshes the cached variant
+  // list for this article so it shows up immediately, then selects it like any other color.
+  const handleCreateColor = async () => {
+    if (entry.articleId == null || !newColorName.trim()) return;
+    setCreatingColor(true);
+    const res = await api.productColors.resolveOrCreate({
+      article_id: entry.articleId,
+      color: newColorName.trim(),
+    });
+    setCreatingColor(false);
+    if (!res.ok) {
+      fail('Failed to add color: ' + res.error.message);
+      return;
+    }
+    const variant = res.data;
+    setVariantsByArticle(prev => {
+      const existing = prev[entry.articleId!] || [];
+      const already = existing.some(v => v.variant_id === variant.variant_id);
+      return { ...prev, [entry.articleId!]: already ? existing : [...existing, variant] };
+    });
+    setIsAddingColor(false);
+    setNewColorName('');
+    // Select it directly from `variant` rather than via handleEntryVariantChange — that reads
+    // variantsByArticle from its own closure, which still holds the pre-create value here.
+    const product = products.find(p => p.article_id === entry.articleId);
+    setEntry(prev => {
+      const packing = variant.packing ?? product?.packing ?? prev.packing;
+      return {
+        ...prev,
+        variantId: variant.variant_id,
+        label: `${product?.name || ''} — ${variant.color}`,
         packing,
         pairs: prev.cartons * packing,
       };
@@ -598,6 +686,21 @@ export default function StockVoucherPage() {
         }`}
       >
         Stock Voucher Ledger
+      </button>
+      {/* Current Stock / Stock Ledger are their own pages (report-stock, reports#product-ledger)
+          — these just jump there, same as clicking them in the top menu (4.STOCK REPORTS), so
+          they're reachable from the Stock page itself without needing separate Quick Menu pins. */}
+      <button
+        onClick={() => dispatch({ type: 'NAVIGATE', page: 'report-stock' })}
+        className="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all bg-white border text-slate-600 hover:bg-slate-50"
+      >
+        Current Stock
+      </button>
+      <button
+        onClick={() => dispatch({ type: 'NAVIGATE', page: 'reports', tab: 'product-ledger' })}
+        className="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all bg-white border text-slate-600 hover:bg-slate-50"
+      >
+        Stock Ledger
       </button>
     </div>
   );
@@ -997,14 +1100,81 @@ export default function StockVoucherPage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-600 mb-1">Color <span className="text-red-500 font-bold">*</span></label>
-                <SearchableSelect
-                  options={(entry.articleId != null ? variantsByArticle[entry.articleId] || [] : []).map(v => ({ value: String(v.variant_id), label: v.color }))}
-                  value={entry.variantId != null ? String(entry.variantId) : ''}
-                  onChange={handleEntryVariantChange}
-                  placeholder="Color..."
-                  searchPlaceholder="Search colors..."
-                  disabled={entry.articleId == null}
-                />
+                {isAddingColor ? (
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      autoFocus
+                      value={newColorName}
+                      onChange={e => setNewColorName(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') { e.preventDefault(); handleCreateColor(); }
+                        else if (e.key === 'Escape') { e.preventDefault(); setIsAddingColor(false); setNewColorName(''); }
+                      }}
+                      placeholder="Type new color..."
+                      className="soleria-input"
+                      style={{ fontSize: '13px' }}
+                      disabled={creatingColor}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCreateColor}
+                      disabled={creatingColor || !newColorName.trim()}
+                      className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                    >
+                      {creatingColor ? '…' : 'Add'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setIsAddingColor(false); setNewColorName(''); }}
+                      className="text-xs font-semibold text-slate-500 hover:text-slate-700 shrink-0"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <input
+                      ref={colorTriggerRef}
+                      type="text"
+                      disabled={isViewMode || entry.articleId == null}
+                      value={colorSearchText}
+                      onChange={e => setColorSearchText(e.target.value)}
+                      onKeyDown={handleColorTriggerKeyDown}
+                      placeholder="Color..."
+                      className="soleria-input pr-8"
+                      style={{ fontSize: '13px' }}
+                    />
+                    <button
+                      type="button"
+                      disabled={isViewMode || entry.articleId == null}
+                      onClick={openColorModal}
+                      title="Browse colors"
+                      className="absolute right-2 bottom-2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <ChevronDown size={14} />
+                    </button>
+                    <SearchModal
+                      isOpen={isColorModalOpen}
+                      title="Select Color"
+                      options={[
+                        ...(entry.articleId != null ? variantsByArticle[entry.articleId] || [] : []).map(v => ({ value: String(v.variant_id), label: v.color })),
+                        { value: NEW_COLOR_SENTINEL, label: '+ Add New Color...' },
+                      ]}
+                      value={entry.variantId != null ? String(entry.variantId) : ''}
+                      onSelect={(val) => {
+                        handleEntryVariantChange(val);
+                        setIsColorModalOpen(false);
+                        if (val !== NEW_COLOR_SENTINEL) {
+                          requestAnimationFrame(() => focusNextField(colorTriggerRef.current));
+                        }
+                      }}
+                      onClose={() => setIsColorModalOpen(false)}
+                      searchPlaceholder="Search colors..."
+                      initialSearch={colorModalSeed}
+                    />
+                  </div>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3" style={{ maxWidth: '340px' }}>

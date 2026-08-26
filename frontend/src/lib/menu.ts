@@ -86,6 +86,9 @@ export const MENU_GROUPS: MenuGroup[] = [
       { no: '2.22', label: 'CHEQUE', page: 'cheque-return' },
       null,
       { no: '2.23', label: 'SEARCH & BILTY ADDA UPDATION', page: 'bilty-update' },
+      // Appended: replaces the old inline "+ Add Stock" flow on the Current Stock report with its
+      // own document type, same architecture as Journal Voucher — no legacy number, so fresh.
+      { no: '2.24', label: 'STOCK VOUCHER', page: 'stock-voucher' },
     ],
   },
   {

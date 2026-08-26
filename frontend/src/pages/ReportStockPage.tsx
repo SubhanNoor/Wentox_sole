@@ -81,14 +81,6 @@ export default function ReportStockPage() {
     api.listVendors().then(r => { if (r.ok) setVendors(r.data); });
   }, []);
 
-  // Add stock state variables
-  const [selectedGroup, setSelectedGroup] = useState<{ articleId: number; code: string; commonName: string; categoryName: string; packing: number; rows: StockRow[] } | null>(null);
-  const [addQuantity, setAddQuantity] = useState<number>(0);
-  const [qtyType, setQtyType] = useState<'cartons' | 'pairs'>('cartons');
-  const [productionDate, setProductionDate] = useState(new Date().toISOString().split('T')[0]);
-  const [addColor, setAddColor] = useState('');
-  const [isNewColor, setIsNewColor] = useState(false);
-
   // Expandable row state — keyed by article_id, since all color variants of an article live
   // under one row.
   const [expandedArticleId, setExpandedArticleId] = useState<number | null>(null);
@@ -834,13 +826,12 @@ export default function ReportStockPage() {
                       <th className="p-3">Product Code</th>
                       <th className="p-3">Category</th>
                       <th className="p-3 text-right">Total Pairs</th>
-                      <th className="p-3 text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {groupedArticles.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="text-center p-8 text-slate-400">
+                        <td colSpan={4} className="text-center p-8 text-slate-400">
                           No products found matching stock criteria.
                         </td>
                       </tr>
@@ -869,30 +860,11 @@ export default function ReportStockPage() {
                               <td className={`p-3 text-right font-bold ${groupTotalPairs <= 0 ? 'text-red-600' : 'text-slate-900'}`}>
                                 {groupTotalPairs.toLocaleString()}
                               </td>
-                              <td className="p-3 text-center">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSelectedGroup(group);
-                                    setAddQuantity(1);
-                                    setQtyType('cartons');
-                                    setProductionDate(new Date().toISOString().split('T')[0]);
-                                    setAddColor('');
-                                    setIsNewColor(group.rows.length === 0);
-                                  }}
-                                  className="border border-black rounded bg-transparent text-black hover:bg-slate-50 transition-colors flex items-center justify-center mx-auto font-black text-xs"
-                                  style={{ width: '22px', height: '22px' }}
-                                  title="Add Stock"
-                                >
-                                  +
-                                </button>
-                              </td>
                             </tr>
                             {isExpanded && (
                               <tr className="bg-slate-50/70 border-b" style={{ borderColor: 'var(--border-table)' }}>
                                 <td></td>
-                                <td colSpan={4} className="p-4">
+                                <td colSpan={3} className="p-4">
                                   {/* Color variant sub-rows */}
                                   <div className="bg-white border rounded-lg overflow-hidden mb-4" style={{ borderColor: 'var(--border-color)' }}>
                                     <table className="w-full text-left border-collapse text-xs">
@@ -937,7 +909,6 @@ export default function ReportStockPage() {
                       <td className="p-4 text-right text-lg" style={{ color: 'var(--brand-gold)' }}>
                         {totalPairs.toLocaleString()} Pairs
                       </td>
-                      <td className="p-4"></td>
                     </tr>
                   </tfoot>
                 </table>
@@ -1491,189 +1462,6 @@ export default function ReportStockPage() {
           </div>
         </div>
       )}
-
-      {/* Add Stock Modal */}
-      {selectedGroup && (() => {
-        const matchedRow = addColor.trim()
-          ? selectedGroup.rows.find(r => r.color.toLowerCase() === addColor.trim().toLowerCase())
-          : undefined;
-        const basePacking = matchedRow?.effective_packing || selectedGroup.packing || 12;
-        const baseStock = matchedRow?.total_pairs || 0;
-        const existingColors = selectedGroup.rows.map(r => r.color);
-
-        return (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
-              <h3 className="font-lora font-bold text-lg text-slate-800 mb-2">
-                Add Stock / Log Production
-              </h3>
-              <p className="text-xs text-slate-500 mb-4 font-semibold uppercase tracking-wider">
-                {selectedGroup.code} — {selectedGroup.commonName}
-              </p>
-
-              {matchedRow && (
-                <div className="bg-slate-50 p-3 rounded-lg border mb-4 text-xs font-semibold text-slate-600 flex justify-between">
-                  <div>
-                    <span className="block text-[10px] uppercase text-slate-400">Current Stock ({matchedRow.color})</span>
-                    <span className="text-slate-800 font-bold">
-                      {Math.floor(baseStock / basePacking)} ctn
-                      { baseStock % basePacking > 0 && ` & ${baseStock % basePacking} prs` }
-                      {` (Total: ${baseStock} Pairs)`}
-                    </span>
-                  </div>
-                  <div className="text-right">
-                    <span className="block text-[10px] uppercase text-slate-400">Packing</span>
-                    <span className="text-slate-800">{basePacking} Pairs/Ctn</span>
-                  </div>
-                </div>
-              )}
-
-              {/* Content Color */}
-              <div className="mb-4">
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  Content Color <span className="text-red-500 font-bold">*</span>
-                </label>
-                {/* The dropdown branch was a native <select>; it is a SearchableSelect now, so the
-                    colour list types-to-search like every other lookup. The __new__ sentinel is still
-                    a real option, and choosing it still swaps in the free-text input above. */}
-                {isNewColor ? (
-                  <input
-                    type="text"
-                    value={addColor}
-                    onChange={e => setAddColor(e.target.value)}
-                    placeholder="Type new color..."
-                    autoFocus
-                    onBlur={() => {
-                      if (!addColor.trim() && existingColors.length > 0) setIsNewColor(false);
-                    }}
-                    className="soleria-input font-bold"
-                  />
-                ) : (
-                  <SearchableSelect
-                    options={[
-                      ...existingColors.map(c => ({ value: c, label: c })),
-                      { value: '__new__', label: '+ Add New Color (type manually)...' },
-                    ]}
-                    value={existingColors.includes(addColor) ? addColor : ''}
-                    onChange={val => {
-                      if (val === '__new__') {
-                        setIsNewColor(true);
-                        setAddColor('');
-                      } else {
-                        setAddColor(val);
-                      }
-                    }}
-                    placeholder="Select existing color..."
-                    searchPlaceholder="Search colors..."
-                  />
-                )}
-                {!matchedRow && addColor.trim() && (
-                  <p className="text-[10px] text-amber-600 mt-1">
-                    "{addColor.trim()}" is a new color — a new article color record will be created for it.
-                  </p>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Add Quantity</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={addQuantity || ''}
-                    onChange={e => setAddQuantity(e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
-                    onFocus={e => e.target.select()}
-                    onBlur={() => setAddQuantity(q => Math.max(1, q))}
-                    className="soleria-input text-center font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Unit Type</label>
-                  <select
-                    value={qtyType}
-                    onChange={e => setQtyType(e.target.value as 'cartons' | 'pairs')}
-                    className="soleria-input cursor-pointer font-bold"
-                  >
-                    <option value="cartons">Carton(s)</option>
-                    <option value="pairs">Pair(s)</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Production Date Selector */}
-              <div className="mb-4">
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Production Date</label>
-                <input
-                  type="date"
-                  value={productionDate}
-                  onChange={e => setProductionDate(e.target.value)}
-                  className="soleria-input font-bold"
-                />
-              </div>
-
-              {/* Preview */}
-              {(() => {
-                const increment = qtyType === 'cartons' ? addQuantity * basePacking : addQuantity;
-                const newTotal = baseStock + increment;
-                const newCartons = Math.floor(newTotal / basePacking);
-                const newRemPairs = newTotal % basePacking;
-                return (
-                  <div className="bg-amber-50 border border-amber-100 p-3 rounded-lg text-xs font-semibold text-slate-700 mb-6">
-                    <span className="block text-[10px] uppercase text-amber-600 mb-0.5">Updated Stock Preview</span>
-                    <span className="font-bold text-amber-800">
-                      {newCartons} ctn
-                      { newRemPairs > 0 && ` & ${newRemPairs} prs` }
-                      {` (Total: ${newTotal} Pairs)`}
-                    </span>
-                  </div>
-                );
-              })()}
-
-              {/* Actions */}
-              <div className="flex justify-end gap-2 text-sm font-semibold">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedGroup(null);
-                    setAddQuantity(0);
-                    setAddColor('');
-                    setIsNewColor(false);
-                  }}
-                  className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={!addColor.trim() || addQuantity <= 0}
-                  onClick={async () => {
-                    const res = await api.stock.logProduction({
-                      movement_date: productionDate,
-                      input_qty: addQuantity,
-                      input_unit: qtyType === 'cartons' ? 'CARTONS' : 'PAIRS',
-                      article_id: selectedGroup.articleId,
-                      color: addColor.trim(),
-                    });
-                    if (!res.ok) {
-                      fail(res.error.message);
-                      return;
-                    }
-                    setSelectedGroup(null);
-                    setAddQuantity(0);
-                    setAddColor('');
-                    setIsNewColor(false);
-                    flash('Stock added and production logged.');
-                    loadStock();
-                  }}
-                  className="px-4 py-2 bg-[#111c2a] text-[#B08D57] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  Confirm Add &amp; Log
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       {/* Material Stock Adjustment Modal (deduct/reduce only — stock:reduce-vendor-stock is the
           only real backend operation, the demo's Add direction had no backend equivalent). */}
