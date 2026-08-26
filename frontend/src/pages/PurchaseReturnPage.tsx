@@ -156,11 +156,16 @@ export default function PurchaseReturnPage() {
   };
 
   function handleVendorTriggerKeyDown(e: React.KeyboardEvent) {
+    // stopPropagation on every branch — otherwise this keydown keeps bubbling past the trigger up
+    // to window-level listeners (AppLayout's own G-01 field-walk), acting on it at the same time
+    // the modal opens. Same reasoning as SearchModal's own internal keydown handling.
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
+      e.stopPropagation();
       openVendorModal();
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      e.stopPropagation();
       if (isViewMode || isCopiedFromPurchase) return;
       setVendorModalSeed(vendorSearchText);
       setIsVendorModalOpen(true);
@@ -346,11 +351,16 @@ export default function PurchaseReturnPage() {
   };
 
   function handleFindPurchaseTriggerKeyDown(e: React.KeyboardEvent) {
+    // stopPropagation on every branch — otherwise this keydown keeps bubbling past the trigger up
+    // to window-level listeners (AppLayout's own G-01 field-walk), acting on it at the same time
+    // the modal opens. Same reasoning as SearchModal's own internal keydown handling.
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
+      e.stopPropagation();
       openFindPurchaseModal();
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      e.stopPropagation();
       if (isViewMode) return;
       setFindPurchaseModalSeed(findPurchaseSearchText);
       setIsFindPurchaseModalOpen(true);

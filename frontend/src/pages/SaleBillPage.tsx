@@ -1,6 +1,10 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
+import WeeklyTab from '@/components/WeeklyTab';
+import MonthlyTab from '@/components/MonthlyTab';
+import OverallTab from '@/components/OverallTab';
+import FindTab from '@/components/FindTab';
 import {
   Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit, AlertTriangle, CheckCircle2,
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, LogOut, Search, X, Undo2, FilePlus2,
@@ -60,6 +64,10 @@ function recalcItem(item: UiItem): UiItem {
 
 export default function SaleBillPage() {
   const { state, dispatch } = useApp();
+
+  // Weekly/Monthly/Overall/Find sub-tabs — same sub-tab bar as Sale Return's own (2026-08-26, per
+  // the user: brought back here alongside it, not dropped).
+  const [activeTab, setActiveTab] = useState<'bill' | 'weekly' | 'monthly' | 'overall' | 'find'>('bill');
 
   // ── Real lookup data ──
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
@@ -277,9 +285,88 @@ export default function SaleBillPage() {
 
   const selectedCustomer = useMemo(() => customers.find(c => c.customer_id === Number(customerId)), [customers, customerId]);
 
-  // Customer field's SearchModal (pages_design.md §5) — the page's main "party" field.
+  // Preview of the System No. a brand-new bill will get — same idea as Purchase's own
+  // nextSystemBillNo: what Save actually assigns is the next draft_sale_bill.draft_id, a
+  // separate IDENTITY sequence from the real bill_id assigned later on Post. Client-side preview
+  // only, correct as long as nothing else inserts a draft between now and Save.
+  const nextSystemBillNo = useMemo(
+    () => Math.max(0, ...unpostedBills.map(d => d.draft_id)) + 1,
+    [unpostedBills]
+  );
+
+  // Customer, Store, Sub Cust., Adda Code — every lookup on this form is a real, typable <input>
+  // that opens the same centered SearchModal popup (same pattern as Purchase's Vendor field /
+  // Receipts' Account field, per the user 2026-08-26: "we can write anything and modal pop up
+  // shows us that result, it is constant for everyone"). Typing filters nothing inline — it just
+  // seeds the modal's own search box once Enter opens it, so results appear immediately and stay
+  // searchable inside. Arrow Up/Down opens the modal blank (full list); the chevron button does
+  // the same on a plain click. Each field follows the identical four-piece shape: an `isXModalOpen`
+  // flag, a `xSearchText` mirroring the picked option's label (never fought mid-type — the sync
+  // effect only runs when the SELECTION changes), an `xModalSeed` that seeds the modal only when
+  // opened via Enter, and a trigger ref for G-01 focus-advance after picking.
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
-  const customerTriggerRef = useRef<HTMLButtonElement>(null);
+  const customerTriggerRef = useRef<HTMLInputElement>(null);
+  const [customerSearchText, setCustomerSearchText] = useState('');
+  const [customerModalSeed, setCustomerModalSeed] = useState('');
+  useEffect(() => {
+    const opt = customerOptions.find(o => o.value === customerId);
+    setCustomerSearchText(opt?.label ?? selectedCustomer?.name ?? '');
+  }, [customerId, customerOptions, selectedCustomer]);
+  const openCustomerModal = () => { if (isViewMode) return; setCustomerModalSeed(''); setIsCustomerModalOpen(true); };
+  // stopPropagation on every branch — otherwise this keydown keeps bubbling past the trigger up
+  // to window-level listeners (AppLayout's own G-01 field-walk), acting on it at the same time
+  // the modal opens. Same reasoning as SearchModal's own internal keydown handling; applies to
+  // every one of this page's own typable trigger fields below too.
+  function handleCustomerTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); openCustomerModal(); }
+    else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); setCustomerModalSeed(customerSearchText); setIsCustomerModalOpen(true); }
+  }
+
+  const [isStoreModalOpen, setIsStoreModalOpen] = useState(false);
+  const storeTriggerRef = useRef<HTMLInputElement>(null);
+  const [storeSearchText, setStoreSearchText] = useState('');
+  const [storeModalSeed, setStoreModalSeed] = useState('');
+  useEffect(() => {
+    const opt = storeOptions.find(o => o.value === storeId);
+    setStoreSearchText(opt?.label ?? '');
+  }, [storeId, storeOptions]);
+  const openStoreModal = () => { if (isViewMode) return; setStoreModalSeed(''); setIsStoreModalOpen(true); };
+  function handleStoreTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); openStoreModal(); }
+    else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); setStoreModalSeed(storeSearchText); setIsStoreModalOpen(true); }
+  }
+
+  const [isSubCustModalOpen, setIsSubCustModalOpen] = useState(false);
+  const subCustTriggerRef = useRef<HTMLInputElement>(null);
+  const [subCustSearchText, setSubCustSearchText] = useState('');
+  const [subCustModalSeed, setSubCustModalSeed] = useState('');
+  const subCustomerOptions = useMemo(
+    () => subCustomers.map(sc => ({ value: String(sc.sub_customer_id), label: sc.name })),
+    [subCustomers]
+  );
+  useEffect(() => {
+    const opt = subCustomerOptions.find(o => o.value === subCustomerId);
+    setSubCustSearchText(opt?.label ?? '');
+  }, [subCustomerId, subCustomerOptions]);
+  const openSubCustModal = () => { if (isViewMode || deliveryType === '1') return; setSubCustModalSeed(''); setIsSubCustModalOpen(true); };
+  function handleSubCustTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); openSubCustModal(); }
+    else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); setSubCustModalSeed(subCustSearchText); setIsSubCustModalOpen(true); }
+  }
+
+  const [isAddaModalOpen, setIsAddaModalOpen] = useState(false);
+  const addaTriggerRef = useRef<HTMLInputElement>(null);
+  const [addaSearchText, setAddaSearchText] = useState('');
+  const [addaModalSeed, setAddaModalSeed] = useState('');
+  useEffect(() => {
+    const opt = addaOptions.find(o => o.value === addaId);
+    setAddaSearchText(opt?.label ?? '');
+  }, [addaId, addaOptions]);
+  const openAddaModal = () => { if (isViewMode) return; setAddaModalSeed(''); setIsAddaModalOpen(true); };
+  function handleAddaTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); openAddaModal(); }
+    else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); setAddaModalSeed(addaSearchText); setIsAddaModalOpen(true); }
+  }
 
   // "Main A/C" — the customer's linked business account's parent chart account (ac_code/ac_name).
   const selectedMainAc = useMemo(() => {
@@ -453,10 +540,6 @@ export default function SaleBillPage() {
   //              enables Prev/Next/First/Last to actually browse, and it's also what the Unpost
   //              button itself checks before allowing the click.
   const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('posted');
-  // Ref-pic's Master/Detail radios. Both sections render at all times — the article entry strip
-  // has to stay reachable no matter which radio is picked, so this only tracks which one is
-  // selected for display (matching the ref pic's own toggle look); it doesn't hide either section.
-  const [viewSection, setViewSection] = useState<'master' | 'detail'>('master');
   const [postedBills, setPostedBills] = useState<SaleBillRow[]>([]);
 
   const refreshPosted = useCallback(async () => {
@@ -592,6 +675,10 @@ export default function SaleBillPage() {
     setEntry(newUiItem());
     setEditingIndex(null);
     setErrorMsg('');
+    // Explicit focus, not just the G-01 mode-change effect above: clicking New while already on
+    // a blank/new bill (mode is already 'new') doesn't change `mode`, so that effect's dependency
+    // never fires and focus would otherwise stay wherever it was.
+    requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
 
   // SB-05: a finished bill clears straight back to a blank one so the next can be typed
@@ -823,6 +910,25 @@ export default function SaleBillPage() {
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshUnposted();
     refreshPosted();
+  };
+
+  // Weekly/Monthly/Overall/Find sub-tabs — re-added (2026-08-26, per the user) alongside Sale
+  // Return's own equivalents, which never lost theirs. Loads the picked row straight into the
+  // main entry form and switches back to the Bill tab (view mode) — same convention as Sale
+  // Return's handleEditSpecificReturn/handlePrintSpecificReturn.
+  const handleEditSpecificBill = async (bill: SaleBillRow) => {
+    await loadBillRow(bill);
+    setActiveTab('bill');
+    setMode('edit');
+  };
+
+  const handlePrintSpecificBill = async (bill: SaleBillRow) => {
+    await loadBillRow(bill);
+    setIsPrintingSingle(true);
+    setTimeout(() => {
+      window.print();
+      setIsPrintingSingle(false);
+    }, 150);
   };
 
   // Entering edit mode never needs its own password prompt anymore — Save (handleSave,
@@ -1289,11 +1395,67 @@ export default function SaleBillPage() {
     );
   }
 
+  // Sub-tab switcher — lives in the top header bar next to the page title (AppLayout's
+  // headerAction slot), same as Sale Return, so the content below the Quick Menu bar starts
+  // immediately instead of losing a row's height to a tab bar first.
+  const tabBar = (
+    <div className="flex gap-1.5" data-no-print>
+      <button
+        onClick={() => { setActiveTab('bill'); handleNew(); }}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'bill' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        New Sale Bill
+      </button>
+      <button
+        onClick={() => setActiveTab('weekly')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'weekly' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Weekly Records
+      </button>
+      <button
+        onClick={() => setActiveTab('monthly')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'monthly' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Monthly Records
+      </button>
+      <button
+        onClick={() => setActiveTab('overall')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'overall' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Overall Records
+      </button>
+      <button
+        onClick={() => setActiveTab('find')}
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+          activeTab === 'find' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
+        }`}
+      >
+        Find &amp; Update Bill
+      </button>
+    </div>
+  );
+
   return (
-    <AppLayout pageTitle="Sale Bill">
+    <AppLayout pageTitle="Sale Bill" headerAction={tabBar}>
       <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
 
-        <form onSubmit={e => e.preventDefault()}>
+        {/* Tab contents (records & find) */}
+        <div>
+          {activeTab === 'weekly' && <WeeklyTab onEditBill={handleEditSpecificBill} onPrintBill={handlePrintSpecificBill} />}
+          {activeTab === 'monthly' && <MonthlyTab onEditBill={handleEditSpecificBill} onPrintBill={handlePrintSpecificBill} />}
+          {activeTab === 'overall' && <OverallTab onEditBill={handleEditSpecificBill} onPrintBill={handlePrintSpecificBill} />}
+          {activeTab === 'find' && <FindTab onEditBill={handleEditSpecificBill} onPrintBill={handlePrintSpecificBill} />}
+        </div>
+
+        <form onSubmit={e => e.preventDefault()} className={activeTab === 'bill' ? 'block' : 'hidden'}>
 
         {/* Banner Messages */}
         {lookupError && (
@@ -1567,21 +1729,12 @@ export default function SaleBillPage() {
           )}
         </div>
 
-        {/* Title bar (ref-pic row directly under the icon toolbar) — Master/Detail radios
-            (display-only, see viewSection above — both sections always stay visible/reachable)
-            centered, Posted/Unposted browse dropdown (drives First/Pre/Next/Last) on the right. */}
+        {/* Title bar (ref-pic row directly under the icon toolbar) — Posted/Unposted browse
+            dropdown (drives First/Pre/Next/Last) on the right. Master/Detail radios removed (per
+            the user, 2026-08-26) — display-only and didn't do anything, both sections always
+            stayed visible/reachable regardless of which was picked. */}
         <div className="flex items-center justify-between gap-3 mb-2 px-1" data-no-print>
           <span className="font-lora font-semibold text-sm text-slate-600">SALE BILL</span>
-          <div className="flex items-center gap-3 text-xs font-semibold text-slate-600">
-            <label className="flex items-center gap-1 cursor-pointer">
-              <input type="radio" name="sb-master-detail" checked={viewSection === 'master'} onChange={() => setViewSection('master')} />
-              Master
-            </label>
-            <label className="flex items-center gap-1 cursor-pointer">
-              <input type="radio" name="sb-master-detail" checked={viewSection === 'detail'} onChange={() => setViewSection('detail')} />
-              Detail
-            </label>
-          </div>
           <select
             value={browseFilter}
             onChange={e => setBrowseFilter(e.target.value as 'posted' | 'unposted')}
@@ -1629,8 +1782,7 @@ export default function SaleBillPage() {
               Customer → Remarks → Delivery → Sub Cust → Bill No. → GP No. → Bilty No. → Adda
               Code — an order that does NOT match these visual rows, so the JSX below is written
               in TAB order and each field is pinned to its ref-pic visual cell with `gridArea`.
-              Always visible — see the note on `viewSection` above for why the Master/Detail
-              radios don't hide this. */}
+              Always visible. */}
           <div
             className="shrink-0 grid gap-x-3 gap-y-1.5 mb-2 pb-2 border-b"
             style={{
@@ -1657,46 +1809,77 @@ export default function SaleBillPage() {
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 From&gt;
               </label>
-              {/* Was a native <select>. SearchableSelect so this field behaves like every other
-                  lookup on the screen: focus it and type, Enter selects and moves on. */}
-              <SearchableSelect
-                options={storeOptions}
-                value={storeId}
-                onChange={setStoreId}
-                placeholder="Select store..."
-                searchPlaceholder="Search stores..."
-                disabled={isViewMode}
-              />
+              {/* Typable — type a store name, or press Enter to search (same pattern as every
+                  other lookup on this form; per the user, 2026-08-26). */}
+              <div className="flex-1 relative">
+                <input
+                  ref={storeTriggerRef}
+                  type="text"
+                  data-field-nav="true"
+                  disabled={isViewMode}
+                  value={storeSearchText}
+                  onChange={e => setStoreSearchText(e.target.value)}
+                  onKeyDown={handleStoreTriggerKeyDown}
+                  placeholder="Type a store name, or press Enter to search..."
+                  className="soleria-input soleria-input-compact pr-9"
+                  style={{ fontSize: '13px' }}
+                />
+                <button
+                  type="button"
+                  disabled={isViewMode}
+                  onClick={openStoreModal}
+                  title="Browse all stores"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronDown size={16} />
+                </button>
+                <SearchModal
+                  isOpen={isStoreModalOpen}
+                  title="Select Store"
+                  options={storeOptions}
+                  value={storeId}
+                  onSelect={(val) => {
+                    setStoreId(val);
+                    setIsStoreModalOpen(false);
+                    requestAnimationFrame(() => focusNextField(storeTriggerRef.current));
+                  }}
+                  onClose={() => setIsStoreModalOpen(false)}
+                  searchPlaceholder="Search stores..."
+                  initialSearch={storeModalSeed}
+                />
+              </div>
             </div>
 
             {/* Customer — the page's main "party" field, per pages_design.md §5: a SearchModal
-                trigger (big centered popup, whole list at once) instead of SearchableSelect's
-                small anchored panel. Enter/Arrow Up/Down on the trigger opens it; typing any
-                substring of the name (e.g. "ahmad footwear") filters inside the modal. Customer
+                popup (big centered popup, whole list at once) instead of SearchableSelect's small
+                anchored panel. Typable — type any substring of the name (e.g. "ahmad footwear")
+                then Enter opens the modal seeded with it; Arrow Up/Down opens it blank. Customer
                 Code auto-fills from the selection. */}
             <div className="flex items-center gap-1.5" style={{ gridArea: 'custname' }}>
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Customer <span className="text-red-500 font-bold">*</span>
               </label>
-              <div className="flex-1">
-                <button
+              <div className="flex-1 relative">
+                <input
                   ref={customerTriggerRef}
-                  type="button"
+                  type="text"
                   data-field-nav="true"
                   disabled={isViewMode}
-                  onClick={() => setIsCustomerModalOpen(true)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                      e.preventDefault();
-                      setIsCustomerModalOpen(true);
-                    }
-                  }}
-                  className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
+                  value={customerSearchText}
+                  onChange={e => setCustomerSearchText(e.target.value)}
+                  onKeyDown={handleCustomerTriggerKeyDown}
+                  placeholder="Type a customer name, or press Enter to search..."
+                  className="soleria-input pr-9"
+                  style={{ fontSize: '13px' }}
+                />
+                <button
+                  type="button"
+                  disabled={isViewMode}
+                  onClick={openCustomerModal}
+                  title="Browse all customers"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  <span className={selectedCustomer ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
-                    {selectedCustomer ? customerOptions.find(o => o.value === customerId)?.label ?? selectedCustomer.name : 'Select customer...'}
-                  </span>
-                  <ChevronDown size={16} className="text-slate-400" />
+                  <ChevronDown size={16} />
                 </button>
                 <SearchModal
                   isOpen={isCustomerModalOpen}
@@ -1714,6 +1897,7 @@ export default function SaleBillPage() {
                   }}
                   onClose={() => setIsCustomerModalOpen(false)}
                   searchPlaceholder="Search customer by name..."
+                  initialSearch={customerModalSeed}
                 />
                 {selectedCustomer && selectedCustomer.ba_id == null && (
                   <p className="text-[10px] text-amber-600 mt-0.5 font-semibold">
@@ -1773,14 +1957,41 @@ export default function SaleBillPage() {
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Sub Cust.
               </label>
-              <div className="flex-1">
-                <SearchableSelect
-                  options={subCustomers.map(sc => ({ value: String(sc.sub_customer_id), label: sc.name }))}
-                  value={subCustomerId}
-                  onChange={setSubCustomerId}
-                  placeholder="Select sub-customer..."
-                  searchPlaceholder="Search sub-customers..."
+              <div className="flex-1 relative">
+                <input
+                  ref={subCustTriggerRef}
+                  type="text"
+                  data-field-nav="true"
                   disabled={isViewMode || deliveryType === '1'}
+                  value={subCustSearchText}
+                  onChange={e => setSubCustSearchText(e.target.value)}
+                  onKeyDown={handleSubCustTriggerKeyDown}
+                  placeholder="Type a sub-customer name, or press Enter to search..."
+                  className="soleria-input soleria-input-compact pr-9"
+                  style={{ fontSize: '13px' }}
+                />
+                <button
+                  type="button"
+                  disabled={isViewMode || deliveryType === '1'}
+                  onClick={openSubCustModal}
+                  title="Browse all sub-customers"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronDown size={16} />
+                </button>
+                <SearchModal
+                  isOpen={isSubCustModalOpen}
+                  title="Select Sub-Customer"
+                  options={subCustomerOptions}
+                  value={subCustomerId}
+                  onSelect={(val) => {
+                    setSubCustomerId(val);
+                    setIsSubCustModalOpen(false);
+                    requestAnimationFrame(() => focusNextField(subCustTriggerRef.current));
+                  }}
+                  onClose={() => setIsSubCustModalOpen(false)}
+                  searchPlaceholder="Search sub-customers..."
+                  initialSearch={subCustModalSeed}
                 />
               </div>
               {!isViewMode && deliveryType !== '1' && (
@@ -1817,14 +2028,43 @@ export default function SaleBillPage() {
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Adda Code
               </label>
-              <SearchableSelect
-                options={addaOptions}
-                value={addaId}
-                onChange={setAddaId}
-                placeholder="Select Adda..."
-                searchPlaceholder="Search Adda..."
-                disabled={isViewMode}
-              />
+              <div className="flex-1 relative">
+                <input
+                  ref={addaTriggerRef}
+                  type="text"
+                  data-field-nav="true"
+                  disabled={isViewMode}
+                  value={addaSearchText}
+                  onChange={e => setAddaSearchText(e.target.value)}
+                  onKeyDown={handleAddaTriggerKeyDown}
+                  placeholder="Type an Adda name, or press Enter to search..."
+                  className="soleria-input soleria-input-compact pr-9"
+                  style={{ fontSize: '13px' }}
+                />
+                <button
+                  type="button"
+                  disabled={isViewMode}
+                  onClick={openAddaModal}
+                  title="Browse all Addas"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronDown size={16} />
+                </button>
+                <SearchModal
+                  isOpen={isAddaModalOpen}
+                  title="Select Adda"
+                  options={addaOptions}
+                  value={addaId}
+                  onSelect={(val) => {
+                    setAddaId(val);
+                    setIsAddaModalOpen(false);
+                    requestAnimationFrame(() => focusNextField(addaTriggerRef.current));
+                  }}
+                  onClose={() => setIsAddaModalOpen(false)}
+                  searchPlaceholder="Search Adda..."
+                  initialSearch={addaModalSeed}
+                />
+              </div>
             </div>
 
             {/* Main A/C: the customer's linked business account's PARENT chart account — purely
@@ -1841,17 +2081,18 @@ export default function SaleBillPage() {
               <input type="text" value={selectedMainAc?.ac_name ?? ''} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
             </div>
 
-            {/* System No. — the auto-generated internal bill number, previously not shown; now
-                visible per spec, still disabled/never typed into. */}
+            {/* System No. — the auto-generated internal bill number. Before Save there's no real
+                id yet, so this previews the number Save will actually assign (same pattern as
+                Purchase's own System Bill No.) instead of just saying "Unsaved". */}
             <div className="flex items-center gap-1.5" style={{ gridArea: 'sysno' }}>
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 No. &gt;&gt;&gt;&gt;
               </label>
-              <input type="text" value={billId ?? 'Unsaved'} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
+              <input type="text" value={billId != null ? `#${billId}` : `#${nextSystemBillNo} (pending)`} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
           </div>
 
-          <>{/* Detail section — see the note on `viewSection` above for why this always renders. */}
+          <>{/* Detail section — always rendered. */}
           {/* Stock Limit Warning Banner */}
           {hasStockExceeded && !isViewMode && (
             <div className="shrink-0 flex items-center justify-between p-2.5 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-semibold mb-3 shadow-sm animate-in fade-in slide-in-from-top-2">
@@ -1894,6 +2135,7 @@ export default function SaleBillPage() {
                     onKeyDown={e => {
                       if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                         e.preventDefault();
+                        e.stopPropagation();
                         setIsProductModalOpen(true);
                       }
                     }}

@@ -1,23 +1,27 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { useApp } from '@/context/AppContext';
+import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import WeeklyReturnTab from '@/components/WeeklyReturnTab';
 import MonthlyReturnTab from '@/components/MonthlyReturnTab';
 import OverallReturnTab from '@/components/OverallReturnTab';
 import FindReturnTab from '@/components/FindReturnTab';
-import { Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit, CheckCircle2 } from 'lucide-react';
+import {
+  Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit, CheckCircle2,
+  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, LogOut, Search, X, Undo2,
+  PackageCheck, ChevronDown
+} from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
 import { formatDate, getTodayDate } from '@/lib/utils';
-import { focusFirstField } from '@/lib/fieldNav';
-import { useHeldKey } from '@/hooks/useHeldKey';
+import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
+import SearchModal from '@/components/SearchModal';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
   SaleReturnRow, SaleReturnCreateInput, SaleReturnItemInput,
-  DraftSaleReturnRow, ConfirmAllResult
+  DraftSaleReturnRow, ConfirmAllResult, SaleBillRow, SaleBillItemRow
 } from '@/lib/api';
 
 interface UiItem {
@@ -59,7 +63,7 @@ function recalcItem(item: UiItem): UiItem {
 }
 
 export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?: 'return' | 'weekly' | 'monthly' | 'overall' | 'find' }) {
-  const { state } = useApp();
+  const { state, dispatch } = useApp();
 
   const [activeTab, setActiveTab] = useState<'return' | 'weekly' | 'monthly' | 'overall' | 'find'>(initialTab);
 
@@ -141,6 +145,104 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     [sortedCustomers]
   );
 
+  // TO Store — typable <input> opening the same centered SearchModal popup as every other lookup
+  // on this form (same pattern as Purchase's Vendor field / Sale Bill's Store field, 2026-08-26).
+  const storeTriggerRef = useRef<HTMLInputElement>(null);
+  const [isStoreModalOpen, setIsStoreModalOpen] = useState(false);
+  const [storeSearchText, setStoreSearchText] = useState('');
+  const [storeModalSeed, setStoreModalSeed] = useState('');
+  useEffect(() => {
+    const opt = storeOptions.find(o => o.value === storeId);
+    setStoreSearchText(opt?.label ?? '');
+  }, [storeId, storeOptions]);
+  const openStoreModal = () => {
+    if (isViewMode || isCopiedFromBill) return;
+    setStoreModalSeed('');
+    setIsStoreModalOpen(true);
+  };
+  // stopPropagation on every branch, not just preventDefault — otherwise this keydown keeps
+  // bubbling past the trigger up to window-level listeners (AppLayout's own G-01 field-walk),
+  // acting on it at the same time the modal opens. Same reasoning as SearchModal's own internal
+  // keydown handling; applies to every one of this page's own typable trigger fields below too.
+  function handleStoreTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      openStoreModal();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isViewMode || isCopiedFromBill) return;
+      setStoreModalSeed(storeSearchText);
+      setIsStoreModalOpen(true);
+    }
+  }
+
+  // Delivery Agent (Sub Customer) — same typable pattern, replacing SearchableSelect's rounded
+  // dropdown (per the user, 2026-08-26: matched against SaleBillPage's own Sub Cust. field).
+  const subCustTriggerRef = useRef<HTMLInputElement>(null);
+  const [isSubCustModalOpen, setIsSubCustModalOpen] = useState(false);
+  const [subCustSearchText, setSubCustSearchText] = useState('');
+  const [subCustModalSeed, setSubCustModalSeed] = useState('');
+  const subCustomerOptions = useMemo(
+    () => subCustomers.map(sc => ({ value: String(sc.sub_customer_id), label: sc.name })),
+    [subCustomers]
+  );
+  useEffect(() => {
+    const opt = subCustomerOptions.find(o => o.value === subCustomerId);
+    setSubCustSearchText(opt?.label ?? '');
+  }, [subCustomerId, subCustomerOptions]);
+  const openSubCustModal = () => {
+    if (isViewMode || isCopiedFromBill) return;
+    setSubCustModalSeed('');
+    setIsSubCustModalOpen(true);
+  };
+  function handleSubCustTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      openSubCustModal();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isViewMode || isCopiedFromBill) return;
+      setSubCustModalSeed(subCustSearchText);
+      setIsSubCustModalOpen(true);
+    }
+  }
+
+  // Transport Adda — same typable pattern, replacing SearchableSelect's rounded dropdown.
+  const addaTriggerRef = useRef<HTMLInputElement>(null);
+  const [isAddaModalOpen, setIsAddaModalOpen] = useState(false);
+  const [addaSearchText, setAddaSearchText] = useState('');
+  const [addaModalSeed, setAddaModalSeed] = useState('');
+  const addaOptions = useMemo(
+    () => addas.map(ad => ({ value: String(ad.adda_id), label: ad.name })),
+    [addas]
+  );
+  useEffect(() => {
+    const opt = addaOptions.find(o => o.value === addaId);
+    setAddaSearchText(opt?.label ?? '');
+  }, [addaId, addaOptions]);
+  const openAddaModal = () => {
+    if (isViewMode || isCopiedFromBill) return;
+    setAddaModalSeed('');
+    setIsAddaModalOpen(true);
+  };
+  function handleAddaTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      openAddaModal();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isViewMode || isCopiedFromBill) return;
+      setAddaModalSeed(addaSearchText);
+      setIsAddaModalOpen(true);
+    }
+  }
+
   // Every saved-unposted return now lives in draft_sale_returns — the real sale_returns table
   // strictly never holds an unposted document (same architecture change as Sale Bill). One list
   // replaces what used to be "Saved Drafts" — there's no meaningful distinction anymore between
@@ -153,16 +255,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   }, []);
 
   useEffect(() => { refreshDrafts(); }, [refreshDrafts]);
-
-  const isNecessaryFieldsFilled = useMemo(() => {
-    if (!customerId) return false;
-    if (!date) return false;
-    if (!storeId) return false;
-    if (!billNo) return false;
-    if (items.length === 0) return false;
-    if (items.some(it => !it.variantId || it.cartons <= 0 || it.rate <= 0)) return false;
-    return true;
-  }, [customerId, date, storeId, billNo, items]);
 
   const loadReturnRow = async (rowIn: SaleReturnRow) => {
     // list() rows never carry items (only get() does) — the tabs pass those straight through,
@@ -206,16 +298,131 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
         value: it.value
       };
     });
-    setItems(loadedItems.length ? loadedItems : [newUiItem()]);
+    setItems(loadedItems);
+    setEntry(newUiItem());
+    setEditingIndex(null);
     loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
+    // Same reasoning as loadDraftIntoForm below — a saved return carries no record of which
+    // original bill it might have been linked to, so reopening it is always unlocked/manual.
+    setCopyFromBillId('');
+    setSourceBillItems([]);
     setErrorMsg('');
   };
 
-  // Pre-fill a return from an existing posted Sale Bill, matched by its manual bill number.
-  const prefillFromSaleBill = async (matchedBillNo: string) => {
-    const res = await api.saleBills.list({ bill_no: matchedBillNo });
-    if (!res.ok || res.data.length === 0) return;
-    const bill = res.data[0];
+  // ── Record navigation: First/Pre./Next/Last + Posted/Unposted dropdown — same mechanism as
+  // SaleBillPage §3. The dropdown isn't a data filter — both values browse the SAME posted-returns
+  // list; it only arms which action you're browsing *for* ('unposted' = "I'm here to Unpost").
+  const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('posted');
+  const [postedReturns, setPostedReturns] = useState<SaleReturnRow[]>([]);
+
+  const refreshPostedReturns = useCallback(async () => {
+    const res = await api.saleReturns.list();
+    if (res.ok) setPostedReturns(res.data);
+  }, []);
+
+  useEffect(() => { refreshPostedReturns(); }, [refreshPostedReturns]);
+
+  // saleReturns.list() returns newest-first — reverse for oldest-first, so First = earliest, Last
+  // = most recent.
+  const navPostedList = useMemo(() => [...postedReturns].reverse(), [postedReturns]);
+
+  const navIndex = useMemo(() => {
+    if (returnId == null || !currentReturnIsPosted) return -1;
+    return navPostedList.findIndex(r => r.return_id === returnId);
+  }, [returnId, currentReturnIsPosted, navPostedList]);
+
+  const canBrowse = browseFilter === 'unposted' && navPostedList.length > 0;
+  const canNavPrevious = canBrowse && navIndex !== 0;
+  const canNavNext = canBrowse && navIndex !== navPostedList.length - 1;
+
+  const goToNavIndex = async (idx: number) => {
+    if (idx < 0 || idx >= navPostedList.length) return;
+    await loadReturnRow(navPostedList[idx]);
+    setMode('view');
+  };
+
+  const handleFirst = () => goToNavIndex(0);
+  const handlePrev = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
+  const handleNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
+  const handleLast = () => goToNavIndex(navPostedList.length - 1);
+
+  // Toolbar's Find button — a quick jump to any return (posted or unposted) by bill number or
+  // customer name, searched client-side over the already-loaded browse lists.
+  const [isFindOpen, setIsFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const findResults = useMemo(() => {
+    const q = findQuery.trim().toLowerCase();
+    if (!q) return [];
+    const matches = (r: { bill_no: string | null; customer_id: number }) =>
+      (r.bill_no || '').toLowerCase().includes(q) ||
+      (customers.find(c => c.customer_id === r.customer_id)?.name || '').toLowerCase().includes(q);
+    const posted = postedReturns.filter(matches).map(row => ({ filter: 'posted' as const, row }));
+    const unposted = drafts.filter(matches).map(row => ({ filter: 'unposted' as const, row }));
+    return [...posted, ...unposted].slice(0, 30);
+  }, [findQuery, postedReturns, drafts, customers]);
+
+  const handleFindResultSelect = async (filter: 'posted' | 'unposted', row: SaleReturnRow | DraftSaleReturnRow) => {
+    setIsFindOpen(false);
+    setFindQuery('');
+    if (filter === 'posted') {
+      await loadReturnRow(row as SaleReturnRow);
+      setMode('view');
+    } else {
+      loadDraftIntoForm(row as DraftSaleReturnRow);
+      setMode('view');
+    }
+  };
+
+  // ── Original Sale Bill linkage (2026-08-26, per the user — same architecture as
+  // PurchaseReturnPage's isCopiedFromPurchase/sourcePurchaseItems, adapted stronger per this
+  // page's own spec): "Manual entry" (default) vs picking an actual bill to return against.
+  //
+  // - Manual entry + typing a Manual Invoice No. that matches a posted Sale Bill's own bill_no
+  //   (on blur): ALL master fields auto-fill FROM that bill and lock (non-editable) — Store,
+  //   Customer, Delivery Agent, Adda, GP No., Bilty No., Remarks — so they can't quietly drift
+  //   from the document being returned. Articles are still added one at a time by hand below;
+  //   each is checked against the matched bill's own items (by variant) as it's picked, and takes
+  //   that line's exact rate — non-editable — while cartons stays free to type (a return can be
+  //   partial).
+  // - Picking an actual bill via "Find Bill to Return" instead: same field-lock, but ALSO copies
+  //   every one of that bill's items in at once (still individually re-editable/removable, still
+  //   validated+priced against the source if touched).
+  //
+  // Both paths funnel through this one function — `copyItems` is the only difference between them.
+  const [copyFromBillId, setCopyFromBillId] = useState('');
+  const [sourceBillItems, setSourceBillItems] = useState<SaleBillItemRow[]>([]);
+  const isCopiedFromBill = !!copyFromBillId;
+
+  const [priorBills, setPriorBills] = useState<SaleBillRow[]>([]);
+  useEffect(() => {
+    (async () => {
+      const res = await api.saleBills.list();
+      if (res.ok) setPriorBills(res.data);
+    })();
+  }, []);
+  const priorBillOptions = useMemo(() => priorBills.map(b => ({
+    value: String(b.bill_id),
+    label: `#${b.bill_id} · ${b.bill_no || 'No Bill No.'} · ${formatDate(b.bill_date)} — ${formatCurrency(b.net_value)}`
+  })), [priorBills]);
+
+  const handleCopyFromBill = async (billIdStr: string, copyItems: boolean) => {
+    setCopyFromBillId(billIdStr);
+    if (!billIdStr) {
+      setSourceBillItems([]);
+      return;
+    }
+    const res = await api.saleBills.get(Number(billIdStr));
+    if (!res.ok) {
+      setErrorMsg('Failed to load original bill: ' + res.error.message);
+      return;
+    }
+    const bill = res.data;
+    // Manual Invoice No. itself has to reflect whichever bill is now linked too — picking one via
+    // "Find Bill to Return" (copyItems=true) previously left this field untouched/blank, so typing
+    // over it afterward had nothing correct to compare against (per the user, 2026-08-26: "when I
+    // select specific it did not fill the invoice number"). The manual-match path (copyItems=false)
+    // already got here BECAUSE this field held the matching text, so this is a no-op there.
+    setBillNo(bill.bill_no);
     setStoreId(bill.store_id != null ? String(bill.store_id) : '');
     setCustomerId(String(bill.customer_id));
     setSubCustomerId(bill.sub_customer_id != null ? String(bill.sub_customer_id) : '');
@@ -224,29 +431,189 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setAddaId(String(bill.adda_id));
     setRemarks(`Return from Sale Bill No. ${bill.bill_no}`);
     setInvoiceDiscount(bill.invoice_discount || 0);
+    setSourceBillItems(bill.items);
 
-    const mappedItems: UiItem[] = bill.items.map(it => {
-      const article = products.find(p => p.code === it.article_code);
-      const uiItem = recalcItem({
-        uid: 'row_' + Date.now() + '_' + it.item_id,
-        articleId: article?.article_id ?? null,
-        variantId: it.variant_id,
-        label: `${it.article_name || it.article_code || 'Article'} — ${it.color || ''}`,
-        packing: it.pairs && it.cartons ? it.pairs / it.cartons : 0,
-        cartons: it.cartons,
-        pairs: it.pairs,
-        rate: it.rate,
-        discountPercent: it.discount_percent,
-        discountValue: it.discount_value,
-        value: it.value
+    if (copyItems) {
+      // Explicit "Find Bill to Return" pick — every item copies in at once, same as the master
+      // fields (per the user: "if user select non manual and any bill then all the articles
+      // appear along with every field").
+      const mappedItems: UiItem[] = bill.items.map(it => {
+        const article = products.find(p => p.code === it.article_code);
+        return recalcItem({
+          uid: 'row_' + Date.now() + '_' + it.item_id,
+          articleId: article?.article_id ?? null,
+          variantId: it.variant_id,
+          label: `${it.article_name || it.article_code || 'Article'} — ${it.color || ''}`,
+          packing: it.pairs && it.cartons ? it.pairs / it.cartons : 0,
+          cartons: it.cartons,
+          pairs: it.pairs,
+          rate: it.rate,
+          discountPercent: it.discount_percent,
+          discountValue: it.discount_value,
+          value: it.value
+        });
       });
-      return uiItem;
-    });
-    setItems(mappedItems.length ? mappedItems : [newUiItem()]);
-    mappedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
-    setSuccessMsg(`Prefilled return items from Sale Bill No. ${bill.bill_no}`);
+      setItems(mappedItems);
+      mappedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
+    } else {
+      // Manual entry, auto-matched by typed Manual Invoice No. — master fields only; articles
+      // are still added one at a time through the entry strip below, each checked against
+      // sourceBillItems (see articleAgainstBillError).
+      setItems([]);
+    }
+    setEntry(newUiItem());
+    setEditingIndex(null);
+    setSuccessMsg(`Linked to Sale Bill No. ${bill.bill_no}${copyItems ? ' — items copied' : ' — master fields filled, add articles below'}`);
     setTimeout(() => setSuccessMsg(''), 3000);
   };
+
+  // Manual-entry auto-lookup by typed Manual Invoice No. — fires on Tab/Enter/blur (not every
+  // keystroke) so it doesn't fight the user mid-type. An exact, case-insensitive match against a
+  // posted Sale Bill's own bill_no reuses handleCopyFromBill with copyItems=false. The field stays
+  // editable even once locked (2026-08-26, per the user: "we can change the bill number for
+  // another bill") — typing a DIFFERENT bill no. here and committing re-runs this same lookup and
+  // re-locks to whichever bill now matches; committing one that matches nothing instead falls back
+  // to Clear Link, unlocking everything (there's nothing left to stay locked to).
+  //
+  // `fallbackFocusEl` (2026-08-26, per the user — Customer's dropdown was popping open uninvited):
+  // the field's own onKeyDown below intercepts Tab/Enter and preventDefault()s the browser's
+  // native focus-advance, specifically so it CAN'T land on Customer while this async lookup is
+  // still in flight — Customer's SearchableSelect auto-opens its panel on focus, and the browser's
+  // default Tab lands there well before setCustomerId's disabled-state update actually commits.
+  // With the native advance suppressed, focus now moves only once WE decide where — straight to
+  // the first article field on a match, or normally onward via fallbackFocusEl when there's none.
+  const prefillFromSaleBill = (typedBillNo: string, fallbackFocusEl?: HTMLInputElement | null) => {
+    const typed = typedBillNo.trim().toLowerCase();
+    if (!typed) {
+      if (isCopiedFromBill) handleClearBillLink();
+      if (fallbackFocusEl) requestAnimationFrame(() => focusNextField(fallbackFocusEl));
+      return;
+    }
+    const match = priorBills.find(b => (b.bill_no || '').trim().toLowerCase() === typed);
+    if (match) {
+      setErrorMsg('');
+      void handleCopyFromBill(String(match.bill_id), false).then(() => {
+        // Master fields are done (just auto-filled and locked) — jump straight to the first
+        // article field so the user can start typing articles right away, per the user
+        // (2026-08-26): "the mouse goes to the first article field" (mirrors
+        // PurchaseReturnPage's identical handleBillNoBlur behavior).
+        requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
+      });
+    } else {
+      // No match — every Manual Invoice No. has to reference a real Sale Bill (per the user,
+      // 2026-08-26: "if user enter some kind of invoice number that not exist show error and do
+      // not move on further"). If this was previously locked to a bill, unlock everything first —
+      // there's nothing left to stay locked to — then block here: show the error and put focus
+      // straight back on the field instead of letting Tab/blur carry it onward, so the user has to
+      // either fix the number or clear it before doing anything else.
+      if (isCopiedFromBill) handleClearBillLink();
+      setErrorMsg(`No Sale Bill found with Manual Invoice No. "${typedBillNo.trim()}".`);
+      if (fallbackFocusEl) requestAnimationFrame(() => fallbackFocusEl.focus());
+    }
+  };
+  // Tab/Enter already triggered the lookup above (and preventDefault()ed the native focus-advance)
+  // — the field's onBlur below must not also re-run it when that programmatic focus change fires
+  // its own blur a moment later. Cleared right after use; a genuine mouse-click-elsewhere blur
+  // (this ref still false) still runs prefillFromSaleBill exactly as before.
+  const billNoHandledRef = useRef(false);
+
+  // Validates one row's article+color+rate against `sourceBillItems` — only while isCopiedFromBill
+  // (plain Manual entry with no bill linked is unrestricted). Keyed on variant_id+rate together,
+  // same reasoning as PurchaseReturnPage: the same variant can appear on the source bill twice at
+  // two different rates (rare, but possible across edited lines), and each is its own pool of
+  // cartons to return against. `excludeUid` leaves the row being edited out of the "already used"
+  // running total, so re-editing a row's own cartons doesn't count itself twice.
+  function articleAgainstBillError(variantId: number | null, cartons: number, rate: number, excludeUid?: string | null): string | null {
+    if (!isCopiedFromBill || variantId == null) return null;
+    const sourceItem = sourceBillItems.find(it => it.variant_id === variantId && it.rate === rate);
+    if (!sourceItem) {
+      const sameVariantDifferentRate = sourceBillItems.some(it => it.variant_id === variantId);
+      if (sameVariantDifferentRate) {
+        return 'This article/color was sold at a different rate on the original bill — match that rate to return it.';
+      }
+      return 'This article/color was not on the original bill — it can\'t be returned against it.';
+    }
+    const alreadyUsed = items
+      .filter(it => it.uid !== excludeUid && it.variantId === variantId && it.rate === rate)
+      .reduce((s, it) => s + it.cartons, 0);
+    const remaining = sourceItem.cartons - alreadyUsed;
+    if (cartons > remaining) {
+      return `Only ${remaining} carton(s) left to return (sold ${sourceItem.cartons}, already used ${alreadyUsed}).`;
+    }
+    return null;
+  }
+
+  // "Find Bill to Return" — the same big centered SearchModal popup as Customer, typable (type a
+  // bill no./customer substring then Enter opens it seeded; Arrow Up/Down or the chevron button
+  // open it blank). Defaults to reading "Manual entry" when nothing's picked, same as
+  // PurchaseReturnPage's own "Find Purchase to Return".
+  const findBillTriggerRef = useRef<HTMLInputElement>(null);
+  const [isFindBillModalOpen, setIsFindBillModalOpen] = useState(false);
+  const [findBillSearchText, setFindBillSearchText] = useState('');
+  const [findBillModalSeed, setFindBillModalSeed] = useState('');
+  useEffect(() => {
+    const opt = priorBillOptions.find(o => o.value === copyFromBillId);
+    setFindBillSearchText(opt?.label ?? '');
+  }, [copyFromBillId, priorBillOptions]);
+  const openFindBillModal = () => {
+    if (isViewMode) return;
+    setFindBillModalSeed('');
+    setIsFindBillModalOpen(true);
+  };
+  function handleFindBillTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      openFindBillModal();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isViewMode) return;
+      setFindBillModalSeed(findBillSearchText);
+      setIsFindBillModalOpen(true);
+    }
+  }
+  async function handleFindBillSelect(billIdStr: string) {
+    setIsFindBillModalOpen(false);
+    // The modal's own "Manual entry (default)" row comes through as value '' — same as picking
+    // it clears the link rather than trying to "copy from" a non-existent bill.
+    if (!billIdStr) {
+      handleClearBillLink();
+      requestAnimationFrame(() => focusNextField(findBillTriggerRef.current));
+      return;
+    }
+    await handleCopyFromBill(billIdStr, true);
+    // Master fields are done (all just auto-filled and locked) — jump straight to the article
+    // entry strip, same as the manual-match path (per the user, 2026-08-26), instead of just
+    // walking to whatever field happens to sit next in DOM order.
+    requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
+  }
+  // Switches back to full Manual entry from a locked state — clears the link and unlocks every
+  // master field, but leaves whatever items/fields are already typed as-is (nothing is erased).
+  const handleClearBillLink = () => {
+    setCopyFromBillId('');
+    setSourceBillItems([]);
+  };
+
+  const isNecessaryFieldsFilled = useMemo(() => {
+    if (!customerId) return false;
+    if (!date) return false;
+    if (!storeId) return false;
+    if (!billNo) return false;
+    if (items.length === 0) return false;
+    if (items.some(it => !it.variantId || it.cartons <= 0 || it.rate <= 0)) return false;
+    // Linked to an original bill — every row also has to actually be returnable against it.
+    if (isCopiedFromBill && items.some(it => articleAgainstBillError(it.variantId, it.cartons, it.rate, it.uid))) return false;
+    return true;
+  }, [customerId, date, storeId, billNo, items, isCopiedFromBill, sourceBillItems]);
+
+  // Preview of the Return No. a brand-new return will get — same idea as SaleBillPage's own
+  // nextSystemBillNo: what Save actually assigns is the next draft_sale_return.draft_id, a
+  // separate IDENTITY sequence from the real return_id assigned later on Post.
+  const nextSystemReturnNo = useMemo(
+    () => Math.max(0, ...drafts.map(d => d.draft_id)) + 1,
+    [drafts]
+  );
 
   // G-01: auto-focus the first field (Date) whenever the return tab becomes the active view and
   // is editable — this page's entry area isn't wrapped in a <form>, so AppLayout's global
@@ -299,14 +666,26 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setStoreId(stores[0] ? String(stores[0].store_id) : '');
     setCustomerId('');
     setSubCustomerId('');
-    setBillNo('RET-' + (Math.floor(Math.random() * 9000) + 1000).toString());
+    // Blank by default (per the user, 2026-08-26) — was auto-generated as "RET-1234", but this
+    // field doubles as the manual lookup key against an original Sale Bill's own bill_no
+    // (prefillFromSaleBill), so a random pre-filled value only got in the way of typing a real one.
+    setBillNo('');
     setGpNo('');
     setBiltyNo('');
     setAddaId(addas[0] ? String(addas[0].adda_id) : '');
     setRemarks('');
     setInvoiceDiscount(0);
-    setItems([newUiItem()]);
+    setItems([]);
+    setEntry(newUiItem());
+    setEditingIndex(null);
+    setCopyFromBillId('');
+    setSourceBillItems([]);
     setErrorMsg('');
+    // Explicit focus, not just the G-01 mode-change effect below: clicking New while already on
+    // a blank/new return (mode is already 'new') doesn't change `mode`, so that effect's
+    // dependency never fires and focus would otherwise stay wherever it was (mirrors the same fix
+    // on SaleBillPage's own handleNew).
+    requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
 
   const buildPayload = (): SaleReturnCreateInput | null => {
@@ -321,6 +700,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       if (!it.variantId) { setErrorMsg(`Article/color is required at row ${i + 1}.`); return null; }
       if (it.cartons <= 0) { setErrorMsg(`Cartons must be greater than 0 at row ${i + 1}.`); return null; }
       if (it.rate <= 0) { setErrorMsg(`Rate must be greater than 0 at row ${i + 1}.`); return null; }
+      // Linked to an original bill (manual-matched or explicitly picked) — every row must
+      // actually be returnable against it: same article/color, same rate, within what's left.
+      if (isCopiedFromBill) {
+        const err = articleAgainstBillError(it.variantId, it.cartons, it.rate, it.uid);
+        if (err) { setErrorMsg(`Row ${i + 1}: ${err}`); return null; }
+      }
     }
 
     const itemsPayload: SaleReturnItemInput[] = items.map(it => ({
@@ -460,6 +845,15 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   const pendingDeleteReturnId = useRef<number | null>(null);
 
+  // Toolbar's Delete — the currently-open UNPOSTED return only (mirrors SaleBillPage's own
+  // Delete); a posted return can't be deleted from here at all (disabled — see the button).
+  const handleDeleteCurrentReturn = () => {
+    if (returnId == null || currentReturnIsPosted) return;
+    pendingDeleteReturnId.current = returnId;
+    setPasswordActionType('delete_unposted_return');
+    setIsPasswordModalOpen(true);
+  };
+
   const handlePasswordSuccess = async (password: string) => {
     setIsPasswordModalOpen(false);
     if (passwordActionType === 'save_return') {
@@ -477,6 +871,15 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           if (returnId === targetId && !currentReturnIsPosted) handleNew();
           refreshDrafts();
         }
+      }
+    } else if (passwordActionType === 'edit_return') {
+      // Row-level edit gate — clicking a line item on an already-POSTED return (handleRowClick) —
+      // same convention as SaleBillPage's own 'edit_item_row'.
+      const idx = pendingRowEditIndex.current;
+      pendingRowEditIndex.current = null;
+      if (idx != null) {
+        setMode('edit');
+        loadRowIntoEntry(idx);
       }
     }
     setPasswordActionType(null);
@@ -525,8 +928,14 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
         value: it.value
       };
     });
-    setItems(loadedItems.length ? loadedItems : [newUiItem()]);
+    setItems(loadedItems);
+    setEntry(newUiItem());
+    setEditingIndex(null);
     loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
+    // A draft carries no record of which original bill it might have been linked to when saved
+    // (not a stored column) — always reopens fully unlocked/manual, same as loadReturnRow below.
+    setCopyFromBillId('');
+    setSourceBillItems([]);
 
     setMode('edit');
     setErrorMsg('');
@@ -586,18 +995,178 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     refreshDrafts();
   };
 
-  // Line Items Helper Actions — new rows go to the TOP, not the bottom: the newest article is
-  // what the user is looking at and typing into, so it should be the one visible without
-  // scrolling down through everything already entered (item table only shows ~2 rows before it
-  // scrolls internally — see its wrapper below).
-  const handleAddItemRow = () => setItems([newUiItem(), ...items]);
+  // Entry strip (ref-pic bound-record pattern, matching SaleBillPage exactly — per the user,
+  // 2026-08-26: "set the article box like this in sale return page"): ONE editable article/color/
+  // cartons/rate/discount row above the table, NOT one editable row per grid entry. Typing an
+  // article, color, cartons, rate, D%/DV and pressing Enter on the last field (or the Add/Update
+  // Row button) commits it into `items` — appending, or replacing `editingIndex` when a table row
+  // was clicked to re-open it — then always clears the strip and refocuses Product for the next
+  // article. Clicking a committed row loads it back into the strip for editing.
+  const [entry, setEntry] = useState<UiItem>(newUiItem());
+  // null while the strip is adding a brand-new row; the table index being replaced once a
+  // committed row has been clicked back open for editing (see handleRowClick below).
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const entryProductCellRef = useRef<HTMLDivElement>(null);
+  const pendingRowEditIndex = useRef<number | null>(null);
+  // Product field's SearchModal — same pattern as Customer's: type the article code, Enter opens
+  // a big centered popup to pick from.
+  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+  const productTriggerRef = useRef<HTMLInputElement>(null);
+  // What's currently typed into the Product field itself — separate from `entry.articleId`/
+  // `entry.label` (the committed selection) so the field can keep showing free-typed text right
+  // up until Enter opens the modal with it as the initial filter.
+  const [productSearchText, setProductSearchText] = useState('');
 
-  // Keyboard entry without the mouse — mirrors SaleBillPage. G-01's generic Enter-walk already
-  // carries fields forward within a row and into an EXISTING next row; this only steps in at the
-  // boundary (Enter on the last field of the last row), where it inserts a blank row at the top
-  // and focuses into it. stopPropagation stops AppLayout's own window-level Enter handler from
-  // also firing on the same keydown and clicking Save & Post before the new row exists.
-  const articleCellRefs = useRef<(HTMLTableCellElement | null)[]>([]);
+  const handleEntryArticleChange = async (articleIdStr: string) => {
+    const articleId = articleIdStr ? Number(articleIdStr) : null;
+    const product = articleId != null ? products.find(p => p.article_id === articleId) : undefined;
+    setEntry(prev => recalcItem({
+      ...prev,
+      articleId,
+      variantId: null,
+      label: product?.name || '',
+      packing: product?.packing || 0,
+      rate: isCopiedFromBill ? prev.rate : (product?.sale_price ?? prev.rate)
+    }));
+    if (articleId != null) await fetchVariants(articleId);
+  };
+
+  // Keeps the Product field's displayed text in sync with `entry.articleId` from every reset
+  // point at once (new row, row loaded for editing, commit, Cancel) instead of setting
+  // `productSearchText` by hand at each one.
+  useEffect(() => {
+    const product = entry.articleId != null ? products.find(p => p.article_id === entry.articleId) : undefined;
+    setProductSearchText(product?.code ?? '');
+  }, [entry.articleId, products]);
+
+  // SR-01: prefer the rate this customer actually paid last time for this variant over the
+  // article's current predefined sale_price — unless linked to an original bill, where the rate
+  // MUST be that bill's own line rate instead (non-editable — see the Rate cell's own lock below).
+  const handleEntryVariantChange = async (variantIdStr: string) => {
+    if (entry.articleId == null) return;
+    const variantId = variantIdStr ? Number(variantIdStr) : null;
+    const variant = variantsByArticle[entry.articleId]?.find(v => v.variant_id === variantId);
+    const product = products.find(p => p.article_id === entry.articleId);
+
+    let rate = product?.sale_price ?? entry.rate;
+    if (isCopiedFromBill) {
+      const sourceItem = variantId != null ? sourceBillItems.find(it => it.variant_id === variantId) : undefined;
+      if (sourceItem) rate = sourceItem.rate;
+    } else if (variantId != null && customerId) {
+      const res = await api.saleBills.lastSoldRate(Number(customerId), variantId);
+      if (res.ok && res.data != null) rate = res.data;
+    }
+
+    setEntry(prev => recalcItem({
+      ...prev,
+      variantId,
+      label: variant ? `${product?.name || ''} — ${variant.color}` : (product?.name || ''),
+      packing: variant?.packing ?? product?.packing ?? prev.packing,
+      rate
+    }));
+  };
+
+  const updateEntryNumericField = (field: 'cartons' | 'rate' | 'discountPercent' | 'discountValue', val: number) => {
+    setEntry(prev => {
+      const next = { ...prev, [field]: val };
+      const gross = next.cartons * next.packing * next.rate;
+      if (field === 'discountValue') {
+        next.discountPercent = gross > 0 ? parseFloat(((val / gross) * 100).toFixed(1)) : 0;
+      }
+      return recalcItem(next);
+    });
+  };
+
+  // Live validation of the strip's own current article/color/rate against the linked original
+  // bill (see articleAgainstBillError above) — same rule Save re-checks, surfaced here so a
+  // mismatch is obvious before the row is even added.
+  const entryBillError = useMemo(
+    () => articleAgainstBillError(entry.variantId, entry.cartons, entry.rate, editingIndex != null ? entry.uid : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [entry, isCopiedFromBill, sourceBillItems, items, editingIndex]
+  );
+
+  // Commits the strip's current entry into the table — appends a new row, or overwrites
+  // `editingIndex` when the strip is re-editing a row clicked open from the table. Linked-bill
+  // mismatches refuse to commit at all, same as SaleBillPage's stock-limit rule.
+  const handleCommitEntryRow = () => {
+    if (entry.articleId == null || entry.variantId == null) {
+      setErrorMsg('Select an article and color before adding the row.');
+      return;
+    }
+    if (entry.cartons <= 0) { setErrorMsg('Cartons must be greater than 0.'); return; }
+    if (entry.rate <= 0) { setErrorMsg('Rate must be greater than 0.'); return; }
+    if (entryBillError) {
+      setErrorMsg(`Cannot add row: ${entryBillError}`);
+      return;
+    }
+    setErrorMsg('');
+    if (editingIndex != null) {
+      setItems(prev => prev.map((it, i) => i === editingIndex ? entry : it));
+    } else {
+      setItems(prev => [...prev, entry]);
+    }
+    setEditingIndex(null);
+    setEntry(newUiItem());
+    requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
+  };
+
+  // Enter on the strip's LAST field (DV) commits the row and resets the strip — every other Enter
+  // press within the strip is left to G-01's normal field-walk. stopPropagation keeps AppLayout's
+  // own window-level Enter handler from also acting on the same keydown once setEntry/setItems
+  // have fired (it reads the same e.target, which hasn't re-rendered away yet).
+  function handleEntryLastFieldKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    e.stopPropagation();
+    handleCommitEntryRow();
+  }
+
+  // Loads an already-committed row back into the strip for editing (table row click). Posted
+  // returns are password-gated first (see handleRowClick); drafts and brand-new returns load
+  // straight in, matching the convention that only a POSTED return's edits ever need a password.
+  const loadRowIntoEntry = (idx: number) => {
+    const row = items[idx];
+    setEntry(row);
+    setEditingIndex(idx);
+    if (row.articleId != null) fetchVariants(row.articleId);
+    requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
+  };
+
+  const handleRowClick = (idx: number) => {
+    if (isViewMode && currentReturnIsPosted) {
+      pendingRowEditIndex.current = idx;
+      setIsPasswordModalOpen(true);
+      setPasswordActionType('edit_return');
+      return;
+    }
+    if (isViewMode) setMode('edit');
+    loadRowIntoEntry(idx);
+  };
+
+  // A return always needs at least one row to type into once anything's committed, but the entry
+  // strip itself can sit empty (unlike the old always-editable table) — so this only has to handle
+  // actually removing a committed row, no more "clear the last one instead" special case.
+  const handleRemoveItemRow = (idx: number) => {
+    setItems(prev => prev.filter((_, i) => i !== idx));
+    if (editingIndex === idx) {
+      setEditingIndex(null);
+      setEntry(newUiItem());
+    } else if (editingIndex != null && idx < editingIndex) {
+      setEditingIndex(editingIndex - 1);
+    }
+  };
+
+  // Delete is dual-purpose, same as SaleBillPage's own toolbar Delete: with a row loaded into the
+  // strip for editing (editingIndex set), it removes THAT row; otherwise it's the whole-return
+  // delete (currently-open unposted return).
+  const handleDeleteAction = () => {
+    if (editingIndex != null) {
+      handleRemoveItemRow(editingIndex);
+      return;
+    }
+    handleDeleteCurrentReturn();
+  };
 
   // Invoice card fills whatever vertical space is left in the viewport below it (mirrors
   // SaleBillPage) — the item table (flex-1 inside it) grows into that space and the Remarks/
@@ -622,93 +1191,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     return () => window.removeEventListener('resize', recompute);
   }, [mode, lookupError, successMsg, errorMsg]);
 
-  // '.' held while Enter is pressed is a genuine three-way chord alongside Shift+Enter/Ctrl+Enter
-  // below — tracked via useHeldKey since '.' isn't a real modifier key with its own event flag.
-  // Typing '.' alone (a decimal point) never triggers this: by the time Enter is a separate,
-  // later keypress, '.' has already been released. Any single stray "." that types into the field
-  // during the chord itself is harmless — the input is fully controlled by the numeric state, so
-  // the very next render overwrites it back to the real number regardless.
-  const periodHeld = useHeldKey('.');
-
-  function handleLastFieldKeyDown(e: React.KeyboardEvent) {
-    // Plain Enter is deliberately left alone here: it now does exactly what every other field
-    // does — walk to whatever's next via AppLayout's own G-01 handler, and eventually reach
-    // Save/Post. An earlier version hijacked it to always append a new line, which meant a plain
-    // Enter on the last field could never actually finish and save a bill — reported directly by
-    // the user after trying it.
-    //
-    // Adding a line is its own explicit action instead: Shift+Enter, Ctrl+Enter, or '.'+Enter, from
-    // the last field of ANY row (not only the last one) — always inserts at the top, same as the
-    // "+ Add Item Row" button, and focuses into the new row. Shift+Enter is distinct from its
-    // other meaning inside a Remarks textarea (insert a literal newline) — different field, no
-    // collision.
-    if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey || periodHeld.current)) return;
-    e.preventDefault();
-    e.stopPropagation(); // stop AppLayout's own Enter handler from also walking this keystroke
-    handleAddItemRow();
-    requestAnimationFrame(() => focusFirstField(articleCellRefs.current[0])); // new row is always index 0 now
-  }
-
-  // A return always needs at least one row to type into, so deleting the last remaining one
-  // clears its fields back to blank instead of removing the row itself (keeping its uid, so the
-  // row doesn't remount and lose focus).
-  const handleRemoveItemRow = (idx: number) => {
-    if (items.length <= 1) {
-      setItems(prev => prev.map((it, i) => i === idx ? { ...newUiItem(), uid: it.uid } : it));
-      return;
-    }
-    setItems(items.filter((_, i) => i !== idx));
-  };
-
-  const handleArticleChange = async (idx: number, articleIdStr: string) => {
-    const articleId = articleIdStr ? Number(articleIdStr) : null;
-    const product = articleId != null ? products.find(p => p.article_id === articleId) : undefined;
-    setItems(prev => prev.map((it, i) => i === idx ? recalcItem({
-      ...it,
-      articleId,
-      variantId: null,
-      label: product?.name || '',
-      packing: product?.packing || 0
-    }) : it));
-    if (articleId != null) await fetchVariants(articleId);
-  };
-
-  // SR-01: prefer the rate this customer actually paid last time for this variant over the
-  // article's current predefined sale_price — only relevant here (not the bill-number prefill
-  // path above, which already copies each line's original rate straight off the source bill).
-  const handleVariantChange = async (idx: number, variantIdStr: string) => {
-    const item = items[idx];
-    if (item.articleId == null) return;
-    const variantId = variantIdStr ? Number(variantIdStr) : null;
-    const variant = variantsByArticle[item.articleId]?.find(v => v.variant_id === variantId);
-    const product = products.find(p => p.article_id === item.articleId);
-
-    let rate = product?.sale_price ?? item.rate;
-    if (variantId != null && customerId) {
-      const res = await api.saleBills.lastSoldRate(Number(customerId), variantId);
-      if (res.ok && res.data != null) rate = res.data;
-    }
-
-    setItems(prev => prev.map((it, i) => i === idx ? recalcItem({
-      ...it,
-      variantId,
-      label: variant ? `${product?.name || ''} — ${variant.color}` : (product?.name || ''),
-      packing: variant?.packing ?? product?.packing ?? it.packing,
-      rate
-    }) : it));
-  };
-
-  const updateNumericField = (idx: number, field: 'cartons' | 'rate' | 'discountPercent' | 'discountValue', val: number) => {
-    setItems(prev => prev.map((item, i) => {
-      if (i !== idx) return item;
-      let next = { ...item, [field]: val };
-      const gross = next.cartons * next.packing * next.rate;
-      if (field === 'discountValue') {
-        next.discountPercent = gross > 0 ? parseFloat(((val / gross) * 100).toFixed(1)) : 0;
-      }
-      return recalcItem(next);
-    }));
-  };
 
   // Products this customer previously bought — derived from any posted Sale Bill lookup by
   // customer. Kept simple: only fires when the user explicitly searches by bill_no via prefill;
@@ -1113,68 +1595,87 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
           </div>
         )}
 
-        {/* Toolbar - data-no-print */}
+        {/* Toolbar - data-no-print — icon-over-label buttons (`.toolbar-btn`), same style as
+            SaleBillPage's own toolbar (per the user, 2026-08-26: "copy sale bill... from button to
+            everything"). Every action always renders — only `disabled` changes per state. */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
-          {/* Every action always renders (ref-pic style) — only `disabled` changes per state,
-              instead of whole button groups mounting/unmounting per `mode`. */}
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={handleNew} className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none">
-              New Return
-            </button>
-            <button
-              type="submit"
-              onClick={handleSave}
-              disabled={mode === 'view' || !isNecessaryFieldsFilled}
-              className="px-4 py-2 text-sm font-semibold rounded-lg transition-all flex items-center gap-1.5 shadow-sm font-inter hover:opacity-90 disabled:pointer-events-none disabled:cursor-not-allowed"
-              style={{
-                backgroundColor: mode !== 'view' && isNecessaryFieldsFilled ? '#111c2a' : '#e2e8f0',
-                color: mode !== 'view' && isNecessaryFieldsFilled ? '#B08D57' : '#64748b',
-                border: mode !== 'view' && isNecessaryFieldsFilled ? '1px solid #B08D57' : '1px solid #cbd5e1',
-                cursor: mode !== 'view' && isNecessaryFieldsFilled ? 'pointer' : 'not-allowed'
-              }}
-            >
-              <Save size={16} /> {mode === 'edit' ? 'Update Return' : 'Save Return'}
+          <div className="flex flex-wrap items-center gap-0.5">
+            <button type="button" onClick={handleNew} title="New" className="toolbar-btn">
+              <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>New</span>
             </button>
             <button
               type="button"
-              onClick={handleSaveAndPost}
-              disabled={mode === 'view' || !isNecessaryFieldsFilled || currentReturnIsPosted}
-              className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              onClick={handleDeleteAction}
+              disabled={editingIndex != null ? isViewMode : (mode !== 'view' || returnId == null || currentReturnIsPosted)}
+              title={editingIndex != null ? 'Delete selected article' : 'Delete'}
+              className="toolbar-btn"
             >
-              Save &amp; Post
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('view')}
-              disabled={mode !== 'edit'}
-              className="btn-outline px-4 py-2 text-sm font-semibold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-            >
-              Cancel Edit
+              <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
+              <span>Delete</span>
             </button>
             <button
               type="button"
               onClick={handleEditCurrentReturn}
               disabled={mode !== 'view' || returnId == null}
-              className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title="Edit"
+              className="toolbar-btn"
             >
-              <Edit size={16} /> Edit Return
+              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
+              <span>Edit</span>
+            </button>
+            <button
+              type="submit"
+              onClick={handleSave}
+              disabled={mode === 'view' || !isNecessaryFieldsFilled}
+              title="Save"
+              className="toolbar-btn"
+            >
+              <Save size={20} strokeWidth={2.5} className="text-blue-600" />
+              <span>Save</span>
             </button>
             <button
               type="button"
-              onClick={handlePostCurrentReturn}
-              disabled={mode !== 'view' || returnId == null || currentReturnIsPosted}
-              className="px-4 py-2 text-sm font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              onClick={handleSaveAndPost}
+              disabled={mode === 'view' || !isNecessaryFieldsFilled || currentReturnIsPosted}
+              title="Save & Post"
+              className="toolbar-btn"
             >
-              Post Return
+              <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>Done</span>
             </button>
             <button
               type="button"
-              onClick={handleUnpostCurrentReturn}
-              disabled={mode !== 'view' || returnId == null || !currentReturnIsPosted}
-              className="px-4 py-2 text-sm font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              onClick={() => setMode('view')}
+              disabled={mode !== 'edit'}
+              title="Cancel Edit"
+              className="toolbar-btn"
             >
-              Unpost Return
+              <X size={20} strokeWidth={2.5} className="text-slate-500" />
+              <span>Cancel</span>
             </button>
+
+            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            <button type="button" onClick={handleFirst} disabled={!canBrowse} title="First" className="toolbar-btn">
+              <ChevronsLeft size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>First</span>
+            </button>
+            <button type="button" onClick={handlePrev} disabled={!canNavPrevious} title="Pre." className="toolbar-btn">
+              <ChevronLeft size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Pre.</span>
+            </button>
+            <button type="button" onClick={handleNext} disabled={!canNavNext} title="Next" className="toolbar-btn">
+              <ChevronRight size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Next</span>
+            </button>
+            <button type="button" onClick={handleLast} disabled={!canBrowse} title="Last" className="toolbar-btn">
+              <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Last</span>
+            </button>
+
+            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
             <button
               type="button"
               onClick={() => {
@@ -1182,17 +1683,75 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 setTimeout(() => { window.print(); setIsPrintingSingle(false); }, 100);
               }}
               disabled={mode !== 'view' || returnId == null}
-              className="px-4 py-2 text-sm font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-700 shadow-sm transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title="Print"
+              className="toolbar-btn"
             >
-              <Printer size={16} /> Print Return
+              <Printer size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Print</span>
             </button>
+            <button type="button" onClick={() => setIsFindOpen(true)} title="Find" className="toolbar-btn">
+              <Search size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Find</span>
+            </button>
+
+            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            <button
+              type="button"
+              onClick={handleUnpostCurrentReturn}
+              disabled={mode !== 'view' || returnId == null || !currentReturnIsPosted || browseFilter !== 'unposted'}
+              title="Un Post — switch the dropdown to Unposted first"
+              className="toolbar-btn"
+            >
+              <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
+              <span>Un Post</span>
+            </button>
+            <button
+              type="button"
+              onClick={handlePostCurrentReturn}
+              disabled={mode !== 'view' || returnId == null || currentReturnIsPosted}
+              title="Post"
+              className="toolbar-btn"
+            >
+              <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>Post</span>
+            </button>
+
+            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            <button
+              type="button"
+              onClick={() => dispatch({ type: 'NAVIGATE', page: 'home' })}
+              title="Exit"
+              className="toolbar-btn"
+            >
+              <LogOut size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Exit</span>
+            </button>
+
+            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            {drafts.length > 0 && (
+              <button
+                type="button"
+                onClick={handlePostAllDrafts}
+                disabled={postAllDraftsBusy}
+                title={`Post All (${drafts.length})`}
+                className="toolbar-btn"
+              >
+                <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
+                <span>Post All</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => exportToPDF()}
               disabled={mode !== 'view' || returnId == null}
-              className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title="Export PDF"
+              className="toolbar-btn"
             >
-              <FileDown size={16} /> Export PDF
+              <FileDown size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>PDF</span>
             </button>
             <button
               type="button"
@@ -1202,9 +1761,11 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 exportRowsToExcel(`sale-return-${billNo || returnId}`, headers, rows);
               }}
               disabled={mode !== 'view' || returnId == null}
-              className="px-4 py-2 text-sm font-semibold rounded-lg btn-outline flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title="Export Excel"
+              className="toolbar-btn"
             >
-              <FileSpreadsheet size={16} /> Export Excel
+              <FileSpreadsheet size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Excel</span>
             </button>
           </div>
 
@@ -1220,6 +1781,22 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               Return {currentReturnIsPosted ? 'Posted' : 'Saved'} Successfully!
             </div>
           )}
+        </div>
+
+        {/* Title bar — Posted/Unposted browse dropdown (drives First/Pre/Next/Last), same as
+            SaleBillPage. */}
+        <div className="flex items-center justify-between gap-3 mb-2 px-1" data-no-print>
+          <span className="font-lora font-semibold text-sm text-slate-600">SALE RETURN</span>
+          <select
+            value={browseFilter}
+            onChange={e => setBrowseFilter(e.target.value as 'posted' | 'unposted')}
+            className="soleria-input soleria-input-compact cursor-pointer font-semibold"
+            style={{ width: 'auto' }}
+            title="Posted = add new returns. Unposted = browse posted returns to Unpost one."
+          >
+            <option value="posted">Posted</option>
+            <option value="unposted">Unposted</option>
+          </select>
         </div>
 
         {/* Invoice Layout — height pinned to the remaining viewport space (see invoiceCardHeight
@@ -1248,54 +1825,156 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               compact redesign), instead of stacked label-above-input fields split across
               bordered cards. */}
           <div className="shrink-0 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }}>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
+            <div className="flex items-center gap-1.5">
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Return No.
               </label>
-              <input type="text" value={returnId ?? 'Unsaved'} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
+              <input type="text" value={returnId != null ? `#${returnId}` : `#${nextSystemReturnNo} (pending)`} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
+            <div className="flex items-center gap-1.5">
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
               <input type="date" ref={firstFieldRef}
             value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
+
+            {/* Entry Mode — right after Date (per the user, 2026-08-26), same position as
+                PurchaseReturnPage's own "Find Purchase to Return". "Manual entry" (default, shown
+                as a real selectable option inside the popup — same as Purchase Return's "Manual
+                entry (default)" row) vs an explicit pick. Typing a bill no./customer substring
+                then Enter opens the popup seeded with it; picking an actual bill copies EVERY
+                field and article in at once (isCopiedFromBill locks the master fields below).
+                Manual Invoice No. further down still does its own thing — typing an exact bill_no
+                there and tabbing out auto-fills just the master fields, leaving articles to be
+                added by hand, each checked against the matched bill as it's picked. */}
+            <div className="flex items-center gap-1.5 md:col-span-2">
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Find Bill to Return
+              </label>
+              <div className="flex-1 relative">
+                <input
+                  ref={findBillTriggerRef}
+                  type="text"
+                  disabled={isViewMode}
+                  value={findBillSearchText}
+                  onChange={e => setFindBillSearchText(e.target.value)}
+                  onKeyDown={handleFindBillTriggerKeyDown}
+                  placeholder="Manual entry — or type a bill no./customer to search..."
+                  className="soleria-input soleria-input-compact pr-9"
+                  style={{ fontSize: '13px' }}
+                />
+                <button
+                  type="button"
+                  disabled={isViewMode}
+                  onClick={openFindBillModal}
+                  title="Browse all posted Sale Bills"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronDown size={16} />
+                </button>
+                <SearchModal
+                  isOpen={isFindBillModalOpen}
+                  title="Select Bill to Return"
+                  options={[{ value: '', label: 'Manual entry (default)' }, ...priorBillOptions]}
+                  value={copyFromBillId}
+                  onSelect={handleFindBillSelect}
+                  onClose={() => setIsFindBillModalOpen(false)}
+                  searchPlaceholder="Search by bill no. or customer..."
+                  initialSearch={findBillModalSeed}
+                />
+              </div>
+              {isCopiedFromBill && !isViewMode && (
+                <button
+                  type="button"
+                  onClick={handleClearBillLink}
+                  title="Unlock the master fields and switch back to fully manual entry"
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg transition-all cursor-pointer shrink-0"
+                >
+                  <X size={11} />
+                  <span>Clear Link</span>
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 TO Store <span className="text-red-500 font-bold">*</span>
               </label>
-              {/* Was a native <select> — SearchableSelect so it types-to-search like the rest. */}
-              <SearchableSelect
-                options={storeOptions}
-                value={storeId}
-                onChange={setStoreId}
-                placeholder="Select store..."
-                searchPlaceholder="Search stores..."
-                disabled={isViewMode}
-              />
+              {/* Typable — same centered SearchModal popup as every other lookup on this form
+                  (was SearchableSelect's small anchored dropdown; per the user, 2026-08-26). */}
+              <div className="flex-1 relative">
+                <input
+                  ref={storeTriggerRef}
+                  type="text"
+                  disabled={isViewMode || isCopiedFromBill}
+                  title={isCopiedFromBill ? 'Set by the bill you picked above — Clear Link to change it' : undefined}
+                  value={storeSearchText}
+                  onChange={e => setStoreSearchText(e.target.value)}
+                  onKeyDown={handleStoreTriggerKeyDown}
+                  placeholder="Type a store name, or press Enter to search..."
+                  className="soleria-input soleria-input-compact pr-9"
+                  style={{ fontSize: '13px' }}
+                />
+                <button
+                  type="button"
+                  disabled={isViewMode || isCopiedFromBill}
+                  onClick={openStoreModal}
+                  title="Browse all stores"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronDown size={16} />
+                </button>
+                <SearchModal
+                  isOpen={isStoreModalOpen}
+                  title="Select Store"
+                  options={storeOptions}
+                  value={storeId}
+                  onSelect={(val) => {
+                    setStoreId(val);
+                    setIsStoreModalOpen(false);
+                    requestAnimationFrame(() => focusNextField(storeTriggerRef.current));
+                  }}
+                  onClose={() => setIsStoreModalOpen(false)}
+                  searchPlaceholder="Search stores..."
+                  initialSearch={storeModalSeed}
+                />
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
+            <div className="flex items-center gap-1.5">
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Manual Invoice No. <span className="text-red-500 font-bold">*</span>
               </label>
               <input
                 type="text"
                 value={billNo}
                 disabled={isViewMode}
+                title={isCopiedFromBill ? 'Linked to this bill — type a different one to switch, or clear it to go fully manual' : undefined}
                 onChange={e => setBillNo(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key !== 'Tab' && e.key !== 'Enter') return;
+                  if (mode !== 'new') return;
+                  const val = e.currentTarget.value.trim();
+                  if (!val && !isCopiedFromBill) return;
+                  // Own the focus move ourselves — see prefillFromSaleBill's own comment above for
+                  // why the native Tab-advance can't be allowed to land on Customer here.
+                  e.preventDefault();
+                  billNoHandledRef.current = true;
+                  prefillFromSaleBill(val, e.currentTarget);
+                }}
                 onBlur={e => {
+                  if (billNoHandledRef.current) { billNoHandledRef.current = false; return; }
                   const val = e.target.value.trim();
-                  if (mode === 'new' && val !== '') {
-                    prefillFromSaleBill(val);
+                  if (mode === 'new' && (val !== '' || isCopiedFromBill)) {
+                    prefillFromSaleBill(val, e.target);
                   }
                 }}
                 className="soleria-input soleria-input-compact"
               />
             </div>
 
-            <div className="flex items-center gap-2 md:col-span-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            <div className="flex items-center gap-1.5 md:col-span-2">
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Customer <span className="text-red-500 font-bold">*</span>
               </label>
               <div className="flex-1">
@@ -1305,7 +1984,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                   onChange={val => { setCustomerId(val); setSubCustomerId(''); }}
                   placeholder="Select customer..."
                   searchPlaceholder="Search customers..."
-                  disabled={isViewMode}
+                  disabled={isViewMode || isCopiedFromBill}
                 />
                 {selectedCustomer && selectedCustomer.ba_id == null && (
                   <p className="text-[10px] text-amber-600 mt-0.5 font-semibold">
@@ -1320,20 +1999,46 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 the header take exactly as many rows as Sale Bill's, instead of leaving Customer
                 Code's row half-empty and pushing Bilty No. onto an orphan 4th row. */}
             <div className="flex items-center gap-2 md:col-span-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Delivery Agent <span className="text-slate-400 font-normal normal-case">— optional</span>
               </label>
-              <div className="flex-1">
-                <SearchableSelect
-                  options={subCustomers.map(sc => ({ value: String(sc.sub_customer_id), label: sc.name }))}
+              <div className="flex-1 relative">
+                <input
+                  ref={subCustTriggerRef}
+                  type="text"
+                  disabled={isViewMode || isCopiedFromBill}
+                  value={subCustSearchText}
+                  onChange={e => setSubCustSearchText(e.target.value)}
+                  onKeyDown={handleSubCustTriggerKeyDown}
+                  placeholder="SAME (Direct) — type a name, or press Enter to search..."
+                  className="soleria-input pr-9"
+                  style={{ fontSize: '13px' }}
+                />
+                <button
+                  type="button"
+                  disabled={isViewMode || isCopiedFromBill}
+                  onClick={openSubCustModal}
+                  title="Browse all sub-customers"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronDown size={16} />
+                </button>
+                <SearchModal
+                  isOpen={isSubCustModalOpen}
+                  title="Select Delivery Agent"
+                  options={subCustomerOptions}
                   value={subCustomerId}
-                  onChange={setSubCustomerId}
-                  placeholder="SAME (Direct) — none selected"
+                  onSelect={(val) => {
+                    setSubCustomerId(val);
+                    setIsSubCustModalOpen(false);
+                    requestAnimationFrame(() => focusNextField(subCustTriggerRef.current));
+                  }}
+                  onClose={() => setIsSubCustModalOpen(false)}
                   searchPlaceholder="Search sub-customers..."
-                  disabled={isViewMode}
+                  initialSearch={subCustModalSeed}
                 />
               </div>
-              {!isViewMode && (
+              {!isViewMode && !isCopiedFromBill && (
                 <button
                   type="button"
                   onClick={() => setIsAddSubCustomerOpen(true)}
@@ -1344,251 +2049,314 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
                 </button>
               )}
             </div>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            <div className="flex items-center gap-1.5">
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Customer Code
               </label>
               <input type="text" value={customerId} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
             </div>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            <div className="flex items-center gap-1.5">
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Transport Adda <span className="text-slate-400 font-normal normal-case">— optional</span>
               </label>
-              <SearchableSelect
-                options={addas.map(ad => ({ value: String(ad.adda_id), label: ad.name }))}
-                value={addaId}
-                onChange={setAddaId}
-                placeholder="Select Adda..."
-                searchPlaceholder="Search Adda..."
-                disabled={isViewMode}
-              />
+              <div className="flex-1 relative">
+                <input
+                  ref={addaTriggerRef}
+                  type="text"
+                  disabled={isViewMode || isCopiedFromBill}
+                  value={addaSearchText}
+                  onChange={e => setAddaSearchText(e.target.value)}
+                  onKeyDown={handleAddaTriggerKeyDown}
+                  placeholder="Type an Adda name, or press Enter to search..."
+                  className="soleria-input soleria-input-compact pr-9"
+                  style={{ fontSize: '13px' }}
+                />
+                <button
+                  type="button"
+                  disabled={isViewMode || isCopiedFromBill}
+                  onClick={openAddaModal}
+                  title="Browse all Addas"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronDown size={16} />
+                </button>
+                <SearchModal
+                  isOpen={isAddaModalOpen}
+                  title="Select Adda"
+                  options={addaOptions}
+                  value={addaId}
+                  onSelect={(val) => {
+                    setAddaId(val);
+                    setIsAddaModalOpen(false);
+                    requestAnimationFrame(() => focusNextField(addaTriggerRef.current));
+                  }}
+                  onClose={() => setIsAddaModalOpen(false)}
+                  searchPlaceholder="Search Adda..."
+                  initialSearch={addaModalSeed}
+                />
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            <div className="flex items-center gap-1.5">
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 GP No. <span className="text-slate-400 font-normal normal-case">— optional</span>
               </label>
-              <input type="text" value={gpNo} disabled={isViewMode} onChange={e => setGpNo(e.target.value)} className="soleria-input soleria-input-compact" />
+              <input type="text" value={gpNo} disabled={isViewMode || isCopiedFromBill} onChange={e => setGpNo(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
-            <div className="flex items-center gap-2">
-              <label className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            <div className="flex items-center gap-1.5">
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Bilty No. <span className="text-slate-400 font-normal normal-case">— optional</span>
               </label>
-              <input type="text" value={biltyNo} disabled={isViewMode} onChange={e => setBiltyNo(e.target.value)} className="soleria-input soleria-input-compact" />
+              <input type="text" value={biltyNo} disabled={isViewMode || isCopiedFromBill} onChange={e => setBiltyNo(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
           </div>
 
-          {/* Product Items Table — flex-1 so it grows to fill whatever space invoiceCardHeight
-              (above) leaves after every other section takes its natural size; this is what pins
-              the footer to the bottom of the screen instead of trailing off after just 2-3 rows.
-              `min-height: 0` overrides flexbox's default min-height:auto, which would otherwise
-              let this box's own content stretch the whole card instead of scrolling internally.
-              The header row is `sticky` within this scroll box so it stays visible past the first
-              screenful of rows. SearchableSelect's own dropdown is rendered via a `fixed`-position
-              React portal (see its source), so it isn't clipped by this box's `overflow-y: auto`
-              even when a select near the bottom edge is opened. */}
+          {/* Entry strip (ref-pic bound-record pattern, matching SaleBillPage exactly — per the
+              user, 2026-08-26). Row 1: Product/Product Name/Color/Packing. Row 2: Cartons/Pairs/
+              Rate/D%/DV/Value. This is the ONE "current record" being typed; Enter on DV commits
+              it into the table below (handleCommitEntryRow) and resets the strip. Clicking a
+              table row loads it back in here for editing. */}
+          {!isViewMode && (
+          <div className="shrink-0 mb-2 p-2 rounded-lg border bg-slate-50/60" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="grid gap-x-3 gap-y-1.5 mb-1.5" style={{ gridTemplateColumns: '1fr 1fr 1fr 130px' }}>
+              <div ref={entryProductCellRef} className="flex items-center gap-1.5">
+                <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Article <span className="text-red-500 font-bold">*</span></label>
+                <div className="flex-1">
+                  {/* A real text input, not a button — type a full code/name or any substring,
+                      then Enter opens the modal already filtered to matches. Arrow Up/Down still
+                      open it too (unfiltered, or filtered by whatever's already typed). */}
+                  <input
+                    ref={productTriggerRef}
+                    type="text"
+                    value={productSearchText}
+                    onChange={e => setProductSearchText(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setIsProductModalOpen(true);
+                      }
+                    }}
+                    placeholder="Type article code or name..."
+                    className="soleria-input soleria-input-compact"
+                  />
+                  <SearchModal
+                    isOpen={isProductModalOpen}
+                    title="Select Article"
+                    options={products.map(p => ({ value: String(p.article_id), label: `${p.code} — ${p.name}` }))}
+                    value={entry.articleId != null ? String(entry.articleId) : ''}
+                    initialSearch={productSearchText}
+                    onSelect={(val) => {
+                      handleEntryArticleChange(val);
+                      setIsProductModalOpen(false);
+                      requestAnimationFrame(() => focusNextField(productTriggerRef.current));
+                    }}
+                    onClose={() => setIsProductModalOpen(false)}
+                    searchPlaceholder="Search articles by code or name..."
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <input type="text" value={entry.label} disabled placeholder="Product name" className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Color <span className="text-red-500 font-bold">*</span></label>
+                <div className="flex-1">
+                  <SearchableSelect
+                    options={(entry.articleId != null ? variantsByArticle[entry.articleId] || [] : []).map(v => ({ value: String(v.variant_id), label: v.color }))}
+                    value={entry.variantId != null ? String(entry.variantId) : ''}
+                    onChange={handleEntryVariantChange}
+                    placeholder="Color..."
+                    searchPlaceholder="Search colors..."
+                    disabled={entry.articleId == null}
+                  />
+                </div>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Packing</label>
+                <input type="text" value={entry.packing || '-'} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 text-center" />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 md:grid-cols-6 gap-2 items-end">
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Cartons <span className="text-red-500 font-bold">*</span></label>
+                <input
+                  type="number"
+                  value={entry.cartons || ''}
+                  min={1}
+                  onChange={e => updateEntryNumericField('cartons', parseInt(e.target.value) || 0)}
+                  className={`soleria-input soleria-input-compact text-center font-mono ${entryBillError ? 'border-2 border-red-500 bg-rose-50 text-red-700 font-bold' : ''}`}
+                />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Pairs</label>
+                <input type="text" value={entry.pairs || '-'} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 text-center" />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                {/* Rate — locked once linked to an original bill: the return must credit exactly
+                    what was charged on that bill, not whatever gets typed here.
+                    handleEntryVariantChange already fills it from sourceBillItems the moment a
+                    matching color is picked. */}
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Rate <span className="text-red-500 font-bold">*</span></label>
+                <input
+                  type="number"
+                  value={entry.rate || ''}
+                  disabled={isCopiedFromBill}
+                  title={isCopiedFromBill ? 'Locked to the original bill\'s own rate for this article/color' : undefined}
+                  min={0}
+                  onChange={e => updateEntryNumericField('rate', parseInt(e.target.value) || 0)}
+                  className="soleria-input soleria-input-compact text-right font-mono"
+                  style={{ background: isCopiedFromBill ? '#f8fafc' : undefined }}
+                />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">D%</label>
+                <input
+                  type="number"
+                  value={entry.discountPercent || ''}
+                  min={0}
+                  max={100}
+                  onChange={e => updateEntryNumericField('discountPercent', parseFloat(e.target.value) || 0)}
+                  className="soleria-input soleria-input-compact text-center font-mono"
+                />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">DV</label>
+                <input
+                  type="number"
+                  value={entry.discountValue || ''}
+                  min={0}
+                  onChange={e => updateEntryNumericField('discountValue', parseFloat(e.target.value) || 0)}
+                  onKeyDown={handleEntryLastFieldKeyDown}
+                  className="soleria-input soleria-input-compact text-right font-mono"
+                />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Value</label>
+                <input type="text" value={formatCurrency(entry.value)} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-600 text-right font-semibold" />
+              </div>
+            </div>
+            {entryBillError && (
+              <div className="mt-1.5 text-[11px] font-bold text-red-600 flex items-center gap-1">
+                <span>{entryBillError} — row will not be added.</span>
+              </div>
+            )}
+            {/* Editing banner, per pages_design.md §4 — the row stays visible (highlighted) in
+                the grid below the whole time it's being edited, not pulled out; Cancel here
+                discards the in-progress edit, same as the toolbar's Cancel Edit for the return as
+                a whole. Deleting this row is the toolbar's own Delete button, not a control here. */}
+            {editingIndex != null && (
+              <div className="mt-1.5 flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-xs">
+                <span className="text-blue-700 font-semibold">Editing an existing article — Update to save, or cancel.</span>
+                <button type="button" onClick={() => { setEditingIndex(null); setEntry(newUiItem()); }} className="text-blue-600 hover:text-blue-800 font-semibold underline">
+                  Cancel
+                </button>
+              </div>
+            )}
+            <div className="mt-1.5 flex items-center gap-2">
+              <button type="button" onClick={handleCommitEntryRow} className="px-3 py-1 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d]">
+                {editingIndex != null ? 'Update Row' : 'Add Row'}
+              </button>
+            </div>
+          </div>
+          )}
+
+          {/* Committed line items — read-only list, matching ref-pic's columns exactly. Click a
+              row to load it back into the entry strip above for editing (password-gated first if
+              the return is already posted — see handleRowClick). No per-row delete button, per
+              pages_design.md §4 — deleting a line item is the toolbar's own Delete button, enabled
+              only while a row is selected here. */}
           <div className="flex-1 min-h-0 mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b text-[11px] font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 pl-3" style={{ minWidth: '190px' }}>Returned Article <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 pl-3" style={{ width: '130px', minWidth: '110px' }}>Color <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 pl-3" style={{ minWidth: '190px' }}>Returned Article</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '80px' }}>Packing</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ minWidth: '80px' }}>Stock</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px' }}>Cartons <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px' }}>Cartons</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px' }}>Pairs</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '110px', minWidth: '96px' }}>Rate <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '100px', minWidth: '72px' }}>D%</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '110px' }}>D. Value</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '100px' }}>Rate</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '130px' }}>Total Credit</th>
-                  {!isViewMode && <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '50px' }}></th>}
                 </tr>
               </thead>
               <tbody>
-                {items.map((item, idx) => {
-                  const variantOptions = (item.articleId != null ? variantsByArticle[item.articleId] || [] : [])
-                    .map(v => ({ value: String(v.variant_id), label: v.color }));
-                  return (
-                    <tr key={item.uid} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                      {/* Article select */}
-                      <td className="p-1 pl-3" ref={el => { articleCellRefs.current[idx] = el; }}>
-                        {isViewMode ? (
-                          <span className="font-semibold text-slate-800 text-[13px] pl-2">{item.label || 'N/A'}</span>
-                        ) : (
-                          <SearchableSelect
-                            options={products.map(p => ({ value: String(p.article_id), label: `${p.name} (${p.code})` }))}
-                            value={item.articleId != null ? String(item.articleId) : ''}
-                            onChange={val => handleArticleChange(idx, val)}
-                            placeholder="Select article..."
-                            searchPlaceholder="Search articles..."
-                          />
-                        )}
-                      </td>
-
-                      {/* Color / Variant select */}
-                      <td className="p-1 pl-3">
-                        {isViewMode ? (
-                          <span className="text-slate-600 text-[13px]">{variantOptions.find(v => v.value === String(item.variantId))?.label || '-'}</span>
-                        ) : (
-                          <SearchableSelect
-                            options={variantOptions}
-                            value={item.variantId != null ? String(item.variantId) : ''}
-                            onChange={val => handleVariantChange(idx, val)}
-                            placeholder="Color..."
-                            searchPlaceholder="Search colors..."
-                            disabled={item.articleId == null}
-                          />
-                        )}
-                      </td>
-
-                      {/* Packing */}
-                      <td className="p-1 text-center font-mono text-sm text-slate-600">
-                        {item.packing || '-'}
-                      </td>
-
-                      {/* Stock — no real-time stock IPC channel exposed yet, see SaleBillPage comment */}
-                      <td className="p-1 text-center text-xs font-medium">—</td>
-
-                      {/* Cartons */}
-                      <td className="p-1">
-                        <input
-                          type="number"
-                          value={item.cartons || ''}
-                          disabled={isViewMode}
-                          min={1}
-                          onChange={e => updateNumericField(idx, 'cartons', parseInt(e.target.value) || 0)}
-                          className="soleria-input soleria-input-compact text-center font-mono"
-                          style={{ border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
-                        />
-                      </td>
-
-                      {/* Pairs */}
-                      <td className="p-1 text-center text-sm font-bold text-slate-700">
-                        {item.pairs || '-'}
-                      </td>
-
-                      {/* Rate */}
-                      <td className="p-1">
-                        <input
-                          type="number"
-                          value={item.rate || ''}
-                          disabled={isViewMode}
-                          min={0}
-                          onChange={e => updateNumericField(idx, 'rate', parseInt(e.target.value) || 0)}
-                          className="soleria-input soleria-input-compact text-right font-mono"
-                          style={{ border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
-                        />
-                      </td>
-
-                      {/* Discount % */}
-                      <td className="p-1">
-                        <input
-                          type="number"
-                          value={item.discountPercent || ''}
-                          disabled={isViewMode}
-                          min={0}
-                          max={100}
-                          onChange={e => updateNumericField(idx, 'discountPercent', parseFloat(e.target.value) || 0)}
-                          onKeyDown={handleLastFieldKeyDown}
-                          className="soleria-input soleria-input-compact text-center font-mono"
-                          style={{ border: isViewMode ? 'none' : undefined, background: isViewMode ? 'transparent' : undefined }}
-                        />
-                      </td>
-
-                      {/* Discount Value — Calculated from Discount % */}
-                      <td className="p-1 text-right font-mono text-xs font-semibold text-slate-700">
-                        {item.discountValue > 0 ? item.discountValue.toLocaleString() : '-'}
-                      </td>
-
-                      {/* Row Total Value */}
-                      <td className="p-1 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>
-                        Rs {item.value.toLocaleString('en-US')}
-                      </td>
-
-                      {/* Delete Action */}
-                      {!isViewMode && (
-                        <td className="p-1 text-center">
-                          <button type="button" onClick={() => handleRemoveItemRow(idx)} className="text-red-500 hover:text-red-700 p-1" title="Remove row (clears fields if it's the last one)">
-                            <Trash2 size={16} />
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  );
-                })}
+                {items.map((item, idx) => (
+                  <tr
+                    key={item.uid}
+                    onClick={() => handleRowClick(idx)}
+                    className={`border-b cursor-pointer hover:bg-slate-50/50 ${idx === editingIndex ? 'bg-blue-50' : ''}`}
+                    style={{ borderColor: 'var(--border-table)' }}
+                  >
+                    <td className="p-1 pl-3 font-semibold text-slate-800 text-[13px]">{item.label || 'N/A'}</td>
+                    <td className="p-1 text-center font-mono text-sm text-slate-600">{item.packing || '-'}</td>
+                    <td className="p-1 text-center font-mono text-sm text-slate-700">{item.cartons}</td>
+                    <td className="p-1 text-center font-mono text-sm font-semibold text-slate-700">{item.pairs || '-'}</td>
+                    <td className="p-1 text-right font-mono text-sm text-slate-700">{item.rate.toLocaleString()}</td>
+                    <td className="p-1 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(item.value)}</td>
+                  </tr>
+                ))}
+                {items.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="p-3 text-center text-xs text-slate-400">
+                      No articles added yet.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
 
-          {/* Add Row Button */}
-          {!isViewMode && (
-            <div className="shrink-0 flex flex-wrap items-center gap-3 mb-2">
-              <button type="button" onClick={handleAddItemRow} className="btn-dashed flex items-center gap-1 px-3 py-1">
-                <Plus size={14} /> Add Item Row
-              </button>
-              <span className="text-xs text-slate-400">
-                Tip: type an existing Sale Bill's Manual Bill No. above and tab out to auto-prefill items from it.
-              </span>
-            </div>
-          )}
-
-          {/* Invoice Summary and Remarks — pinned to the bottom of the screen by the item table's
-              flex-1 above (see invoiceCardHeight). Kept compact (small textarea, tight gaps, no
-              min-height floor on the calculations box) in its own right too, matching SaleBillPage. */}
-          <div className="shrink-0 grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
-            {/* Remarks */}
-            <div className="flex flex-col gap-1">
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 font-inter">
-                RETURN REASON / REMARKS
+          {/* Bottom Section: Remarks + ref-pic's flat totals row (Total Cartons | Total Pairs |
+              Invoice Discount | Total Value | Rs.) — replaces the old dark "Calculations" box,
+              which isn't in the ref pic; matches SaleBillPage's own bottom section exactly (per
+              the user, 2026-08-26 — spotted the dark box as a clear diff from Sale Bill). */}
+          <div className="shrink-0 flex flex-wrap items-end justify-between gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
+            <div className="flex flex-col gap-1 flex-1 min-w-[220px]">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Return Reason / Remarks
               </label>
-              <textarea
+              <input
+                type="text"
                 value={remarks}
                 disabled={isViewMode}
                 onChange={e => setRemarks(e.target.value)}
                 placeholder="Enter return reasons or remarks..."
-                className="soleria-input w-full rounded-xl border border-slate-200/90 p-2.5 focus:ring-2 focus:ring-[var(--brand-gold)]/20 focus:border-[var(--brand-gold)] transition-all"
-                rows={2}
-                style={{ fontSize: '13px', resize: 'none', minHeight: '52px' }}
+                className="soleria-input"
+                style={{ fontSize: '13px' }}
               />
             </div>
 
-            {/* Calculations Box */}
-            <div className="flex flex-col justify-between p-2 rounded-lg border transition-all bg-[#111c2a] text-white border-slate-800 shadow-md">
-              <div className="text-xs font-semibold uppercase tracking-wider border-b pb-1 mb-1.5 text-slate-400 border-slate-800">
-                Calculations
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cartons</label>
+                <input type="text" value={totalCartons} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-center font-mono font-semibold" style={{ width: '90px' }} />
               </div>
-              <div className="flex flex-col gap-1 font-inter text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Total Cartons:</span>
-                  <span className="font-semibold font-mono">{totalCartons}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Total Pairs:</span>
-                  <span className="font-semibold font-mono">{totalPairs.toLocaleString('en-US')}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Gross Total:</span>
-                  <span className="font-semibold font-mono">Rs {itemsTotalValue.toLocaleString('en-US')}</span>
-                </div>
-                <div className="flex justify-between items-center mt-1">
-                  <span className="text-slate-400">Inv. Discount:</span>
-                  {isViewMode ? (
-                    <span className="font-semibold font-mono">Rs {invoiceDiscount.toLocaleString('en-US')}</span>
-                  ) : (
-                    <input
-                      type="number"
-                      value={invoiceDiscount || ''}
-                      onChange={e => setInvoiceDiscount(Math.max(0, parseInt(e.target.value) || 0))}
-                      className="soleria-input text-right font-mono py-0.5 px-2 border focus:ring-amber-500"
-                      style={{ width: '85px', fontSize: '12px', background: '#111c2a', color: '#ffffff', borderColor: '#334155' }}
-                    />
-                  )}
-                </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Pairs</label>
+                <input type="text" value={totalPairs} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-center font-mono font-semibold" style={{ width: '90px' }} />
               </div>
-              <div className="flex justify-between items-center border-t pt-1.5 mt-1.5 border-[#1e293b]">
-                <span className="font-bold text-[11px] uppercase tracking-wider text-slate-400">Total Credit Amount:</span>
-                <span className="text-xl font-bold font-mono text-[#B08D57] font-extrabold">
-                  Rs {finalTotalValue.toLocaleString('en-US')}
-                </span>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Invoice Discount</label>
+                <input
+                  type="number"
+                  value={invoiceDiscount || ''}
+                  disabled={isViewMode}
+                  onChange={e => setInvoiceDiscount(Math.max(0, parseInt(e.target.value) || 0))}
+                  className="soleria-input soleria-input-compact text-right font-mono"
+                  style={{ width: '110px' }}
+                />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Value</label>
+                <input type="text" value={formatCurrency(itemsTotalValue)} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '130px' }} />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Rs.</label>
+                <input
+                  type="text"
+                  value={formatCurrency(finalTotalValue)}
+                  disabled
+                  className="soleria-input soleria-input-compact text-right font-mono font-bold"
+                  style={{ width: '140px', color: 'var(--brand-gold)', background: '#111c2a', borderColor: '#334155' }}
+                />
               </div>
             </div>
           </div>
@@ -1597,6 +2365,49 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
       </form>
       </div>
+
+      {/* Find Return Modal — jump to any posted or unposted return by bill number or customer
+          name (mirrors SaleBillPage's own Find Bill Modal). */}
+      {isFindOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
+            <h3 className="font-lora font-bold text-lg text-slate-800 mb-4">Find Return</h3>
+            <input
+              type="text"
+              value={findQuery}
+              onChange={e => setFindQuery(e.target.value)}
+              placeholder="Bill No. or customer name..."
+              className="soleria-input w-full font-semibold mb-3"
+              autoFocus
+            />
+            <ul className="max-h-72 overflow-y-auto border rounded-lg divide-y" style={{ borderColor: 'var(--border-color)' }}>
+              {findResults.map(({ filter, row }) => (
+                <li
+                  key={`${filter}-${'return_id' in row ? row.return_id : row.draft_id}`}
+                  onClick={() => handleFindResultSelect(filter, row)}
+                  className="px-3 py-2 text-xs cursor-pointer hover:bg-amber-50/60 flex items-center justify-between gap-2"
+                >
+                  <span className="font-mono font-semibold text-slate-700">{row.bill_no || `#${'return_id' in row ? row.return_id : row.draft_id}`}</span>
+                  <span className="text-slate-400 truncate">{customers.find(c => c.customer_id === row.customer_id)?.name || 'Unnamed Customer'}</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${filter === 'posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{filter}</span>
+                </li>
+              ))}
+              {findQuery.trim() && findResults.length === 0 && (
+                <li className="px-3 py-3 text-xs text-slate-400 text-center">No matching returns.</li>
+              )}
+            </ul>
+            <div className="flex justify-end mt-4">
+              <button
+                type="button"
+                onClick={() => { setIsFindOpen(false); setFindQuery(''); }}
+                className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm font-semibold"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add New Sub-Customer Modal */}
       {isAddSubCustomerOpen && (

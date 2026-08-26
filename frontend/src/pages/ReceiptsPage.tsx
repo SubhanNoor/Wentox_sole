@@ -301,21 +301,49 @@ export default function ReceiptsPage() {
   }, [businessAccounts, regions, cities]);
 
   // Account field opens a centered "find" modal (SearchModal) instead of SearchableSelect's small
-  // anchored panel — see frontend/pages_design.md §5. Enter (or Arrow Up/Down) on the field opens
-  // it; RJ-02's live balance preview still works via SearchModal's own onHighlightChange (added
-  // for this). Committing an account closes it and advances focus via the app's G-01 rule.
-  const accountTriggerRef = useRef<HTMLButtonElement>(null);
+  // anchored panel — see frontend/pages_design.md §5. It's a real, typable <input> (same pattern
+  // as Purchase's Vendor field, 2026-08-27): type an account name/city and press Enter (or Arrow
+  // Up/Down for the full list) to open the modal seeded with what's typed, and keep searching
+  // inside it. The small chevron button alongside it still opens the full list blank, for a plain
+  // click with nothing typed. RJ-02's live balance preview still works via SearchModal's own
+  // onHighlightChange (added for this). Committing an account closes the modal, updates the
+  // displayed text to the picked account's label (see the sync effect below), and advances focus
+  // via the app's G-01 rule.
+  const accountTriggerRef = useRef<HTMLInputElement>(null);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [accountSearchText, setAccountSearchText] = useState('');
+  // Seeds the modal's search box when opened via Enter on the typed input (blank when opened via
+  // the chevron button or Arrow Up/Down instead).
+  const [accountModalSeed, setAccountModalSeed] = useState('');
+
+  // Keeps the input's displayed text in sync with whatever baId actually is — covers every place
+  // baId gets set (picking one, New clearing it, loading a posted/draft record) without
+  // duplicating each of those call sites. Typing itself never touches baId, so this never fights
+  // the user mid-type — it only ever runs when the SELECTION changes.
+  useEffect(() => {
+    const opt = accountOptions.find(o => o.value === baId);
+    setAccountSearchText(opt?.label ?? '');
+  }, [baId, accountOptions]);
 
   const openAccountModal = () => {
     if (isViewMode) return;
+    setAccountModalSeed('');
     setIsAccountModalOpen(true);
   };
 
   function handleAccountTriggerKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    // stopPropagation on every branch — otherwise this keydown keeps bubbling past the trigger up
+    // to window-level listeners (AppLayout's own G-01 field-walk), acting on it at the same time
+    // the modal opens. Same reasoning as SearchModal's own internal keydown handling.
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
+      e.stopPropagation();
       openAccountModal();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      setAccountModalSeed(accountSearchText);
+      setIsAccountModalOpen(true);
     }
   }
 
@@ -1195,20 +1223,29 @@ export default function ReceiptsPage() {
                     {/* RJ-03: ref target for the post-Done cursor return — this is the first
                         field of the entry row. */}
                     <div className="flex-1 min-w-0" ref={firstEntryFieldWrapRef}>
-                      <button
-                        ref={accountTriggerRef}
-                        type="button"
-                        data-field-nav="true"
-                        disabled={isViewMode}
-                        onClick={openAccountModal}
-                        onKeyDown={handleAccountTriggerKeyDown}
-                        className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
-                      >
-                        <span className={baId ? 'text-black font-semibold' : 'text-slate-500'}>
-                          {baId ? accountOptions.find(o => o.value === baId)?.label : 'Search account...'}
-                        </span>
-                        <ChevronDown size={16} className="text-slate-400" />
-                      </button>
+                      <div className="relative">
+                        <input
+                          ref={accountTriggerRef}
+                          type="text"
+                          data-field-nav="true"
+                          disabled={isViewMode}
+                          value={accountSearchText}
+                          onChange={e => setAccountSearchText(e.target.value)}
+                          onKeyDown={handleAccountTriggerKeyDown}
+                          placeholder="Type an account name, or press Enter to search..."
+                          className="soleria-input pr-9"
+                          style={{ fontSize: '13px' }}
+                        />
+                        <button
+                          type="button"
+                          disabled={isViewMode}
+                          onClick={openAccountModal}
+                          title="Browse all accounts"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <ChevronDown size={16} />
+                        </button>
+                      </div>
                       <SearchModal
                         isOpen={isAccountModalOpen}
                         title="Select Account"
@@ -1218,6 +1255,7 @@ export default function ReceiptsPage() {
                         onClose={() => { setIsAccountModalOpen(false); setPreviewBaId(null); }}
                         onHighlightChange={val => setPreviewBaId(val ? Number(val) : null)}
                         searchPlaceholder="Search account..."
+                        initialSearch={accountModalSeed}
                       />
                     </div>
                     <AccountBalanceTooltip baId={previewBaId ?? (baId ? Number(baId) : null)} refreshKey={balanceRefreshKey} />
@@ -1474,9 +1512,11 @@ export default function ReceiptsPage() {
                   (per the user, 2026-08-26 — a separate box just ate extra padding/border space
                   for no benefit; this way there's more room to actually show entries). The same
                   grid the client's screen shows, plus the Cheque/Online/Cash/Voucher totals in its
-                  own footer, so a voucher can be read back at a glance before posting. */}
-              {voucherLines.length > 0 && (
-                <div className="mt-6 pt-5 border-t" style={{ borderColor: 'var(--border-color)' }}>
+                  own footer, so a voucher can be read back at a glance before posting. Always
+                  rendered — even with zero lines — matching Purchase's own articles box, which
+                  shows its empty state ("No articles added yet...") rather than disappearing
+                  entirely (per the user, 2026-08-26). */}
+              <div className="mt-6 pt-5 border-t" style={{ borderColor: 'var(--border-color)' }}>
                   <div className="flex items-center justify-between mb-3">
                     <h4 className="font-lora font-semibold text-slate-800">
                       Entries in this Voucher
@@ -1501,7 +1541,13 @@ export default function ReceiptsPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {voucherLines.map(line => (
+                        {voucherLines.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="p-6 text-center text-slate-400 text-sm">
+                              No receipts added yet — fill the fields above and press Enter.
+                            </td>
+                          </tr>
+                        ) : voucherLines.map(line => (
                           <tr key={line.receipt_id ?? `draft_${line.draft_id}`} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
                             <td className="p-2.5 pl-3 font-mono text-xs text-slate-600">{line.account_code || '—'}</td>
                             <td className="p-2.5 font-semibold text-slate-800">{line.account_name}</td>
@@ -1550,22 +1596,35 @@ export default function ReceiptsPage() {
                           </tr>
                         ))}
                       </tbody>
-                      {/* RJ-03: the client's own footer — totals split by how the money arrived. */}
-                      <tfoot>
-                        <tr className="border-t-2 bg-slate-50/70 font-semibold" style={{ borderColor: 'var(--border-color)' }}>
-                          <td className="p-2.5 pl-3 text-xs uppercase tracking-wider text-slate-500" colSpan={4}>
-                            Total Cheque {formatCurrency(Number(voucher?.total_cheque ?? 0))}
-                            {'  ·  '}Total Online {formatCurrency(Number(voucher?.total_online ?? 0))}
-                            {'  ·  '}Total Cash {formatCurrency(Number(voucher?.total_cash ?? 0))}
-                          </td>
-                          <td className="p-2.5 text-right text-xs uppercase tracking-wider text-slate-500">Voucher Total</td>
-                          <td className="p-2.5 text-right font-mono text-slate-900">
-                            {formatCurrency(Number(voucher?.total_amount ?? 0))}
-                          </td>
-                          <td colSpan={2} />
-                        </tr>
-                      </tfoot>
                     </table>
+                  </div>
+
+                  {/* RJ-03: ref-pic's small boxed totals — Total Cheque/Online/Cash on the bottom
+                      right plus a Total Amount field, matching Sale Bill's totals-row style
+                      instead of the old inline footer text. */}
+                  <div className="flex flex-wrap items-end justify-end gap-3 mt-3 pt-3 border-t" style={{ borderColor: 'var(--border-table)' }}>
+                    <div className="flex flex-col gap-0.5">
+                      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cheque</label>
+                      <input type="text" value={formatCurrency(Number(voucher?.total_cheque ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Online</label>
+                      <input type="text" value={formatCurrency(Number(voucher?.total_online ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cash</label>
+                      <input type="text" value={formatCurrency(Number(voucher?.total_cash ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Amount</label>
+                      <input
+                        type="text"
+                        value={formatCurrency(Number(voucher?.total_amount ?? 0))}
+                        disabled
+                        className="soleria-input soleria-input-compact text-right font-mono font-bold"
+                        style={{ width: '140px', color: 'var(--brand-gold)', background: '#111c2a', borderColor: '#334155' }}
+                      />
+                    </div>
                   </div>
 
                   {/* Per-line outcome of the last Post/Un Post. Deliberately NOT auto-hidden on a
@@ -1593,8 +1652,7 @@ export default function ReceiptsPage() {
                       </button>
                     </div>
                   )}
-                </div>
-              )}
+              </div>
             </div>
           </div>
         )}

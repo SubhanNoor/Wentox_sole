@@ -217,11 +217,18 @@ export default function PurchasePage() {
   };
 
   function handleVendorTriggerKeyDown(e: React.KeyboardEvent) {
+    // stopPropagation on every branch, not just preventDefault — otherwise this keydown keeps
+    // bubbling past the trigger up to window-level listeners (AppLayout's own G-01 field-walk and
+    // Quick Menu Bar Arrow Up/Down handler), which would act on it AT THE SAME TIME the modal
+    // opens, e.g. also walking focus in the background field. Same reasoning as SearchModal's own
+    // internal keydown handling.
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
+      e.stopPropagation();
       openVendorModal();
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      e.stopPropagation();
       setVendorModalSeed(vendorSearchText);
       setIsVendorModalOpen(true);
     }

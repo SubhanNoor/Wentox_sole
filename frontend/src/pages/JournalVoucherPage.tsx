@@ -1,14 +1,18 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import SearchableSelect from '@/components/SearchableSelect';
+import SearchModal from '@/components/SearchModal';
+import { focusNextField } from '@/lib/fieldNav';
 import * as api from '@/lib/api';
 import type {
   BusinessAccountRow, JournalVoucherRow, JournalVoucherLineInput, JournalVoucherCreateInput,
   UnpostedJournalVoucherRow, PostAllResult,
 } from '@/lib/api';
 import { formatDate, getTodayDate } from '@/lib/utils';
-import { Save, Edit, Search, Plus, Trash2, BookText, ChevronDown, CheckCircle2 } from 'lucide-react';
+import {
+  Edit, Search, Plus, Trash2, BookText, ChevronDown, CheckCircle2, PackageCheck, Undo2,
+  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Printer
+} from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 
 /**
@@ -22,32 +26,43 @@ function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
 
+function newLineUid() {
+  return 'jvl_' + Date.now() + Math.random().toString(36).slice(2, 7);
+}
+
 interface UiLine {
   uid: string;
   baId: string;
+  // What's currently typed/shown in this row's own Account field — lives on the row itself
+  // (rather than a separate uid-keyed Record) so each row's typed text is independent and never
+  // gets clobbered by another row's re-render, same idea as every other typable+SearchModal field
+  // in the app, just per-row instead of a single page-level field.
+  baSearchText: string;
   debit: number;
   credit: number;
   narration: string;
 }
 
-function emptyLine(): UiLine {
-  return {
-    uid: 'jvl_' + Date.now() + Math.random().toString(36).slice(2, 7),
-    baId: '', debit: 0, credit: 0, narration: '',
-  };
+// UiLine (above) is now only the COMMITTED shape, read-only in the grid and hydrated by loadJv —
+// new/edited lines are built by handleCommitLine from the entry strip's own shape below instead.
+
+// The entry strip's own "one line being typed" shape — a single signed Amount, not separate
+// Debit/Credit inputs (see the entry-strip comment further down for the sign convention).
+interface EntryLine {
+  baId: string;
+  baSearchText: string;
+  amount: number;
+  narration: string;
+}
+
+function emptyEntry(): EntryLine {
+  return { baId: '', baSearchText: '', amount: 0, narration: '' };
 }
 
 export default function JournalVoucherPage() {
   const [accounts, setAccounts] = useState<BusinessAccountRow[]>([]);
   const [vouchers, setVouchers] = useState<JournalVoucherRow[]>([]);
   const [lookupError, setLookupError] = useState('');
-
-  // Smart default: the common case is one real party account plus a write-off, so an untouched
-  // 2nd line auto-fills to this account balancing the 1st (matches jv2.0.jpeg's own example —
-  // one line credits a customer, the other debits DISCOUNTS, CLAIMS & COMMISSIONS). Just a
-  // convenience, not a fixed model: the user can still edit/remove that line or add more lines
-  // for a real multi-account journal — see the auto-balance effect below.
-  const [counterAccount, setCounterAccount] = useState<BusinessAccountRow | null>(null);
 
   // JV Ledger — search + status filter, both applied server-side (search matches the header
   // OR any line: account name/code, per-line narration, debit/credit amount — see
@@ -80,12 +95,6 @@ export default function JournalVoucherPage() {
       const ba = await api.listBusinessAccounts();
       if (ba.ok) setAccounts(ba.data); else setLookupError('Failed to load accounts: ' + ba.error.message);
     })();
-    (async () => {
-      const ca = await api.journalVouchers.counterAccount();
-      if (ca.ok) setCounterAccount(ca.data);
-      // Not fatal if this fails — the smart default just won't fire; manual multi-line entry
-      // still works fine without it.
-    })();
     refreshUnposted();
   }, [refreshUnposted]);
 
@@ -103,6 +112,13 @@ export default function JournalVoucherPage() {
     setPostAllResult(res.data);
     refresh();
     refreshUnposted();
+    refreshNav();
+    // Same "ready for the next one" reset as the toolbar's own Post (per the user, 2026-08-19):
+    // whatever was on screen is done either way — either it just posted (so showing it as if
+    // still pending would be stale) or it wasn't part of this run and stays saved regardless.
+    const workingDate = date;
+    handleNew();
+    setDate(workingDate);
   };
 
   // Recorded Journal Vouchers moved to its own tab (was inline below the live entry form on the
@@ -115,12 +131,8 @@ export default function JournalVoucherPage() {
   const [jvId, setJvId] = useState<number | null>(null);
   const [status, setStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
   const [date, setDate] = useState(getTodayDate());
-  const [voucherNo, setVoucherNo] = useState('');
   const [reason, setReason] = useState('');
-  const [lines, setLines] = useState<UiLine[]>([emptyLine(), emptyLine()]);
-  // Turns off the 2nd-line auto-balance once the user edits that line themselves (it's their
-  // line now, not ours to keep overwriting) — see the auto-balance effect below.
-  const [secondLineTouched, setSecondLineTouched] = useState(false);
+  const [lines, setLines] = useState<UiLine[]>([]);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -137,29 +149,126 @@ export default function JournalVoucherPage() {
 
   const handleNew = () => {
     setMode('new'); setJvId(null); setStatus('DRAFT');
-    setDate(getTodayDate()); setVoucherNo(''); setReason('');
-    setLines([emptyLine(), emptyLine()]);
-    setSecondLineTouched(false);
+    setDate(getTodayDate()); setReason('');
+    setLines([]);
+    setEntry(emptyEntry());
+    setEditingIndex(null);
     setErrorMsg('');
+    // Explicit focus, not just a mode-change effect: clicking New while already on a blank/new JV
+    // (mode is already 'new') wouldn't otherwise re-trigger any such effect, so focus would stay
+    // wherever it was (same fix as SaleBillPage/SaleReturnPage's own handleNew).
+    requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
 
-  const updateLine = (uid: string, field: keyof UiLine, value: string | number) => {
-    const idx = lines.findIndex(l => l.uid === uid);
-    // Editing the 2nd line directly, while it's still the auto-balance slot, hands it over to
-    // the user — the effect below stops overwriting it from this point on.
-    if (idx === 1 && lines.length === 2) setSecondLineTouched(true);
-    setLines(prev => prev.map(l => {
-      if (l.uid !== uid) return l;
-      const updated = { ...l, [field]: value };
-      // Single-sided per line, matching ledger_entries — typing one clears the other.
-      if (field === 'debit' && Number(value) > 0) updated.credit = 0;
-      if (field === 'credit' && Number(value) > 0) updated.debit = 0;
-      return updated;
-    }));
+  // ── Entry strip (ref-pic jv2.0's own bound-record pattern, 2026-08-26 per the user: "we select
+  // the account... it has its own box as in the ref pic") — ONE editable A/C Code/Amount/Narration
+  // row, NOT one editable row per grid line. A single signed Amount replaces separate Debit/Credit
+  // inputs: positive types a credit (JAMMA), negative types a debit (NAAM) — per the user: "if it
+  // is positive... we are doing credit and if it's negative it is debit". Enter on Narration (the
+  // strip's last field) commits the line into `lines` — appending, or replacing `editingIndex`
+  // when a grid row was clicked to re-open it — then always clears the strip and refocuses A/C
+  // Code for the next line (per the user: "it goes to the first field of account code... but the
+  // master details remain same" — Date/Reason above are never touched by this).
+  const [entry, setEntry] = useState<EntryLine>(emptyEntry());
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const entryAccountTriggerRef = useRef<HTMLInputElement>(null);
+  const [isEntryAccountModalOpen, setIsEntryAccountModalOpen] = useState(false);
+  const [entryAccountModalSeed, setEntryAccountModalSeed] = useState('');
+
+  const openEntryAccountModal = () => {
+    if (isViewMode) return;
+    setEntryAccountModalSeed('');
+    setIsEntryAccountModalOpen(true);
+  };
+  const handleEntryAccountKeyDown = (e: React.KeyboardEvent) => {
+    // stopPropagation on every branch, not just preventDefault — otherwise this keydown keeps
+    // bubbling past the trigger up to window-level listeners (AppLayout's own G-01 field-walk),
+    // which would act on it at the same time the modal opens. Same reasoning as SearchModal's own
+    // internal keydown handling.
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      openEntryAccountModal();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isViewMode) return;
+      setEntryAccountModalSeed(entry.baSearchText);
+      setIsEntryAccountModalOpen(true);
+    }
+  };
+  const handleEntryAccountSelect = (val: string) => {
+    const acc = accounts.find(a => String(a.ba_id) === val);
+    setEntry(prev => ({ ...prev, baId: val, baSearchText: acc ? `${acc.name} (${acc.code})` : '' }));
+    setIsEntryAccountModalOpen(false);
+    requestAnimationFrame(() => focusNextField(entryAccountTriggerRef.current));
   };
 
-  const addLine = () => setLines(prev => [...prev, emptyLine()]);
-  const removeLine = (uid: string) => setLines(prev => prev.length > 2 ? prev.filter(l => l.uid !== uid) : prev);
+  const handleCommitLine = () => {
+    if (!entry.baId) { setErrorMsg('Select an account before adding the line.'); return; }
+    if (entry.amount === 0) { setErrorMsg('Amount can\'t be 0 — positive for a credit, negative for a debit.'); return; }
+    setErrorMsg('');
+    const committed: UiLine = {
+      uid: editingIndex != null ? lines[editingIndex].uid : newLineUid(),
+      baId: entry.baId,
+      baSearchText: entry.baSearchText,
+      debit: entry.amount < 0 ? Math.abs(entry.amount) : 0,
+      credit: entry.amount > 0 ? entry.amount : 0,
+      narration: entry.narration,
+    };
+    if (editingIndex != null) {
+      setLines(prev => prev.map((l, i) => i === editingIndex ? committed : l));
+    } else {
+      setLines(prev => [...prev, committed]);
+    }
+    setEditingIndex(null);
+    setEntry(emptyEntry());
+    requestAnimationFrame(() => entryAccountTriggerRef.current?.focus());
+  };
+
+  function handleEntryLastFieldKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    e.stopPropagation();
+    handleCommitLine();
+  }
+
+  // Loads an already-committed line back into the strip for editing (grid row click) — the signed
+  // Amount is reconstructed from whichever side actually holds a value.
+  const loadLineIntoEntry = (idx: number) => {
+    const row = lines[idx];
+    setEntry({ baId: row.baId, baSearchText: row.baSearchText, amount: row.credit > 0 ? row.credit : -row.debit, narration: row.narration });
+    setEditingIndex(idx);
+    requestAnimationFrame(() => entryAccountTriggerRef.current?.focus());
+  };
+
+  const handleRowClick = (idx: number) => {
+    if (isViewMode) setMode('edit');
+    loadLineIntoEntry(idx);
+  };
+
+  const removeLine = (idx: number) => {
+    setLines(prev => prev.filter((_, i) => i !== idx));
+    if (editingIndex === idx) {
+      setEditingIndex(null);
+      setEntry(emptyEntry());
+    } else if (editingIndex != null && idx < editingIndex) {
+      setEditingIndex(editingIndex - 1);
+    }
+  };
+
+  // Toolbar's Delete is dual-purpose, same convention as SaleBillPage/SaleReturnPage: with a line
+  // loaded into the strip for editing, it removes THAT line; otherwise it's the whole-JV delete
+  // (currently-open unposted voucher).
+  const handleDeleteAction = () => {
+    if (editingIndex != null) {
+      removeLine(editingIndex);
+      return;
+    }
+    if (jvId == null || isPosted) return;
+    pendingDeleteJvId.current = jvId;
+    setIsPasswordModalOpen(true);
+  };
 
   const totals = useMemo(() => {
     const totalDebit = round2(lines.reduce((s, l) => s + (Number(l.debit) || 0), 0));
@@ -167,21 +276,8 @@ export default function JournalVoucherPage() {
     return { totalDebit, totalCredit, difference: round2(totalDebit - totalCredit) };
   }, [lines]);
 
-  // Smart default: with exactly 2 lines and the 2nd untouched, keep it mirroring the 1st line's
-  // account+amount on the opposite side against the counter-account. Stops the moment the user
-  // edits that line themselves (secondLineTouched), adds/removes lines, or in view mode.
-  useEffect(() => {
-    if (isViewMode || secondLineTouched || lines.length !== 2 || !counterAccount) return;
-    const [first, second] = lines;
-    const firstAmount = Number(first.debit) || Number(first.credit) || 0;
-    if (!first.baId || firstAmount <= 0) return;
-    const wantDebit = Number(first.credit) > 0 ? firstAmount : 0;
-    const wantCredit = Number(first.debit) > 0 ? firstAmount : 0;
-    const counterBaId = String(counterAccount.ba_id);
-    if (second.baId === counterBaId && Number(second.debit) === wantDebit && Number(second.credit) === wantCredit) return;
-    setLines(prev => prev.map((l, i) => i === 1 ? { ...l, baId: counterBaId, debit: wantDebit, credit: wantCredit } : l));
-  }, [lines, secondLineTouched, counterAccount, isViewMode]);
-
+  // Net Total must be exactly 0 before Save is even reachable — per the user: "the net total must
+  // be 0 if yes we can save it otherwise not".
   const isValid = useMemo(() => {
     if (!date || !reason.trim()) return false;
     if (lines.length < 2) return false;
@@ -198,7 +294,7 @@ export default function JournalVoucherPage() {
       setErrorMsg('Every line needs a debit or credit amount greater than 0.'); return null;
     }
     if (totals.difference !== 0) {
-      setErrorMsg(`Total debit (${totals.totalDebit}) must equal total credit (${totals.totalCredit}).`); return null;
+      setErrorMsg(`Net Total must be 0 — total debit (${totals.totalDebit}) must equal total credit (${totals.totalCredit}).`); return null;
     }
     const payloadLines: JournalVoucherLineInput[] = lines.map(l => ({
       ba_id: Number(l.baId),
@@ -207,7 +303,7 @@ export default function JournalVoucherPage() {
       narration: l.narration.trim() || undefined,
     }));
     return {
-      jv_date: date, voucher_no: voucherNo.trim() || undefined,
+      jv_date: date,
       reason: reason.trim(),
       lines: payloadLines,
     };
@@ -228,16 +324,26 @@ export default function JournalVoucherPage() {
     setMode('view');
     refresh();
     refreshUnposted();
+    refreshNav();
   };
 
+  // Posting finishes this JV and readies the form for the next one — same convention as Sale
+  // Bill/Purchase's own "clear straight back to blank so the next can be typed immediately" (per
+  // the user, 2026-08-26: "when I press the post... auto focus goes to the date alike... new
+  // bill"). Reuses handleNew() (which already focuses Date itself) rather than repeating its
+  // field list, then restores the working date — handleNew() snaps to today, and a run of JVs
+  // entered for an earlier date would otherwise reset on every one.
   const handlePost = async () => {
     if (jvId == null) return;
     const res = await api.journalVouchers.post(jvId);
     if (!res.ok) { fail('Failed to post: ' + res.error.message); return; }
-    setStatus(res.data.status);
     flash('Journal Voucher posted — every line\'s ledger updated.');
     refresh();
     refreshUnposted();
+    refreshNav();
+    const workingDate = date;
+    handleNew();
+    setDate(workingDate);
   };
 
   const handleUnpost = async () => {
@@ -248,6 +354,7 @@ export default function JournalVoucherPage() {
     flash('Journal Voucher unposted.');
     refresh();
     refreshUnposted();
+    refreshNav();
   };
 
   // Listing rows only carry rolled-up totals (line_count/total_debit/total_credit), not the
@@ -259,18 +366,17 @@ export default function JournalVoucherPage() {
     setJvId(jv.jv_id);
     setStatus(jv.status);
     setDate(jv.jv_date.slice(0, 10));
-    setVoucherNo(jv.voucher_no || '');
     setReason(jv.reason);
     setLines((jv.lines || []).map(l => ({
       uid: 'jvl_' + l.line_id,
       baId: String(l.ba_id),
+      baSearchText: l.ba_name ? `${l.ba_name} (${l.ba_code})` : '',
       debit: l.debit,
       credit: l.credit,
       narration: l.narration || '',
     })));
-    // Loaded data is already whatever it is — the auto-balance effect must not overwrite an
-    // existing voucher's 2nd line just because it happens to still look untouched.
-    setSecondLineTouched(true);
+    setEntry(emptyEntry());
+    setEditingIndex(null);
     setErrorMsg('');
     setMode('view');
   };
@@ -292,6 +398,7 @@ export default function JournalVoucherPage() {
     flash(`Journal Voucher ${res.data.voucher_no || `#${res.data.jv_id}`} posted.`);
     refresh();
     refreshUnposted();
+    refreshNav();
     if (targetId === jvId) setStatus(res.data.status);
   };
 
@@ -317,6 +424,7 @@ export default function JournalVoucherPage() {
     if (jvId === targetId) handleNew();
     refresh();
     refreshUnposted();
+    refreshNav();
   };
 
   // Entry card fills whatever vertical space is left in the viewport below it (mirrors
@@ -327,6 +435,17 @@ export default function JournalVoucherPage() {
   const entryCardRef = useRef<HTMLFormElement>(null);
   const [entryCardHeight, setEntryCardHeight] = useState<number | null>(null);
   const firstFieldRef = useRef<HTMLInputElement>(null);
+
+  // G-01: auto-focus Date whenever the entry tab becomes the active, editable view — including
+  // the very first time the page itself is opened (per the user, 2026-08-26: "when I go to the JV
+  // page auto focus on date"). AppLayout's own global auto-focus only re-scans when a <form> is
+  // newly INSERTED into the DOM, which doesn't reliably cover switching tabs/mode on a page that
+  // stays mounted the whole time — same fix as SaleReturnPage's own identical effect.
+  useEffect(() => {
+    if (activeTab === 'entry' && mode !== 'view') {
+      requestAnimationFrame(() => firstFieldRef.current?.focus());
+    }
+  }, [activeTab, mode]);
 
   useEffect(() => {
     function recompute() {
@@ -341,6 +460,77 @@ export default function JournalVoucherPage() {
     window.addEventListener('resize', recompute);
     return () => window.removeEventListener('resize', recompute);
   }, [mode, lookupError, successMsg, errorMsg]);
+
+  // ── Record navigation: First/Pre./Next/Last + Posted/Unposted dropdown (per the user, 2026-08-26:
+  // "posted and unposted thing so that we can move to and fro") — same mechanism as SaleBillPage
+  // §3. Fetched unfiltered (independent of the JV Ledger tab's own search/status filters), newest-
+  // first per journalVouchers.repository.js#list — reversed here for oldest-first browsing, so
+  // First = earliest, Last = most recent. Also doubles as the source for the auto "Number" preview
+  // below, since jv_id is the ONE identity space a JV ever has (no separate draft table the way
+  // Sale Bill/Purchase have — DRAFT and CONFIRMED are just a status on the same row).
+  const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('posted');
+  const [navVouchers, setNavVouchers] = useState<JournalVoucherRow[]>([]);
+
+  const refreshNav = useCallback(async () => {
+    const res = await api.journalVouchers.list({});
+    if (res.ok) setNavVouchers(res.data);
+  }, []);
+
+  useEffect(() => { refreshNav(); }, [refreshNav]);
+
+  const navPostedList = useMemo(
+    () => [...navVouchers].filter(v => v.status === 'CONFIRMED').reverse(),
+    [navVouchers]
+  );
+
+  const navIndex = useMemo(() => {
+    if (jvId == null || !isPosted) return -1;
+    return navPostedList.findIndex(v => v.jv_id === jvId);
+  }, [jvId, isPosted, navPostedList]);
+
+  const canBrowse = browseFilter === 'unposted' && navPostedList.length > 0;
+  const canNavPrevious = canBrowse && navIndex !== 0;
+  const canNavNext = canBrowse && navIndex !== navPostedList.length - 1;
+
+  const goToNavIndex = async (idx: number) => {
+    if (idx < 0 || idx >= navPostedList.length) return;
+    await loadJv(navPostedList[idx].jv_id);
+  };
+  const handleFirst = () => goToNavIndex(0);
+  const handlePrev = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
+  const handleNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
+  const handleLast = () => goToNavIndex(navPostedList.length - 1);
+
+  // Preview of the Number a brand-new JV will get — jv_id is assigned the moment Save actually
+  // creates the row (draft or posted alike), so this is a client-side preview only, correct as
+  // long as nothing else inserts a JV between now and Save.
+  const nextJvNoPreview = useMemo(
+    () => Math.max(0, ...navVouchers.map(v => v.jv_id), ...unpostedJvs.map(v => v.jv_id)) + 1,
+    [navVouchers, unpostedJvs]
+  );
+
+  // Toolbar's Find — a quick jump to any JV (posted or unposted) by number or reason, searched
+  // client-side over the already-loaded browse/pending lists.
+  const [isFindOpen, setIsFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const findResults = useMemo(() => {
+    const q = findQuery.trim().toLowerCase();
+    if (!q) return [];
+    const matches = (v: { reason: string; jv_id: number }) =>
+      v.reason.toLowerCase().includes(q) || String(v.jv_id).includes(q);
+    const posted = navVouchers.filter(v => v.status === 'CONFIRMED' && matches(v));
+    const unposted = unpostedJvs.filter(matches);
+    return [
+      ...posted.map(v => ({ jv_id: v.jv_id, reason: v.reason, date: v.jv_date, status: 'posted' as const })),
+      ...unposted.map(v => ({ jv_id: v.jv_id, reason: v.reason, date: v.jv_date, status: 'unposted' as const })),
+    ].slice(0, 30);
+  }, [findQuery, navVouchers, unpostedJvs]);
+  const handleFindSelect = async (id: number) => {
+    setIsFindOpen(false);
+    setFindQuery('');
+    await loadJv(id);
+  };
+
 
   const tabBar = (
     <div className="flex gap-1.5" data-no-print>
@@ -478,58 +668,147 @@ export default function JournalVoucherPage() {
           subtitle="Enter your password to permanently delete this unposted Journal Voucher."
         />
 
+        {/* Find Journal Voucher Modal — jump to any posted or unposted JV by number or reason. */}
+        {isFindOpen && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
+              <h3 className="font-lora font-bold text-lg text-slate-800 mb-4">Find Journal Voucher</h3>
+              <input
+                type="text"
+                value={findQuery}
+                onChange={e => setFindQuery(e.target.value)}
+                placeholder="Number or reason..."
+                className="soleria-input w-full font-semibold mb-3"
+                autoFocus
+              />
+              <ul className="max-h-72 overflow-y-auto border rounded-lg divide-y" style={{ borderColor: 'var(--border-color)' }}>
+                {findResults.map(r => (
+                  <li
+                    key={`${r.status}-${r.jv_id}`}
+                    onClick={() => handleFindSelect(r.jv_id)}
+                    className="px-3 py-2 text-xs cursor-pointer hover:bg-amber-50/60 flex items-center justify-between gap-2"
+                  >
+                    <span className="font-mono font-semibold text-slate-700">#{r.jv_id}</span>
+                    <span className="text-slate-400 truncate flex-1">{r.reason}</span>
+                    <span className="text-slate-400">{formatDate(r.date)}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${r.status === 'posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{r.status}</span>
+                  </li>
+                ))}
+                {findQuery.trim() && findResults.length === 0 && (
+                  <li className="px-3 py-3 text-xs text-slate-400 text-center">No matching journal vouchers.</li>
+                )}
+              </ul>
+              <div className="flex justify-end mt-4">
+                <button
+                  type="button"
+                  onClick={() => { setIsFindOpen(false); setFindQuery(''); }}
+                  className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm font-semibold"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {lookupError && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>}
         {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>}
         {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>}
 
         {activeTab === 'entry' && (
         <>
-        {/* Toolbar — standalone row above the card, matching PurchasePage/SaleBillPage: every
-            action always renders, only `disabled` changes per state, instead of whole button
-            groups mounting/unmounting per mode. */}
+        {/* Toolbar — icon-over-label buttons (`.toolbar-btn`), matching ref-pic jv2.0's own set
+            exactly (per the user, 2026-08-26): New/Delete/Edit/Done, First/Previous/Next/Last,
+            Print/Find, Un Post/Post. Every action always renders, only `disabled` changes per
+            state, instead of whole button groups mounting/unmounting per mode. */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button" onClick={handleNew}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all"
-            >
-              New JV
-            </button>
-            <button
-              type="submit" form="jv-entry-form" disabled={isViewMode || !isValid}
-              className="btn-gold flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-            >
-              <Save size={14} /> {mode === 'edit' ? 'Update JV' : 'Save JV'}
+          <div className="flex flex-wrap items-center gap-0.5">
+            <button type="button" onClick={handleNew} title="New" className="toolbar-btn">
+              <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>New</span>
             </button>
             <button
               type="button"
-              onClick={() => { if (jvId != null) loadJv(jvId); }}
-              disabled={mode !== 'edit'}
-              className="btn-outline px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              onClick={handleDeleteAction}
+              disabled={editingIndex != null ? isViewMode : (mode !== 'view' || jvId == null || isPosted)}
+              title={editingIndex != null ? 'Delete selected line' : 'Delete'}
+              className="toolbar-btn"
             >
-              Cancel Edit
+              <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
+              <span>Delete</span>
             </button>
             <button
-              type="button" onClick={() => setMode('edit')} disabled={!isViewMode || isPosted}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              type="button" onClick={() => setMode('edit')} disabled={!isViewMode || jvId == null || isPosted}
+              title="Edit"
+              className="toolbar-btn"
             >
-              <Edit size={13} /> Edit
+              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
+              <span>Edit</span>
+            </button>
+            <button
+              type="submit" form="jv-entry-form" disabled={isViewMode || !isValid}
+              title="Done"
+              className="toolbar-btn"
+            >
+              <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>Done</span>
+            </button>
+
+            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            <button type="button" onClick={handleFirst} disabled={!canBrowse} title="First" className="toolbar-btn">
+              <ChevronsLeft size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>First</span>
+            </button>
+            <button type="button" onClick={handlePrev} disabled={!canNavPrevious} title="Previous" className="toolbar-btn">
+              <ChevronLeft size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Prev.</span>
+            </button>
+            <button type="button" onClick={handleNext} disabled={!canNavNext} title="Next" className="toolbar-btn">
+              <ChevronRight size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Next</span>
+            </button>
+            <button type="button" onClick={handleLast} disabled={!canBrowse} title="Last" className="toolbar-btn">
+              <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Last</span>
+            </button>
+
+            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            <button
+              type="button"
+              onClick={() => window.print()}
+              disabled={mode !== 'view' || jvId == null}
+              title="Print"
+              className="toolbar-btn"
+            >
+              <Printer size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Print</span>
+            </button>
+            <button type="button" onClick={() => setIsFindOpen(true)} title="Find" className="toolbar-btn">
+              <Search size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Find</span>
+            </button>
+
+            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            <button
+              type="button" onClick={handleUnpost} disabled={!isViewMode || jvId == null || !isPosted || browseFilter !== 'unposted'}
+              title="Un Post — switch the dropdown to Unposted first"
+              className="toolbar-btn"
+            >
+              <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
+              <span>Un Post</span>
             </button>
             <button
               type="button" onClick={handlePost} disabled={!isViewMode || jvId == null || isPosted}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title="Post"
+              className="toolbar-btn"
             >
-              Post
-            </button>
-            <button
-              type="button" onClick={handleUnpost} disabled={!isViewMode || jvId == null || !isPosted}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-            >
-              Unpost
+              <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>Post</span>
             </button>
           </div>
-          {/* Status now lives in the card's own "Voucher Status" readout below — just the
-              identity label here, matching Purchase/SaleBill's toolbar shape (buttons only). */}
           <span className="font-lora font-bold text-xs text-slate-900">
             {mode === 'edit' ? `Editing JV #${jvId}` : mode === 'view' ? `JV #${jvId}` : 'New Journal Voucher'}
           </span>
@@ -542,33 +821,39 @@ export default function JournalVoucherPage() {
         <form
           id="jv-entry-form" ref={entryCardRef} onSubmit={handleSave}
           className="card-white p-6 bg-white border flex flex-col" style={{ height: entryCardHeight ?? undefined }}
-          data-no-print
         >
-          {/* Header row — "JOURNAL ENTRY" title (left) + a Voucher Status readout styled like a
-              disabled select (right), mirroring the legacy Journal Entry screen's own title/
-              status row, in the app's own navy/gold palette rather than the legacy grey chrome. */}
+          {/* Header row — "JOURNAL ENTRY" title (left), Posted/Unposted dropdown (drives
+              First/Prev/Next/Last, per the user: "posted and unposted thing so that we can move
+              to and fro") on the right. Not a print-worthy control, unlike the rest of this form
+              (Print now prints this whole card, entry strip naturally absent since it's view-mode
+              only). Master/Detail radios removed (per the user, 2026-08-26) — display-only and
+              didn't do anything, same reason they're gone from SaleBillPage too. */}
           <div className="shrink-0 flex items-center justify-between gap-4 border-b pb-3 mb-4">
             <div className="flex items-center gap-2">
               <BookText size={18} className="text-[#B08D57]" />
               <h3 className="font-lora font-bold text-lg tracking-wide text-slate-800">JOURNAL ENTRY</h3>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2" data-no-print>
               <span className="text-xs font-semibold text-slate-500">Voucher Status</span>
-              <span
-                className={`flex items-center gap-1.5 pl-3 pr-2.5 py-1.5 rounded-lg border text-xs font-bold ${
-                  isPosted ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-900'
-                }`}
-                title={isPosted ? 'Posted — live in the ledger' : 'Saved but not yet in the ledger — Post it to move any balance.'}
+              <select
+                value={browseFilter}
+                onChange={e => setBrowseFilter(e.target.value as 'posted' | 'unposted')}
+                className="soleria-input soleria-input-compact cursor-pointer font-semibold"
+                style={{ width: 'auto' }}
+                title="Posted = add new JVs. Unposted = browse posted JVs to Unpost one."
               >
-                {isPosted ? 'Posted' : 'UnPosted'}
-                <ChevronDown size={12} className="opacity-50" />
-              </span>
+                <option value="posted">Posted</option>
+                <option value="unposted">Unposted</option>
+              </select>
             </div>
           </div>
 
           {/* Date / Number / Reason — banded row (the app's gold tint standing in for the legacy
               screen's grey bar) so the master fields read as one grouped strip, same as the
-              picture's Date/Number/Remarks bar. */}
+              picture's Date/Number/Remarks bar. Number is auto-generated by the system (jv_id) —
+              per the user, 2026-08-26: "the number is auto generated by the system and must be
+              shown to us" — read-only, previewing what Save will assign, same convention as
+              SaleBillPage's own System No. */}
           <div
             className="shrink-0 grid grid-cols-1 md:grid-cols-4 gap-4 mb-4 p-4 rounded-lg border"
             style={{ background: 'rgba(176,141,87,0.06)', borderColor: 'var(--border-color)' }}
@@ -583,12 +868,13 @@ export default function JournalVoucherPage() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                Number <span className="text-slate-400 font-normal normal-case">— optional</span>
-              </label>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Number</label>
               <input
-                type="text" value={voucherNo} disabled={isViewMode} onChange={e => setVoucherNo(e.target.value)}
-                placeholder="Manual voucher #..." className="soleria-input" style={{ fontSize: '13px' }}
+                type="text"
+                value={jvId != null ? `#${jvId}` : `#${nextJvNoPreview} (pending)`}
+                disabled
+                className="soleria-input bg-gray-50 text-gray-500 border-gray-200 font-mono"
+                style={{ fontSize: '13px' }}
               />
             </div>
             <div className="md:col-span-2">
@@ -602,86 +888,177 @@ export default function JournalVoucherPage() {
             </div>
           </div>
 
-          {/* Line items — flex-1 so it grows to fill whatever space entryCardHeight (above)
-              leaves after every other section takes its natural size (same treatment as
-              PurchasePage/SaleBillPage's item tables). The header row is sticky within the
-              scroll box so column labels stay visible past the first screenful of rows. */}
+          {/* Entry strip (ref-pic jv2.0's own bound-record pattern) — A/C Code + Account
+              Description + a single signed Amount on one row, Narration on the next. This is the
+              ONE "current line" being typed; Enter on Narration commits it into the grid below
+              (handleCommitLine) and resets the strip back to A/C Code. Clicking a grid row loads
+              it back in here for editing. */}
+          {!isViewMode && (
+          <div className="shrink-0 mb-3 p-3 rounded-lg border" style={{ background: 'rgba(176,141,87,0.06)', borderColor: 'var(--border-color)' }}>
+            <div className="grid gap-3 mb-2" style={{ gridTemplateColumns: '1fr 2fr 160px' }}>
+              <div className="relative">
+                <label className="block text-xs font-medium text-slate-600 mb-1">A/C Code <span className="text-red-500 font-bold">*</span></label>
+                <input
+                  ref={entryAccountTriggerRef}
+                  type="text"
+                  value={entry.baSearchText}
+                  onChange={e => setEntry(prev => ({ ...prev, baSearchText: e.target.value }))}
+                  onKeyDown={handleEntryAccountKeyDown}
+                  placeholder="Type an account name, or press Enter to search..."
+                  className="soleria-input pr-8"
+                  style={{ fontSize: '13px' }}
+                />
+                <button
+                  type="button"
+                  onClick={openEntryAccountModal}
+                  title="Browse all accounts"
+                  className="absolute right-2 bottom-2 p-0.5 text-slate-400 hover:text-slate-600"
+                >
+                  <ChevronDown size={14} />
+                </button>
+                <SearchModal
+                  isOpen={isEntryAccountModalOpen}
+                  title="Select Account"
+                  options={accountOptions}
+                  value={entry.baId}
+                  onSelect={handleEntryAccountSelect}
+                  onClose={() => setIsEntryAccountModalOpen(false)}
+                  searchPlaceholder="Search account..."
+                  initialSearch={entryAccountModalSeed}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Account Description</label>
+                <input
+                  type="text"
+                  value={accounts.find(a => String(a.ba_id) === entry.baId)?.name ?? ''}
+                  disabled
+                  placeholder="—"
+                  className="soleria-input bg-gray-100 text-gray-500"
+                  style={{ fontSize: '13px' }}
+                />
+              </div>
+              <div>
+                {/* Single signed Amount, not separate Debit/Credit boxes — per the user
+                    (2026-08-26): "when we enter price if it is positive... we are doing credit
+                    and if it's negative it is debit". handleCommitLine splits this into the
+                    committed line's own debit/credit on Enter. */}
+                <label className="block text-xs font-medium text-slate-600 mb-1">Amount <span className="text-red-500 font-bold">*</span></label>
+                <input
+                  type="number"
+                  value={entry.amount || ''}
+                  onChange={e => setEntry(prev => ({ ...prev, amount: parseFloat(e.target.value) || 0 }))}
+                  placeholder="+credit / -debit"
+                  className="soleria-input font-mono text-right"
+                  style={{ fontSize: '13px' }}
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Narration</label>
+              <input
+                type="text"
+                value={entry.narration}
+                onChange={e => setEntry(prev => ({ ...prev, narration: e.target.value }))}
+                onKeyDown={handleEntryLastFieldKeyDown}
+                placeholder="Optional note for this line..."
+                className="soleria-input"
+                style={{ fontSize: '13px' }}
+              />
+            </div>
+            {editingIndex != null && (
+              <div className="mt-2 flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-xs">
+                <span className="text-blue-700 font-semibold">Editing an existing line — commit (Enter on Narration) to save, or cancel.</span>
+                <button type="button" onClick={() => { setEditingIndex(null); setEntry(emptyEntry()); }} className="text-blue-600 hover:text-blue-800 font-semibold underline">
+                  Cancel
+                </button>
+              </div>
+            )}
+            <div className="mt-2">
+              <button type="button" onClick={handleCommitLine} className="px-3 py-1 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d]">
+                {editingIndex != null ? 'Update Line' : 'Add Line'}
+              </button>
+            </div>
+          </div>
+          )}
+
+          {/* Committed lines — read-only grid, matching ref-pic's own columns exactly. Click a
+              row to load it back into the entry strip above for editing. No per-row delete —
+              that's the toolbar's own Delete button, enabled only while a row is selected. */}
           <div className="flex-1 min-h-0 mb-4 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 pl-4" style={{ minWidth: '220px' }}>A/C Code</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 pl-4" style={{ minWidth: '160px' }}>A/C Code</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3">Account Description</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3">Narration</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: '140px' }}>Debit (NAAM)</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: '140px' }}>Credit (JAMMA)</th>
-                  {!isViewMode && <th className="sticky top-0 z-10 bg-slate-50 p-3" style={{ width: '50px' }}></th>}
                 </tr>
               </thead>
               <tbody>
-                {lines.map(line => {
+                {lines.map((line, idx) => {
                   const selectedAccount = accounts.find(a => a.ba_id === Number(line.baId));
                   return (
-                    <tr key={line.uid} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
-                      <td className="p-2 pl-4">
-                        <SearchableSelect
-                          options={accountOptions} value={line.baId}
-                          onChange={v => updateLine(line.uid, 'baId', v)}
-                          placeholder="Search account..." disabled={isViewMode}
-                        />
+                    <tr
+                      key={line.uid}
+                      onClick={() => handleRowClick(idx)}
+                      className={`border-b cursor-pointer hover:bg-slate-50/55 transition-colors ${idx === editingIndex ? 'bg-blue-50' : ''}`}
+                      style={{ borderColor: 'var(--border-table)' }}
+                    >
+                      <td className="p-2 pl-4 font-mono text-xs text-slate-600">{selectedAccount?.code ?? '—'}</td>
+                      <td className="p-2 text-xs text-slate-800 font-semibold">
+                        {selectedAccount ? selectedAccount.name : (line.baSearchText || '—')}
                       </td>
-                      <td className="p-2 text-xs text-slate-600 font-medium">
-                        {selectedAccount ? `${selectedAccount.name} (${selectedAccount.code})` : '—'}
-                      </td>
-                      <td className="p-2">
-                        <input type="text" value={line.narration} disabled={isViewMode}
-                          onChange={e => updateLine(line.uid, 'narration', e.target.value)}
-                          placeholder="Optional note for this line..." className="soleria-input text-xs" />
-                      </td>
-                      <td className="p-2">
-                        <input type="number" min={0} value={line.debit || ''} disabled={isViewMode}
-                          onChange={e => updateLine(line.uid, 'debit', Math.max(0, parseInt(e.target.value) || 0))}
-                          placeholder="0" className="soleria-input font-mono text-right" />
-                      </td>
-                      <td className="p-2">
-                        <input type="number" min={0} value={line.credit || ''} disabled={isViewMode}
-                          onChange={e => updateLine(line.uid, 'credit', Math.max(0, parseInt(e.target.value) || 0))}
-                          placeholder="0" className="soleria-input font-mono text-right" />
-                      </td>
-                      {!isViewMode && (
-                        <td className="p-2 text-center">
-                          <button type="button" onClick={() => removeLine(line.uid)} disabled={lines.length <= 2}
-                            className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title="Remove Row">
-                            <Trash2 size={15} />
-                          </button>
-                        </td>
-                      )}
+                      <td className="p-2 text-xs text-slate-600">{line.narration || '—'}</td>
+                      <td className="p-2 text-right font-mono text-sm text-slate-700">{line.debit > 0 ? formatCurrency(line.debit) : '-'}</td>
+                      <td className="p-2 text-right font-mono text-sm text-slate-700">{line.credit > 0 ? formatCurrency(line.credit) : '-'}</td>
                     </tr>
                   );
                 })}
-              </tbody>
-              <tfoot>
-                <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                  <td colSpan={3} className="p-3 pl-4 text-right font-lora">Net Total</td>
-                  <td className="p-3 text-right font-mono text-emerald-800">{formatCurrency(totals.totalDebit)}</td>
-                  <td className="p-3 text-right font-mono text-rose-800">{formatCurrency(totals.totalCredit)}</td>
-                  {!isViewMode && <td />}
-                </tr>
-                {totals.difference !== 0 && (
+                {lines.length === 0 && (
                   <tr>
-                    <td colSpan={isViewMode ? 5 : 6} className="p-2 pl-4 text-xs font-semibold text-rose-600">
-                      Out of balance by {formatCurrency(Math.abs(totals.difference))} — debit and credit must match before saving.
+                    <td colSpan={5} className="p-3 text-center text-xs text-slate-400">
+                      No lines added yet.
                     </td>
                   </tr>
                 )}
-              </tfoot>
+              </tbody>
             </table>
           </div>
 
-          {!isViewMode && (
-            <button type="button" onClick={addLine} className="shrink-0 btn-outline flex items-center gap-1.5 px-4 py-2 text-sm">
-              <Plus size={16} /> Add Line
-            </button>
+          {/* Bottom totals row — same small-boxed-fields style as SaleBillPage's own (per the
+              user, 2026-08-26: "the net total must be shown as we have in the sale bill"), not a
+              table tfoot. Total Debit/Total Credit are plain grey boxes; Net Total (their
+              difference — the actual result of the math) is the dark/gold emphasized box, exactly
+              like Sale Bill's own "Rs." field, except it flips to rose while out of balance
+              (Save's own Net-Total-must-be-0 rule is checking this same number). */}
+          <div className="shrink-0 flex flex-wrap items-center justify-end gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Debit</label>
+              <input type="text" value={formatCurrency(totals.totalDebit)} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '130px' }} />
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Credit</label>
+              <input type="text" value={formatCurrency(totals.totalCredit)} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '130px' }} />
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Net Total</label>
+              <input
+                type="text"
+                value={formatCurrency(totals.difference)}
+                disabled
+                className="soleria-input soleria-input-compact text-right font-mono font-bold"
+                style={totals.difference === 0
+                  ? { width: '140px', color: 'var(--brand-gold)', background: '#111c2a', borderColor: '#334155' }
+                  : { width: '140px', color: '#fff', background: '#be123c', borderColor: '#9f1239' }}
+              />
+            </div>
+          </div>
+          {totals.difference !== 0 && (
+            <p className="shrink-0 text-xs font-semibold text-rose-600 text-right mt-1">
+              Out of balance by {formatCurrency(Math.abs(totals.difference))} — debit and credit must match before saving.
+            </p>
           )}
         </form>
         </>

@@ -831,6 +831,66 @@ export interface UnpostedJournalVoucherRow {
   total_debit: number;
 }
 
+// Stock Voucher — a manual "add stock" document (legacy Journal Entry-style bound-record screen):
+// N lines, each a finished-goods variant + cartons/pairs, under one Date/Store/Remarks header.
+// Replaces the old inline "+ Add Stock" flow on the Current Stock report, which recorded every
+// manual addition AS production — this is its own document type instead, same architecture as
+// Journal Voucher (DRAFT by default, status flips to CONFIRMED only on post()).
+export interface StockVoucherLineInput {
+  variant_id: number;
+  cartons: number;
+  pairs: number;
+}
+
+export interface StockVoucherLineRow extends StockVoucherLineInput {
+  line_id: number;
+  line_no: number;
+  article_id?: number;
+  article_code?: string;
+  article_name?: string;
+  color?: string;
+}
+
+export interface StockVoucherRow {
+  stock_voucher_id: number;
+  voucher_date: string;
+  store_id: number | null;
+  store_name?: string;
+  remarks: string | null;
+  status: 'CONFIRMED' | 'DRAFT';
+  /** Only present on get()/create()/update()/post()/unpost() — list() returns the rolled-up
+   *  totals below without the per-line detail, to keep the listing query a single aggregate. */
+  lines?: StockVoucherLineRow[];
+  line_count: number;
+  total_cartons: number;
+  total_pairs: number;
+}
+
+export interface StockVoucherCreateInput {
+  voucher_date: string;
+  store_id?: number | null;
+  remarks?: string;
+  lines: StockVoucherLineInput[];
+}
+
+export interface StockVoucherListFilters {
+  store_id?: number;
+  status?: 'CONFIRMED' | 'DRAFT';
+  date_from?: string;
+  date_to?: string;
+  /** Matches the header (remarks) or any line (article code/name, color) — a search box doesn't
+   *  need to know which field it landed in. */
+  search?: string;
+}
+
+/** A stock voucher still awaiting posting, for the Post All confirmation list. */
+export interface UnpostedStockVoucherRow {
+  stock_voucher_id: number;
+  voucher_date: string;
+  remarks: string | null;
+  total_pairs: number;
+}
+
 export interface DepositRow {
   deposit_id: number;
   deposit_date: string;
@@ -1952,6 +2012,17 @@ declare global {
         postAll: (payload?: { ids?: number[] }) => Promise<ApiResult<PostAllResult<'jv_id'>>>;
         counterAccount: () => Promise<ApiResult<BusinessAccountRow>>;
       };
+      stockVouchers: {
+        list: (payload?: StockVoucherListFilters) => Promise<ApiResult<StockVoucherRow[]>>;
+        get: (payload: { id: number }) => Promise<ApiResult<StockVoucherRow>>;
+        create: (payload: StockVoucherCreateInput) => Promise<ApiResult<StockVoucherRow>>;
+        update: (payload: { id: number } & StockVoucherCreateInput) => Promise<ApiResult<StockVoucherRow>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
+        post: (payload: { id: number }) => Promise<ApiResult<StockVoucherRow>>;
+        unpost: (payload: { id: number }) => Promise<ApiResult<StockVoucherRow>>;
+        listUnposted: () => Promise<ApiResult<UnpostedStockVoucherRow[]>>;
+        postAll: (payload?: { ids?: number[] }) => Promise<ApiResult<PostAllResult<'stock_voucher_id'>>>;
+      };
       settlements: {
         list: (payload?: SettlementListFilters) => Promise<ApiResult<SettlementRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<SettlementRow>>;
@@ -2791,6 +2862,31 @@ export const journalVouchers = {
     window.api ? window.api.journalVouchers.postAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE),
   counterAccount: () =>
     window.api ? window.api.journalVouchers.counterAccount() : Promise.resolve(NO_BRIDGE),
+};
+
+function normalizeStockVoucherRow<T extends { voucher_date: string }>(row: T): T {
+  return { ...row, voucher_date: normalizeDate(row.voucher_date) };
+}
+
+export const stockVouchers = {
+  list: (payload?: StockVoucherListFilters) =>
+    window.api ? window.api.stockVouchers.list(payload).then(r => mapResult(r, rows => rows.map(normalizeStockVoucherRow))) : Promise.resolve(NO_BRIDGE),
+  get: (id: number) =>
+    window.api ? window.api.stockVouchers.get({ id }).then(r => mapResult(r, normalizeStockVoucherRow)) : Promise.resolve(NO_BRIDGE),
+  create: (payload: StockVoucherCreateInput) =>
+    window.api ? window.api.stockVouchers.create(payload).then(r => mapResult(r, normalizeStockVoucherRow)) : Promise.resolve(NO_BRIDGE),
+  update: (id: number, payload: StockVoucherCreateInput) =>
+    window.api ? window.api.stockVouchers.update({ id, ...payload }).then(r => mapResult(r, normalizeStockVoucherRow)) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.stockVouchers.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
+  post: (id: number) =>
+    window.api ? window.api.stockVouchers.post({ id }).then(r => mapResult(r, normalizeStockVoucherRow)) : Promise.resolve(NO_BRIDGE),
+  unpost: (id: number) =>
+    window.api ? window.api.stockVouchers.unpost({ id }).then(r => mapResult(r, normalizeStockVoucherRow)) : Promise.resolve(NO_BRIDGE),
+  listUnposted: () =>
+    window.api ? window.api.stockVouchers.listUnposted() : Promise.resolve(NO_BRIDGE),
+  postAll: (ids?: number[]) =>
+    window.api ? window.api.stockVouchers.postAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE),
 };
 
 export const settlements = {
