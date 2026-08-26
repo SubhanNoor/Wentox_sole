@@ -82,7 +82,9 @@ body {
   transition-duration: 150ms;
   border-color: var(--border-color);
   background: var(--card-surface);
-  color: var(--dark-heading);
+  /* Typed text reads as true black, not the dark-navy heading tint — flagged directly by the
+     user as too washed-out to read comfortably across a data-entry-heavy screen. */
+  color: #000000;
   font-family: 'Inter', sans-serif;
   min-width: 0;
   width: 100%;
@@ -92,6 +94,14 @@ body {
 .soleria-input:focus {
   border-color: var(--brand-gold);
   box-shadow: 0 0 0 3px rgba(176,141,87,0.15);
+}
+
+/* Placeholder ("text holder") text — darkened from the very light browser default so an empty
+   field's hint is actually legible at a glance, while staying visibly lighter than real typed
+   text so the two are never confused. */
+.soleria-input::placeholder {
+  color: #64748b; /* slate-500 */
+  opacity: 1;
 }
 
 /* Denser variant for line-item table cells (Cartons/Rate/Discount %) — same look, smaller box */
@@ -200,8 +210,9 @@ body {
   background: rgba(27,42,65,0.06);
 }
 
-/* Toolbar icon-over-label button (System_architecture/pages_design.md §1) — small square
-   buttons, colored icon on top, tiny bold label underneath, packed tightly in one strip. */
+/* Legacy-desktop-style toolbar button: small square, icon on top, label underneath — used on the
+   record-entry toolbars (Purchase, Sale Bill, ...) to match ref-pics/batch2/sale bill.png instead
+   of the pill-shaped colored action buttons used elsewhere in the app. */
 .toolbar-btn {
   display: flex;
   flex-direction: column;
@@ -217,8 +228,16 @@ body {
   color: #475569; /* slate-600 */
   transition: background-color 150ms ease;
 }
-.toolbar-btn:hover:not(:disabled) { background: rgba(27,42,65,0.06); }
-.toolbar-btn:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+
+.toolbar-btn:hover:not(:disabled) {
+  background: rgba(27,42,65,0.06);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 
 /* Danger button */
 .btn-danger {

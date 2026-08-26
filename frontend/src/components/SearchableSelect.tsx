@@ -275,7 +275,7 @@ export default function SearchableSelect({
         }}
         className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
       >
-        <span className={selectedOption ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
+        <span className={selectedOption ? 'text-black font-semibold' : 'text-slate-500'}>
           {selectedOption ? selectedOption.label : placeholder}
         </span>
         <ChevronDown size={16} className={`text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180 text-[var(--brand-gold)]' : ''}`} />
@@ -303,7 +303,7 @@ export default function SearchableSelect({
               onChange={e => setSearch(e.target.value)}
               onKeyDown={handleSearchKeyDown}
               placeholder={searchPlaceholder}
-              className="w-full bg-transparent border-none outline-none text-xs font-semibold text-slate-800 placeholder-slate-400 p-1"
+              className="w-full bg-transparent border-none outline-none text-xs font-semibold text-black placeholder-slate-500 p-1"
               autoFocus
             />
           </div>
@@ -330,10 +330,12 @@ export default function SearchableSelect({
                     }}
                     className={`w-full text-left px-3.5 py-2 text-xs font-medium transition-colors flex items-center justify-between cursor-pointer ${
                       isSelected
-                        ? 'bg-[var(--brand-gold)] text-white font-semibold'
+                        ? 'bg-[var(--brand-gold)] text-white font-bold'
                         : isHighlighted
-                        ? 'bg-[#fbf7f0] text-[var(--brand-navy)]'
-                        : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'
+                        // Darkened from a barely-visible pale cream — flagged directly by the user
+                        // as too washed-out to tell apart from an unhighlighted row at a glance.
+                        ? 'bg-[var(--brand-navy)] text-white font-bold'
+                        : 'text-black hover:bg-[var(--brand-navy)] hover:text-white'
                     }`}
                   >
                     <span>{opt.label}</span>

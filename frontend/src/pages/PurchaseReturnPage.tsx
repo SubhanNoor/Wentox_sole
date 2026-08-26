@@ -1,16 +1,18 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import SearchableSelect from '@/components/SearchableSelect';
+import SearchModal from '@/components/SearchModal';
 import * as api from '@/lib/api';
 import type {
-  VendorRow, CityRow, PurchaseRow, PurchaseReturnRow, PurchaseReturnCreateInput, PurchaseReturnItemInput,
-  DraftPurchaseReturnRow, ConfirmAllResult
+  VendorRow, CityRow, PurchaseRow, PurchaseItemRow, PurchaseReturnRow, PurchaseReturnCreateInput,
+  PurchaseReturnItemInput, DraftPurchaseReturnRow, ConfirmAllResult
 } from '@/lib/api';
 import { formatDate, getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
-import { focusFirstField } from '@/lib/fieldNav';
-import { useHeldKey } from '@/hooks/useHeldKey';
-import { Plus, Trash2, Save, Undo2, Edit, CheckCircle2 } from 'lucide-react';
+import { focusNextField } from '@/lib/fieldNav';
+import {
+  Plus, Trash2, Save, Undo2, Edit, CheckCircle2, XCircle, ChevronDown,
+  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight
+} from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
@@ -24,15 +26,22 @@ interface UiItem {
   totalPrice: number;
 }
 
-function emptyItem(): UiItem {
-  return {
-    uid: 'pri_' + Date.now() + Math.random().toString(36).slice(2, 7),
-    materialName: '',
-    unit: 'Meters',
-    quantity: 0,
-    pricePerUnit: 0,
-    totalPrice: 0
-  };
+// The live article-entry row (not yet committed to `items`) — matches PurchasePage's pattern
+// (see frontend/pages_design.md §4): one editable article field set above the grid, not one
+// editable row per grid entry.
+interface CurrentRow {
+  materialName: string;
+  unit: string;
+  quantity: number;
+  pricePerUnit: number;
+}
+
+function emptyCurrentRow(): CurrentRow {
+  return { materialName: '', unit: 'Meters', quantity: 0, pricePerUnit: 0 };
+}
+
+function newItemUid(): string {
+  return 'pri_' + Date.now() + Math.random().toString(36).slice(2, 7);
 }
 
 export default function PurchaseReturnPage() {
@@ -84,8 +93,14 @@ export default function PurchaseReturnPage() {
   const [vendorId, setVendorId] = useState('');
   const [billNo, setBillNo] = useState('');
   const [remarks, setRemarks] = useState('');
-  const [items, setItems] = useState<UiItem[]>([emptyItem()]);
-  const [customUnitRows, setCustomUnitRows] = useState<Record<string, boolean>>({});
+  // `items` holds only COMMITTED rows — the grid below the entry fields. The row currently being
+  // typed lives separately in `currentRow` until Enter (or the Add button) commits it.
+  const [items, setItems] = useState<UiItem[]>([]);
+  const [currentRow, setCurrentRow] = useState<CurrentRow>(emptyCurrentRow());
+  // Set while re-editing an existing grid row (clicked from the list below) — commit updates that
+  // row in place instead of appending a new one. null means the entry fields are building a new row.
+  const [editingUid, setEditingUid] = useState<string | null>(null);
+  const [isCustomUnit, setIsCustomUnit] = useState(false);
   const [copyFromPurchaseId, setCopyFromPurchaseId] = useState('');
 
   const [errorMsg, setErrorMsg] = useState('');
@@ -102,20 +117,78 @@ export default function PurchaseReturnPage() {
     return vendors.find(v => v.vendor_id === Number(vendorId));
   }, [vendorId, vendors]);
 
-  // Prior purchases from this vendor, to optionally prefill a return
+  // Preview of the System Bill No. a brand-new return will get — see PurchasePage's identical
+  // nextSystemBillNo for why this is the next draft_purchase_returns.draft_id, not the next real
+  // return_id (a separate IDENTITY sequence only assigned later, on Post), and why it's a preview
+  // rather than a guarantee.
+  const nextSystemBillNo = useMemo(
+    () => Math.max(0, ...unpostedReturns.map(d => d.draft_id)) + 1,
+    [unpostedReturns]
+  );
+
+  // Vendor field opens a centered "find" modal (SearchModal) instead of SearchableSelect's small
+  // anchored panel — see frontend/pages_design.md §5. Enter (or Arrow Up/Down) on the field opens
+  // it; committing a vendor closes it and advances focus via the app's G-01 rule.
+  const vendorTriggerRef = useRef<HTMLButtonElement>(null);
+  const [isVendorModalOpen, setIsVendorModalOpen] = useState(false);
+
+  const openVendorModal = () => {
+    if (isViewMode) return;
+    setIsVendorModalOpen(true);
+  };
+
+  function handleVendorTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      openVendorModal();
+    }
+  }
+
+  function handleVendorSelect(newVendorId: string) {
+    setVendorId(newVendorId);
+    setCopyFromPurchaseId('');
+    setSourcePurchaseItems([]);
+    // PR-01: forget which name was already priced — the same material has a different last-paid
+    // price under a different vendor, so the entry row re-looks-up on its next blur.
+    lastResolvedNameRef.current = '';
+    setIsVendorModalOpen(false);
+    requestAnimationFrame(() => focusNextField(vendorTriggerRef.current));
+  }
+
+  // Prior purchases from this vendor, to optionally prefill a return. The label carries BOTH the
+  // system bill no. (#purchase_id, auto-assigned, never typed) and the vendor's own bill_no, so
+  // typing either into the search box finds the right purchase — SearchableSelect matches typed
+  // text against this label (and against `value`, which is also the system number, redundantly).
   const priorPurchaseOptions = useMemo(() => {
     return priorPurchases
       .filter(p => !vendorId || p.vendor_id === Number(vendorId))
       .map(p => ({
         value: String(p.purchase_id),
-        label: `${formatDate(p.purchase_date)} — ${formatCurrency(p.total_value)}`
+        label: `#${p.purchase_id} · ${p.bill_no || 'No Vendor Bill No.'} · ${formatDate(p.purchase_date)} — ${formatCurrency(p.total_value)}`
       }));
   }, [priorPurchases, vendorId]);
 
+  // isCopiedFromPurchase: true once an actual purchase (not "Manual entry") is picked — Vendor,
+  // Vendor Bill No. and Remarks then all come FROM that purchase and lock (disabled, alongside
+  // isViewMode) so they can't quietly drift from the document being returned. Picking "Manual
+  // entry" again unlocks them for hand typing, per the user's explicit "non editable or I can
+  // choose manually" (2026-08-26).
+  const isCopiedFromPurchase = !!copyFromPurchaseId;
+
+  // The picked purchase's own items — copied straight into `items` (see handleCopyFromPurchase
+  // below), same as vendor/bill no./remarks, but ALSO kept here on the side as a validation
+  // reference: any further edit through the entry row (bumping a copied row's quantity, or typing
+  // in an extra article afterward) is checked against this list — must exist on the purchase, and
+  // its quantity can't exceed what was actually purchased — see articleAgainstPurchaseError below.
+  const [sourcePurchaseItems, setSourcePurchaseItems] = useState<PurchaseItemRow[]>([]);
+
   const handleCopyFromPurchase = async (purchaseIdStr: string) => {
     setCopyFromPurchaseId(purchaseIdStr);
-    if (!purchaseIdStr) return;
-    // list() rows never carry items — fetch the full record before cloning its line items.
+    if (!purchaseIdStr) {
+      setSourcePurchaseItems([]);
+      return;
+    }
+    // list() rows never carry items — fetch the full record before reading its line items.
     const res = await api.purchases.get(Number(purchaseIdStr));
     if (!res.ok) {
       setErrorMsg('Failed to load prior purchase: ' + res.error.message);
@@ -123,49 +196,122 @@ export default function PurchaseReturnPage() {
     }
     const purchase = res.data;
     setVendorId(String(purchase.vendor_id));
-    const copied = purchase.items.map(it => ({
-      uid: 'pri_' + Date.now() + Math.random().toString(36).slice(2, 7),
+    // Show the SOURCE purchase's own Vendor Bill No. and Remarks in those fields too — previously
+    // only the vendor and items were copied, so a picked purchase's own bill no./remarks were
+    // visible nowhere but the picker's own trigger label. Reported directly by the user.
+    setBillNo(purchase.bill_no || '');
+    setRemarks(purchase.remarks || '');
+    setSourcePurchaseItems(purchase.items);
+    // Corrected per the user (2026-08-26): articles from the picked purchase DO show/auto-copy,
+    // same as vendor/bill no./remarks — the "not auto-copied" behavior only ever applies to Manual
+    // entry (which has nothing to copy from in the first place, so it was never really "not
+    // copying" anything). sourcePurchaseItems (above) still exists purely so any FURTHER edit —
+    // bumping a copied row's quantity, or adding an extra article afterward — stays validated
+    // against what was actually purchased (articleAgainstPurchaseError below).
+    setItems(purchase.items.map(it => ({
+      uid: newItemUid(),
       materialName: it.material_name || '',
       unit: it.unit,
       quantity: it.quantity,
       pricePerUnit: it.price_per_unit,
       totalPrice: it.total_price
-    }));
-    setItems(copied);
-    // PR-01: these lines are copied straight off the source purchase, so they already carry that
-    // purchase's own rates — which beats "the last posted purchase of this material" when the two
-    // differ. Mark them resolved so tabbing through the name fields doesn't re-look-up and
-    // replace a rate taken from the very document being returned.
-    resolvedNames.current = Object.fromEntries(copied.map(it => [it.uid, it.materialName.trim()]));
+    })));
+    setCurrentRow(emptyCurrentRow());
+    setEditingUid(null);
+    setIsCustomUnit(false);
   };
 
-  const updateItem = (uid: string, field: keyof UiItem, value: string | number) => {
-    setItems(prev => prev.map(it => {
-      if (it.uid !== uid) return it;
-      const updated = { ...it, [field]: value };
-      if (field === 'quantity' || field === 'pricePerUnit') {
-        updated.totalPrice = Number(updated.quantity) * Number(updated.pricePerUnit);
-      }
-      return updated;
-    }));
+  // Validates one article's name + quantity against `sourcePurchaseItems` — only while
+  // isCopiedFromPurchase (Manual entry has no purchase to validate against, so it's always
+  // unrestricted). `excludeUid` leaves the row currently being edited out of the "already used"
+  // running total, so re-editing a row's own quantity doesn't count itself twice.
+  function articleAgainstPurchaseError(materialName: string, quantity: number, excludeUid?: string | null): string | null {
+    if (!isCopiedFromPurchase) return null;
+    const name = materialName.trim().toLowerCase();
+    if (!name) return null;
+
+    const sourceItem = sourcePurchaseItems.find(it => (it.material_name || '').trim().toLowerCase() === name);
+    if (!sourceItem) {
+      return `"${materialName.trim()}" was not on the purchased bill — it can't be returned against it.`;
+    }
+    const alreadyUsed = items
+      .filter(it => it.uid !== excludeUid && it.materialName.trim().toLowerCase() === name)
+      .reduce((s, it) => s + it.quantity, 0);
+    const remaining = sourceItem.quantity - alreadyUsed;
+    if (quantity > remaining) {
+      return `Only ${remaining} ${sourceItem.unit} of "${materialName.trim()}" left to return (purchased ${sourceItem.quantity}, already used ${alreadyUsed}).`;
+    }
+    return null;
+  }
+
+  // "Find Purchase to Return" opens the same big centered SearchModal as Vendor (§5 of
+  // frontend/pages_design.md) rather than SearchableSelect's small anchored panel — typing either
+  // the vendor's own bill no. or the system bill no. finds it (priorPurchaseOptions' label above
+  // carries both). Placed as the very first field after Date: picking a purchase here fills the
+  // vendor and items for you, so it doesn't need Vendor picked first the way it used to.
+  const findPurchaseTriggerRef = useRef<HTMLButtonElement>(null);
+  const [isFindPurchaseModalOpen, setIsFindPurchaseModalOpen] = useState(false);
+
+  const openFindPurchaseModal = () => {
+    if (isViewMode) return;
+    setIsFindPurchaseModalOpen(true);
   };
+
+  function handleFindPurchaseTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      openFindPurchaseModal();
+    }
+  }
+
+  async function handleFindPurchaseSelect(purchaseIdStr: string) {
+    setIsFindPurchaseModalOpen(false);
+    await handleCopyFromPurchase(purchaseIdStr);
+    requestAnimationFrame(() => focusNextField(findPurchaseTriggerRef.current));
+  }
+
+  const updateCurrentField = (field: keyof CurrentRow, value: string | number) => {
+    setCurrentRow(prev => ({ ...prev, [field]: value }));
+  };
+
+  const currentRowTotal = useMemo(
+    () => Number(currentRow.quantity) * Number(currentRow.pricePerUnit),
+    [currentRow]
+  );
 
   // PR-01: a return must credit the vendor at the price actually paid, not at whatever the user
-  // happens to type. When a line's material name is finished (blur), look up what this vendor was
-  // last paid for it on a POSTED purchase and fill in that price and its unit.
+  // happens to type. When the entry row's material name is finished (blur), look up what this
+  // vendor was last paid for it on a POSTED purchase and fill in that price and its unit.
   //
   // Keyed off blur rather than every keystroke: the name is free text, so mid-typing it names
-  // nothing. `resolvedNames` remembers the name each row was last filled from, so re-blurring an
-  // unchanged field never overwrites a price the user has since edited by hand — while genuinely
-  // changing the material does refill. Cleared when the vendor changes, since the same material
-  // has a different price per vendor.
-  const resolvedNames = useRef<Record<string, string>>({});
+  // nothing. `lastResolvedNameRef` remembers the name the entry row was last filled from, so
+  // re-blurring an unchanged field never overwrites a price the user has since edited by hand —
+  // while genuinely changing the material does refill. Cleared when the vendor changes (above),
+  // since the same material has a different price per vendor, and primed to the row's own name
+  // when reopening an existing row for edit (handleEditRow) so that doesn't immediately re-fetch
+  // and clobber a hand-edited or copied-from-purchase rate either.
+  const lastResolvedNameRef = useRef('');
 
-  const fillRateFromLastPurchase = async (uid: string, rawName: string) => {
+  const fillRateFromLastPurchase = async (rawName: string) => {
     const name = rawName.trim();
     if (!name || !vendorId) return;
-    if (resolvedNames.current[uid] === name) return;
-    resolvedNames.current[uid] = name;
+    if (lastResolvedNameRef.current === name) return;
+    lastResolvedNameRef.current = name;
+
+    // While copied from a specific purchase, use THAT bill's own rate for this article — it's the
+    // exact price actually paid on the document being returned, which beats "whatever was last
+    // posted for this vendor+material" (fillRateFromLastPurchase's usual API lookup, still used in
+    // Manual entry mode below) when the two happen to differ.
+    if (isCopiedFromPurchase) {
+      const sourceItem = sourcePurchaseItems.find(it => (it.material_name || '').trim().toLowerCase() === name.toLowerCase());
+      if (sourceItem) {
+        setCurrentRow(prev => ({ ...prev, pricePerUnit: sourceItem.price_per_unit, unit: sourceItem.unit }));
+        setIsCustomUnit(!UNIT_PRESETS.includes(sourceItem.unit));
+      }
+      // No match here is fine to leave silent — articleAgainstPurchaseError (shown live below the
+      // field) is what actually reports "not on this bill" and blocks committing the row.
+      return;
+    }
 
     const res = await api.purchases.lastPurchasedRate(Number(vendorId), name);
     // No prior posted purchase (data === null) leaves the line exactly as typed — a first-time
@@ -173,22 +319,93 @@ export default function PurchaseReturnPage() {
     if (!res.ok || !res.data) return;
     const { price_per_unit, unit } = res.data;
 
-    setItems(prev => prev.map(it => it.uid === uid
-      ? { ...it, pricePerUnit: price_per_unit, unit, totalPrice: Number(it.quantity) * price_per_unit }
-      : it));
+    setCurrentRow(prev => ({ ...prev, pricePerUnit: price_per_unit, unit }));
     // Keep the unit control in sync: a fetched unit outside the presets needs the free-text box
-    // showing, or the select would silently snap the line back to a preset.
-    setCustomUnitRows(prev => ({ ...prev, [uid]: !UNIT_PRESETS.includes(unit) }));
+    // showing, or the select would silently snap the row back to a preset.
+    setIsCustomUnit(!UNIT_PRESETS.includes(unit));
   };
 
-  const addItemRow = () => setItems(prev => [...prev, emptyItem()]);
+  // Article entry, matching PurchasePage's pattern (frontend/pages_design.md §4): ONE editable
+  // article field set above the grid, not one editable row per grid entry. Committing (Enter on
+  // Price, or the Add button) either appends a new grid row or — while `editingUid` is set —
+  // updates that row in place, then always clears the entry fields and refocuses Material for the
+  // next article. Save/Post is reached only by clicking the toolbar button, never by walking off
+  // the entry row with Enter.
+  const materialNameRef = useRef<HTMLInputElement>(null);
 
-  // Keyboard entry without the mouse — same pattern as SaleBillPage/SaleReturnPage/PurchasePage.
-  // G-01's generic Enter-walk already carries fields forward within a row and into an EXISTING
-  // next row; this only steps in at the boundary (Enter on the last field of the last row), where
-  // it appends a blank row and focuses into it. stopPropagation stops AppLayout's own window-level
-  // Enter handler from also firing on the same keydown and clicking Save before the new row exists.
-  const materialNameRefs = useRef<(HTMLInputElement | null)[]>([]);
+  // Live, as the entry row's own fields change — recomputed on every keystroke of Material/
+  // Quantity rather than only on commit, so the message (rendered below the entry row) appears
+  // before the user even tries to commit, not as a surprise rejection afterward.
+  const currentRowError = useMemo(
+    () => articleAgainstPurchaseError(currentRow.materialName, currentRow.quantity, editingUid),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentRow.materialName, currentRow.quantity, editingUid, isCopiedFromPurchase, sourcePurchaseItems, items]
+  );
+
+  const commitCurrentRow = () => {
+    const materialName = currentRow.materialName.trim();
+    const unit = currentRow.unit.trim();
+    if (!materialName || !unit || !(currentRow.quantity > 0) || !(currentRow.pricePerUnit > 0)) {
+      return; // incomplete row — nothing to commit yet, leave focus where it is
+    }
+    if (currentRowError) {
+      setErrorMsg(currentRowError);
+      return; // blocked — must match an article/quantity actually on the picked purchase
+    }
+    const totalPrice = currentRow.quantity * currentRow.pricePerUnit;
+    if (editingUid) {
+      setItems(prev => prev.map(it => it.uid === editingUid
+        ? { ...it, materialName, unit, quantity: currentRow.quantity, pricePerUnit: currentRow.pricePerUnit, totalPrice }
+        : it));
+    } else {
+      setItems(prev => [...prev, {
+        uid: newItemUid(), materialName, unit,
+        quantity: currentRow.quantity, pricePerUnit: currentRow.pricePerUnit, totalPrice
+      }]);
+    }
+    setCurrentRow(emptyCurrentRow());
+    setEditingUid(null);
+    setIsCustomUnit(false);
+    requestAnimationFrame(() => materialNameRef.current?.focus());
+  };
+
+  function handleRateKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    e.stopPropagation(); // stop AppLayout's own Enter handler from walking this keystroke to Save
+    commitCurrentRow();
+  }
+
+  // Clicking a committed row (below) loads it back into the entry fields for editing — the row
+  // stays in the grid (not pulled out) until the edit is committed, so it never looks "missing".
+  // PR-01: priming lastResolvedNameRef to this row's own name means reopening it for edit doesn't
+  // immediately re-fetch and clobber a hand-edited or copied-from-purchase rate on the first blur.
+  const handleEditRow = (item: UiItem) => {
+    if (isViewMode) return;
+    setCurrentRow({ materialName: item.materialName, unit: item.unit, quantity: item.quantity, pricePerUnit: item.pricePerUnit });
+    setEditingUid(item.uid);
+    setIsCustomUnit(!UNIT_PRESETS.includes(item.unit));
+    lastResolvedNameRef.current = item.materialName.trim();
+    requestAnimationFrame(() => materialNameRef.current?.focus());
+  };
+
+  const cancelEditRow = () => {
+    setCurrentRow(emptyCurrentRow());
+    setEditingUid(null);
+    setIsCustomUnit(false);
+  };
+
+  const removeItemRow = (uid: string) => {
+    setItems(prev => prev.filter(it => it.uid !== uid));
+    if (editingUid === uid) cancelEditRow(); // was mid-edit on the row just deleted
+  };
+
+  // Toolbar "Delete" targets the selected ARTICLE (the row clicked into the entry fields below),
+  // not the whole return — return deletion stays where it was, password-gated in the Pending
+  // Posting panel. Disabled until a row is selected (editingUid set).
+  const deleteSelectedArticle = () => {
+    if (editingUid) removeItemRow(editingUid);
+  };
 
   // Invoice card (the <form> itself — see its opening tag below) fills whatever vertical space is
   // left in the viewport below it (mirrors SaleBillPage/SaleReturnPage/PurchasePage) — the item
@@ -213,53 +430,11 @@ export default function PurchaseReturnPage() {
     return () => window.removeEventListener('resize', recompute);
   }, [mode, lookupError, successMsg, errorMsg]);
 
-  // '.' held while Enter is pressed is a genuine three-way chord alongside Shift+Enter/Ctrl+Enter
-  // below — tracked via useHeldKey since '.' isn't a real modifier key with its own event flag.
-  // Typing '.' alone (a decimal point) never triggers this: by the time Enter is a separate,
-  // later keypress, '.' has already been released. Any single stray "." that types into the field
-  // during the chord itself is harmless — the input is fully controlled by the numeric state, so
-  // the very next render overwrites it back to the real number regardless.
-  const periodHeld = useHeldKey('.');
-
-  function handleLastFieldKeyDown(e: React.KeyboardEvent) {
-    // Plain Enter is deliberately left alone here: it now does exactly what every other field
-    // does — walk to whatever's next via AppLayout's own G-01 handler, and eventually reach
-    // Save/Post. An earlier version hijacked it to always append a new line, which meant a plain
-    // Enter on the last field could never actually finish and save a bill — reported directly by
-    // the user after trying it.
-    //
-    // Adding a line is its own explicit action instead: Shift+Enter, Ctrl+Enter, or '.'+Enter, from
-    // the last field of ANY row (not only the last one) — always appends at the end, same as the
-    // "+ Add Item Row" button, and focuses into the new row. Shift+Enter is distinct from its
-    // other meaning inside a Remarks textarea (insert a literal newline) — different field, no
-    // collision.
-    if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey || periodHeld.current)) return;
-    e.preventDefault();
-    e.stopPropagation(); // stop AppLayout's own Enter handler from also walking this keystroke
-    const newRowIndex = items.length; // always the end, regardless of which row triggered this
-    addItemRow();
-    requestAnimationFrame(() => focusFirstField(materialNameRefs.current[newRowIndex]));
-  }
-
-  // A return always needs at least one row to type into, so deleting the last remaining one
-  // clears its fields back to blank instead of removing the row itself (keeping its uid, so the
-  // row doesn't remount and lose focus).
-  const removeItemRow = (uid: string) => {
-    setItems(prev => prev.length > 1
-      ? prev.filter(it => it.uid !== uid)
-      : prev.map(it => it.uid === uid ? { ...emptyItem(), uid: it.uid } : it));
-    setCustomUnitRows(prev => {
-      const next = { ...prev };
-      delete next[uid];
-      return next;
-    });
-  };
-
   const grandTotal = useMemo(() => items.reduce((s, it) => s + it.totalPrice, 0), [items]);
 
   const isValid = useMemo(() => {
     if (!vendorId || !date) return false;
-    return items.every(it => it.materialName.trim() && it.unit.trim() && it.quantity > 0 && it.pricePerUnit > 0);
+    return items.length > 0;
   }, [vendorId, date, items]);
 
   const isViewMode = mode === 'view';
@@ -272,16 +447,28 @@ export default function PurchaseReturnPage() {
     setVendorId('');
     setBillNo('');
     setRemarks('');
-    setItems([emptyItem()]);
-    setCustomUnitRows({});
+    setItems([]);
+    setCurrentRow(emptyCurrentRow());
+    setEditingUid(null);
+    setIsCustomUnit(false);
     setCopyFromPurchaseId('');
+    setSourcePurchaseItems([]);
+    lastResolvedNameRef.current = '';
     setErrorMsg('');
+  };
+
+  // "New Return" (toolbar button and the entry-tab switch) focuses Date, matching PurchasePage's
+  // startNewPurchase (frontend/pages_design.md §2).
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+  const startNewReturn = () => {
+    handleNew();
+    requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
 
   const buildPayload = (): PurchaseReturnCreateInput | null => {
     if (!vendorId) { setErrorMsg('Vendor is required.'); return null; }
     if (!date) { setErrorMsg('Date is required.'); return null; }
-    if (!isValid) { setErrorMsg('Every line item needs a material name, unit, quantity, and price per unit.'); return null; }
+    if (!isValid) { setErrorMsg('At least one article is required.'); return null; }
 
     const itemsPayload: PurchaseReturnItemInput[] = items.map(it => ({
       material_name: it.materialName.trim(),
@@ -346,19 +533,20 @@ export default function PurchaseReturnPage() {
     setBillNo(row.bill_no || '');
     setRemarks(row.remarks || '');
     setCopyFromPurchaseId('');
-    const loaded = row.items.length
-      ? row.items.map(it => ({
-          uid: 'pri_' + it.item_id,
-          materialName: it.material_name || '',
-          unit: it.unit,
-          quantity: it.quantity,
-          pricePerUnit: it.price_per_unit,
-          totalPrice: it.total_price
-        }))
-      : [emptyItem()];
-    setItems(loaded);
+    setSourcePurchaseItems([]);
+    setItems(row.items.map(it => ({
+      uid: 'pri_' + it.item_id,
+      materialName: it.material_name || '',
+      unit: it.unit,
+      quantity: it.quantity,
+      pricePerUnit: it.price_per_unit,
+      totalPrice: it.total_price
+    })));
+    setCurrentRow(emptyCurrentRow());
+    setEditingUid(null);
+    setIsCustomUnit(false);
     // PR-01: an existing return's saved rates are the record — never re-priced on open/edit.
-    resolvedNames.current = Object.fromEntries(loaded.map(it => [it.uid, it.materialName.trim()]));
+    lastResolvedNameRef.current = '';
     setErrorMsg('');
     setMode('view');
   };
@@ -392,6 +580,7 @@ export default function PurchaseReturnPage() {
     }
     setReturnId(res.data.draft_id);
     setCurrentIsPosted(false);
+    setMode('edit'); // land on the editable screen straight away, not the read-only view
     setSuccessMsg('Purchase return unposted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshReturns();
@@ -433,18 +622,19 @@ export default function PurchaseReturnPage() {
     setBillNo(draft.bill_no || '');
     setRemarks(draft.remarks || '');
     setCopyFromPurchaseId('');
-    const loaded = (draft.items || []).length
-      ? (draft.items || []).map(it => ({
-          uid: 'draftrow_' + it.line_no,
-          materialName: it.material_name || '',
-          unit: it.unit,
-          quantity: it.quantity,
-          pricePerUnit: it.price_per_unit,
-          totalPrice: it.total_price
-        }))
-      : [emptyItem()];
-    setItems(loaded);
-    resolvedNames.current = Object.fromEntries(loaded.map(it => [it.uid, it.materialName.trim()]));
+    setSourcePurchaseItems([]);
+    setItems((draft.items || []).map(it => ({
+      uid: 'draftrow_' + it.line_no,
+      materialName: it.material_name || '',
+      unit: it.unit,
+      quantity: it.quantity,
+      pricePerUnit: it.price_per_unit,
+      totalPrice: it.total_price
+    })));
+    setCurrentRow(emptyCurrentRow());
+    setEditingUid(null);
+    setIsCustomUnit(false);
+    lastResolvedNameRef.current = '';
     setErrorMsg('');
     setMode('edit');
   };
@@ -510,6 +700,43 @@ export default function PurchaseReturnPage() {
     return [...returns].filter(r => r.is_posted).sort((a, b) => b.return_date.localeCompare(a.return_date));
   }, [returns]);
 
+  // First/Previous/Next/Last record navigation + Posted/Unposted dropdown (frontend/pages_design.md
+  // §3, mirrors PurchasePage exactly): always walks the POSTED returns (oldest first) — a
+  // draft-only (unposted) return isn't a "record" to page through yet; it's reachable via the
+  // Pending Posting panel above. `navFilter` isn't a data filter (both values browse the same
+  // posted list) — it arms which action you're browsing FOR: 'unposted' means "I'm here to Unpost
+  // the return I land on" (only posted returns are unpostable) and gates the Unpost button and
+  // Prev/Next/First/Last themselves; 'posted' is the default browsing/new-entry mode, where nav
+  // stays dull.
+  const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('posted');
+
+  const navPostedList = useMemo(() => [...sortedReturns].reverse(), [sortedReturns]);
+
+  const navIndex = useMemo(() => {
+    if (!currentIsPosted || returnId == null) return -1;
+    return navPostedList.findIndex(r => r.return_id === returnId);
+  }, [currentIsPosted, returnId, navPostedList]);
+
+  const canNavPrevious = navFilter === 'unposted' && navPostedList.length > 0 && navIndex !== 0;
+  const canNavNext = navFilter === 'unposted' && navPostedList.length > 0 && navIndex !== navPostedList.length - 1;
+
+  const handleNavFirst = async () => {
+    if (navPostedList.length) await loadReturnRow(navPostedList[0]);
+  };
+  const handleNavLast = async () => {
+    if (navPostedList.length) await loadReturnRow(navPostedList[navPostedList.length - 1]);
+  };
+  const handleNavPrevious = async () => {
+    const targetIdx = navIndex === -1 ? 0 : navIndex - 1;
+    if (targetIdx < 0 || targetIdx >= navPostedList.length) return;
+    await loadReturnRow(navPostedList[targetIdx]);
+  };
+  const handleNavNext = async () => {
+    const targetIdx = navIndex === -1 ? 0 : navIndex + 1;
+    if (targetIdx < 0 || targetIdx >= navPostedList.length) return;
+    await loadReturnRow(navPostedList[targetIdx]);
+  };
+
   // Recorded Purchase Returns moved to its own tab (was inline under the entry form on the same
   // page, matching the identical PurchasePage fix). Date-range filter defaults to the last three
   // months rather than "everything"; both ends stay editable/clearable.
@@ -529,7 +756,7 @@ export default function PurchaseReturnPage() {
   const tabBar = (
     <div className="flex gap-1.5" data-no-print>
       <button
-        onClick={() => { setActiveTab('entry'); handleNew(); }}
+        onClick={() => { setActiveTab('entry'); startNewReturn(); }}
         className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
           activeTab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
@@ -549,7 +776,114 @@ export default function PurchaseReturnPage() {
 
   return (
     <AppLayout pageTitle="Purchase Return" headerAction={tabBar}>
-      <div className="mx-auto" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
+
+        {/* P-03: Pending Posting — pinned outside the card's own left edge rather than inside the
+            page's flow, matching PurchasePage's own sidebar exactly (`absolute`, anchored via
+            `right: calc(100% + gap)` to this wrapper's left edge, so it can never affect the
+            card's width/position). Was previously a full-width banner at the top of the entry
+            tab, which pushed the whole form down; this way it's always visible (any tab) without
+            taking layout space at all. Only shown from `2xl` up, same as Purchase/Sale Bill —
+            below that there usually isn't 280px of free margin for it to land in. Corrected per
+            the user (2026-08-26) to match PurchasePage's layout exactly. */}
+        {(unpostedReturns.length > 0 || postAllResult) && (
+          <aside
+            className="hidden 2xl:block absolute top-0 w-64 space-y-3"
+            style={{ right: 'calc(100% + 24px)' }}
+            data-no-print
+          >
+            <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <span className="font-semibold text-slate-700">Pending Posting</span>
+                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
+                  {unpostedReturns.length}
+                </span>
+              </div>
+              <div className="text-xs text-slate-500 mb-3">
+                {unpostedReturns.length > 0 && `Total ${formatCurrency(unpostedReturns.reduce((s, r) => s + Number(r.total_value), 0))}`}
+              </div>
+              {unpostedReturns.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handlePostAll}
+                  disabled={postAllBusy}
+                  className="w-full px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                >
+                  {postAllBusy ? 'Posting…' : `Post All (${unpostedReturns.length})`}
+                </button>
+              )}
+
+              {/* Stays until dismissed — a run can post 18 of 20, and the two that failed are the
+                  whole point of the message. Never auto-hidden on a timer. */}
+              {postAllResult && (
+                <div className="mt-3 pt-3 border-t border-amber-200">
+                  <p className="text-xs font-semibold text-slate-700">
+                    {postAllResult.posted.length} of {postAllResult.attempted} posted
+                    {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
+                  </p>
+                  {postAllResult.failed.length > 0 && (
+                    <ul className="mt-1.5 space-y-1">
+                      {postAllResult.failed.map(f => (
+                        <li key={f.draft_id} className="text-xs text-rose-700">
+                          <span className="font-mono font-semibold">{f.bill_no || `#${f.draft_id}`}</span>
+                          {' — '}{f.message}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setPostAllResult(null)}
+                    className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Flat list — every unposted return, oldest first (same order the backend returns).
+                Each row opens straight into the form for editing, with inline Post/Delete actions
+                so a single ready one doesn't need to be opened first just to post it. */}
+            {unpostedReturns.length > 0 && (
+              <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
+                {unpostedReturns.map(r => (
+                  <li
+                    key={r.draft_id}
+                    onClick={() => handleOpenUnposted(r.draft_id)}
+                    className="px-3 py-2.5 text-xs border-b border-slate-100 last:border-b-0 cursor-pointer hover:bg-amber-50/60 transition-colors"
+                  >
+                    <div className="min-w-0 flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-mono font-semibold text-slate-700">{r.bill_no || `#${r.draft_id}`}</div>
+                        <div className="text-slate-400 truncate">{vendors.find(v => v.vendor_id === r.vendor_id)?.name || 'Unnamed Vendor'}</div>
+                        <div className="text-slate-400">{formatDate(r.return_date)} · {formatCurrency(Number(r.total_value))}</div>
+                      </div>
+                      <button
+                        type="button"
+                        title="Post this return"
+                        onClick={(e) => handlePostOneUnposted(r.draft_id, e)}
+                        disabled={postingDraftId === r.draft_id}
+                        className="flex-shrink-0 p-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                      >
+                        <CheckCircle2 size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        title="Delete this return (password required)"
+                        onClick={(e) => handleDeleteUnposted(r.draft_id, e)}
+                        disabled={postingDraftId === r.draft_id}
+                        className="flex-shrink-0 p-1 rounded bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </aside>
+        )}
 
         {lookupError && (
           <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>
@@ -563,97 +897,6 @@ export default function PurchaseReturnPage() {
 
         {activeTab === 'entry' && (
         <>
-        {/* P-03: Pending Posting panel — enter a run of returns, then post them all at the end
-            instead of one at a time. Mirrors the identical panel on PurchasePage. */}
-        {(unpostedReturns.length > 0 || postAllResult) && (
-          <div className="mb-6 p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm" data-no-print>
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-700">Pending Posting:</span>
-                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
-                  {unpostedReturns.length} return(s)
-                </span>
-                <span className="text-xs text-slate-500">
-                  {unpostedReturns.length > 0 && `Total ${formatCurrency(unpostedReturns.reduce((s, r) => s + Number(r.total_value), 0))}`}
-                </span>
-              </div>
-              {unpostedReturns.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handlePostAll}
-                  disabled={postAllBusy}
-                  className="px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                >
-                  {postAllBusy ? 'Posting…' : `Post All (${unpostedReturns.length})`}
-                </button>
-              )}
-            </div>
-
-            {unpostedReturns.length > 0 && (
-              <ul className="mt-3 space-y-0.5 max-h-40 overflow-y-auto">
-                {unpostedReturns.map(r => (
-                  <li
-                    key={r.draft_id}
-                    onClick={() => handleOpenUnposted(r.draft_id)}
-                    className="text-xs text-slate-600 flex items-center gap-2 cursor-pointer hover:bg-amber-100/50 rounded px-1 py-0.5 -mx-1"
-                  >
-                    <span className="font-mono font-semibold">{r.bill_no || `#${r.draft_id}`}</span>
-                    <span className="text-slate-400">{formatDate(r.return_date)}</span>
-                    <span className="truncate">{vendors.find(v => v.vendor_id === r.vendor_id)?.name || 'Unnamed Vendor'}</span>
-                    <span className="ml-auto font-mono">{formatCurrency(Number(r.total_value))}</span>
-                    <button
-                      type="button"
-                      title="Post this return"
-                      onClick={(e) => handlePostOneUnposted(r.draft_id, e)}
-                      disabled={postingDraftId === r.draft_id}
-                      className="flex-shrink-0 p-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                    >
-                      <CheckCircle2 size={12} />
-                    </button>
-                    <button
-                      type="button"
-                      title="Delete this return (password required)"
-                      onClick={(e) => handleDeleteUnposted(r.draft_id, e)}
-                      disabled={postingDraftId === r.draft_id}
-                      className="flex-shrink-0 p-1 rounded bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {/* Stays until dismissed — a run can post 18 of 20, and the two that failed are the
-                whole point of the message. Never auto-hidden on a timer. */}
-            {postAllResult && (
-              <div className="mt-3 pt-3 border-t border-amber-200">
-                <p className="text-xs font-semibold text-slate-700">
-                  {postAllResult.posted.length} of {postAllResult.attempted} posted
-                  {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
-                </p>
-                {postAllResult.failed.length > 0 && (
-                  <ul className="mt-1.5 space-y-1">
-                    {postAllResult.failed.map(f => (
-                      <li key={f.draft_id} className="text-xs text-rose-700">
-                        <span className="font-mono font-semibold">{f.bill_no || `#${f.draft_id}`}</span>
-                        {' — '}{f.message}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setPostAllResult(null)}
-                  className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
-                >
-                  Dismiss
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Toolbar — standalone row above the card, matching SaleBillPage/SaleReturnPage/
             PurchasePage so every transaction page's action buttons live in the same place instead
             of being mixed into the card's own header. `form="purchase-return-form"` on the submit
@@ -661,24 +904,43 @@ export default function PurchaseReturnPage() {
             outside it — see fieldNav.ts's `findSubmitButton` comment for why the HTML `form`
             attribute is the established way other pages (Receipts, Transfer, etc.) already do
             this. */}
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
-          <div className="flex flex-wrap gap-2">
-            {/* Every action always renders (ref-pic style) — only `disabled` changes per state,
-                instead of whole button groups mounting/unmounting per `mode`. */}
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
+          <div className="flex flex-wrap items-center gap-0.5">
+            {/* ref-pics/batch2/sale bill.png toolbar style: small square buttons, icon on top,
+                label underneath, tightly packed — see frontend/pages_design.md §1. */}
+            <button type="button" onClick={startNewReturn} title="New Return" className="toolbar-btn">
+              <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>New</span>
+            </button>
             <button
               type="button"
-              onClick={handleNew}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              onClick={deleteSelectedArticle}
+              disabled={isViewMode || !editingUid}
+              title="Delete selected article"
+              className="toolbar-btn"
             >
-              New Return
+              <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
+              <span>Delete</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('edit')}
+              disabled={!isViewMode || currentIsPosted}
+              title="Edit"
+              className="toolbar-btn"
+            >
+              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
+              <span>Edit</span>
             </button>
             <button
               type="submit"
               form="purchase-return-form"
               disabled={isViewMode || !isValid}
-              className="btn-gold flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title={mode === 'edit' ? 'Update Return' : 'Save Purchase Return'}
+              className="toolbar-btn"
             >
-              <Save size={14} /> {mode === 'edit' ? 'Update Return' : 'Save Purchase Return'}
+              <Save size={20} strokeWidth={2.5} className="text-blue-600" />
+              <span>{mode === 'edit' ? 'Update' : 'Save'}</span>
             </button>
             <button
               type="button"
@@ -688,35 +950,69 @@ export default function PurchaseReturnPage() {
                 if (res.ok) loadDraftIntoForm(res.data);
               }}
               disabled={mode !== 'edit'}
-              className="btn-outline px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title="Cancel Edit"
+              className="toolbar-btn"
             >
-              Cancel Edit
+              <XCircle size={20} strokeWidth={2.5} className="text-slate-500" />
+              <span>Cancel</span>
             </button>
+
+            <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            {/* Record navigation — always browses posted returns; only active while the
+                Posted/Unposted dropdown (right) says Unposted. See §3. */}
+            <button type="button" onClick={handleNavFirst} disabled={!canNavPrevious} title="First" className="toolbar-btn">
+              <ChevronsLeft size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>First</span>
+            </button>
+            <button type="button" onClick={handleNavPrevious} disabled={!canNavPrevious} title="Previous" className="toolbar-btn">
+              <ChevronLeft size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Prev.</span>
+            </button>
+            <button type="button" onClick={handleNavNext} disabled={!canNavNext} title="Next" className="toolbar-btn">
+              <ChevronRight size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Next</span>
+            </button>
+            <button type="button" onClick={handleNavLast} disabled={!canNavNext} title="Last" className="toolbar-btn">
+              <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Last</span>
+            </button>
+
+            <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
             <button
               type="button"
-              onClick={() => setMode('edit')}
-              disabled={!isViewMode || currentIsPosted}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              onClick={handleUnpost}
+              disabled={!isViewMode || returnId == null || !currentIsPosted || navFilter !== 'unposted'}
+              title={navFilter !== 'unposted' ? 'Switch the dropdown to Unposted first' : 'Unpost'}
+              className="toolbar-btn"
             >
-              <Edit size={13} /> Edit
+              <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
+              <span>Unpost</span>
             </button>
             <button
               type="button"
               onClick={handlePost}
               disabled={!isViewMode || returnId == null || currentIsPosted}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title="Post"
+              className="toolbar-btn"
             >
-              Post
-            </button>
-            <button
-              type="button"
-              onClick={handleUnpost}
-              disabled={!isViewMode || returnId == null || !currentIsPosted}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-            >
-              Unpost
+              <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>Post</span>
             </button>
           </div>
+
+          {/* Posted/Unposted — arms which action Previous/Next/First/Last (left) are for. */}
+          <select
+            value={navFilter}
+            onChange={e => setNavFilter(e.target.value as 'posted' | 'unposted')}
+            className="soleria-input soleria-input-compact cursor-pointer font-semibold"
+            style={{ width: 'auto' }}
+            title="Posted = add new returns. Unposted = browse posted returns to Unpost one."
+          >
+            <option value="posted">Posted</option>
+            <option value="unposted">Unposted</option>
+          </select>
         </div>
 
         {/* This <form> IS the invoice card — height pinned to the remaining viewport space (see
@@ -733,16 +1029,17 @@ export default function PurchaseReturnPage() {
         >
           <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-5">
             <Undo2 size={18} className="text-[#B08D57]" />
-            <h3 className="font-lora font-semibold text-lg text-slate-800">Raw Material Purchase Return</h3>
+            <h3 className="font-lora font-bold text-lg text-slate-900">Raw Material Purchase Return</h3>
           </div>
 
           {/* Header fields */}
-          <div className="shrink-0 grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+          <div className="shrink-0 grid grid-cols-1 md:grid-cols-6 gap-4 mb-6">
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
+              <label className="block text-xs font-bold text-slate-900 mb-1">
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
               <input
+                ref={firstFieldRef}
                 type="date"
                 value={date}
                 disabled={isViewMode}
@@ -751,19 +1048,84 @@ export default function PurchaseReturnPage() {
                 style={{ fontSize: '13px' }}
               />
             </div>
+            {!isViewMode && (
+              <div>
+                <label className="block text-xs font-bold text-slate-900 mb-1">
+                  Find Purchase to Return
+                </label>
+                {/* Big centered SearchModal, not SearchableSelect's small anchored panel — typing
+                    either the vendor's own bill no. or the system bill no. finds it (both are in
+                    each option's label; see priorPurchaseOptions above). First field after Date:
+                    picking a purchase here fills Vendor and the items for you. */}
+                <button
+                  ref={findPurchaseTriggerRef}
+                  type="button"
+                  data-field-nav="true"
+                  onClick={openFindPurchaseModal}
+                  onKeyDown={handleFindPurchaseTriggerKeyDown}
+                  className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs min-h-[38px] text-left"
+                >
+                  <span className={copyFromPurchaseId ? 'text-black font-semibold' : 'text-slate-500'}>
+                    {copyFromPurchaseId
+                      ? priorPurchaseOptions.find(o => o.value === copyFromPurchaseId)?.label
+                      : 'Manual entry'}
+                  </span>
+                  <ChevronDown size={16} className="text-slate-400" />
+                </button>
+                <SearchModal
+                  isOpen={isFindPurchaseModalOpen}
+                  title="Find Purchase to Return"
+                  options={[{ value: '', label: 'Manual entry (default)' }, ...priorPurchaseOptions]}
+                  value={copyFromPurchaseId}
+                  onSelect={handleFindPurchaseSelect}
+                  onClose={() => setIsFindPurchaseModalOpen(false)}
+                  searchPlaceholder="Search by vendor or system bill no..."
+                />
+              </div>
+            )}
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
+              {/* System Bill No. — this RETURN's own return_id (draft_id while unposted),
+                  assigned by the database, never typed. Read-only always. Distinct from the
+                  "Find Purchase to Return" search below, which looks up a PRIOR PURCHASE by its
+                  own system/vendor bill no. — and from "Vendor Bill No." further along, which is
+                  the vendor's own free-text invoice number for this return. */}
+              <label className="block text-xs font-bold text-slate-900 mb-1">System Bill No.</label>
+              <input
+                type="text"
+                value={returnId != null ? `#${returnId}` : `#${nextSystemBillNo} (pending)`}
+                disabled
+                readOnly
+                className="soleria-input bg-slate-100 text-slate-500 font-mono"
+                style={{ fontSize: '13px' }}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-900 mb-1">
                 Vendor <span className="text-red-500 font-bold">*</span>
               </label>
-              <SearchableSelect
+              <button
+                ref={vendorTriggerRef}
+                type="button"
+                data-field-nav="true"
+                disabled={isViewMode || isCopiedFromPurchase}
+                title={isCopiedFromPurchase ? 'Set by the purchase you picked above — switch to Manual entry to change it' : undefined}
+                onClick={openVendorModal}
+                onKeyDown={handleVendorTriggerKeyDown}
+                className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
+              >
+                <span className={selectedVendor ? 'text-black font-semibold' : 'text-slate-500'}>
+                  {selectedVendor ? vendorOptions.find(o => o.value === vendorId)?.label : 'Select vendor...'}
+                </span>
+                <ChevronDown size={16} className="text-slate-400" />
+              </button>
+              <SearchModal
+                isOpen={isVendorModalOpen}
+                title="Select Vendor"
                 options={vendorOptions}
                 value={vendorId}
-                // PR-01: forget which names were already priced — the same material has a
-                // different last-paid price under a different vendor, so every line re-looks-up.
-                onChange={val => { setVendorId(val); setCopyFromPurchaseId(''); resolvedNames.current = {}; }}
-                placeholder="Select vendor..."
+                onSelect={handleVendorSelect}
+                onClose={() => setIsVendorModalOpen(false)}
                 searchPlaceholder="Search vendors..."
-                disabled={isViewMode}
               />
               {selectedVendor && (
                 <p className="text-[11px] text-slate-400 mt-1">
@@ -771,29 +1133,13 @@ export default function PurchaseReturnPage() {
                 </p>
               )}
             </div>
-            {!isViewMode && (
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  Copy From Prior Purchase (optional)
-                </label>
-                {/* Was a native <select>. A vendor's purchase history can be long, so this is
-                    exactly where typing to search beats scrolling. "Manual entry" is carried as a
-                    real option rather than the placeholder, so it can be chosen again to go back. */}
-                <SearchableSelect
-                  options={[{ value: '', label: 'Manual entry (default)' }, ...priorPurchaseOptions]}
-                  value={copyFromPurchaseId}
-                  onChange={handleCopyFromPurchase}
-                  placeholder="Manual entry (default)"
-                  searchPlaceholder="Search prior purchases..."
-                />
-              </div>
-            )}
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Vendor Bill No.</label>
+              <label className="block text-xs font-bold text-slate-900 mb-1">Vendor Bill No.</label>
               <input
                 type="text"
                 value={billNo}
-                disabled={isViewMode}
+                disabled={isViewMode || isCopiedFromPurchase}
+                title={isCopiedFromPurchase ? 'Copied from the purchase you picked above — switch to Manual entry to change it' : undefined}
                 onChange={e => setBillNo(e.target.value)}
                 placeholder="Vendor's own invoice #..."
                 className="soleria-input"
@@ -801,135 +1147,193 @@ export default function PurchaseReturnPage() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Remarks</label>
+              {/* Remarks is never hand-typed here — it's always the SOURCE purchase's own remarks,
+                  fetched the instant a bill is picked in "Find Purchase to Return" (see
+                  handleCopyFromPurchase). Always read-only, in Manual entry too: there's no source
+                  purchase to pull it from there, so it just stays blank until one is picked.
+                  Corrected per the user (2026-08-26) — Remarks used to be free-typable while in
+                  Manual entry, unlike Vendor/Vendor Bill No., which still are. */}
+              <label className="block text-xs font-bold text-slate-900 mb-1">Remarks</label>
               <input
                 type="text"
                 value={remarks}
-                disabled={isViewMode}
-                onChange={e => setRemarks(e.target.value)}
-                placeholder="Reason for return..."
-                className="soleria-input"
+                disabled
+                readOnly
+                title="Fetched from the purchase you pick above in Find Purchase to Return — never typed by hand"
+                placeholder="Pick a purchase above to fetch its remarks..."
+                className="soleria-input bg-slate-100 text-slate-500"
                 style={{ fontSize: '13px' }}
               />
             </div>
           </div>
 
-          {/* Line items — flex-1 so it grows to fill whatever space invoiceCardHeight (above)
-              leaves after every other section takes its natural size (mirrors PurchasePage's item
-              table). `min-height: 0` overrides flexbox's default min-height:auto, which would
-              otherwise let this box's own content stretch the whole form instead of scrolling
-              internally. The header row is `sticky` within the scroll box so column labels stay
-              visible past the first screenful of rows. */}
+          {/* Article entry — ONE editable field set (frontend/pages_design.md §4), not one
+              editable row per grid entry. Enter on Price/Unit (or the Add/Update button) commits
+              it into the grid below and clears back to blank, ready for the next article. */}
+          {!isViewMode && (
+            <div className="shrink-0 mb-3 p-3 rounded-lg border bg-blue-50/40" style={{ borderColor: 'var(--border-color)' }}>
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                <div className="md:col-span-4">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
+                    Material / Product Name <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    ref={materialNameRef}
+                    value={currentRow.materialName}
+                    onChange={e => updateCurrentField('materialName', e.target.value)}
+                    // PR-01: fill the price/unit from this vendor's last posted purchase of this
+                    // material once the name is finished.
+                    onBlur={e => fillRateFromLastPurchase(e.target.value)}
+                    placeholder="e.g. PU Sheet Roll"
+                    className="soleria-input font-semibold"
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
+                    Unit <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  {isCustomUnit ? (
+                    <input
+                      type="text"
+                      value={currentRow.unit}
+                      onChange={e => updateCurrentField('unit', e.target.value)}
+                      placeholder="Type unit..."
+                      autoFocus
+                      onBlur={() => {
+                        if (!currentRow.unit.trim()) {
+                          setIsCustomUnit(false);
+                          updateCurrentField('unit', UNIT_PRESETS[0]);
+                        }
+                      }}
+                      className="soleria-input"
+                      style={{ fontSize: '13px' }}
+                    />
+                  ) : (
+                    <select
+                      value={UNIT_PRESETS.includes(currentRow.unit) ? currentRow.unit : '__other__'}
+                      onChange={e => {
+                        if (e.target.value === '__other__') {
+                          setIsCustomUnit(true);
+                          updateCurrentField('unit', '');
+                        } else {
+                          updateCurrentField('unit', e.target.value);
+                        }
+                      }}
+                      className="soleria-input cursor-pointer"
+                      style={{ fontSize: '13px' }}
+                    >
+                      {UNIT_PRESETS.map(u => (
+                        <option key={u} value={u}>{u}</option>
+                      ))}
+                      <option value="__other__">
+                        {UNIT_PRESETS.includes(currentRow.unit) ? 'Other (type manually)...' : currentRow.unit || 'Other (type manually)...'}
+                      </option>
+                    </select>
+                  )}
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
+                    Quantity <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={currentRow.quantity || ''}
+                    onChange={e => updateCurrentField('quantity', Number(e.target.value))}
+                    className="soleria-input text-center font-semibold"
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
+                    Price / Unit <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={currentRow.pricePerUnit || ''}
+                    onChange={e => updateCurrentField('pricePerUnit', Number(e.target.value))}
+                    onKeyDown={handleRateKeyDown}
+                    className="soleria-input text-center font-semibold"
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+                <div className="md:col-span-2 flex items-end gap-2">
+                  <div className="flex-1">
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Value</label>
+                    <div className="soleria-input flex items-center font-bold text-slate-800 bg-slate-100" style={{ fontSize: '13px' }}>
+                      {formatCurrency(currentRowTotal)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={commitCurrentRow}
+                    title={editingUid ? 'Update this article' : 'Add this article'}
+                    className="btn-outline p-2 shrink-0"
+                  >
+                    {editingUid ? <CheckCircle2 size={16} /> : <Plus size={16} />}
+                  </button>
+                </div>
+              </div>
+              {/* Live article-vs-purchase check (only while isCopiedFromPurchase — see
+                  articleAgainstPurchaseError above) — shown as soon as it's wrong, not only after
+                  a rejected commit attempt. */}
+              {currentRowError && (
+                <p className="mt-2 text-xs text-rose-600 font-semibold">{currentRowError}</p>
+              )}
+              {editingUid && (
+                <div className="mt-2 flex items-center gap-2 text-xs">
+                  <span className="text-amber-700 font-semibold">Editing an existing article — Update to save, or</span>
+                  <button type="button" onClick={cancelEditRow} className="text-slate-500 hover:text-slate-700 font-semibold underline">
+                    cancel
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Committed articles — read-only list; click any row to load it back into the entry
+              fields above for editing. flex-1 so it grows to fill whatever space invoiceCardHeight
+              (above) leaves after every other section takes its natural size. `min-height: 0`
+              overrides flexbox's default min-height:auto, which would otherwise let this box's own
+              content stretch the whole form instead of scrolling internally. The header row is
+              `sticky` within the scroll box so column labels stay visible past the first
+              screenful of rows. */}
           <div className="flex-1 min-h-0 mb-4 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 pl-4" style={{ minWidth: '200px' }}>Material / Product Name <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3" style={{ width: '160px' }}>Unit <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '110px' }}>Quantity <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '130px' }}>Price / Unit <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 pl-4" style={{ minWidth: '200px' }}>Material / Product Name</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3" style={{ width: '160px' }}>Unit</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '110px' }}>Quantity</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '130px' }}>Price / Unit</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: '130px' }}>Total Price</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '50px' }}></th>
                 </tr>
               </thead>
               <tbody>
-                {items.map((item, idx) => (
-                  <tr key={item.uid} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 pl-4">
-                      <input
-                        type="text"
-                        ref={el => { materialNameRefs.current[idx] = el; }}
-                        value={item.materialName}
-                        disabled={isViewMode}
-                        onChange={e => updateItem(item.uid, 'materialName', e.target.value)}
-                        // PR-01: fill the price/unit from this vendor's last posted purchase of
-                        // this material once the name is finished.
-                        onBlur={e => fillRateFromLastPurchase(item.uid, e.target.value)}
-                        placeholder="e.g. PU Sheet Roll"
-                        className="soleria-input font-semibold"
-                        style={{ fontSize: '13px' }}
-                      />
+                {items.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="p-6 text-center text-slate-400 text-sm">
+                      No articles added yet — fill the fields above and press Enter.
                     </td>
-                    <td className="p-3">
-                      {customUnitRows[item.uid] ? (
-                        <input
-                          type="text"
-                          value={item.unit}
-                          disabled={isViewMode}
-                          onChange={e => updateItem(item.uid, 'unit', e.target.value)}
-                          placeholder="Type unit..."
-                          autoFocus
-                          onBlur={() => {
-                            if (!item.unit.trim()) {
-                              setCustomUnitRows(prev => ({ ...prev, [item.uid]: false }));
-                              updateItem(item.uid, 'unit', UNIT_PRESETS[0]);
-                            }
-                          }}
-                          className="soleria-input"
-                          style={{ fontSize: '13px' }}
-                        />
-                      ) : (
-                        <select
-                          value={UNIT_PRESETS.includes(item.unit) ? item.unit : '__other__'}
-                          disabled={isViewMode}
-                          onChange={e => {
-                            if (e.target.value === '__other__') {
-                              setCustomUnitRows(prev => ({ ...prev, [item.uid]: true }));
-                              updateItem(item.uid, 'unit', '');
-                            } else {
-                              updateItem(item.uid, 'unit', e.target.value);
-                            }
-                          }}
-                          className="soleria-input cursor-pointer"
-                          style={{ fontSize: '13px' }}
-                        >
-                          {UNIT_PRESETS.map(u => (
-                            <option key={u} value={u}>{u}</option>
-                          ))}
-                          <option value="__other__">
-                            {UNIT_PRESETS.includes(item.unit) ? 'Other (type manually)...' : item.unit || 'Other (type manually)...'}
-                          </option>
-                        </select>
-                      )}
-                    </td>
-                    <td className="p-3 text-center">
-                      <input
-                        type="number"
-                        min={0}
-                        value={item.quantity || ''}
-                        disabled={isViewMode}
-                        onChange={e => updateItem(item.uid, 'quantity', Number(e.target.value))}
-                        className="soleria-input text-center font-semibold"
-                        style={{ fontSize: '13px' }}
-                      />
-                    </td>
-                    <td className="p-3 text-center">
-                      <input
-                        type="number"
-                        min={0}
-                        value={item.pricePerUnit || ''}
-                        disabled={isViewMode}
-                        onChange={e => updateItem(item.uid, 'pricePerUnit', Number(e.target.value))}
-                        onKeyDown={handleLastFieldKeyDown}
-                        className="soleria-input text-center font-semibold"
-                        style={{ fontSize: '13px' }}
-                      />
-                    </td>
-                    <td className="p-3 text-right font-bold text-slate-800">
-                      {formatCurrency(item.totalPrice)}
-                    </td>
-                    <td className="p-3 text-center">
-                      {!isViewMode && (
-                        <button
-                          type="button"
-                          onClick={() => removeItemRow(item.uid)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                          title="Remove Row"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      )}
-                    </td>
+                  </tr>
+                ) : items.map(item => (
+                  <tr
+                    key={item.uid}
+                    onClick={() => handleEditRow(item)}
+                    title={!isViewMode ? 'Click to select this article — Delete (toolbar) removes it' : undefined}
+                    className={`border-b transition-colors ${
+                      item.uid === editingUid ? 'bg-blue-50' : 'hover:bg-slate-50/55'
+                    } ${!isViewMode ? 'cursor-pointer' : ''}`}
+                    style={{ borderColor: 'var(--border-table)' }}
+                  >
+                    <td className="p-3 pl-4 font-semibold text-slate-800">{item.materialName}</td>
+                    <td className="p-3 text-slate-600">{item.unit}</td>
+                    <td className="p-3 text-center font-semibold text-slate-700">{item.quantity}</td>
+                    <td className="p-3 text-center font-semibold text-slate-700">{formatCurrency(item.pricePerUnit)}</td>
+                    <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(item.totalPrice)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -937,21 +1341,10 @@ export default function PurchaseReturnPage() {
                 <tr className="bg-slate-50 border-t-2 font-bold text-slate-800" style={{ borderColor: 'var(--border-color)' }}>
                   <td className="p-3 pl-4" colSpan={4}>Grand Total</td>
                   <td className="p-3 text-right">{formatCurrency(grandTotal)}</td>
-                  <td></td>
                 </tr>
               </tfoot>
             </table>
           </div>
-
-          {!isViewMode && (
-            <button
-              type="button"
-              onClick={addItemRow}
-              className="shrink-0 btn-outline flex items-center gap-1.5 px-4 py-2 text-sm"
-            >
-              <Plus size={16} /> Add Line Item
-            </button>
-          )}
         </form>
         </>
         )}
@@ -962,10 +1355,10 @@ export default function PurchaseReturnPage() {
         {activeTab === 'records' && (
         <div className="card-white p-6 bg-white border">
           <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-            <h3 className="font-lora font-semibold text-lg text-slate-800">Recorded Purchase Returns</h3>
+            <h3 className="font-lora font-bold text-lg text-slate-900">Recorded Purchase Returns</h3>
             <div className="flex flex-wrap items-end gap-3" data-no-print>
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">From</label>
+                <label className="block text-xs font-bold text-slate-900 mb-1">From</label>
                 <input
                   type="date"
                   value={recordsDateFrom}
@@ -975,7 +1368,7 @@ export default function PurchaseReturnPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">To</label>
+                <label className="block text-xs font-bold text-slate-900 mb-1">To</label>
                 <input
                   type="date"
                   value={recordsDateTo}

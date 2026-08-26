@@ -2,15 +2,18 @@ import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
+import SearchModal from '@/components/SearchModal';
 import * as api from '@/lib/api';
 import type {
   VendorRow, RegionRow, CityRow, PurchaseRow, PurchaseCreateInput, PurchaseItemInput,
   DraftPurchaseRow, ConfirmAllResult
 } from '@/lib/api';
 import { formatDate, getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
-import { focusFirstField } from '@/lib/fieldNav';
-import { useHeldKey } from '@/hooks/useHeldKey';
-import { Plus, Trash2, Save, ShoppingBag, Edit, CheckCircle2 } from 'lucide-react';
+import { focusNextField } from '@/lib/fieldNav';
+import {
+  Plus, Trash2, Save, ShoppingBag, Edit, CheckCircle2, XCircle, Undo2, ChevronDown,
+  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight
+} from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
@@ -24,15 +27,22 @@ interface UiItem {
   totalPrice: number;
 }
 
-function emptyItem(): UiItem {
-  return {
-    uid: 'pui_' + Date.now() + Math.random().toString(36).slice(2, 7),
-    materialName: '',
-    unit: 'Meters',
-    quantity: 0,
-    pricePerUnit: 0,
-    totalPrice: 0
-  };
+// The live article-entry row (not yet committed to `items`) — matches the legacy Wentox desktop
+// app (ref-pics/batch2/sale bill.png): one editable article field set above the grid, not one
+// editable row per grid entry.
+interface CurrentRow {
+  materialName: string;
+  unit: string;
+  quantity: number;
+  pricePerUnit: number;
+}
+
+function emptyCurrentRow(): CurrentRow {
+  return { materialName: '', unit: 'Meters', quantity: 0, pricePerUnit: 0 };
+}
+
+function newItemUid(): string {
+  return 'pui_' + Date.now() + Math.random().toString(36).slice(2, 7);
 }
 
 export default function PurchasePage() {
@@ -98,8 +108,14 @@ export default function PurchasePage() {
   const [vendorId, setVendorId] = useState('');
   const [billNo, setBillNo] = useState('');
   const [remarks, setRemarks] = useState('');
-  const [items, setItems] = useState<UiItem[]>([emptyItem()]);
-  const [customUnitRows, setCustomUnitRows] = useState<Record<string, boolean>>({});
+  // `items` holds only COMMITTED rows — the grid below the entry fields. The row currently being
+  // typed lives separately in `currentRow` until Enter (or the Add button) commits it.
+  const [items, setItems] = useState<UiItem[]>([]);
+  const [currentRow, setCurrentRow] = useState<CurrentRow>(emptyCurrentRow());
+  // Set while re-editing an existing grid row (clicked from the list below) — commit updates that
+  // row in place instead of appending a new one. null means the entry fields are building a new row.
+  const [editingUid, setEditingUid] = useState<string | null>(null);
+  const [isCustomUnit, setIsCustomUnit] = useState(false);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -157,73 +173,162 @@ export default function PurchasePage() {
     return vendors.find(v => v.vendor_id === Number(vendorId));
   }, [vendorId, vendors]);
 
-  const updateItem = (uid: string, field: keyof UiItem, value: string | number) => {
-    setItems(prev => prev.map(it => {
-      if (it.uid !== uid) return it;
-      const updated = { ...it, [field]: value };
-      if (field === 'quantity' || field === 'pricePerUnit') {
-        updated.totalPrice = Number(updated.quantity) * Number(updated.pricePerUnit);
-      }
-      return updated;
-    }));
+  // Preview of the System Bill No. a brand-new purchase will get. What Save actually assigns is
+  // the next draft_purchases.draft_id (a NEW draft is what gets created — see handleSave) — not
+  // the next real purchase_id, which is a separate IDENTITY sequence only assigned later, on Post.
+  // Computed client-side from the currently-loaded unposted list, so it's a preview, not a
+  // guarantee: correct as long as nothing else inserts a draft between now and Save (true for this
+  // app's single-admin-session model — see backend/CLAUDE.md).
+  const nextSystemBillNo = useMemo(
+    () => Math.max(0, ...unpostedPurchases.map(d => d.draft_id)) + 1,
+    [unpostedPurchases]
+  );
+
+  // Vendor field opens a centered "find" modal (SearchModal) instead of SearchableSelect's small
+  // anchored panel — the user wanted the full vendor list visible at once, not a dropdown. Enter
+  // (or Arrow Up/Down) on the field opens it; the search box inside it autofocuses and handles its
+  // own Up/Down-to-highlight, Enter-to-commit — same keyboard model as SearchableSelect, just in a
+  // bigger box. Committing a vendor closes the modal and advances focus via the app's G-01 rule,
+  // same as every other field-nav-aware control (focusNextField needs the trigger BUTTON, which is
+  // why it isn't just a plain <input> here).
+  const vendorTriggerRef = useRef<HTMLButtonElement>(null);
+  const [isVendorModalOpen, setIsVendorModalOpen] = useState(false);
+
+  const openVendorModal = () => {
+    if (isViewMode) return;
+    setIsVendorModalOpen(true);
   };
 
-  const addItemRow = () => setItems(prev => [...prev, emptyItem()]);
-
-  // Keyboard entry without the mouse — same pattern as SaleBillPage/SaleReturnPage. G-01's generic
-  // Enter-walk already carries fields forward within a row and into an EXISTING next row; this only
-  // steps in at the boundary (Enter on the last field of the last row), where it appends a blank row
-  // and focuses into it. stopPropagation stops AppLayout's own window-level Enter handler from also
-  // firing on the same keydown and clicking Save before the new row exists.
-  const materialNameRefs = useRef<(HTMLInputElement | null)[]>([]);
-  // '.' held while Enter is pressed is a genuine three-way chord alongside Shift+Enter/Ctrl+Enter
-  // below — tracked via useHeldKey since '.' isn't a real modifier key with its own event flag.
-  // Typing '.' alone (a decimal point) never triggers this: by the time Enter is a separate,
-  // later keypress, '.' has already been released. Any single stray "." that types into the field
-  // during the chord itself is harmless — the input is fully controlled by the numeric state, so
-  // the very next render overwrites it back to the real number regardless.
-  const periodHeld = useHeldKey('.');
-
-  function handleLastFieldKeyDown(e: React.KeyboardEvent) {
-    // Plain Enter is deliberately left alone here: it now does exactly what every other field
-    // does — walk to whatever's next via AppLayout's own G-01 handler, and eventually reach
-    // Save/Post. An earlier version hijacked it to always append a new line, which meant a plain
-    // Enter on the last field could never actually finish and save a bill — reported directly by
-    // the user after trying it.
-    //
-    // Adding a line is its own explicit action instead: Shift+Enter, Ctrl+Enter, or '.'+Enter, from
-    // the last field of ANY row (not only the last one) — always appends at the end, same as the
-    // "+ Add Item Row" button, and focuses into the new row. Shift+Enter is distinct from its
-    // other meaning inside a Remarks textarea (insert a literal newline) — different field, no
-    // collision.
-    if (e.key !== 'Enter' || !(e.shiftKey || e.ctrlKey || periodHeld.current)) return;
-    e.preventDefault();
-    e.stopPropagation(); // stop AppLayout's own Enter handler from also walking this keystroke
-    const newRowIndex = items.length; // always the end, regardless of which row triggered this
-    addItemRow();
-    requestAnimationFrame(() => focusFirstField(materialNameRefs.current[newRowIndex]));
+  function handleVendorTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      openVendorModal();
+    }
   }
 
-  // A purchase always needs at least one row to type into, so deleting the last remaining one
-  // clears its fields back to blank instead of removing the row itself (keeping its uid, so the
-  // row doesn't remount and lose focus).
+  function handleVendorSelect(newVendorId: string) {
+    setVendorId(newVendorId);
+    setIsVendorModalOpen(false);
+    requestAnimationFrame(() => focusNextField(vendorTriggerRef.current));
+  }
+
+  const updateCurrentField = (field: keyof CurrentRow, value: string | number) => {
+    setCurrentRow(prev => ({ ...prev, [field]: value }));
+  };
+
+  const currentRowTotal = useMemo(
+    () => Number(currentRow.quantity) * Number(currentRow.pricePerUnit),
+    [currentRow]
+  );
+
+  // Article entry, matching the legacy Wentox desktop app (ref-pics/batch2/sale bill.png): ONE
+  // editable article field set above the grid, not one editable row per grid entry. Committing
+  // (Enter on Price, or the Add button) either appends a new grid row or — while `editingUid` is
+  // set, from clicking an existing row below — updates that row in place, then always clears the
+  // entry fields and refocuses Material for the next article. Save/Post is reached only by
+  // clicking the toolbar button, never by walking off the entry row with Enter (confirmed with the
+  // user 2026-08-25).
+  const materialNameRef = useRef<HTMLInputElement>(null);
+
+  const commitCurrentRow = () => {
+    const materialName = currentRow.materialName.trim();
+    const unit = currentRow.unit.trim();
+    if (!materialName || !unit || !(currentRow.quantity > 0) || !(currentRow.pricePerUnit > 0)) {
+      return; // incomplete row — nothing to commit yet, leave focus where it is
+    }
+    const totalPrice = currentRow.quantity * currentRow.pricePerUnit;
+    if (editingUid) {
+      setItems(prev => prev.map(it => it.uid === editingUid
+        ? { ...it, materialName, unit, quantity: currentRow.quantity, pricePerUnit: currentRow.pricePerUnit, totalPrice }
+        : it));
+    } else {
+      setItems(prev => [...prev, {
+        uid: newItemUid(), materialName, unit,
+        quantity: currentRow.quantity, pricePerUnit: currentRow.pricePerUnit, totalPrice
+      }]);
+    }
+    setCurrentRow(emptyCurrentRow());
+    setEditingUid(null);
+    setIsCustomUnit(false);
+    requestAnimationFrame(() => materialNameRef.current?.focus());
+  };
+
+  function handleRateKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    e.stopPropagation(); // stop AppLayout's own Enter handler from walking this keystroke to Save
+    commitCurrentRow();
+  }
+
+  // Clicking a committed row (below) loads it back into the entry fields for editing — the row
+  // stays in the grid (not pulled out) until the edit is committed, so it never looks "missing".
+  const handleEditRow = (item: UiItem) => {
+    if (isViewMode) return;
+    setCurrentRow({ materialName: item.materialName, unit: item.unit, quantity: item.quantity, pricePerUnit: item.pricePerUnit });
+    setEditingUid(item.uid);
+    setIsCustomUnit(!UNIT_PRESETS.includes(item.unit));
+    requestAnimationFrame(() => materialNameRef.current?.focus());
+  };
+
+  const cancelEditRow = () => {
+    setCurrentRow(emptyCurrentRow());
+    setEditingUid(null);
+    setIsCustomUnit(false);
+  };
+
   const removeItemRow = (uid: string) => {
-    setItems(prev => prev.length > 1
-      ? prev.filter(it => it.uid !== uid)
-      : prev.map(it => it.uid === uid ? { ...emptyItem(), uid: it.uid } : it));
-    setCustomUnitRows(prev => {
-      const next = { ...prev };
-      delete next[uid];
-      return next;
-    });
+    setItems(prev => prev.filter(it => it.uid !== uid));
+    if (editingUid === uid) cancelEditRow(); // was mid-edit on the row just deleted
   };
 
   const grandTotal = useMemo(() => items.reduce((s, it) => s + it.totalPrice, 0), [items]);
 
+  // Debounced 300ms behind the live `billNo` — the duplicate check below re-scans two whole
+  // arrays on every run, so tying it straight to onChange would re-run it on every keystroke.
+  // Confirmed with the user (2026-08-26) as 300ms, not the literally-unnoticeable 3ms first asked
+  // for. The input itself stays bound to the live `billNo`, so typing is never delayed — only the
+  // duplicate check (and its message) lags behind by this much.
+  const [debouncedBillNo, setDebouncedBillNo] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedBillNo(billNo), 300);
+    return () => clearTimeout(t);
+  }, [billNo]);
+
+  // Frontend-only duplicate check (no backend endpoint for this — see the user's explicit "in
+  // frontend", 2026-08-26): the same vendor shouldn't have two purchases entered under the same
+  // Vendor Bill No., posted or still a pending draft. `purchaseId` means different things
+  // depending on `currentIsPosted` (a real purchase_id once posted, a draft_id before that — see
+  // the System Bill No. field's own comment above), so self-exclusion is split accordingly:
+  // editing a posted purchase's own bill no. must not flag itself against `purchases`, and editing
+  // a draft's own bill no. must not flag itself against `unpostedPurchases`.
+  const billNoDuplicate = useMemo(() => {
+    const trimmed = debouncedBillNo.trim();
+    if (!trimmed || !vendorId) return null;
+    const vId = Number(vendorId);
+    const lower = trimmed.toLowerCase();
+    const selfPostedId = currentIsPosted ? purchaseId : null;
+    const selfDraftId = currentIsPosted ? null : purchaseId;
+
+    const matchPosted = purchases.find(p =>
+      p.vendor_id === vId && p.purchase_id !== selfPostedId && (p.bill_no || '').trim().toLowerCase() === lower
+    );
+    if (matchPosted) {
+      return { kind: 'posted' as const, id: matchPosted.purchase_id, date: matchPosted.purchase_date };
+    }
+    const matchDraft = unpostedPurchases.find(d =>
+      d.vendor_id === vId && d.draft_id !== selfDraftId && (d.bill_no || '').trim().toLowerCase() === lower
+    );
+    if (matchDraft) {
+      return { kind: 'draft' as const, id: matchDraft.draft_id, date: matchDraft.purchase_date };
+    }
+    return null;
+  }, [debouncedBillNo, vendorId, purchases, unpostedPurchases, purchaseId, currentIsPosted]);
+
   const isValid = useMemo(() => {
     if (!vendorId || !date) return false;
-    return items.every(it => it.materialName.trim() && it.unit.trim() && it.quantity > 0 && it.pricePerUnit > 0);
-  }, [vendorId, date, items]);
+    if (billNoDuplicate) return false;
+    return items.length > 0;
+  }, [vendorId, date, items, billNoDuplicate]);
 
   const isViewMode = mode === 'view';
 
@@ -243,8 +348,10 @@ export default function PurchasePage() {
     setVendorId('');
     setBillNo('');
     setRemarks('');
-    setItems([emptyItem()]);
-    setCustomUnitRows({});
+    setItems([]);
+    setCurrentRow(emptyCurrentRow());
+    setEditingUid(null);
+    setIsCustomUnit(false);
     setErrorMsg('');
   };
 
@@ -290,10 +397,22 @@ export default function PurchasePage() {
     requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
 
+  // "New Purchase" (toolbar button and the entry-tab switch) — unlike readyForNextPurchase, this
+  // is a deliberate reset of the whole form (including the date), so focus goes to Date itself
+  // rather than restoring a working date and jumping past it.
+  const startNewPurchase = () => {
+    handleNew();
+    requestAnimationFrame(() => firstFieldRef.current?.focus());
+  };
+
   const buildPayload = (): PurchaseCreateInput | null => {
     if (!vendorId) { setErrorMsg('Vendor is required.'); return null; }
     if (!date) { setErrorMsg('Date is required.'); return null; }
-    if (!isValid) { setErrorMsg('Every line item needs a material name, unit, quantity, and price per unit.'); return null; }
+    if (billNoDuplicate) {
+      setErrorMsg(`Bill No. "${billNo.trim()}" is already used for this vendor (${billNoDuplicate.kind === 'posted' ? 'Purchase' : 'Draft'} #${billNoDuplicate.id}, ${formatDate(billNoDuplicate.date)}).`);
+      return null;
+    }
+    if (!isValid) { setErrorMsg('At least one article is required.'); return null; }
 
     const itemsPayload: PurchaseItemInput[] = items.map(it => ({
       material_name: it.materialName.trim(),
@@ -370,16 +489,17 @@ export default function PurchasePage() {
     setVendorId(String(row.vendor_id));
     setBillNo(row.bill_no || '');
     setRemarks(row.remarks || '');
-    setItems(row.items.length
-      ? row.items.map(it => ({
-          uid: 'pui_' + it.item_id,
-          materialName: it.material_name || '',
-          unit: it.unit,
-          quantity: it.quantity,
-          pricePerUnit: it.price_per_unit,
-          totalPrice: it.total_price
-        }))
-      : [emptyItem()]);
+    setItems(row.items.map(it => ({
+      uid: 'pui_' + it.item_id,
+      materialName: it.material_name || '',
+      unit: it.unit,
+      quantity: it.quantity,
+      pricePerUnit: it.price_per_unit,
+      totalPrice: it.total_price
+    })));
+    setCurrentRow(emptyCurrentRow());
+    setEditingUid(null);
+    setIsCustomUnit(false);
     setErrorMsg('');
     setMode('view');
   };
@@ -447,6 +567,7 @@ export default function PurchasePage() {
     }
     setPurchaseId(res.data.draft_id);
     setCurrentIsPosted(false);
+    setMode('edit'); // land on the editable screen straight away, not the read-only view
     setSuccessMsg('Purchase unposted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshPurchases();
@@ -463,16 +584,17 @@ export default function PurchasePage() {
     setVendorId(String(draft.vendor_id));
     setBillNo(draft.bill_no || '');
     setRemarks(draft.remarks || '');
-    setItems((draft.items || []).length
-      ? (draft.items || []).map(it => ({
-          uid: 'draftrow_' + it.line_no,
-          materialName: it.material_name || '',
-          unit: it.unit,
-          quantity: it.quantity,
-          pricePerUnit: it.price_per_unit,
-          totalPrice: it.total_price
-        }))
-      : [emptyItem()]);
+    setItems((draft.items || []).map(it => ({
+      uid: 'draftrow_' + it.line_no,
+      materialName: it.material_name || '',
+      unit: it.unit,
+      quantity: it.quantity,
+      pricePerUnit: it.price_per_unit,
+      totalPrice: it.total_price
+    })));
+    setCurrentRow(emptyCurrentRow());
+    setEditingUid(null);
+    setIsCustomUnit(false);
     setErrorMsg('');
     setMode('edit');
   };
@@ -541,6 +663,56 @@ export default function PurchasePage() {
     return [...purchases].filter(p => p.is_posted).sort((a, b) => b.purchase_date.localeCompare(a.purchase_date));
   }, [purchases]);
 
+  // First/Previous/Next/Last record navigation (ref-pics/batch2/sale bill.png) — always walks the
+  // POSTED bills (oldest first), since those are the only records that can be reached this way:
+  // a draft-only (unposted) bill has no ledger effect yet and isn't a "record" to page through —
+  // it's still reachable via the Pending Posting panel above. `navFilter` isn't a data filter here
+  // (both values browse the same posted list) — it arms which action you're browsing FOR:
+  // 'unposted' means "I'm here to Unpost the bill I land on" (only posted bills are unpostable,
+  // hence browsing posted bills under an "Unposted" label — confirmed with the user 2026-08-25),
+  // and gates the Unpost button below; 'posted' is the default browsing/new-entry mode.
+  const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('posted');
+
+  const navPostedList = useMemo(() => [...sortedPurchases].reverse(), [sortedPurchases]);
+
+  const navIndex = useMemo(() => {
+    if (!currentIsPosted || purchaseId == null) return -1;
+    return navPostedList.findIndex(p => p.purchase_id === purchaseId);
+  }, [currentIsPosted, purchaseId, navPostedList]);
+
+  // Previous/Next/First/Last only browse anything while navFilter is 'unposted' (i.e. "I'm here to
+  // Unpost a bill") — while it's 'posted', the toolbar's job is adding new bills, not paging
+  // through old ones, so navigation goes dull rather than staying active. Confirmed with the user
+  // 2026-08-25.
+  const canNavPrevious = navFilter === 'unposted' && navPostedList.length > 0 && navIndex !== 0;
+  const canNavNext = navFilter === 'unposted' && navPostedList.length > 0 && navIndex !== navPostedList.length - 1;
+
+  const handleNavFirst = async () => {
+    if (navPostedList.length) await loadPurchaseRow(navPostedList[0]);
+  };
+  const handleNavLast = async () => {
+    if (navPostedList.length) await loadPurchaseRow(navPostedList[navPostedList.length - 1]);
+  };
+  const handleNavPrevious = async () => {
+    // No current position yet (navIndex -1) — Previous behaves like First rather than doing
+    // nothing, same convention as handleNavNext below.
+    const targetIdx = navIndex === -1 ? 0 : navIndex - 1;
+    if (targetIdx < 0 || targetIdx >= navPostedList.length) return;
+    await loadPurchaseRow(navPostedList[targetIdx]);
+  };
+  const handleNavNext = async () => {
+    const targetIdx = navIndex === -1 ? 0 : navIndex + 1;
+    if (targetIdx < 0 || targetIdx >= navPostedList.length) return;
+    await loadPurchaseRow(navPostedList[targetIdx]);
+  };
+
+  // Toolbar "Delete" now targets the selected ARTICLE (the row clicked into the entry fields
+  // below), not the whole bill — bill deletion stays where it was, password-gated in the Pending
+  // Posting panel. Disabled until a row is selected (editingUid set).
+  const deleteSelectedArticle = () => {
+    if (editingUid) removeItemRow(editingUid);
+  };
+
   // Recorded Purchases moved to its own tab (was inline under the entry form on the same page —
   // every purchase ever recorded rendering directly below a live entry form doesn't scale and
   // pushed the whole page well past one screen). Date-range filter, defaulting to the last three
@@ -562,7 +734,7 @@ export default function PurchasePage() {
   const tabBar = (
     <div className="flex gap-1.5" data-no-print>
       <button
-        onClick={() => { setActiveTab('entry'); handleNew(); }}
+        onClick={() => { setActiveTab('entry'); startNewPurchase(); }}
         className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
           activeTab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
@@ -711,24 +883,43 @@ export default function PurchasePage() {
             <form> below even though it now renders outside it — see fieldNav.ts's
             `findSubmitButton` comment for why the HTML `form` attribute is the established way
             other pages (Receipts, Transfer, etc.) already do this. */}
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
-          <div className="flex flex-wrap gap-2">
-            {/* Every action always renders (ref-pic style) — only `disabled` changes per state,
-                instead of whole button groups mounting/unmounting per `mode`. */}
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
+          <div className="flex flex-wrap items-center gap-0.5">
+            {/* ref-pics/batch2/sale bill.png toolbar style: small square buttons, icon on top,
+                label underneath, tightly packed in one strip — not pill-shaped colored buttons. */}
+            <button type="button" onClick={startNewPurchase} title="New Purchase" className="toolbar-btn">
+              <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>New</span>
+            </button>
             <button
               type="button"
-              onClick={handleNew}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              onClick={deleteSelectedArticle}
+              disabled={isViewMode || !editingUid}
+              title="Delete selected article"
+              className="toolbar-btn"
             >
-              New Purchase
+              <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
+              <span>Delete</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('edit')}
+              disabled={!isViewMode || currentIsPosted}
+              title="Edit"
+              className="toolbar-btn"
+            >
+              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
+              <span>Edit</span>
             </button>
             <button
               type="submit"
               form="purchase-entry-form"
               disabled={isViewMode || !isValid}
-              className="btn-gold flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title={mode === 'edit' ? 'Update Purchase' : 'Save Purchase'}
+              className="toolbar-btn"
             >
-              <Save size={14} /> {mode === 'edit' ? 'Update Purchase' : 'Save Purchase'}
+              <Save size={20} strokeWidth={2.5} className="text-blue-600" />
+              <span>{mode === 'edit' ? 'Update' : 'Save'}</span>
             </button>
             <button
               type="button"
@@ -738,35 +929,73 @@ export default function PurchasePage() {
                 if (res.ok) await loadPurchaseRow(res.data);
               }}
               disabled={mode !== 'edit'}
-              className="btn-outline px-3 py-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title="Cancel Edit"
+              className="toolbar-btn"
             >
-              Cancel Edit
+              <XCircle size={20} strokeWidth={2.5} className="text-slate-500" />
+              <span>Cancel</span>
             </button>
+
+            <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            {/* Record navigation — First/Previous/Next/Last, browsing whichever list `navFilter`
+                (the Posted/Unposted dropdown, far right) currently points at. */}
+            <button type="button" onClick={handleNavFirst} disabled={!canNavPrevious} title="First" className="toolbar-btn">
+              <ChevronsLeft size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>First</span>
+            </button>
+            <button type="button" onClick={handleNavPrevious} disabled={!canNavPrevious} title="Previous" className="toolbar-btn">
+              <ChevronLeft size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Prev.</span>
+            </button>
+            <button type="button" onClick={handleNavNext} disabled={!canNavNext} title="Next" className="toolbar-btn">
+              <ChevronRight size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Next</span>
+            </button>
+            <button type="button" onClick={handleNavLast} disabled={!canNavNext} title="Last" className="toolbar-btn">
+              <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
+              <span>Last</span>
+            </button>
+
+            <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
             <button
               type="button"
-              onClick={() => setMode('edit')}
-              disabled={!isViewMode || currentIsPosted}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] border border-[#B08D57] shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              onClick={handleUnpost}
+              disabled={!isViewMode || purchaseId == null || !currentIsPosted || navFilter !== 'unposted'}
+              title={navFilter !== 'unposted' ? 'Switch the dropdown to Unposted first' : 'Unpost'}
+              className="toolbar-btn"
             >
-              <Edit size={13} /> Edit
+              <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
+              <span>Unpost</span>
             </button>
             <button
               type="button"
               onClick={handlePost}
               disabled={!isViewMode || purchaseId == null || currentIsPosted}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+              title="Post"
+              className="toolbar-btn"
             >
-              Post
-            </button>
-            <button
-              type="button"
-              onClick={handleUnpost}
-              disabled={!isViewMode || purchaseId == null || !currentIsPosted}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-            >
-              Unpost
+              <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
+              <span>Post</span>
             </button>
           </div>
+
+          {/* Posted/Unposted — arms which action Previous/Next/First/Last (left) are for; see the
+              comment on canNavPrevious/canNavNext above. Uses soleria-input-compact rather than a
+              forced inline height on the full-size soleria-input — that combination fought the
+              class's own padding/line-height and clipped the text, which is what "doesn't appear
+              properly" was. */}
+          <select
+            value={navFilter}
+            onChange={e => setNavFilter(e.target.value as 'posted' | 'unposted')}
+            className="soleria-input soleria-input-compact cursor-pointer font-semibold"
+            style={{ width: 'auto' }}
+            title="Posted = add new bills. Unposted = browse posted bills to Unpost one."
+          >
+            <option value="posted">Posted</option>
+            <option value="unposted">Unposted</option>
+          </select>
         </div>
 
         {/* This <form> IS the invoice card — height pinned to the remaining viewport space (see
@@ -783,13 +1012,13 @@ export default function PurchasePage() {
         >
           <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-5">
             <ShoppingBag size={18} className="text-[#B08D57]" />
-            <h3 className="font-lora font-semibold text-lg text-slate-800">Raw Material Purchase</h3>
+            <h3 className="font-lora font-bold text-lg text-slate-900">Raw Material Purchase</h3>
           </div>
 
           {/* Header fields */}
-          <div className="shrink-0 grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div className="shrink-0 grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
+              <label className="block text-xs font-bold text-slate-900 mb-1">
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
               <input
@@ -799,6 +1028,22 @@ export default function PurchasePage() {
                 disabled={isViewMode}
                 onChange={e => setDate(e.target.value)}
                 className="soleria-input"
+                style={{ fontSize: '13px' }}
+              />
+            </div>
+            <div>
+              {/* System Bill No. — the real purchase_id (draft_id while unposted), assigned by the
+                  database, never typed. Read-only always, matching the legacy Wentox screenshot's
+                  auto "Bill No." box. Distinct from "Vendor Bill No." below, which is the vendor's
+                  own free-text invoice number. Before a save, shows nextSystemBillNo — a PREVIEW
+                  of what Save will assign, not the assigned number itself yet. */}
+              <label className="block text-xs font-bold text-slate-900 mb-1">System Bill No.</label>
+              <input
+                type="text"
+                value={purchaseId != null ? `#${purchaseId}` : `#${nextSystemBillNo} (pending)`}
+                disabled
+                readOnly
+                className="soleria-input bg-slate-100 text-slate-500 font-mono"
                 style={{ fontSize: '13px' }}
               />
             </div>
@@ -818,13 +1063,28 @@ export default function PurchasePage() {
                   </button>
                 )}
               </div>
-              <SearchableSelect
+              <button
+                ref={vendorTriggerRef}
+                type="button"
+                data-field-nav="true"
+                disabled={isViewMode}
+                onClick={openVendorModal}
+                onKeyDown={handleVendorTriggerKeyDown}
+                className="w-full flex items-center justify-between pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 focus:border-[var(--brand-gold)] shadow-2xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-h-[38px] text-left"
+              >
+                <span className={selectedVendor ? 'text-black font-semibold' : 'text-slate-500'}>
+                  {selectedVendor ? vendorOptions.find(o => o.value === vendorId)?.label : 'Select vendor...'}
+                </span>
+                <ChevronDown size={16} className="text-slate-400" />
+              </button>
+              <SearchModal
+                isOpen={isVendorModalOpen}
+                title="Select Vendor"
                 options={vendorOptions}
                 value={vendorId}
-                onChange={setVendorId}
-                placeholder="Select vendor..."
+                onSelect={handleVendorSelect}
+                onClose={() => setIsVendorModalOpen(false)}
                 searchPlaceholder="Search vendors..."
-                disabled={isViewMode}
               />
               {selectedVendor && (
                 <p className="text-[11px] text-slate-400 mt-1">
@@ -833,19 +1093,33 @@ export default function PurchasePage() {
               )}
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Vendor Bill No.</label>
+              <label className="block text-xs font-bold text-slate-900 mb-1">Vendor Bill No.</label>
               <input
                 type="text"
                 value={billNo}
                 disabled={isViewMode}
                 onChange={e => setBillNo(e.target.value)}
                 placeholder="Vendor's own invoice #..."
-                className="soleria-input"
+                className={`soleria-input ${billNoDuplicate ? 'border-rose-400 focus:border-rose-500' : ''}`}
                 style={{ fontSize: '13px' }}
               />
+              {/* Live duplicate check as you type — same vendor, same bill no., either already
+                  posted or still sitting as a pending draft. Frontend-only (no backend endpoint
+                  for this): checked against the purchases/unpostedPurchases already loaded on this
+                  page, 300ms debounced (see debouncedBillNo above). Save stays blocked
+                  (isValid/buildPayload above) while this shows a duplicate. */}
+              {billNo.trim() && vendorId && billNo.trim() !== debouncedBillNo.trim() ? (
+                <p className="text-[11px] text-slate-400 font-semibold mt-1">Checking…</p>
+              ) : billNoDuplicate ? (
+                <p className="text-[11px] text-rose-600 font-semibold mt-1">
+                  Already used — {billNoDuplicate.kind === 'posted' ? 'Purchase' : 'Draft'} #{billNoDuplicate.id} ({formatDate(billNoDuplicate.date)})
+                </p>
+              ) : billNo.trim() && vendorId ? (
+                <p className="text-[11px] text-emerald-600 font-semibold mt-1">Bill No. available</p>
+              ) : null}
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Remarks</label>
+              <label className="block text-xs font-bold text-slate-900 mb-1">Remarks</label>
               <input
                 type="text"
                 value={remarks}
@@ -858,119 +1132,164 @@ export default function PurchasePage() {
             </div>
           </div>
 
-          {/* Line items — flex-1 so it grows to fill whatever space invoiceCardHeight (above)
-              leaves after every other section takes its natural size (same treatment as
-              SaleBillPage/SaleReturnPage's item tables). `min-height: 0` overrides flexbox's
-              default min-height:auto, which would otherwise let this box's own content stretch
-              the whole form instead of scrolling internally. The header row is `sticky` within
-              the scroll box so column labels stay visible past the first screenful of rows. */}
+          {/* Article entry — ONE editable field set (ref-pics/batch2/sale bill.png), not one
+              editable row per grid entry. Enter on Price/Unit (or the Add/Update button) commits
+              it into the grid below and clears back to blank, ready for the next article. */}
+          {!isViewMode && (
+            <div className="shrink-0 mb-3 p-3 rounded-lg border bg-blue-50/40" style={{ borderColor: 'var(--border-color)' }}>
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                <div className="md:col-span-4">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
+                    Material / Product Name <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    ref={materialNameRef}
+                    value={currentRow.materialName}
+                    onChange={e => updateCurrentField('materialName', e.target.value)}
+                    placeholder="e.g. PU Sheet Roll"
+                    className="soleria-input font-semibold"
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
+                    Unit <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  {isCustomUnit ? (
+                    <input
+                      type="text"
+                      value={currentRow.unit}
+                      onChange={e => updateCurrentField('unit', e.target.value)}
+                      placeholder="Type unit..."
+                      autoFocus
+                      onBlur={() => {
+                        if (!currentRow.unit.trim()) {
+                          setIsCustomUnit(false);
+                          updateCurrentField('unit', UNIT_PRESETS[0]);
+                        }
+                      }}
+                      className="soleria-input"
+                      style={{ fontSize: '13px' }}
+                    />
+                  ) : (
+                    <select
+                      value={UNIT_PRESETS.includes(currentRow.unit) ? currentRow.unit : '__other__'}
+                      onChange={e => {
+                        if (e.target.value === '__other__') {
+                          setIsCustomUnit(true);
+                          updateCurrentField('unit', '');
+                        } else {
+                          updateCurrentField('unit', e.target.value);
+                        }
+                      }}
+                      className="soleria-input cursor-pointer"
+                      style={{ fontSize: '13px' }}
+                    >
+                      {UNIT_PRESETS.map(u => (
+                        <option key={u} value={u}>{u}</option>
+                      ))}
+                      <option value="__other__">
+                        {UNIT_PRESETS.includes(currentRow.unit) ? 'Other (type manually)...' : currentRow.unit || 'Other (type manually)...'}
+                      </option>
+                    </select>
+                  )}
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
+                    Quantity <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={currentRow.quantity || ''}
+                    onChange={e => updateCurrentField('quantity', Number(e.target.value))}
+                    className="soleria-input text-center font-semibold"
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-bold text-slate-900 mb-1">
+                    Price / Unit <span className="text-red-500 font-bold">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={currentRow.pricePerUnit || ''}
+                    onChange={e => updateCurrentField('pricePerUnit', Number(e.target.value))}
+                    onKeyDown={handleRateKeyDown}
+                    className="soleria-input text-center font-semibold"
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+                <div className="md:col-span-2 flex items-end gap-2">
+                  <div className="flex-1">
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Value</label>
+                    <div className="soleria-input flex items-center font-bold text-slate-800 bg-slate-100" style={{ fontSize: '13px' }}>
+                      {formatCurrency(currentRowTotal)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={commitCurrentRow}
+                    title={editingUid ? 'Update this article' : 'Add this article'}
+                    className="btn-outline p-2 shrink-0"
+                  >
+                    {editingUid ? <CheckCircle2 size={16} /> : <Plus size={16} />}
+                  </button>
+                </div>
+              </div>
+              {editingUid && (
+                <div className="mt-2 flex items-center gap-2 text-xs">
+                  <span className="text-amber-700 font-semibold">Editing an existing article — Update to save, or</span>
+                  <button type="button" onClick={cancelEditRow} className="text-slate-500 hover:text-slate-700 font-semibold underline">
+                    cancel
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Committed articles — read-only list; click any row to load it back into the entry
+              fields above for editing (ref-pics/batch2/sale bill.png). flex-1 so it grows to fill
+              whatever space invoiceCardHeight (above) leaves after every other section takes its
+              natural size. `min-height: 0` overrides flexbox's default min-height:auto, which
+              would otherwise let this box's own content stretch the whole form instead of
+              scrolling internally. The header row is `sticky` within the scroll box so column
+              labels stay visible past the first screenful of rows. */}
           <div className="flex-1 min-h-0 mb-4 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 pl-4" style={{ minWidth: '200px' }}>Material / Product Name <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3" style={{ width: '160px' }}>Unit <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '110px' }}>Quantity <span className="text-red-500 font-bold">*</span></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '130px' }}>Price / Unit <span className="text-red-500 font-bold">*</span></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 pl-4" style={{ minWidth: '200px' }}>Material / Product Name</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3" style={{ width: '160px' }}>Unit</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '110px' }}>Quantity</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '130px' }}>Price / Unit</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: '130px' }}>Total Price</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '50px' }}></th>
                 </tr>
               </thead>
               <tbody>
-                {items.map((item, idx) => (
-                  <tr key={item.uid} className="border-b hover:bg-slate-50/55 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 pl-4">
-                      <input
-                        type="text"
-                        ref={el => { materialNameRefs.current[idx] = el; }}
-                        value={item.materialName}
-                        disabled={isViewMode}
-                        onChange={e => updateItem(item.uid, 'materialName', e.target.value)}
-                        placeholder="e.g. PU Sheet Roll"
-                        className="soleria-input font-semibold"
-                        style={{ fontSize: '13px' }}
-                      />
+                {items.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="p-6 text-center text-slate-400 text-sm">
+                      No articles added yet — fill the fields above and press Enter.
                     </td>
-                    <td className="p-3">
-                      {customUnitRows[item.uid] ? (
-                        <input
-                          type="text"
-                          value={item.unit}
-                          disabled={isViewMode}
-                          onChange={e => updateItem(item.uid, 'unit', e.target.value)}
-                          placeholder="Type unit..."
-                          autoFocus
-                          onBlur={() => {
-                            if (!item.unit.trim()) {
-                              setCustomUnitRows(prev => ({ ...prev, [item.uid]: false }));
-                              updateItem(item.uid, 'unit', UNIT_PRESETS[0]);
-                            }
-                          }}
-                          className="soleria-input"
-                          style={{ fontSize: '13px' }}
-                        />
-                      ) : (
-                        <select
-                          value={UNIT_PRESETS.includes(item.unit) ? item.unit : '__other__'}
-                          disabled={isViewMode}
-                          onChange={e => {
-                            if (e.target.value === '__other__') {
-                              setCustomUnitRows(prev => ({ ...prev, [item.uid]: true }));
-                              updateItem(item.uid, 'unit', '');
-                            } else {
-                              updateItem(item.uid, 'unit', e.target.value);
-                            }
-                          }}
-                          className="soleria-input cursor-pointer"
-                          style={{ fontSize: '13px' }}
-                        >
-                          {UNIT_PRESETS.map(u => (
-                            <option key={u} value={u}>{u}</option>
-                          ))}
-                          <option value="__other__">
-                            {UNIT_PRESETS.includes(item.unit) ? 'Other (type manually)...' : item.unit || 'Other (type manually)...'}
-                          </option>
-                        </select>
-                      )}
-                    </td>
-                    <td className="p-3 text-center">
-                      <input
-                        type="number"
-                        min={0}
-                        value={item.quantity || ''}
-                        disabled={isViewMode}
-                        onChange={e => updateItem(item.uid, 'quantity', Number(e.target.value))}
-                        className="soleria-input text-center font-semibold"
-                        style={{ fontSize: '13px' }}
-                      />
-                    </td>
-                    <td className="p-3 text-center">
-                      <input
-                        type="number"
-                        min={0}
-                        value={item.pricePerUnit || ''}
-                        disabled={isViewMode}
-                        onChange={e => updateItem(item.uid, 'pricePerUnit', Number(e.target.value))}
-                        onKeyDown={handleLastFieldKeyDown}
-                        className="soleria-input text-center font-semibold"
-                        style={{ fontSize: '13px' }}
-                      />
-                    </td>
-                    <td className="p-3 text-right font-bold text-slate-800">
-                      {formatCurrency(item.totalPrice)}
-                    </td>
-                    <td className="p-3 text-center">
-                      {!isViewMode && (
-                        <button
-                          type="button"
-                          onClick={() => removeItemRow(item.uid)}
-                          className="p-1.5 rounded hover:bg-slate-100 text-slate-400 hover:text-red-600 transition-colors"
-                          title="Remove Row"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      )}
-                    </td>
+                  </tr>
+                ) : items.map(item => (
+                  <tr
+                    key={item.uid}
+                    onClick={() => handleEditRow(item)}
+                    title={!isViewMode ? 'Click to select this article — Delete (toolbar) removes it' : undefined}
+                    className={`border-b transition-colors ${
+                      item.uid === editingUid ? 'bg-blue-50' : 'hover:bg-slate-50/55'
+                    } ${!isViewMode ? 'cursor-pointer' : ''}`}
+                    style={{ borderColor: 'var(--border-table)' }}
+                  >
+                    <td className="p-3 pl-4 font-semibold text-slate-800">{item.materialName}</td>
+                    <td className="p-3 text-slate-600">{item.unit}</td>
+                    <td className="p-3 text-center font-semibold text-slate-700">{item.quantity}</td>
+                    <td className="p-3 text-center font-semibold text-slate-700">{formatCurrency(item.pricePerUnit)}</td>
+                    <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(item.totalPrice)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -978,21 +1297,10 @@ export default function PurchasePage() {
                 <tr className="bg-slate-50 border-t-2 font-bold text-slate-800" style={{ borderColor: 'var(--border-color)' }}>
                   <td className="p-3 pl-4" colSpan={4}>Grand Total</td>
                   <td className="p-3 text-right">{formatCurrency(grandTotal)}</td>
-                  <td></td>
                 </tr>
               </tfoot>
             </table>
           </div>
-
-          {!isViewMode && (
-            <button
-              type="button"
-              onClick={addItemRow}
-              className="shrink-0 btn-outline flex items-center gap-1.5 px-4 py-2 text-sm"
-            >
-              <Plus size={16} /> Add Line Item
-            </button>
-          )}
         </form>
         </>
         )}
@@ -1002,10 +1310,10 @@ export default function PurchasePage() {
         {activeTab === 'records' && (
         <div className="card-white p-6 bg-white border">
           <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-            <h3 className="font-lora font-semibold text-lg text-slate-800">Recorded Purchases</h3>
+            <h3 className="font-lora font-bold text-lg text-slate-900">Recorded Purchases</h3>
             <div className="flex flex-wrap items-end gap-3" data-no-print>
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">From</label>
+                <label className="block text-xs font-bold text-slate-900 mb-1">From</label>
                 <input
                   type="date"
                   value={recordsDateFrom}
@@ -1015,7 +1323,7 @@ export default function PurchasePage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">To</label>
+                <label className="block text-xs font-bold text-slate-900 mb-1">To</label>
                 <input
                   type="date"
                   value={recordsDateTo}
