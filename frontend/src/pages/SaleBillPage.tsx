@@ -17,7 +17,7 @@ import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
-import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
 import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
@@ -152,6 +152,8 @@ export default function SaleBillPage() {
   // persisted; which EXISTING record is loaded (billId/currentBillIsPosted/mode) is deliberately
   // left as plain useState, same as StockVoucherPage.
   const clearSaleBillDraft = useClearPageDraft('sale-bill');
+  // Captured at mount — gates the auto-initialize effect below. See its comment.
+  const hasSaleBillDraft = useHasPageDraft('sale-bill');
 
   // Form State
   const [billId, setBillId] = useState<number | null>(null);
@@ -649,8 +651,14 @@ export default function SaleBillPage() {
     handleDeleteCurrentBill();
   };
 
-  // Initialize new bill if mode is new and not set
+  // Initialize new bill if mode is new and not set.
+  //
+  // Skipped entirely when this page mounted with a restored draft (usePersistentField): this
+  // effect fires a beat AFTER mount, once `stores` resolves, and handleNew() blanks every field
+  // AND clears the stored draft — so without the guard, coming back to a half-typed bill wiped it
+  // a fraction of a second after it was restored (reported by the user, 2026-08-30).
   useEffect(() => {
+    if (hasSaleBillDraft) return;
     if (mode === 'new' && billId === null && stores.length > 0) {
       handleNew();
     }

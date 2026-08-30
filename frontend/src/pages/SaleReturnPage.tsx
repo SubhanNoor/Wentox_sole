@@ -17,7 +17,7 @@ import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
-import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
 import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
@@ -114,6 +114,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // persisted; which EXISTING record is loaded (returnId/currentReturnIsPosted/mode) is
   // deliberately left as plain useState, same as StockVoucherPage/SaleBillPage.
   const clearSaleReturnDraft = useClearPageDraft('sale-return');
+  // Captured at mount — gates the auto-initialize effect below. See its comment.
+  const hasSaleReturnDraft = useHasPageDraft('sale-return');
 
   // Form State
   const [returnId, setReturnId] = useState<number | null>(null);
@@ -663,8 +665,14 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     }, 150);
   };
 
-  // Initialize new return if mode is new and not set
+  // Initialize new return if mode is new and not set.
+  //
+  // Skipped entirely when this page mounted with a restored draft (usePersistentField): this
+  // effect fires a beat AFTER mount, once `stores`/`addas` resolve, and handleNew() blanks every
+  // field AND clears the stored draft — so without the guard, coming back to a half-typed return
+  // wiped it a fraction of a second after it was restored (reported by the user, 2026-08-30).
   useEffect(() => {
+    if (hasSaleReturnDraft) return;
     if (activeTab === 'return' && mode === 'new' && returnId === null && stores.length > 0 && addas.length > 0) {
       handleNew();
     }
