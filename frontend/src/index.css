@@ -264,6 +264,16 @@ select option:hover {
   background: rgba(27,42,65,0.06);
 }
 
+/* Keyboard focus (e.g. landing on New after switching the Posted/Unposted dropdown) needs to read
+   as clearly "selected" as a hover, not just a thin browser outline (reported by the user,
+   2026-08-30) — same background tint as hover, plus a visible ring so it still shows on a button
+   that also happens to be under the mouse. */
+.toolbar-btn:focus {
+  background: rgba(27,42,65,0.09);
+  outline: 2px solid #B08D57;
+  outline-offset: -2px;
+}
+
 .toolbar-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;

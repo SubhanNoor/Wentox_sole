@@ -72,6 +72,7 @@ export default function PurchasePage() {
     const res = await api.purchases.list({});
     if (res.ok) setPurchases(res.data);
     else setLookupError('Failed to load purchases: ' + res.error.message);
+    return res.ok ? res.data : null;
   }, []);
 
   // Every saved-unposted purchase now lives in draft_purchases — the real purchases table
@@ -638,13 +639,25 @@ export default function PurchasePage() {
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshPurchases();
     refreshUnposted();
+    // It's a draft again now, so the window follows it back to the Unposted view (per the user,
+    // 2026-08-30) rather than staying on Posted looking at a purchase that no longer belongs there.
+    setNavFilter('unposted');
   };
 
   // Pending Posting panel: opening a row loads that draft straight into the form — no password
   // (drafts never needed one on this page; only a password-gated delete is new, below).
   // `opts.mode` lets the nav buttons open a draft READ-ONLY while browsing (look-then-decide),
   // while every other caller keeps the original edit-on-open behaviour.
-  const loadDraftIntoForm = (draft: DraftPurchaseRow, opts: { mode?: 'edit' | 'view' } = {}) => {
+  const loadDraftIntoForm = async (draftIn: DraftPurchaseRow, opts: { mode?: 'edit' | 'view' } = {}) => {
+    // list()/find-search rows never carry `.items` (only get()/create()/update() do — see
+    // DraftPurchaseRow's own comment) — browsing/switching to one of those rows was loading the
+    // form with an empty material grid (reported by the user, 2026-08-30). Re-fetch the full
+    // draft whenever it's missing rather than trusting whatever was passed in.
+    let draft = draftIn;
+    if (!draft.items) {
+      const res = await api.draftPurchases.get(draft.draft_id);
+      if (res.ok) draft = res.data;
+    }
     createdInThisRun.current = false;
     setPurchaseId(draft.draft_id);
     setCurrentIsPosted(false);
@@ -673,7 +686,7 @@ export default function PurchasePage() {
       setErrorMsg('Failed to load purchase: ' + res.error.message);
       return;
     }
-    loadDraftIntoForm(res.data);
+    await loadDraftIntoForm(res.data);
     setActiveTab('entry');
   };
 
@@ -740,7 +753,12 @@ export default function PurchasePage() {
   // "Unposted" showed posted bills, and a purchase just saved with Save couldn't be reached from
   // the toolbar at all. Changed on the user's explicit instruction (2026-08-27), same as Sale Bill
   // and Sale Return.
-  const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('posted');
+  //
+  // Unposted is the default (per the user, 2026-08-30): that's the working mode you add and post
+  // new purchases from. Posted is purely a browse mode over already-posted purchases (First/Prev./
+  // Next/Last + Un Post).
+  const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('unposted');
+  const newButtonRef = useRef<HTMLButtonElement>(null);
 
   const navPostedList = useMemo(() => [...sortedPurchases].reverse(), [sortedPurchases]);
   const navUnpostedList = useMemo(() => [...unpostedPurchases].reverse(), [unpostedPurchases]);
@@ -767,7 +785,26 @@ export default function PurchasePage() {
     if (navFilter === 'posted') {
       await loadPurchaseRow(navList[idx] as PurchaseRow);
     } else {
-      loadDraftIntoForm(navList[idx] as DraftPurchaseRow, { mode: 'view' });
+      await loadDraftIntoForm(navList[idx] as DraftPurchaseRow, { mode: 'view' });
+    }
+  };
+
+  // Switching the Posted/Unposted dropdown (per the user, 2026-08-30):
+  // - To Unposted: load the most recently saved draft (or a blank New purchase if there isn't
+  //   one), then focus New — Enter on it clicks New and lands on Date, ready for the next one.
+  // - To Posted: re-fetch and jump straight to the most recently posted purchase for browsing.
+  const handleNavFilterChange = async (next: 'posted' | 'unposted') => {
+    setNavFilter(next);
+    if (next === 'unposted') {
+      const latest = navUnpostedList[navUnpostedList.length - 1];
+      if (latest) await loadDraftIntoForm(latest, { mode: 'view' });
+      else startNewPurchase();
+      requestAnimationFrame(() => newButtonRef.current?.focus());
+    } else {
+      const fresh = await refreshPurchases();
+      const list = [...(fresh ?? purchases).filter(p => p.is_posted)].reverse();
+      const latest = list[list.length - 1];
+      if (latest) await loadPurchaseRow(latest);
     }
   };
 
@@ -958,7 +995,7 @@ export default function PurchasePage() {
           <div className="flex flex-wrap items-center gap-0.5">
             {/* ref-pics/batch2/sale bill.png toolbar style: small square buttons, icon on top,
                 label underneath, tightly packed in one strip — not pill-shaped colored buttons. */}
-            <button type="button" onClick={startNewPurchase} title="New Purchase" className="toolbar-btn">
+            <button ref={newButtonRef} type="button" onClick={startNewPurchase} title="New Purchase" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1066,19 +1103,20 @@ export default function PurchasePage() {
             </button>
           </div>
 
-          {/* Posted/Unposted — picks which list Previous/Next/First/Last page through. Uses
-              soleria-input-compact rather than a forced inline height on the full-size
-              soleria-input — that combination fought the class's own padding/line-height and
-              clipped the text, which is what "doesn't appear properly" was. */}
+          {/* Posted/Unposted — picks which list Previous/Next/First/Last page through. Unposted
+              (default) = add/post new purchases; Posted = browse already-posted ones (per the
+              user, 2026-08-30). Uses soleria-input-compact rather than a forced inline height on
+              the full-size soleria-input — that combination fought the class's own padding/
+              line-height and clipped the text, which is what "doesn't appear properly" was. */}
           <select
             value={navFilter}
-            onChange={e => setNavFilter(e.target.value as 'posted' | 'unposted')}
+            onChange={e => handleNavFilterChange(e.target.value as 'posted' | 'unposted')}
             className="soleria-input soleria-input-compact cursor-pointer font-semibold"
             style={{ width: 'auto' }}
             title="Which purchases First/Prev./Next/Last page through: posted ones, or saved-but-unposted drafts."
           >
-            <option value="posted">Posted ({sortedPurchases.length})</option>
             <option value="unposted">Unposted ({unpostedPurchases.length})</option>
+            <option value="posted">Posted ({sortedPurchases.length})</option>
           </select>
         </div>
 

@@ -57,6 +57,7 @@ export default function PurchaseReturnPage() {
     const res = await api.purchaseReturns.list({});
     if (res.ok) setReturns(res.data);
     else setLookupError('Failed to load purchase returns: ' + res.error.message);
+    return res.ok ? res.data : null;
   }, []);
 
   // Every saved-unposted Purchase Return now lives in draft_purchase_returns — the real
@@ -735,6 +736,9 @@ export default function PurchaseReturnPage() {
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshReturns();
     refreshUnposted();
+    // It's a draft again now, so the window follows it back to the Unposted view (per the user,
+    // 2026-08-30) rather than staying on Posted looking at a return that no longer belongs there.
+    setNavFilter('unposted');
   };
 
   // P-03: post the whole run via the real backend batch endpoint (draftPurchaseReturns.confirmAll).
@@ -766,7 +770,16 @@ export default function PurchaseReturnPage() {
   // (drafts never needed one on this page; only a password-gated delete is new, below).
   // `opts.mode` lets the nav buttons open a draft READ-ONLY while browsing (look-then-decide),
   // while every other caller keeps the original edit-on-open behaviour.
-  const loadDraftIntoForm = (draft: DraftPurchaseReturnRow, opts: { mode?: 'edit' | 'view' } = {}) => {
+  const loadDraftIntoForm = async (draftIn: DraftPurchaseReturnRow, opts: { mode?: 'edit' | 'view' } = {}) => {
+    // list()/find-search rows never carry `.items` (only get()/create()/update() do — see
+    // DraftPurchaseReturnRow's own comment) — browsing/switching to one of those rows was loading
+    // the form with an empty material grid (reported by the user, 2026-08-30). Re-fetch the full
+    // draft whenever it's missing rather than trusting whatever was passed in.
+    let draft = draftIn;
+    if (!draft.items) {
+      const res = await api.draftPurchaseReturns.get(draft.draft_id);
+      if (res.ok) draft = res.data;
+    }
     setReturnId(draft.draft_id);
     setCurrentIsPosted(false);
     setDate(draft.return_date.slice(0, 10));
@@ -797,7 +810,7 @@ export default function PurchaseReturnPage() {
       setErrorMsg('Failed to load purchase return: ' + res.error.message);
       return;
     }
-    loadDraftIntoForm(res.data);
+    await loadDraftIntoForm(res.data);
     setActiveTab('entry');
   };
 
@@ -857,7 +870,12 @@ export default function PurchaseReturnPage() {
   // through saved-but-not-yet-posted drafts. Departs from pages_design.md §3 (where both values
   // browsed the posted list and 'unposted' merely armed the Unpost button, making the labels lie)
   // on the user's explicit instruction, 2026-08-27 — same change as Sale Bill/Return/Purchase.
-  const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('posted');
+  //
+  // Unposted is the default (per the user, 2026-08-30): that's the working mode you add and post
+  // new returns from. Posted is purely a browse mode over already-posted returns (First/Prev./
+  // Next/Last + Un Post).
+  const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('unposted');
+  const newButtonRef = useRef<HTMLButtonElement>(null);
 
   const navPostedList = useMemo(() => [...sortedReturns].reverse(), [sortedReturns]);
   const navUnpostedList = useMemo(() => [...unpostedReturns].reverse(), [unpostedReturns]);
@@ -884,7 +902,7 @@ export default function PurchaseReturnPage() {
     if (navFilter === 'posted') {
       await loadReturnRow(navList[idx] as PurchaseReturnRow);
     } else {
-      loadDraftIntoForm(navList[idx] as DraftPurchaseReturnRow, { mode: 'view' });
+      await loadDraftIntoForm(navList[idx] as DraftPurchaseReturnRow, { mode: 'view' });
     }
   };
 
@@ -892,6 +910,25 @@ export default function PurchaseReturnPage() {
   const handleNavLast = () => goToNavIndex(navList.length - 1);
   const handleNavPrevious = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
   const handleNavNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
+
+  // Switching the Posted/Unposted dropdown (per the user, 2026-08-30):
+  // - To Unposted: load the most recently saved draft (or a blank New return if there isn't one),
+  //   then focus New — Enter on it clicks New and lands on Date, ready for the next one.
+  // - To Posted: re-fetch and jump straight to the most recently posted return for browsing.
+  const handleNavFilterChange = async (next: 'posted' | 'unposted') => {
+    setNavFilter(next);
+    if (next === 'unposted') {
+      const latest = navUnpostedList[navUnpostedList.length - 1];
+      if (latest) await loadDraftIntoForm(latest, { mode: 'view' });
+      else startNewReturn();
+      requestAnimationFrame(() => newButtonRef.current?.focus());
+    } else {
+      const fresh = await refreshReturns();
+      const list = [...(fresh ?? returns).filter(r => r.is_posted)].reverse();
+      const latest = list[list.length - 1];
+      if (latest) await loadReturnRow(latest);
+    }
+  };
 
   // Recorded Purchase Returns moved to its own tab (was inline under the entry form on the same
   // page, matching the identical PurchasePage fix). Date-range filter defaults to the last three
@@ -1064,7 +1101,7 @@ export default function PurchaseReturnPage() {
           <div className="flex flex-wrap items-center gap-0.5">
             {/* ref-pics/batch2/sale bill.png toolbar style: small square buttons, icon on top,
                 label underneath, tightly packed — see frontend/pages_design.md §1. */}
-            <button type="button" onClick={startNewReturn} title="New Return" className="toolbar-btn">
+            <button ref={newButtonRef} type="button" onClick={startNewReturn} title="New Return" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1169,16 +1206,18 @@ export default function PurchaseReturnPage() {
             </button>
           </div>
 
-          {/* Posted/Unposted — picks which list Previous/Next/First/Last page through. */}
+          {/* Posted/Unposted — picks which list Previous/Next/First/Last page through. Unposted
+              (default) = add/post new returns; Posted = browse already-posted ones (per the user,
+              2026-08-30). */}
           <select
             value={navFilter}
-            onChange={e => setNavFilter(e.target.value as 'posted' | 'unposted')}
+            onChange={e => handleNavFilterChange(e.target.value as 'posted' | 'unposted')}
             className="soleria-input soleria-input-compact cursor-pointer font-semibold"
             style={{ width: 'auto' }}
             title="Which returns First/Prev./Next/Last page through: posted ones, or saved-but-unposted drafts."
           >
-            <option value="posted">Posted ({sortedReturns.length})</option>
             <option value="unposted">Unposted ({unpostedReturns.length})</option>
+            <option value="posted">Posted ({sortedReturns.length})</option>
           </select>
         </div>
 

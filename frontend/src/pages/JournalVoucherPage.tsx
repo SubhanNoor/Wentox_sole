@@ -364,6 +364,9 @@ export default function JournalVoucherPage() {
     refresh();
     refreshUnposted();
     refreshNav();
+    // It's a draft again now, so the window follows it back to the Unposted view (per the user,
+    // 2026-08-30) rather than staying on Posted looking at a record that no longer belongs there.
+    setBrowseFilter('unposted');
   };
 
   // Listing rows only carry rolled-up totals (line_count/total_debit/total_credit), not the
@@ -477,12 +480,18 @@ export default function JournalVoucherPage() {
   // First = earliest, Last = most recent. Also doubles as the source for the auto "Number" preview
   // below, since jv_id is the ONE identity space a JV ever has (no separate draft table the way
   // Sale Bill/Purchase have — DRAFT and CONFIRMED are just a status on the same row).
-  const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('posted');
+  // Unposted is the default (per the user, 2026-08-30): that's the working mode you add and post
+  // new JVs from. Posted is purely a browse mode over already-CONFIRMED JVs (First/Prev./Next/
+  // Last + Un Post) — switching into it never blocks entry, it's just a different lens on the
+  // same record list.
+  const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('unposted');
   const [navVouchers, setNavVouchers] = useState<JournalVoucherRow[]>([]);
+  const newButtonRef = useRef<HTMLButtonElement>(null);
 
   const refreshNav = useCallback(async () => {
     const res = await api.journalVouchers.list({});
     if (res.ok) setNavVouchers(res.data);
+    return res.ok ? res.data : null;
   }, []);
 
   useEffect(() => { refreshNav(); }, [refreshNav]);
@@ -497,7 +506,7 @@ export default function JournalVoucherPage() {
     return navPostedList.findIndex(v => v.jv_id === jvId);
   }, [jvId, isPosted, navPostedList]);
 
-  const canBrowse = browseFilter === 'unposted' && navPostedList.length > 0;
+  const canBrowse = browseFilter === 'posted' && navPostedList.length > 0;
   const canNavPrevious = canBrowse && navIndex !== 0;
   const canNavNext = canBrowse && navIndex !== navPostedList.length - 1;
 
@@ -509,6 +518,25 @@ export default function JournalVoucherPage() {
   const handlePrev = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
   const handleNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
   const handleLast = () => goToNavIndex(navPostedList.length - 1);
+
+  // Switching the Posted/Unposted dropdown (per the user, 2026-08-30):
+  // - To Unposted: load the most recently saved unposted JV (or a blank New one if there isn't
+  //   one), then focus New — Enter on it clicks New and lands on Date, ready to type the next JV.
+  // - To Posted: re-fetch and jump straight to the most recently posted JV for browsing.
+  const handleBrowseFilterChange = async (next: 'posted' | 'unposted') => {
+    setBrowseFilter(next);
+    if (next === 'unposted') {
+      const latest = unpostedJvs[unpostedJvs.length - 1];
+      if (latest) await loadJv(latest.jv_id);
+      else handleNew();
+      requestAnimationFrame(() => newButtonRef.current?.focus());
+    } else {
+      const fresh = await refreshNav();
+      const list = [...(fresh ?? navVouchers)].filter(v => v.status === 'CONFIRMED').reverse();
+      const latest = list[list.length - 1];
+      if (latest) await loadJv(latest.jv_id);
+    }
+  };
 
   // Preview of the Number a brand-new JV will get — jv_id is assigned the moment Save actually
   // creates the row (draft or posted alike), so this is a client-side preview only, correct as
@@ -732,7 +760,7 @@ export default function JournalVoucherPage() {
             state, instead of whole button groups mounting/unmounting per mode. */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-0.5">
-            <button type="button" onClick={handleNew} title="New" className="toolbar-btn">
+            <button ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -802,8 +830,8 @@ export default function JournalVoucherPage() {
             <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
 
             <button
-              type="button" onClick={handleUnpost} disabled={!isViewMode || jvId == null || !isPosted || browseFilter !== 'unposted'}
-              title="Un Post — switch the dropdown to Unposted first"
+              type="button" onClick={handleUnpost} disabled={!isViewMode || jvId == null || !isPosted || browseFilter !== 'posted'}
+              title="Un Post — switch the dropdown to Posted first"
               className="toolbar-btn"
             >
               <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
@@ -820,17 +848,18 @@ export default function JournalVoucherPage() {
           </div>
 
           {/* Posted/Unposted — picks which list First/Prev./Next/Last page through. Same row as
-              the toolbar icons (per the user, 2026-08-30), matching PurchasePage's own layout. */}
+              the toolbar icons. Unposted (default) = add/post new JVs; Posted = browse
+              already-posted ones to Un Post one (per the user, 2026-08-30). */}
           <select
             value={browseFilter}
-            onChange={e => setBrowseFilter(e.target.value as 'posted' | 'unposted')}
+            onChange={e => handleBrowseFilterChange(e.target.value as 'posted' | 'unposted')}
             className="soleria-input soleria-input-compact cursor-pointer font-semibold"
             style={{ width: 'auto' }}
-            title="Posted = add new JVs. Unposted = browse posted JVs to Unpost one."
+            title="Unposted = add new JVs. Posted = browse posted JVs to Un Post one."
             data-no-print
           >
-            <option value="posted">Posted</option>
             <option value="unposted">Unposted</option>
+            <option value="posted">Posted</option>
           </select>
         </div>
 

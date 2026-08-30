@@ -321,12 +321,17 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // SaleBillPage. The dropdown is a REAL data filter: 'posted' pages through confirmed returns
   // (dbo.sale_returns), 'unposted' through saved-but-not-yet-posted drafts (dbo.draft_sale_returns).
   // See SaleBillPage's own comment for why this departs from pages_design.md §3.
-  const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('posted');
+  // Unposted is the default (per the user, 2026-08-30): that's the working mode you add and post
+  // new returns from. Posted is purely a browse mode over already-posted returns (First/Prev./
+  // Next/Last + Un Post).
+  const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('unposted');
   const [postedReturns, setPostedReturns] = useState<SaleReturnRow[]>([]);
+  const newButtonRef = useRef<HTMLButtonElement>(null);
 
   const refreshPostedReturns = useCallback(async () => {
     const res = await api.saleReturns.list();
     if (res.ok) setPostedReturns(res.data);
+    return res.ok ? res.data : null;
   }, []);
 
   useEffect(() => { refreshPostedReturns(); }, [refreshPostedReturns]);
@@ -359,7 +364,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       await loadReturnRow(navList[idx] as SaleReturnRow);
       setMode('view');
     } else {
-      loadDraftIntoForm(navList[idx] as DraftSaleReturnRow, { mode: 'view' });
+      await loadDraftIntoForm(navList[idx] as DraftSaleReturnRow, { mode: 'view' });
     }
   };
 
@@ -367,6 +372,25 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   const handlePrev = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
   const handleNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
   const handleLast = () => goToNavIndex(navList.length - 1);
+
+  // Switching the Posted/Unposted dropdown (per the user, 2026-08-30):
+  // - To Unposted: load the most recently saved draft (or a blank New return if there isn't one),
+  //   then focus New — Enter on it clicks New and lands on Date, ready to type the next return.
+  // - To Posted: re-fetch and jump straight to the most recently posted return for browsing.
+  const handleBrowseFilterChange = async (next: 'posted' | 'unposted') => {
+    setBrowseFilter(next);
+    if (next === 'unposted') {
+      const latest = navUnpostedList[navUnpostedList.length - 1];
+      if (latest) await loadDraftIntoForm(latest, { mode: 'view' });
+      else handleNew();
+      requestAnimationFrame(() => newButtonRef.current?.focus());
+    } else {
+      const fresh = await refreshPostedReturns();
+      const list = [...(fresh ?? postedReturns)].reverse();
+      const latest = list[list.length - 1];
+      if (latest) { await loadReturnRow(latest); setMode('view'); }
+    }
+  };
 
   // Toolbar's Find button — a quick jump to any return (posted or unposted) by bill number or
   // customer name, searched client-side over the already-loaded browse lists.
@@ -390,7 +414,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       await loadReturnRow(row as SaleReturnRow);
       setMode('view');
     } else {
-      loadDraftIntoForm(row as DraftSaleReturnRow);
+      await loadDraftIntoForm(row as DraftSaleReturnRow);
       setMode('view');
     }
   };
@@ -862,6 +886,10 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setSuccessMsg('Return unposted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshDrafts();
+    refreshPostedReturns();
+    // It's a draft again now, so the window follows it back to the Unposted view (per the user,
+    // 2026-08-30) rather than staying on Posted looking at a return that no longer belongs there.
+    setBrowseFilter('unposted');
   };
 
   // Entering edit mode never needs its own password prompt anymore — Save (handleSave,
@@ -930,7 +958,16 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // `opts.mode` lets the nav buttons open a draft READ-ONLY while browsing (look-then-decide),
   // while every other caller keeps the original edit-on-open behaviour. Mirrors SaleBillPage's
   // own loadDraftIntoForm signature.
-  const loadDraftIntoForm = (draft: DraftSaleReturnRow, opts: { mode?: 'edit' | 'view' } = {}) => {
+  const loadDraftIntoForm = async (draftIn: DraftSaleReturnRow, opts: { mode?: 'edit' | 'view' } = {}) => {
+    // list()/find-search rows never carry `.items` (only get()/create()/update() do — see
+    // DraftSaleReturnRow's own comment) — browsing/switching to one of those rows was loading the
+    // form with an empty article grid (reported by the user, 2026-08-30). Re-fetch the full draft
+    // whenever it's missing rather than trusting whatever was passed in.
+    let draft = draftIn;
+    if (!draft.items) {
+      const res = await api.draftSaleReturns.get(draft.draft_id);
+      if (res.ok) draft = res.data;
+    }
     setReturnId(draft.draft_id);
     setCurrentReturnIsPosted(false);
     setDate(draft.return_date.slice(0, 10));
@@ -1647,7 +1684,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-2">
           <div className="flex flex-wrap items-center gap-0.5">
-            <button type="button" onClick={handleNew} title="New" className="toolbar-btn">
+            <button ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1748,7 +1785,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               onClick={handleUnpostCurrentReturn}
               // No longer gated on the dropdown — see SaleBillPage's Un Post button for why.
               disabled={mode !== 'view' || returnId == null || !currentReturnIsPosted}
-              title="Un Post — switch the dropdown to Unposted first"
+              title="Un Post — move this posted return back to drafts"
               className="toolbar-btn"
             >
               <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
@@ -1823,25 +1860,20 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
             </div>
           )}
 
-          {mode === 'view' && (
-            <div className="text-sm font-semibold text-emerald-600 font-inter flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping text-[10px]"></span>
-              Return {currentReturnIsPosted ? 'Posted' : 'Saved'} Successfully!
-            </div>
-          )}
           </div>
 
-          {/* Posted/Unposted — picks which list First/Prev./Next/Last page through. Same row as
-              the toolbar icons (per the user, 2026-08-30), matching PurchasePage's own layout. */}
+          {/* Posted/Unposted — picks which list First/Prev./Next/Last page through. Unposted
+              (default) = add/post new returns; Posted = browse already-posted ones (per the user,
+              2026-08-30). */}
           <select
             value={browseFilter}
-            onChange={e => setBrowseFilter(e.target.value as 'posted' | 'unposted')}
+            onChange={e => handleBrowseFilterChange(e.target.value as 'posted' | 'unposted')}
             className="soleria-input soleria-input-compact cursor-pointer font-semibold"
             style={{ width: 'auto' }}
             title="Which returns First/Pre./Next/Last page through: posted returns, or saved-but-unposted drafts."
           >
-            <option value="posted">Posted ({postedReturns.length})</option>
             <option value="unposted">Unposted ({drafts.length})</option>
+            <option value="posted">Posted ({postedReturns.length})</option>
           </select>
         </div>
 

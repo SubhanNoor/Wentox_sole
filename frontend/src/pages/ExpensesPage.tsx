@@ -63,6 +63,7 @@ export default function ExpensesPage() {
   const refreshAllVouchers = useCallback(async () => {
     const res = await api.expenseVouchers.list({});
     if (res.ok) setAllVouchers(res.data);
+    return res.ok ? res.data : null;
   }, []);
 
   useEffect(() => {
@@ -87,7 +88,12 @@ export default function ExpensesPage() {
   // 'unposted' walks those still awaiting posting (UNPOSTED or PARTIAL). Changed 2026-08-27 on the
   // user's instruction, alongside removing the left-hand Pending Posting panel — see Receipts'
   // own comment for the full history.
-  const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('posted');
+  //
+  // Unposted is the default (per the user, 2026-08-30): that's the working mode you add and post
+  // new vouchers from. Posted is purely a browse mode over already-posted vouchers (First/Prev./
+  // Next/Last + Unpost).
+  const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('unposted');
+  const newButtonRef = useRef<HTMLButtonElement>(null);
   const [expenseId, setExpenseId] = useState<number | null>(null);
   // Which table `expenseId` points into. An unposted expense now lives in dbo.draft_expenses and a
   // posted one in dbo.expenses, so the id alone is ambiguous — this says which id space it is in.
@@ -478,6 +484,10 @@ export default function ExpensesPage() {
     refreshAllVouchers();
     refreshCheques(); // unposting releases any cheque allocation the lines held
     if (res.data.failed.length === 0) flash(`Voucher ${voucher.voucher_no} unposted.`);
+    // It's not fully posted any more, so the window follows it back to the Unposted view (per the
+    // user, 2026-08-30) rather than staying on Posted looking at a voucher that no longer belongs
+    // there.
+    setNavFilter('unposted');
   };
 
   // PN-01: abandon the voucher on screen and start a blank one. Nothing is deleted — an unposted
@@ -486,7 +496,7 @@ export default function ExpensesPage() {
     setVoucher(null);
     setVoucherRemarks('');
     setVoucherResult(null);
-    setNavFilter('posted'); // back to default browsing/new-entry mode
+    setNavFilter('unposted'); // back to default working/new-entry mode
     handleNew(); // one definition of "a blank entry row", and it resets the date too
     requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
@@ -579,6 +589,26 @@ export default function ExpensesPage() {
   const handleNavLast = () => goToNavIndex(navList.length - 1);
   const handleNavPrevious = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
   const handleNavNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
+
+  // Switching the Posted/Unposted dropdown (per the user, 2026-08-30):
+  // - To Unposted: open the most recently saved unposted/partial voucher (or start a blank new
+  //   one if there isn't one), then focus New — Enter on it clicks New and lands on Date.
+  // - To Posted: re-fetch and jump straight to the most recently posted voucher for browsing.
+  const handleNavFilterChange = async (next: 'posted' | 'unposted') => {
+    setNavFilter(next);
+    if (next === 'unposted') {
+      const latest = navUnpostedVouchers[navUnpostedVouchers.length - 1];
+      if (latest) await openVoucherInEntry(latest.voucher_id);
+      else startNewVoucher();
+      requestAnimationFrame(() => newButtonRef.current?.focus());
+    } else {
+      const fresh = await refreshAllVouchers();
+      const list = [...(fresh ?? allVouchers).filter(v => v.status === 'POSTED')]
+        .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no);
+      const latest = list[list.length - 1];
+      if (latest) await openVoucherInEntry(latest.voucher_id);
+    }
+  };
 
   // Preview of the System Voucher No. a brand-new voucher will get — voucher_no is ONE sequence
   // across the whole expense_vouchers table regardless of status (MAX+1, allocated inside
@@ -743,7 +773,7 @@ export default function ExpensesPage() {
                     <span>{mode === 'edit' ? 'Update' : 'Done'}</span>
                   </button>
                 )}
-                <button type="button" onClick={startNewVoucher} title="New Voucher" className="toolbar-btn">
+                <button ref={newButtonRef} type="button" onClick={startNewVoucher} title="New Voucher" className="toolbar-btn">
                   <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
                   <span>New</span>
                 </button>
@@ -823,15 +853,17 @@ export default function ExpensesPage() {
                 </button>
               </div>
 
+              {/* Unposted (default) = add/post new vouchers; Posted = browse already-posted ones
+                  (per the user, 2026-08-30). */}
               <select
                 value={navFilter}
-                onChange={e => setNavFilter(e.target.value as 'posted' | 'unposted')}
+                onChange={e => handleNavFilterChange(e.target.value as 'posted' | 'unposted')}
                 className="soleria-input soleria-input-compact cursor-pointer font-semibold"
                 style={{ width: 'auto' }}
                 title="Which vouchers First/Prev./Next/Last page through: posted ones, or those still awaiting posting."
               >
-                <option value="posted">Posted ({navPostedVouchers.length})</option>
                 <option value="unposted">Unposted ({navUnpostedVouchers.length})</option>
+                <option value="posted">Posted ({navPostedVouchers.length})</option>
               </select>
 
               {/* Post All's outcome — stays until dismissed, since the failures are the point.

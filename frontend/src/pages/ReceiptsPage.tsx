@@ -65,6 +65,7 @@ export default function ReceiptsPage() {
   const refreshAllVouchers = useCallback(async () => {
     const res = await api.receiptVouchers.list({});
     if (res.ok) setAllVouchers(res.data);
+    return res.ok ? res.data : null;
   }, []);
 
   useEffect(() => {
@@ -95,7 +96,12 @@ export default function ReceiptsPage() {
   // that, navFilter merely armed the Unpost button while both values browsed the posted list.
   // Changed 2026-08-27 to match Sale Bill, alongside removing the left-hand Pending Posting panel
   // (whose job — reaching another pending voucher — these buttons now do).
-  const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('posted');
+  //
+  // Unposted is the default (per the user, 2026-08-30): that's the working mode you add and post
+  // new vouchers from. Posted is purely a browse mode over already-posted vouchers (First/Prev./
+  // Next/Last + Unpost).
+  const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('unposted');
+  const newButtonRef = useRef<HTMLButtonElement>(null);
   const [receiptId, setReceiptId] = useState<number | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
   // In-progress entry-row fields persist across switching pages AND an app restart
@@ -578,6 +584,10 @@ export default function ReceiptsPage() {
     setBalanceRefreshKey(k => k + 1);
     refreshAllVouchers();
     if (res.data.failed.length === 0) flash(`Voucher ${voucher.voucher_no} unposted.`);
+    // It's not fully posted any more, so the window follows it back to the Unposted view (per the
+    // user, 2026-08-30) rather than staying on Posted looking at a voucher that no longer belongs
+    // there.
+    setNavFilter('unposted');
   };
 
   // RJ-03: abandon the voucher on screen and start a blank one. Nothing is deleted — an unposted
@@ -587,7 +597,7 @@ export default function ReceiptsPage() {
     setVoucher(null);
     setVoucherRemarks('');
     setVoucherResult(null);
-    setNavFilter('posted'); // back to default browsing/new-entry mode
+    setNavFilter('unposted'); // back to default working/new-entry mode
     handleNew(); // resets every entry field and the date — one definition of "a blank entry row"
     requestAnimationFrame(() => firstEntryFieldRef.current?.focus());
   };
@@ -666,6 +676,26 @@ export default function ReceiptsPage() {
   const handleNavLast = () => goToNavIndex(navList.length - 1);
   const handleNavPrevious = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
   const handleNavNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
+
+  // Switching the Posted/Unposted dropdown (per the user, 2026-08-30):
+  // - To Unposted: open the most recently saved unposted/partial voucher (or start a blank new
+  //   one if there isn't one), then focus New — Enter on it clicks New and lands on Date.
+  // - To Posted: re-fetch and jump straight to the most recently posted voucher for browsing.
+  const handleNavFilterChange = async (next: 'posted' | 'unposted') => {
+    setNavFilter(next);
+    if (next === 'unposted') {
+      const latest = navUnpostedVouchers[navUnpostedVouchers.length - 1];
+      if (latest) await openVoucherInEntry(latest.voucher_id);
+      else startNewVoucher();
+      requestAnimationFrame(() => newButtonRef.current?.focus());
+    } else {
+      const fresh = await refreshAllVouchers();
+      const list = [...(fresh ?? allVouchers).filter(v => v.status === 'POSTED')]
+        .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no);
+      const latest = list[list.length - 1];
+      if (latest) await openVoucherInEntry(latest.voucher_id);
+    }
+  };
 
   // RJ-03: pull a committed line back into the entry row to correct it. Only while the line itself
   // is unposted — a posted line has ledger entries, and receipts:update rejects it outright.
@@ -922,7 +952,7 @@ export default function ReceiptsPage() {
                     <span>{mode === 'edit' ? 'Update' : 'Done'}</span>
                   </button>
                 )}
-                <button type="button" onClick={startNewVoucher} title="New Voucher" className="toolbar-btn">
+                <button ref={newButtonRef} type="button" onClick={startNewVoucher} title="New Voucher" className="toolbar-btn">
                   <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
                   <span>New</span>
                 </button>
@@ -973,7 +1003,7 @@ export default function ReceiptsPage() {
 
                 {/* Post/Unpost are voucher-level. Post needs at least one committed line; an empty
                     voucher has nothing to post (the backend rejects it with EMPTY_VOUCHER). Unpost
-                    additionally requires navFilter === 'unposted' (see its own comment above). */}
+                    is gated only on the voucher's own status, not on navFilter. */}
                 <button
                   type="button"
                   onClick={handleUnpostVoucher}
@@ -1028,16 +1058,18 @@ export default function ReceiptsPage() {
                 )}
               </div>
 
-              {/* Posted/Unposted — picks which list Previous/Next/First/Last page through. */}
+              {/* Posted/Unposted — picks which list Previous/Next/First/Last page through. Unposted
+                  (default) = add/post new vouchers; Posted = browse already-posted ones (per the
+                  user, 2026-08-30). */}
               <select
                 value={navFilter}
-                onChange={e => setNavFilter(e.target.value as 'posted' | 'unposted')}
+                onChange={e => handleNavFilterChange(e.target.value as 'posted' | 'unposted')}
                 className="soleria-input soleria-input-compact cursor-pointer font-semibold"
                 style={{ width: 'auto' }}
                 title="Which vouchers First/Prev./Next/Last page through: posted ones, or those still awaiting posting."
               >
-                <option value="posted">Posted ({navPostedVouchers.length})</option>
                 <option value="unposted">Unposted ({navUnpostedVouchers.length})</option>
+                <option value="posted">Posted ({navPostedVouchers.length})</option>
               </select>
 
               {/* Post All's outcome. Stays until dismissed — a run can post 8 of 10, and the two

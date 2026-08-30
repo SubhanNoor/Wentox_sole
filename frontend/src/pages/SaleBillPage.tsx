@@ -495,7 +495,16 @@ export default function SaleBillPage() {
   // for editing — no password, same convention drafts always had (only editing an already-POSTED
   // bill is password-gated). mode='edit' with billId set to the draft's own id so Save routes to
   // draftSaleBills.update() rather than create()-ing a second one.
-  const loadDraftIntoForm = (draft: DraftSaleBillRow, opts: { mode?: 'edit' | 'view' } = {}) => {
+  const loadDraftIntoForm = async (draftIn: DraftSaleBillRow, opts: { mode?: 'edit' | 'view' } = {}) => {
+    // list()/find-search rows never carry `.items` (only get()/create()/update() do — see
+    // DraftSaleBillRow's own comment) — browsing/switching to one of those rows was loading the
+    // form with an empty article grid (reported by the user, 2026-08-30). Re-fetch the full draft
+    // whenever it's missing rather than trusting whatever was passed in.
+    let draft = draftIn;
+    if (!draft.items) {
+      const res = await api.draftSaleBills.get(draft.draft_id);
+      if (res.ok) draft = res.data;
+    }
     createdInThisRun.current = false;
     setBillId(draft.draft_id);
     setCurrentBillIsPosted(false);
@@ -550,12 +559,17 @@ export default function SaleBillPage() {
   // you had just saved with Done could not be reached from the toolbar at all — only via Find or
   // the Pending Posting sidebar. Changed on the user's explicit instruction (2026-08-27) so each
   // option lists what its label says.
-  const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('posted');
+  // Unposted is the default (per the user, 2026-08-30): that's the working mode you add and post
+  // new bills from. Posted is purely a browse mode over already-posted bills (First/Prev./Next/
+  // Last + Un Post).
+  const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('unposted');
   const [postedBills, setPostedBills] = useState<SaleBillRow[]>([]);
+  const newButtonRef = useRef<HTMLButtonElement>(null);
 
   const refreshPosted = useCallback(async () => {
     const res = await api.saleBills.list();
     if (res.ok) setPostedBills(res.data);
+    return res.ok ? res.data : null;
   }, []);
 
   useEffect(() => { refreshPosted(); }, [refreshPosted]);
@@ -592,7 +606,7 @@ export default function SaleBillPage() {
       await loadBillRow(navList[idx] as SaleBillRow);
       setMode('view');
     } else {
-      loadDraftIntoForm(navList[idx] as DraftSaleBillRow, { mode: 'view' });
+      await loadDraftIntoForm(navList[idx] as DraftSaleBillRow, { mode: 'view' });
     }
   };
 
@@ -601,6 +615,25 @@ export default function SaleBillPage() {
   const handlePrev = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
   const handleNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
   const handleLast = () => goToNavIndex(navList.length - 1);
+
+  // Switching the Posted/Unposted dropdown (per the user, 2026-08-30):
+  // - To Unposted: load the most recently saved draft (or a blank New bill if there isn't one),
+  //   then focus New — Enter on it clicks New and lands on Date, ready to type the next bill.
+  // - To Posted: re-fetch and jump straight to the most recently posted bill for browsing.
+  const handleBrowseFilterChange = async (next: 'posted' | 'unposted') => {
+    setBrowseFilter(next);
+    if (next === 'unposted') {
+      const latest = navUnpostedList[navUnpostedList.length - 1];
+      if (latest) await loadDraftIntoForm(latest, { mode: 'view' });
+      else handleNew();
+      requestAnimationFrame(() => newButtonRef.current?.focus());
+    } else {
+      const fresh = await refreshPosted();
+      const list = [...(fresh ?? postedBills)].reverse();
+      const latest = list[list.length - 1];
+      if (latest) { await loadBillRow(latest); setMode('view'); }
+    }
+  };
 
   // Toolbar's Find button — a quick jump to any bill (posted or unposted) by bill number or
   // customer name, searched client-side over the already-loaded browse lists rather than a
@@ -625,7 +658,7 @@ export default function SaleBillPage() {
       await loadBillRow(row as SaleBillRow);
       setMode('view');
     } else {
-      loadDraftIntoForm(row as DraftSaleBillRow, { mode: 'view' });
+      await loadDraftIntoForm(row as DraftSaleBillRow, { mode: 'view' });
     }
   };
 
@@ -961,6 +994,9 @@ export default function SaleBillPage() {
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshUnposted();
     refreshPosted();
+    // It's a draft again now, so the window follows it back to the Unposted view (per the user,
+    // 2026-08-30) rather than staying on Posted looking at a bill that no longer belongs there.
+    setBrowseFilter('unposted');
   };
 
   // Weekly/Monthly/Overall/Find sub-tabs — re-added (2026-08-26, per the user) alongside Sale
@@ -1094,17 +1130,32 @@ export default function SaleBillPage() {
   // other committed rows already reserve some of that stock, so what's left is (available minus
   // whatever they've already claimed) — the row being re-edited (editingIndex) doesn't double-count
   // against itself.
-  const entryStockCheck = useMemo(() => {
-    if (entry.variantId == null || entry.cartons <= 0) return null;
+  // Stock In Hand readout — available stock minus whatever this same article/color already has
+  // reserved on OTHER committed rows of this bill (per the user, 2026-08-30: re-picking a variant
+  // already on the bill was showing the raw stock figure, not what's actually still available to
+  // add). The row being re-edited (editingIndex) doesn't double-count against itself.
+  const entryStockInHand = useMemo(() => {
+    if (entry.variantId == null) return null;
     const stockInfo = getStockInfo(entry.articleId, entry.variantId);
-    const available = stockInfo ? stockInfo.cartons : 0;
-    const otherReserved = items.reduce(
-      (sum, it, i) => (i !== editingIndex && it.variantId === entry.variantId) ? sum + it.cartons : sum,
-      0
-    );
-    const totalReq = otherReserved + entry.cartons;
-    return totalReq > available ? { available, totalReq } : null;
-  }, [entry, items, editingIndex, getStockInfo]);
+    if (!stockInfo) return null;
+    const otherReserved = items.reduce((acc, it, i) => {
+      if (i !== editingIndex && it.variantId === entry.variantId) {
+        acc.cartons += it.cartons;
+        acc.pairs += it.pairs;
+      }
+      return acc;
+    }, { cartons: 0, pairs: 0 });
+    return {
+      cartons: Math.max(0, stockInfo.cartons - otherReserved.cartons),
+      pairs: Math.max(0, stockInfo.pairs - otherReserved.pairs),
+    };
+  }, [entry.articleId, entry.variantId, items, editingIndex, getStockInfo]);
+
+  const entryStockCheck = useMemo(() => {
+    if (entry.variantId == null || entry.cartons <= 0 || !entryStockInHand) return null;
+    const available = entryStockInHand.cartons;
+    return entry.cartons > available ? { available, totalReq: entry.cartons } : null;
+  }, [entry.variantId, entry.cartons, entryStockInHand]);
 
   // Commits the strip's current entry into the table — appends a new row, or overwrites
   // `editingIndex` when the strip is re-editing a row clicked open from the table. Stock-blocked
@@ -1550,7 +1601,7 @@ export default function SaleBillPage() {
               neutral, amber = navigation. */}
           <div className="flex flex-wrap items-center gap-2">
           <div className="flex flex-wrap items-center gap-0.5">
-            <button type="button" onClick={handleNew} title="New" className="toolbar-btn">
+            <button ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1792,25 +1843,20 @@ export default function SaleBillPage() {
             </div>
           )}
 
-          {mode === 'view' && (
-            <div className="text-sm font-semibold text-emerald-600 font-inter flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping text-[10px]"></span>
-              Bill {currentBillIsPosted ? 'Posted' : 'Saved'} Successfully!
-            </div>
-          )}
           </div>
 
-          {/* Posted/Unposted — picks which list First/Prev./Next/Last page through. Same row as
-              the toolbar icons (per the user, 2026-08-30), matching PurchasePage's own layout. */}
+          {/* Posted/Unposted — picks which list First/Prev./Next/Last page through. Unposted
+              (default) = add/post new bills; Posted = browse already-posted ones (per the user,
+              2026-08-30). */}
           <select
             value={browseFilter}
-            onChange={e => setBrowseFilter(e.target.value as 'posted' | 'unposted')}
+            onChange={e => handleBrowseFilterChange(e.target.value as 'posted' | 'unposted')}
             className="soleria-input soleria-input-compact cursor-pointer font-semibold"
             style={{ width: 'auto' }}
             title="Which bills First/Pre./Next/Last page through: posted bills, or saved-but-unposted drafts."
           >
-            <option value="posted">Posted ({postedBills.length})</option>
             <option value="unposted">Unposted ({unpostedBills.length})</option>
+            <option value="posted">Posted ({postedBills.length})</option>
           </select>
         </div>
 
@@ -2255,12 +2301,7 @@ export default function SaleBillPage() {
                 </div>
                 <div className="flex flex-col gap-0.5">
                   <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Stock In Hand</label>
-                  {(() => {
-                    const stockInfo = getStockInfo(entry.articleId, entry.variantId);
-                    return (
-                      <input type="text" value={stockInfo ? `${stockInfo.cartons} Ctn / ${stockInfo.pairs} Prs` : '-'} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 text-center" />
-                    );
-                  })()}
+                  <input type="text" value={entryStockInHand ? `${entryStockInHand.cartons} Ctn / ${entryStockInHand.pairs} Prs` : '-'} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 text-center" />
                 </div>
               </div>
             </div>

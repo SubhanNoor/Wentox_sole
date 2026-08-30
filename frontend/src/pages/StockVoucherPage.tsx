@@ -636,6 +636,9 @@ export default function StockVoucherPage() {
     refresh();
     refreshUnposted();
     refreshNav();
+    // It's a draft again now, so the window follows it back to the Unposted view (per the user,
+    // 2026-08-30) rather than staying on Posted looking at a record that no longer belongs there.
+    setBrowseFilter('unposted');
   };
 
   // Listing rows only carry rolled-up totals, not the per-line detail — loading a voucher always
@@ -747,12 +750,19 @@ export default function StockVoucherPage() {
   // JournalVoucherPage §. Fetched unfiltered, newest-first — reversed here for oldest-first
   // browsing, so First = earliest, Last = most recent. Also doubles as the source for the auto
   // "Number" preview below, since stock_voucher_id is the ONE identity a voucher ever has.
-  const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('posted');
+  //
+  // Unposted is the default (per the user, 2026-08-30): that's the working mode you add and post
+  // new vouchers from. Posted is purely a browse mode over already-CONFIRMED vouchers (First/
+  // Prev./Next/Last + Un Post) — switching into it never blocks entry, it's just a different lens
+  // on the same record list.
+  const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('unposted');
   const [navVouchers, setNavVouchers] = useState<StockVoucherRow[]>([]);
+  const newButtonRef = useRef<HTMLButtonElement>(null);
 
   const refreshNav = useCallback(async () => {
     const res = await api.stockVouchers.list({});
     if (res.ok) setNavVouchers(res.data);
+    return res.ok ? res.data : null;
   }, []);
 
   useEffect(() => { refreshNav(); }, [refreshNav]);
@@ -767,7 +777,7 @@ export default function StockVoucherPage() {
     return navPostedList.findIndex(v => v.stock_voucher_id === svId);
   }, [svId, isPosted, navPostedList]);
 
-  const canBrowse = browseFilter === 'unposted' && navPostedList.length > 0;
+  const canBrowse = browseFilter === 'posted' && navPostedList.length > 0;
   const canNavPrevious = canBrowse && navIndex !== 0;
   const canNavNext = canBrowse && navIndex !== navPostedList.length - 1;
 
@@ -779,6 +789,26 @@ export default function StockVoucherPage() {
   const handlePrev = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
   const handleNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
   const handleLast = () => goToNavIndex(navPostedList.length - 1);
+
+  // Switching the Posted/Unposted dropdown (per the user, 2026-08-30):
+  // - To Unposted: load the most recently saved unposted voucher (or a blank New one if there
+  //   isn't one), then focus New — Enter on it clicks New and lands on Date, ready to type the
+  //   next voucher, same as today.
+  // - To Posted: re-fetch and jump straight to the most recently posted voucher for browsing.
+  const handleBrowseFilterChange = async (next: 'posted' | 'unposted') => {
+    setBrowseFilter(next);
+    if (next === 'unposted') {
+      const latest = unpostedSvs[unpostedSvs.length - 1];
+      if (latest) await loadSv(latest.stock_voucher_id);
+      else handleNew();
+      requestAnimationFrame(() => newButtonRef.current?.focus());
+    } else {
+      const fresh = await refreshNav();
+      const list = [...(fresh ?? navVouchers)].filter(v => v.status === 'CONFIRMED').reverse();
+      const latest = list[list.length - 1];
+      if (latest) await loadSv(latest.stock_voucher_id);
+    }
+  };
 
   // Preview of the Number a brand-new voucher will get — stock_voucher_id is assigned the moment
   // Save actually creates the row (draft or posted alike), so this is a client-side preview only.
@@ -1013,7 +1043,7 @@ export default function StockVoucherPage() {
             own: New/Delete/Edit/Done, First/Previous/Next/Last, Print/Find, Un Post/Post. */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-0.5">
-            <button type="button" onClick={handleNew} title="New" className="toolbar-btn">
+            <button ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1083,8 +1113,8 @@ export default function StockVoucherPage() {
             <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
 
             <button
-              type="button" onClick={handleUnpost} disabled={!isViewMode || svId == null || !isPosted || browseFilter !== 'unposted'}
-              title="Un Post — switch the dropdown to Unposted first"
+              type="button" onClick={handleUnpost} disabled={!isViewMode || svId == null || !isPosted || browseFilter !== 'posted'}
+              title="Un Post — switch the dropdown to Posted first"
               className="toolbar-btn"
             >
               <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
@@ -1101,17 +1131,18 @@ export default function StockVoucherPage() {
           </div>
 
           {/* Posted/Unposted — picks which list First/Prev./Next/Last page through. Same row as
-              the toolbar icons (per the user, 2026-08-30), matching PurchasePage's own layout. */}
+              the toolbar icons. Unposted (default) = add/post new vouchers; Posted = browse
+              already-posted ones to Un Post one (per the user, 2026-08-30). */}
           <select
             value={browseFilter}
-            onChange={e => setBrowseFilter(e.target.value as 'posted' | 'unposted')}
+            onChange={e => handleBrowseFilterChange(e.target.value as 'posted' | 'unposted')}
             className="soleria-input soleria-input-compact cursor-pointer font-semibold"
             style={{ width: 'auto' }}
-            title="Posted = add new vouchers. Unposted = browse posted vouchers to Unpost one."
+            title="Unposted = add new vouchers. Posted = browse posted vouchers to Un Post one."
             data-no-print
           >
-            <option value="posted">Posted</option>
             <option value="unposted">Unposted</option>
+            <option value="posted">Posted</option>
           </select>
         </div>
 

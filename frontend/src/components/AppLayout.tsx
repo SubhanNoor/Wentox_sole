@@ -358,12 +358,17 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
             <div className="brand-mark" style={{ width: 1, height: 26, background: 'var(--border-color)' }} />
           </div>
 
-          {/* Page name intentionally not shown in the header (per the user, 2026-08-30) — the tab
-              bar below already identifies which screen is open, and dropping the title frees up
-              the room the tab bar needed. Dragging a page onto the Quick Access Menu Bar to pin it
-              still works via the "+ Pin Page to Bar" button (see below) and, for a sub-tab, its
-              own button in the tab bar. `pageTitle` itself stays a required prop — every page still
-              passes one — since it's still used as the pin's stored label. */}
+          {/* Current page name, next to the brand mark (per the user, 2026-08-30 follow-up —
+              reinstated after being dropped earlier the same day) — just the page itself, not the
+              sub-tab (that's what the tab bar to its right is for). */}
+          <div className="flex-shrink-0">
+            <span
+              className="font-lora font-semibold"
+              style={{ fontSize: '13.5px', color: 'var(--dark-heading)' }}
+            >
+              {pageTitle}
+            </span>
+          </div>
 
           {/* Sub-page tab bar — back on the main header row (per the user, 2026-08-30), sized down
               (see the px-2/text-[11px] button classes each page's own tabBar now uses, changed at
