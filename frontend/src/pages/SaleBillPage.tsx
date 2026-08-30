@@ -665,6 +665,17 @@ export default function SaleBillPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, billId, stores]);
 
+  // One-time cleanup: a restored draft from before Bill No. stopped being auto-generated
+  // (2026-08-30) can still be carrying the old random 5-digit value. Clears only that one field
+  // — never the rest of a legitimately half-typed draft — and only while it's still untouched
+  // (no articles added yet), so a real bill no coincidentally matching the same shape is left alone.
+  useEffect(() => {
+    if (hasSaleBillDraft && mode === 'new' && billId === null && items.length === 0 && /^\d{5}$/.test(billNo)) {
+      setBillNo('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Calculations
   const totalCartons = useMemo(() => items.reduce((sum, item) => sum + (item.cartons || 0), 0), [items]);
   const totalPairs = useMemo(() => items.reduce((sum, item) => sum + (item.pairs || 0), 0), [items]);
@@ -694,7 +705,8 @@ export default function SaleBillPage() {
     setCustomAddress('');
     setIsAddSubCustomerOpen(false);
     setNewSubCustomerName('');
-    setBillNo((Math.floor(Math.random() * 90000) + 10000).toString());
+    // Bill No. is hand-typed by the user, per the user (2026-08-30) — never a generated value.
+    setBillNo('');
     setGpNo('');
     setBiltyNo('');
     setAddaId('');
@@ -1109,7 +1121,22 @@ export default function SaleBillPage() {
       return;
     }
     setErrorMsg('');
-    if (editingIndex != null) {
+    // Same article/color already on the bill — merge cartons into it instead of adding a
+    // duplicate row (per the user, 2026-08-30). Excludes the row being edited itself, so
+    // re-committing an unchanged row doesn't fold it into a copy of itself.
+    const dupIdx = items.findIndex((it, i) => it.variantId === entry.variantId && i !== editingIndex);
+    if (dupIdx !== -1) {
+      setItems(prev => {
+        const withoutEditing = editingIndex != null ? prev.filter((_, i) => i !== editingIndex) : prev;
+        const mergeIdx = withoutEditing.findIndex(it => it.variantId === entry.variantId);
+        return withoutEditing.map((it, i) => i === mergeIdx
+          ? recalcItem({ ...it, cartons: it.cartons + entry.cartons })
+          : it);
+      });
+      setErrorMsg('');
+      setSuccessMsg(`${entry.label} was already on the bill — cartons merged into that row.`);
+      setTimeout(() => setSuccessMsg(''), 3500);
+    } else if (editingIndex != null) {
       setItems(prev => prev.map((it, i) => i === editingIndex ? entry : it));
     } else {
       setItems(prev => [...prev, entry]);
@@ -1441,7 +1468,7 @@ export default function SaleBillPage() {
     <div className="flex gap-1.5" data-no-print>
       <button
         onClick={() => { setActiveTab('bill'); handleNew(); }}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'bill' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
       >
@@ -1449,7 +1476,7 @@ export default function SaleBillPage() {
       </button>
       <button
         onClick={() => setActiveTab('weekly')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'weekly' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
       >
@@ -1457,7 +1484,7 @@ export default function SaleBillPage() {
       </button>
       <button
         onClick={() => setActiveTab('monthly')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'monthly' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
       >
@@ -1465,7 +1492,7 @@ export default function SaleBillPage() {
       </button>
       <button
         onClick={() => setActiveTab('overall')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'overall' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
       >
@@ -1473,7 +1500,7 @@ export default function SaleBillPage() {
       </button>
       <button
         onClick={() => setActiveTab('find')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'find' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
       >
@@ -1521,6 +1548,7 @@ export default function SaleBillPage() {
               Icon color signals the action's nature (not the button background): emerald =
               create/confirm, rose = delete/destructive, sky = edit, blue = save, slate = cancel/
               neutral, amber = navigation. */}
+          <div className="flex flex-wrap items-center gap-2">
           <div className="flex flex-wrap items-center gap-0.5">
             <button type="button" onClick={handleNew} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
@@ -1770,14 +1798,10 @@ export default function SaleBillPage() {
               Bill {currentBillIsPosted ? 'Posted' : 'Saved'} Successfully!
             </div>
           )}
-        </div>
+          </div>
 
-        {/* Title bar (ref-pic row directly under the icon toolbar) — Posted/Unposted browse
-            dropdown (drives First/Pre/Next/Last) on the right. Master/Detail radios removed (per
-            the user, 2026-08-26) — display-only and didn't do anything, both sections always
-            stayed visible/reachable regardless of which was picked. */}
-        <div className="flex items-center justify-between gap-3 mb-2 px-1" data-no-print>
-          <span className="font-lora font-semibold text-sm text-slate-600">SALE BILL</span>
+          {/* Posted/Unposted — picks which list First/Prev./Next/Last page through. Same row as
+              the toolbar icons (per the user, 2026-08-30), matching PurchasePage's own layout. */}
           <select
             value={browseFilter}
             onChange={e => setBrowseFilter(e.target.value as 'posted' | 'unposted')}

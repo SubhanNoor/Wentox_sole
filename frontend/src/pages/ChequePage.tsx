@@ -60,7 +60,7 @@ export default function ChequePage() {
           }}
           onClick={() => switchTab(tab.key)}
           title="Drag tab to Quick Access Menu Bar to pin"
-          className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
+          className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all cursor-grab active:cursor-grabbing ${
             activeTab === tab.key
               ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
               : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'

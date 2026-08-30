@@ -229,13 +229,13 @@ export default function SalaryRunPage() {
       <div className="flex gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200">
         <button
           onClick={() => switchTab('entry')}
-          className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+          className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all flex items-center gap-1.5 ${tab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
         >
           <BadgeDollarSign size={14} /> {editingRunId ? 'Editing Run' : 'New Salary Run'}
         </button>
         <button
           onClick={() => switchTab('history')}
-          className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 ${tab === 'history' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+          className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all flex items-center gap-1.5 ${tab === 'history' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
         >
           <History size={14} /> History ({runs.length})
         </button>

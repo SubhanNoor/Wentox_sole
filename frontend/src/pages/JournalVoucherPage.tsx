@@ -545,7 +545,7 @@ export default function JournalVoucherPage() {
     <div className="flex gap-1.5" data-no-print>
       <button
         onClick={() => { setActiveTab('entry'); handleNew(); }}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
       >
@@ -553,7 +553,7 @@ export default function JournalVoucherPage() {
       </button>
       <button
         onClick={() => setActiveTab('records')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'records' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
       >
@@ -818,9 +818,20 @@ export default function JournalVoucherPage() {
               <span>Post</span>
             </button>
           </div>
-          <span className="font-lora font-bold text-xs text-slate-900">
-            {mode === 'edit' ? `Editing JV #${jvId}` : mode === 'view' ? `JV #${jvId}` : 'New Journal Voucher'}
-          </span>
+
+          {/* Posted/Unposted — picks which list First/Prev./Next/Last page through. Same row as
+              the toolbar icons (per the user, 2026-08-30), matching PurchasePage's own layout. */}
+          <select
+            value={browseFilter}
+            onChange={e => setBrowseFilter(e.target.value as 'posted' | 'unposted')}
+            className="soleria-input soleria-input-compact cursor-pointer font-semibold"
+            style={{ width: 'auto' }}
+            title="Posted = add new JVs. Unposted = browse posted JVs to Unpost one."
+            data-no-print
+          >
+            <option value="posted">Posted</option>
+            <option value="unposted">Unposted</option>
+          </select>
         </div>
 
         {/* This <form> IS the entry card — height pinned to the remaining viewport space (see
@@ -831,30 +842,12 @@ export default function JournalVoucherPage() {
           id="jv-entry-form" ref={entryCardRef} onSubmit={handleSave}
           className="card-white p-6 bg-white border flex flex-col" style={{ height: entryCardHeight ?? undefined }}
         >
-          {/* Header row — "JOURNAL ENTRY" title (left), Posted/Unposted dropdown (drives
-              First/Prev/Next/Last, per the user: "posted and unposted thing so that we can move
-              to and fro") on the right. Not a print-worthy control, unlike the rest of this form
-              (Print now prints this whole card, entry strip naturally absent since it's view-mode
-              only). Master/Detail radios removed (per the user, 2026-08-26) — display-only and
-              didn't do anything, same reason they're gone from SaleBillPage too. */}
-          <div className="shrink-0 flex items-center justify-between gap-4 border-b pb-3 mb-4">
-            <div className="flex items-center gap-2">
-              <BookText size={18} className="text-[#B08D57]" />
-              <h3 className="font-lora font-bold text-lg tracking-wide text-slate-800">JOURNAL ENTRY</h3>
-            </div>
-            <div className="flex items-center gap-2" data-no-print>
-              <span className="text-xs font-semibold text-slate-500">Voucher Status</span>
-              <select
-                value={browseFilter}
-                onChange={e => setBrowseFilter(e.target.value as 'posted' | 'unposted')}
-                className="soleria-input soleria-input-compact cursor-pointer font-semibold"
-                style={{ width: 'auto' }}
-                title="Posted = add new JVs. Unposted = browse posted JVs to Unpost one."
-              >
-                <option value="posted">Posted</option>
-                <option value="unposted">Unposted</option>
-              </select>
-            </div>
+          {/* Header row — "JOURNAL ENTRY" title. Master/Detail radios removed (per the user,
+              2026-08-26) — display-only and didn't do anything, same reason they're gone from
+              SaleBillPage too. */}
+          <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-4">
+            <BookText size={18} className="text-[#B08D57]" />
+            <h3 className="font-lora font-bold text-lg tracking-wide text-slate-800">JOURNAL ENTRY</h3>
           </div>
 
           {/* Date / Number / Reason — banded row (the app's gold tint standing in for the legacy

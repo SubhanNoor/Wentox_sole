@@ -400,7 +400,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
                   key={grp}
                   type="button"
                   onClick={() => { setSelectedGroup(grp); setReportVisible(true); }}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+                  className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all cursor-pointer ${
                     reportVisible && selectedGroup === grp
                       ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold'
                       : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'

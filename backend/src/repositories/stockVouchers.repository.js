@@ -5,12 +5,12 @@ const { sql, query, requestWithParams } = require('../db/pool');
 function linesSubquery(alias = 'sv') {
   // No GROUP BY — SQL Server rejects a bare column selected alongside aggregates without one,
   // even though the WHERE already correlates to a single voucher. Mirrors journalVouchers
-  // repository's own identical subquery.
+  // repository's own identical subquery. No total_value — this document carries no valuation
+  // (per the user, 2026-08-30).
   return `(
     SELECT COUNT(*) AS line_count,
            SUM(svl.cartons) AS total_cartons,
-           SUM(svl.pairs) AS total_pairs,
-           SUM(svl.value) AS total_value
+           SUM(svl.pairs) AS total_pairs
     FROM dbo.stock_voucher_lines svl
     WHERE svl.stock_voucher_id = ${alias}.stock_voucher_id
   )`;
@@ -56,12 +56,10 @@ async function list(filters = {}) {
   const result = await query(
     `SELECT sv.*, st.name AS store_name,
             boa.name AS on_account_name, boa.code AS on_account_code,
-            mac.name AS main_ac_name, mac.code AS main_ac_code,
-            totals.line_count, totals.total_cartons, totals.total_pairs, totals.total_value
+            totals.line_count, totals.total_cartons, totals.total_pairs
      FROM dbo.stock_vouchers sv
      LEFT JOIN dbo.stores st ON st.store_id = sv.store_id
      LEFT JOIN dbo.business_accounts boa ON boa.ba_id = sv.on_account_ba_id
-     LEFT JOIN dbo.chart_of_accounts mac ON mac.ac_id = sv.main_ac_id
      CROSS APPLY ${linesSubquery('sv')} totals
      ${where}
      ORDER BY sv.voucher_date DESC, sv.stock_voucher_id DESC`,
@@ -100,12 +98,10 @@ async function findById(stockVoucherId) {
   const result = await query(
     `SELECT sv.*, st.name AS store_name,
             boa.name AS on_account_name, boa.code AS on_account_code,
-            mac.name AS main_ac_name, mac.code AS main_ac_code,
-            totals.line_count, totals.total_cartons, totals.total_pairs, totals.total_value
+            totals.line_count, totals.total_cartons, totals.total_pairs
      FROM dbo.stock_vouchers sv
      LEFT JOIN dbo.stores st ON st.store_id = sv.store_id
      LEFT JOIN dbo.business_accounts boa ON boa.ba_id = sv.on_account_ba_id
-     LEFT JOIN dbo.chart_of_accounts mac ON mac.ac_id = sv.main_ac_id
      CROSS APPLY ${linesSubquery('sv')} totals
      WHERE sv.stock_voucher_id = @stockVoucherId`,
     { stockVoucherId: { type: sql.Int, value: stockVoucherId } },
@@ -234,35 +230,7 @@ async function deleteStockMovements(transaction, stockVoucherId) {
   );
 }
 
-// Dr STOCK TRANSFER (fixed) / Cr on_account_ba_id — see stockVouchers.service.js#post. Mirrors
-// deposits.repository.js#insertLedgerEntries exactly.
-async function insertLedgerEntries(transaction, rows) {
-  for (const row of rows) {
-    const request = requestWithParams(transaction, {
-      entryDate: { type: sql.Date, value: row.entry_date },
-      acId: { type: sql.Int, value: row.ac_id ?? null },
-      baId: { type: sql.Int, value: row.ba_id ?? null },
-      debit: { type: sql.Decimal(14, 2), value: row.debit },
-      credit: { type: sql.Decimal(14, 2), value: row.credit },
-      sourceType: { type: sql.VarChar(20), value: row.source_type },
-      sourceId: { type: sql.Int, value: row.source_id },
-      narration: { type: sql.NVarChar(500), value: row.narration ?? null },
-    });
-    await request.query(`
-      INSERT INTO dbo.ledger_entries (entry_date, ac_id, ba_id, debit, credit, source_type, source_id, narration)
-      VALUES (@entryDate, @acId, @baId, @debit, @credit, @sourceType, @sourceId, @narration)
-    `);
-  }
-}
-
-async function deleteLedgerEntries(transaction, stockVoucherId) {
-  const request = requestWithParams(transaction, { stockVoucherId: { type: sql.Int, value: stockVoucherId } });
-  await request.query(
-    `DELETE FROM dbo.ledger_entries WHERE source_type = 'STOCK_VOUCHER' AND source_id = @stockVoucherId`,
-  );
-}
-
 module.exports = {
   list, listUnposted, findById, getLines, insert, updateHeader, insertLines, deleteLines, remove,
-  setStatus, insertStockMovements, deleteStockMovements, insertLedgerEntries, deleteLedgerEntries,
+  setStatus, insertStockMovements, deleteStockMovements,
 };

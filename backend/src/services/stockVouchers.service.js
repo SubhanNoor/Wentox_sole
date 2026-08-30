@@ -3,60 +3,38 @@
 //
 // Stock Voucher — a manual "add stock" document (legacy Journal Entry-style bound-record screen,
 // per the user 2026-08-26): N lines, each a finished-goods variant + cartons/pairs, under one
-// Date/Store/Remarks header. Replaces the old inline "+ Add Stock" flow on the Current Stock
-// report, which recorded every manual addition AS production (stock:log-production) — this is its
-// own document type instead, same architecture as Journal Voucher: DRAFT by default, status flips
-// to CONFIRMED only on post(), which is the only thing that writes stock_movements.
+// Date/Store/On Account/Remarks header. Replaces the old inline "+ Add Stock" flow on the Current
+// Stock report, which recorded every manual addition AS production (stock:log-production) — this
+// is its own document type instead, same architecture as Journal Voucher: DRAFT by default,
+// status flips to CONFIRMED only on post(), which is the only thing that writes stock_movements.
+//
+// No valuation, no reference numbers, no ledger posting (per the user, 2026-08-30 follow-up — a
+// prior round briefly added Rate/D%/Value/Bill No./IGP No./Bilty No./Delivery and a Dr STOCK
+// TRANSFER/Cr On Account ledger pair; all of that was removed again as unwanted scope). On
+// Account/Main A/C are pure reference fields now — recorded on the voucher, never posted anywhere.
+// The rate/discount_pct/discount_value/value/bill_no/bilty_no/igp_no/delivery_type/
+// delivery_address columns from that round still exist in the database (migrations are never
+// edited once applied) but are always written as their defaults (0/null/'SAME') and never read
+// back out — see resolveLines()/buildHeaderFields() below.
 const repository = require('../repositories/stockVouchers.repository');
 const productColorsService = require('./productColors.service');
 const storesService = require('./stores.service');
 const businessAccountsService = require('./businessAccounts.service');
-const chartAccountsRepository = require('../repositories/chartAccounts.repository');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
-const CODES = require('../constants/reservedAccounts');
 
 function validateHeader(payload) {
   if (!payload.voucher_date) throw ApiError.badRequest('voucher_date is required');
-  if (payload.delivery_type && payload.delivery_type !== 'SAME' && payload.delivery_type !== 'CUSTOM') {
-    throw ApiError.badRequest("delivery_type must be 'SAME' or 'CUSTOM'");
-  }
-  if (payload.delivery_type === 'CUSTOM' && (!payload.delivery_address || !payload.delivery_address.trim())) {
-    throw ApiError.badRequest('delivery_address is required for Custom delivery');
-  }
 }
 
-// Bill No./Bilty No./IGP No. — optional whole numbers, per the user (2026-08-30): fillable at or
-// after save time, same convention as Sale Bill's own gp_no/bilty_no.
-function normalizeRefNo(value, label) {
-  if (value === undefined || value === null || value === '') return null;
-  const n = Number(value);
-  if (!Number.isInteger(n)) throw ApiError.badRequest(`${label} must be a whole number`);
-  return n;
-}
-
-// Stock Voucher's fixed ledger head (reservedAccounts.js#STOCK_TRANSFER) — resolved by code, same
-// pattern as journalVouchers.service.js#getCounterAccount / deposits.service.js's own MISC_ADJUSTMENTS
-// lookup. Always has exactly one business account beneath it (db/seeds/run.js).
-async function getStockTransferAccount() {
-  const chartAccount = await chartAccountsRepository.findByCode(CODES.STOCK_TRANSFER);
-  if (!chartAccount) throw new Error(`Reserved chart account STOCK TRANSFER (code ${CODES.STOCK_TRANSFER}) not found — run npm run seed`);
-  const account = await businessAccountsService.getByAcId(chartAccount.ac_id);
-  if (!account) throw new Error('STOCK TRANSFER business account not found — run npm run seed');
-  return account;
-}
-
-// On Account — user-picked, editable; defaults to the STOCK TRANSFER account itself when omitted
-// (matching the reference screen's own On Account/Main A/C both showing the same code). Main A/C
-// is never typed — it's a snapshot of the picked account's own parent chart account, same pattern
-// as dbo.sale_bills.main_ac_id snapshotting the customer's.
+// On Account — user-picked, no default (per the user, 2026-08-30: "no account must be selected
+// as default"). Main A/C is never a separate lookup — it mirrors On Account's own name/code
+// exactly ("must be same and same selected and not changeable"), so there is nothing to resolve
+// beyond confirming the picked account exists.
 async function resolveOnAccount(payload) {
-  if (payload.on_account_ba_id) {
-    const account = await businessAccountsService.getById(payload.on_account_ba_id); // 404s if it doesn't exist
-    return { on_account_ba_id: account.ba_id, main_ac_id: account.ac_id };
-  }
-  const stockTransfer = await getStockTransferAccount();
-  return { on_account_ba_id: stockTransfer.ba_id, main_ac_id: stockTransfer.ac_id };
+  if (!payload.on_account_ba_id) return { on_account_ba_id: null };
+  const account = await businessAccountsService.getById(payload.on_account_ba_id); // 404s if it doesn't exist
+  return { on_account_ba_id: account.ba_id };
 }
 
 function validateLines(rawLines) {
@@ -69,23 +47,7 @@ function validateLines(rawLines) {
     const pairs = Number(line.pairs) || 0;
     if (cartons < 0) throw ApiError.badRequest('Cartons cannot be negative');
     if (pairs <= 0) throw ApiError.badRequest('Each line must have pairs > 0');
-    const rate = Number(line.rate) || 0;
-    const discountPct = Number(line.discount_pct) || 0;
-    if (rate <= 0) throw ApiError.badRequest('Rate must be entered');
-    if (discountPct < 0 || discountPct > 100) throw ApiError.badRequest('D% must be between 0 and 100');
   }
-}
-
-// Money math, never trusted from the client — recomputed here from rate/pairs/discount_pct alone,
-// same convention as every other priced line in this app (e.g. SaleBillPage's own line totals).
-function round2(n) {
-  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-}
-function computeValuation(rate, pairs, discountPct) {
-  const gross = round2(rate * pairs);
-  const discountValue = round2(gross * discountPct / 100);
-  const value = round2(gross - discountValue);
-  return { discount_value: discountValue, value };
 }
 
 async function resolveLines(payload) {
@@ -98,17 +60,16 @@ async function resolveLines(payload) {
     await productColorsService.getById(line.variant_id); // 404s if it doesn't exist
     const cartons = Math.max(0, Math.trunc(Number(line.cartons) || 0));
     const pairs = Math.trunc(Number(line.pairs));
-    const rate = round2(Number(line.rate) || 0);
-    const discountPct = round2(Number(line.discount_pct) || 0);
-    const { discount_value, value } = computeValuation(rate, pairs, discountPct);
     lines.push({
       variant_id: line.variant_id,
       cartons,
       pairs,
-      rate,
-      discount_pct: discountPct,
-      discount_value,
-      value,
+      // Valuation columns still exist on the table (never edit an applied migration) but are no
+      // longer part of this document — always written as their defaults.
+      rate: 0,
+      discount_pct: 0,
+      discount_value: 0,
+      value: 0,
     });
   }
   return lines;
@@ -116,18 +77,20 @@ async function resolveLines(payload) {
 
 async function buildHeaderFields(payload) {
   validateHeader(payload);
-  const { on_account_ba_id, main_ac_id } = await resolveOnAccount(payload);
+  const { on_account_ba_id } = await resolveOnAccount(payload);
   return {
     voucher_date: payload.voucher_date,
     store_id: payload.store_id ?? null,
     remarks: payload.remarks ? payload.remarks.trim() : null,
-    bill_no: normalizeRefNo(payload.bill_no, 'Bill No.'),
-    bilty_no: normalizeRefNo(payload.bilty_no, 'Bilty No.'),
-    igp_no: normalizeRefNo(payload.igp_no, 'IGP No.'),
-    delivery_type: payload.delivery_type === 'CUSTOM' ? 'CUSTOM' : 'SAME',
-    delivery_address: payload.delivery_type === 'CUSTOM' ? payload.delivery_address.trim() : null,
     on_account_ba_id,
-    main_ac_id,
+    // main_ac_id/bill_no/bilty_no/igp_no/delivery_* columns still exist on the table but are no
+    // longer part of this document — always written as their defaults.
+    main_ac_id: null,
+    bill_no: null,
+    bilty_no: null,
+    igp_no: null,
+    delivery_type: 'SAME',
+    delivery_address: null,
   };
 }
 
@@ -141,7 +104,7 @@ async function getById(stockVoucherId) {
   return sv;
 }
 
-// Always created DRAFT — post() is the only thing that writes stock_movements/ledger_entries.
+// Always created DRAFT — post() is the only thing that writes stock_movements.
 async function create(payload, userId) {
   const lines = await resolveLines(payload);
   const header = await buildHeaderFields(payload);
@@ -179,9 +142,7 @@ async function remove(stockVoucherId) {
   return { ok: true };
 }
 
-// Dr STOCK TRANSFER (fixed) / Cr on_account_ba_id, for the voucher's total line value — see
-// getStockTransferAccount()/resolveOnAccount() above. Skipped when total_value is 0 (an all-zero-
-// rate voucher, e.g. a pure quantity adjustment, has nothing to post financially).
+// No ledger effect (per the user, 2026-08-30) — post() only writes stock_movements.
 async function post(stockVoucherId, userId) {
   const sv = await getById(stockVoucherId);
   if (sv.status === 'CONFIRMED') {
@@ -190,21 +151,10 @@ async function post(stockVoucherId, userId) {
   // Defensive re-check: the lines were valid when saved, but re-validate before stock moves.
   validateLines(sv.lines);
 
-  const totalValue = round2(Number(sv.total_value) || 0);
-
   await withTransaction(async (transaction) => {
     await repository.insertStockMovements(transaction, {
       stockVoucherId, voucherDate: sv.voucher_date, lines: sv.lines, createdBy: userId,
     });
-    if (totalValue > 0) {
-      const stockTransfer = await getStockTransferAccount();
-      const onAccountBaId = sv.on_account_ba_id || stockTransfer.ba_id;
-      const narration = `Stock Voucher #${stockVoucherId}`;
-      await repository.insertLedgerEntries(transaction, [
-        { entry_date: sv.voucher_date, ba_id: stockTransfer.ba_id, debit: totalValue, credit: 0, source_type: 'STOCK_VOUCHER', source_id: stockVoucherId, narration },
-        { entry_date: sv.voucher_date, ba_id: onAccountBaId, debit: 0, credit: totalValue, source_type: 'STOCK_VOUCHER', source_id: stockVoucherId, narration },
-      ]);
-    }
     await repository.setStatus(transaction, stockVoucherId, 'CONFIRMED', userId);
   });
 
@@ -219,7 +169,6 @@ async function unpost(stockVoucherId, userId) {
 
   await withTransaction(async (transaction) => {
     await repository.deleteStockMovements(transaction, stockVoucherId);
-    await repository.deleteLedgerEntries(transaction, stockVoucherId);
     await repository.setStatus(transaction, stockVoucherId, 'DRAFT', userId);
   });
 
@@ -247,7 +196,7 @@ async function postAll(ids, userId) {
     const stockVoucherId = target.stock_voucher_id;
     try {
       const sv = await post(stockVoucherId, userId);
-      posted.push({ stock_voucher_id: stockVoucherId, bill_no: sv.bill_no ?? null, total_pairs: sv.total_pairs });
+      posted.push({ stock_voucher_id: stockVoucherId, bill_no: null, total_pairs: sv.total_pairs });
     } catch (err) {
       // Already posted by someone else meets the user's intent — not reported as a failure.
       if (err.code === 'ALREADY_POSTED') continue;

@@ -821,7 +821,7 @@ export default function ReceiptsPage() {
         }}
         onClick={() => setActiveTab('entry')}
         title="Drag tab to Quick Access Menu Bar to pin"
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all cursor-grab active:cursor-grabbing ${
           activeTab === 'entry'
             ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
             : 'bg-white border border-slate-200 text-[#111c2a] hover:bg-slate-50'
@@ -836,7 +836,7 @@ export default function ReceiptsPage() {
         }}
         onClick={() => setActiveTab('weekly')}
         title="Drag tab to Quick Access Menu Bar to pin"
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all cursor-grab active:cursor-grabbing ${
           activeTab === 'weekly'
             ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
             : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
@@ -851,7 +851,7 @@ export default function ReceiptsPage() {
         }}
         onClick={() => setActiveTab('monthly')}
         title="Drag tab to Quick Access Menu Bar to pin"
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all cursor-grab active:cursor-grabbing ${
           activeTab === 'monthly'
             ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
             : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
@@ -866,7 +866,7 @@ export default function ReceiptsPage() {
         }}
         onClick={() => setActiveTab('overall')}
         title="Drag tab to Quick Access Menu Bar to pin"
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-grab active:cursor-grabbing ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all cursor-grab active:cursor-grabbing ${
           activeTab === 'overall'
             ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
             : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'

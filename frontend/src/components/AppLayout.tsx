@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
   Settings, LogOut, ChevronDown, Home,
-  Pin, BookmarkPlus, GripHorizontal, ArrowDownToLine
+  Pin, BookmarkPlus, ArrowDownToLine
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
@@ -336,9 +336,12 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
           >
             <Home size={20} color="var(--dark-heading)" />
           </button>
-          
-          <div className="flex items-center gap-4 flex-1 min-w-0">
-            {/* Brand mark */}
+
+          <div className="flex items-center gap-4 flex-shrink-0">
+            {/* Brand mark — flex-shrink-0 on this whole block, not flex-1: a page with many
+                sub-tabs used to push this out of view entirely once the tab row ran out of room
+                (reported by the user, 2026-08-26/2026-08-30). The tab bar below is the one that
+                shrinks/scrolls now instead. */}
             <div className="flex flex-col gap-1 brand-mark">
               <span
                 className="font-lora uppercase tracking-widest"
@@ -353,53 +356,29 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
             </div>
             {/* Divider */}
             <div className="brand-mark" style={{ width: 1, height: 26, background: 'var(--border-color)' }} />
-            
-            {/* Draggable Page Title & Sub-Tab Breadcrumb */}
-            <div className="flex items-center gap-2 font-lora font-semibold truncate" style={{ color: 'var(--dark-heading)' }}>
-              <h1
-                draggable={true}
-                onDragStart={(e) => {
-                  e.dataTransfer.setData('text/plain', JSON.stringify({ page: currentPage, label: pageTitle || currentPage }));
-                  setIsDragging(true);
-                }}
-                onDragEnd={() => {
-                  setIsDragging(false);
-                  setIsDragOver(false);
-                }}
-                className="capitalize truncate cursor-grab active:cursor-grabbing flex items-center gap-1.5 group hover:text-[#B08D57] transition-colors"
-                style={{ fontSize: '24px' }}
-                title="Drag main page title to top Quick Access Menu Bar to pin"
-              >
-                <span>{pageTitle}</span>
-                <GripHorizontal size={14} className="text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity" />
-              </h1>
-
-              {subTabTitle && (
-                <>
-                  <span className="text-slate-300 font-light text-lg">/</span>
-                  <h2
-                    draggable={true}
-                    onDragStart={(e) => {
-                      e.dataTransfer.setData('text/plain', JSON.stringify({ page: currentPage, tab: subTabId, label: subTabTitle }));
-                      setIsDragging(true);
-                    }}
-                    onDragEnd={() => {
-                      setIsDragging(false);
-                      setIsDragOver(false);
-                    }}
-                    className="capitalize truncate cursor-grab active:cursor-grabbing flex items-center gap-1 text-amber-900 group hover:underline"
-                    style={{ fontSize: '20px' }}
-                    title="Drag subpage tab title to top Quick Access Menu Bar to pin"
-                  >
-                    <span>{subTabTitle}</span>
-                    <GripHorizontal size={14} className="text-amber-500 opacity-0 group-hover:opacity-100 transition-opacity" />
-                  </h2>
-                </>
-              )}
-            </div>
           </div>
-          <ZoomControl />
-          <NotificationBell />
+
+          {/* Page name intentionally not shown in the header (per the user, 2026-08-30) — the tab
+              bar below already identifies which screen is open, and dropping the title frees up
+              the room the tab bar needed. Dragging a page onto the Quick Access Menu Bar to pin it
+              still works via the "+ Pin Page to Bar" button (see below) and, for a sub-tab, its
+              own button in the tab bar. `pageTitle` itself stays a required prop — every page still
+              passes one — since it's still used as the pin's stored label. */}
+
+          {/* Sub-page tab bar — back on the main header row (per the user, 2026-08-30), sized down
+              (see the px-2/text-[11px] button classes each page's own tabBar now uses, changed at
+              the same time as this) so a page with many tabs fits without pushing the brand mark
+              out — and scrolls horizontally in the rare case it still doesn't, rather than wrapping
+              and growing the header's height or shrinking the brand mark. */}
+          {headerAction && (
+            <div data-no-print className="flex-1 overflow-x-auto min-w-0">
+              {headerAction}
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 flex-shrink-0 ml-auto">
+            <ZoomControl />
+            <NotificationBell />
 
           {/* The user chip — and with it Settings and Log out — used to sit in the sidebar footer.
               Removing the sidebar without moving it would have taken the only way to log out with
@@ -464,20 +443,8 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
               </div>
             )}
           </div>
-        </header>
-
-        {/* Sub-page tab bar — its own full-width row, not squeezed into the fixed-height header
-            next to the brand mark/title/icons. A page with many sub-tabs (Reports Hub) used to
-            share the header's single line with WENTOX/title/Zoom/Notifications/user chip, and once
-            there were enough tabs to overflow that line, flex-shrink pushed the brand mark out of
-            view entirely (reported by the user, 2026-08-30). This row gets the full window width
-            and wraps (most tab bars already use flex-wrap internally), so the header above it never
-            has to give up space for it. */}
-        {headerAction && (
-          <div data-no-print className="flex items-center flex-wrap gap-1.5 px-6 md:px-8 py-2" style={{ borderBottom: '1px solid var(--border-color)', background: 'var(--app-bg)' }}>
-            {headerAction}
           </div>
-        )}
+        </header>
 
         {/* The classic menu bar from the client's previous software — five hover menus, directly
             above the Quick Menu row, replacing the sidebar. */}

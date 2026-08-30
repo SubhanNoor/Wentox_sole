@@ -328,7 +328,7 @@ export default function TransferPage() {
       <button
         type="button"
         onClick={() => { setMode('transfer'); setErrorMsg(''); }}
-        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-all ${
+        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-semibold cursor-pointer transition-all ${
           mode === 'transfer'
             ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold'
             : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
@@ -339,7 +339,7 @@ export default function TransferPage() {
       <button
         type="button"
         onClick={() => { setMode('deposit'); setErrorMsg(''); }}
-        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-all ${
+        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-semibold cursor-pointer transition-all ${
           mode === 'deposit'
             ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold'
             : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'

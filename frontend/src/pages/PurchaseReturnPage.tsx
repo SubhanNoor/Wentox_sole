@@ -473,7 +473,22 @@ export default function PurchaseReturnPage() {
       return; // blocked — must match an article/quantity actually on the picked purchase
     }
     const totalPrice = currentRow.quantity * currentRow.pricePerUnit;
-    if (editingUid) {
+    // Same material/unit already on the grid — merge quantity into it instead of adding a
+    // duplicate row (per the user, 2026-08-30). Excludes the row being edited itself, so
+    // re-committing an unchanged row doesn't fold it into a copy of itself.
+    const dup = items.find(it =>
+      it.uid !== editingUid &&
+      it.materialName.trim().toLowerCase() === materialName.toLowerCase() &&
+      it.unit.trim().toLowerCase() === unit.toLowerCase()
+    );
+    if (dup) {
+      setItems(prev => {
+        const withoutEditing = editingUid ? prev.filter(it => it.uid !== editingUid) : prev;
+        return withoutEditing.map(it => it.uid === dup.uid
+          ? { ...it, quantity: it.quantity + currentRow.quantity, totalPrice: (it.quantity + currentRow.quantity) * it.pricePerUnit }
+          : it);
+      });
+    } else if (editingUid) {
       setItems(prev => prev.map(it => it.uid === editingUid
         ? { ...it, materialName, unit, quantity: currentRow.quantity, pricePerUnit: currentRow.pricePerUnit, totalPrice }
         : it));
@@ -898,7 +913,7 @@ export default function PurchaseReturnPage() {
     <div className="flex gap-1.5" data-no-print>
       <button
         onClick={() => { setActiveTab('entry'); startNewReturn(); }}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
       >
@@ -906,7 +921,7 @@ export default function PurchaseReturnPage() {
       </button>
       <button
         onClick={() => setActiveTab('records')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'records' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
       >

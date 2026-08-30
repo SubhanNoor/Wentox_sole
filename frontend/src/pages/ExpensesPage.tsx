@@ -661,7 +661,7 @@ export default function ExpensesPage() {
     <div className="flex flex-wrap gap-1.5" data-no-print>
       <button
         onClick={() => setActiveTab('entry')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'entry'
             ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
             : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
@@ -671,7 +671,7 @@ export default function ExpensesPage() {
       </button>
       <button
         onClick={() => setActiveTab('weekly')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'weekly'
             ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
             : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
@@ -681,7 +681,7 @@ export default function ExpensesPage() {
       </button>
       <button
         onClick={() => setActiveTab('monthly')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'monthly'
             ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
             : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
@@ -691,7 +691,7 @@ export default function ExpensesPage() {
       </button>
       <button
         onClick={() => setActiveTab('overall')}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'overall'
             ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
             : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
