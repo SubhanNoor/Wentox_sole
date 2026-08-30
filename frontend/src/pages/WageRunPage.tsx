@@ -8,6 +8,7 @@ import { formatDate } from '@/lib/utils';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Plus, Trash2, Save, HardHat, AlertTriangle, Edit2, Undo2, History, Clock, ChevronDown, Check, X } from 'lucide-react';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 interface FormItem {
   key: string;
@@ -47,10 +48,16 @@ export default function WageRunPage() {
   };
 
   const [editingRunId, setEditingRunId] = useState<number | null>(null);
-  const [date, setDate] = useState(today());
-  const [employeeId, setEmployeeId] = useState('');
-  const [stage, setStage] = useState('');
-  const [items, setItems] = useState<FormItem[]>([emptyItem()]);
+  // A New Wage Run's own in-progress fields persist across switching pages AND an app restart
+  // (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied to
+  // editingRunId — an already-saved run loaded for edit is safely re-openable by id at any time,
+  // so caching it risks showing a stale copy instead; only unsaved "new" work is ever at risk of
+  // being lost for good.
+  const clearWageRunDraft = useClearPageDraft('wage-run');
+  const [date, setDate] = usePersistentField('wage-run', 'date', today());
+  const [employeeId, setEmployeeId] = usePersistentField('wage-run', 'employeeId', '');
+  const [stage, setStage] = usePersistentField('wage-run', 'stage', '');
+  const [items, setItems] = usePersistentField<FormItem[]>('wage-run', 'items', [emptyItem()]);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -227,6 +234,7 @@ export default function WageRunPage() {
     setEmployeeId('');
     setStage('');
     setItems([emptyItem()]);
+    clearWageRunDraft();
   };
 
   const save = async (shouldPost: boolean) => {

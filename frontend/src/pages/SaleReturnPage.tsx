@@ -17,6 +17,7 @@ import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
@@ -109,22 +110,27 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [passwordActionType, setPasswordActionType] = useState<'edit_return' | 'save_return' | 'save_and_post' | 'post_return' | 'delete_unposted_return' | null>(null);
 
+  // Draft persistence — see src/hooks/usePersistentField.ts. Only real in-progress entry data is
+  // persisted; which EXISTING record is loaded (returnId/currentReturnIsPosted/mode) is
+  // deliberately left as plain useState, same as StockVoucherPage/SaleBillPage.
+  const clearSaleReturnDraft = useClearPageDraft('sale-return');
+
   // Form State
   const [returnId, setReturnId] = useState<number | null>(null);
   const [currentReturnIsPosted, setCurrentReturnIsPosted] = useState(false);
-  const [date, setDate] = useState(getTodayDate());
-  const [storeId, setStoreId] = useState('');
-  const [customerId, setCustomerId] = useState('');
-  const [subCustomerId, setSubCustomerId] = useState('');
-  const [billNo, setBillNo] = useState('');
-  const [gpNo, setGpNo] = useState('');
-  const [biltyNo, setBiltyNo] = useState('');
-  const [addaId, setAddaId] = useState('');
-  const [remarks, setRemarks] = useState('');
-  const [invoiceDiscount, setInvoiceDiscount] = useState(0);
+  const [date, setDate] = usePersistentField('sale-return', 'date', getTodayDate());
+  const [storeId, setStoreId] = usePersistentField('sale-return', 'storeId', '');
+  const [customerId, setCustomerId] = usePersistentField('sale-return', 'customerId', '');
+  const [subCustomerId, setSubCustomerId] = usePersistentField('sale-return', 'subCustomerId', '');
+  const [billNo, setBillNo] = usePersistentField('sale-return', 'billNo', '');
+  const [gpNo, setGpNo] = usePersistentField('sale-return', 'gpNo', '');
+  const [biltyNo, setBiltyNo] = usePersistentField('sale-return', 'biltyNo', '');
+  const [addaId, setAddaId] = usePersistentField('sale-return', 'addaId', '');
+  const [remarks, setRemarks] = usePersistentField('sale-return', 'remarks', '');
+  const [invoiceDiscount, setInvoiceDiscount] = usePersistentField('sale-return', 'invoiceDiscount', 0);
 
   // Line items state
-  const [items, setItems] = useState<UiItem[]>([]);
+  const [items, setItems] = usePersistentField<UiItem[]>('sale-return', 'items', []);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -403,8 +409,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   //   validated+priced against the source if touched).
   //
   // Both paths funnel through this one function — `copyItems` is the only difference between them.
-  const [copyFromBillId, setCopyFromBillId] = useState('');
-  const [sourceBillItems, setSourceBillItems] = useState<SaleBillItemRow[]>([]);
+  const [copyFromBillId, setCopyFromBillId] = usePersistentField('sale-return', 'copyFromBillId', '');
+  const [sourceBillItems, setSourceBillItems] = usePersistentField<SaleBillItemRow[]>('sale-return', 'sourceBillItems', []);
   const isCopiedFromBill = !!copyFromBillId;
 
   const [priorBills, setPriorBills] = useState<SaleBillRow[]>([]);
@@ -695,6 +701,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setCopyFromBillId('');
     setSourceBillItems([]);
     setErrorMsg('');
+    clearSaleReturnDraft();
     // Explicit focus, not just the G-01 mode-change effect below: clicking New while already on
     // a blank/new return (mode is already 'new') doesn't change `mode`, so that effect's
     // dependency never fires and focus would otherwise stay wherever it was (mirrors the same fix
@@ -776,6 +783,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
     // Every other save — a brand-new return, or editing one that's still a draft — goes through
     // the draft table now (draftSaleReturns.service.js), not sale_returns directly.
+    const wasNew = mode !== 'edit';
     const result = mode === 'edit' && returnId != null
       ? await api.draftSaleReturns.update(returnId, payload)
       : await api.draftSaleReturns.create(payload);
@@ -791,6 +799,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setTimeout(() => setSuccessMsg(''), 3000);
     setMode(finalize ? 'view' : 'edit');
     setErrorMsg('');
+    if (wasNew) clearSaleReturnDraft();
     refreshDrafts();
     return result.data;
   };
@@ -1017,7 +1026,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // Row button) commits it into `items` — appending, or replacing `editingIndex` when a table row
   // was clicked to re-open it — then always clears the strip and refocuses Product for the next
   // article. Clicking a committed row loads it back into the strip for editing.
-  const [entry, setEntry] = useState<UiItem>(newUiItem());
+  const [entry, setEntry] = usePersistentField<UiItem>('sale-return', 'entry', newUiItem());
   // null while the strip is adding a brand-new row; the table index being replaced once a
   // committed row has been clicked back open for editing (see handleRowClick below).
   const [editingIndex, setEditingIndex] = useState<number | null>(null);

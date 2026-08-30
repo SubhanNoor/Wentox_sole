@@ -4,6 +4,7 @@ import { Plus, Search, Settings, Save, Edit2, X, Globe } from 'lucide-react';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import DataListTable from '@/components/DataListTable';
 import { regions as regionsApi, type RegionRow } from '@/lib/api';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 export default function RegionSetupPage() {
   const [regions, setRegions] = useState<RegionRow[]>([]);
@@ -18,8 +19,10 @@ export default function RegionSetupPage() {
   const [dupMatch, setDupMatch] = useState<DuplicateNameMatch | null>(null);
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
-  // Form State
-  const [regionName, setRegionName] = useState('');
+  // Form State — persisted only while adding a NEW region (not editing an existing one, which is
+  // re-openable by id at any time and would risk a stale cached copy).
+  const clearDraft = useClearPageDraft('region-setup');
+  const [regionName, setRegionName] = usePersistentField('region-setup', 'regionName', '');
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -49,6 +52,7 @@ export default function RegionSetupPage() {
     setSelectedRegionId(null);
     setRegionName('');
     setErrorMsg('');
+    clearDraft();
   };
 
   // G-06: after a successful create, the window stays open and clears — ready for the next
@@ -89,6 +93,7 @@ export default function RegionSetupPage() {
       setSuccessMsg('New region registered successfully.');
       await loadData();
       resetForNextRegion();
+      clearDraft();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);

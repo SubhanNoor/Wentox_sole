@@ -4,6 +4,7 @@ import { Plus, Search, Settings, Save, Edit2, Warehouse, X } from 'lucide-react'
 import DataListTable from '@/components/DataListTable';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import { stores as storesApi, type StoreRow } from '@/lib/api';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 export default function StoreSetupPage() {
   const [stores, setStores] = useState<StoreRow[]>([]);
@@ -18,8 +19,10 @@ export default function StoreSetupPage() {
   const [dupMatch, setDupMatch] = useState<DuplicateNameMatch | null>(null);
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
-  // Form State
-  const [storeName, setStoreName] = useState('');
+  // Form State — persisted only while adding a NEW store (not editing an existing one, which is
+  // re-openable by id at any time and would risk a stale cached copy).
+  const clearDraft = useClearPageDraft('store-setup');
+  const [storeName, setStoreName] = usePersistentField('store-setup', 'storeName', '');
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -49,6 +52,7 @@ export default function StoreSetupPage() {
     setSelectedStoreId(null);
     setStoreName('');
     setErrorMsg('');
+    clearDraft();
   };
 
   // G-06: after a successful create, the window stays open and clears — ready for the next
@@ -87,6 +91,7 @@ export default function StoreSetupPage() {
       setSuccessMsg('New Store registered successfully.');
       await loadData();
       resetForNextStore();
+      clearDraft();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);

@@ -9,6 +9,7 @@ import OpeningBalanceFields from '@/components/OpeningBalanceFields';
 import { Plus, Search, Settings, Save, Edit2, Phone, MapPin, HardHat, BadgeDollarSign, X, RotateCcw } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 type ListTab = 'workers' | 'salaried';
 
@@ -41,16 +42,17 @@ export default function EmployeeSetupPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   // Form state
-  const [empType, setEmpType] = useState<EmployeeType>('WORKER');
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [cityId, setCityId] = useState('');
-  const [selectedStages, setSelectedStages] = useState<string[]>([]);
-  const [salary, setSalary] = useState('');
+  const clearEmployeeDraft = useClearPageDraft('employee-setup');
+  const [empType, setEmpType] = usePersistentField<EmployeeType>('employee-setup', 'empType', 'WORKER');
+  const [name, setName] = usePersistentField('employee-setup', 'name', '');
+  const [phone, setPhone] = usePersistentField('employee-setup', 'phone', '');
+  const [cityId, setCityId] = usePersistentField('employee-setup', 'cityId', '');
+  const [selectedStages, setSelectedStages] = usePersistentField<string[]>('employee-setup', 'selectedStages', []);
+  const [salary, setSalary] = usePersistentField('employee-setup', 'salary', '');
   // The opening balance lives on the auto-created business account, not on this row — the service
   // forwards it there (same route bankAccounts.service.js has always used).
-  const [openingBalance, setOpeningBalance] = useState('');
-  const [openingDate, setOpeningDate] = useState(getTodayDate());
+  const [openingBalance, setOpeningBalance] = usePersistentField('employee-setup', 'openingBalance', '');
+  const [openingDate, setOpeningDate] = usePersistentField('employee-setup', 'openingDate', getTodayDate());
 
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -138,6 +140,7 @@ export default function EmployeeSetupPage() {
     setOpeningBalance('');
     setOpeningDate(getTodayDate());
     setErrorMsg('');
+    clearEmployeeDraft();
   };
 
   // G-06: after a successful create, the window stays open and clears — ready for the next
@@ -200,6 +203,7 @@ export default function EmployeeSetupPage() {
       }
       flash(`${empType === 'WORKER' ? 'Worker' : 'Salaried employee'} added successfully.`);
       resetForNextEmployee();
+      clearEmployeeDraft();
     }
 
     loadAll();
@@ -212,6 +216,7 @@ export default function EmployeeSetupPage() {
     if (!res.ok) return fail('Failed to reactivate: ' + res.error.message);
     flash('Existing employee reactivated.');
     resetForNextEmployee();
+    clearEmployeeDraft();
     loadAll();
   };
 

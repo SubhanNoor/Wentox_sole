@@ -7,6 +7,7 @@ import * as api from '@/lib/api';
 import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import {
   Save, Edit, Trash2, Plus, CheckCircle2, Undo2, ChevronDown,
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, PackageCheck, Search
@@ -97,17 +98,23 @@ export default function ReceiptsPage() {
   const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('posted');
   const [receiptId, setReceiptId] = useState<number | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
-  const [date, setDate] = useState(today());
-  const [baId, setBaId] = useState('');
-  const [amount, setAmount] = useState<number>(0);
-  const [commission, setCommission] = useState<number>(0);
-  const [paymentMode, setPaymentMode] = useState<'CASH' | 'ONLINE' | 'CHEQUE'>('CASH');
-  const [bankId, setBankId] = useState('');
-  const [details, setDetails] = useState('');
-  const [chequeNo, setChequeNo] = useState('');
-  const [chequeDate, setChequeDate] = useState('');
-  const [chequeReceivedDate, setChequeReceivedDate] = useState('');
-  const [remarks, setRemarks] = useState('');
+  // In-progress entry-row fields persist across switching pages AND an app restart
+  // (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied to
+  // mode/receiptId/receiptStatus/entryIsDraft/docKind/voucher — an already-saved receipt or
+  // voucher loaded for view/edit is safely re-openable by id at any time, so caching it risks
+  // showing a stale copy; only unsaved "new" work is ever at risk of being lost.
+  const clearReceiptsDraft = useClearPageDraft('receipts');
+  const [date, setDate] = usePersistentField('receipts', 'date', today());
+  const [baId, setBaId] = usePersistentField('receipts', 'baId', '');
+  const [amount, setAmount] = usePersistentField('receipts', 'amount', 0);
+  const [commission, setCommission] = usePersistentField('receipts', 'commission', 0);
+  const [paymentMode, setPaymentMode] = usePersistentField<'CASH' | 'ONLINE' | 'CHEQUE'>('receipts', 'paymentMode', 'CASH');
+  const [bankId, setBankId] = usePersistentField('receipts', 'bankId', '');
+  const [details, setDetails] = usePersistentField('receipts', 'details', '');
+  const [chequeNo, setChequeNo] = usePersistentField('receipts', 'chequeNo', '');
+  const [chequeDate, setChequeDate] = usePersistentField('receipts', 'chequeDate', '');
+  const [chequeReceivedDate, setChequeReceivedDate] = usePersistentField('receipts', 'chequeReceivedDate', '');
+  const [remarks, setRemarks] = usePersistentField('receipts', 'remarks', '');
 
   // draftReceipts is a separate server-side feature (genuinely incomplete entries) —
   // distinct from a receipt's own DRAFT/CONFIRMED status above. Loading one just
@@ -120,8 +127,8 @@ export default function ReceiptsPage() {
   // saving writes a `settlements` row (Dr the endorsed account / Cr the payer, both ba_id) instead.
   // docKind tracks which document the form is currently holding, because Post/Unpost/Edit have to
   // dispatch to the right service.
-  const [isEndorsed, setIsEndorsed] = useState(false);
-  const [endorseToBaId, setEndorseToBaId] = useState('');
+  const [isEndorsed, setIsEndorsed] = usePersistentField('receipts', 'isEndorsed', false);
+  const [endorseToBaId, setEndorseToBaId] = usePersistentField('receipts', 'endorseToBaId', '');
   const [docKind, setDocKind] = useState<'RECEIPT' | 'SETTLEMENT'>('RECEIPT');
   // Which table `receiptId` points into. An unposted receipt now lives in dbo.draft_receipts and a
   // posted one in dbo.receipts, so the id alone is ambiguous — this says which id space it is in.
@@ -169,7 +176,7 @@ export default function ReceiptsPage() {
   // client's "C.Book No" and is allocated MAX+1, so creating one eagerly would burn a number every
   // time somebody merely visited the screen and walked away.
   const [voucher, setVoucher] = useState<ReceiptVoucherRow | null>(null);
-  const [voucherRemarks, setVoucherRemarks] = useState('');
+  const [voucherRemarks, setVoucherRemarks] = usePersistentField('receipts', 'voucherRemarks', '');
   const [voucherBusy, setVoucherBusy] = useState(false);
   const [voucherResult, setVoucherResult] = useState<VoucherActionResult<'receipt_id', ReceiptVoucherRow> | null>(null);
 
@@ -385,6 +392,7 @@ export default function ReceiptsPage() {
     setChequeReceivedDate('');
     setRemarks('');
     setErrorMsg('');
+    clearReceiptsDraft();
   };
 
   const buildPayload = (): ReceiptCreateInput | null => {
@@ -447,6 +455,7 @@ export default function ReceiptsPage() {
     setErrorMsg('');
     flash('Endorsement saved — Post it to update both ledgers.');
     setMode('view');
+    clearReceiptsDraft();
     setBalanceRefreshKey(k => k + 1);
   };
 
@@ -473,6 +482,7 @@ export default function ReceiptsPage() {
     setChequeReceivedDate('');
     setRemarks('');
     setErrorMsg('');
+    clearReceiptsDraft();
     // Cursor back to the first entry field, ready to type — the client's flow is Done → type →
     // Done → type, with no mouse. The app-wide G-01 rule focuses a form's first field on mount, but
     // this form never unmounts between lines, so the focus has to be asked for explicitly.

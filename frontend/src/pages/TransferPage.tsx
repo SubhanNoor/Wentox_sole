@@ -9,6 +9,7 @@ import { formatDate } from '@/lib/utils';
 import {
   ArrowLeftRight, PiggyBank, Save, AlertTriangle, TrendingUp, TrendingDown, Edit
 } from 'lucide-react';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 const today = () => new Date().toISOString().split('T')[0];
 
@@ -81,14 +82,20 @@ export default function TransferPage() {
   }, [refreshTransfers, refreshDeposits]);
 
   // ── Transfer form ──
+  // In-progress entry fields persist across switching pages AND an app restart
+  // (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied to
+  // tMode/transferId/transferStatus/dMode/depositId/depositStatus — an already-saved
+  // transfer/deposit loaded for view/edit is safely re-openable by id at any time, so caching
+  // it risks showing a stale copy; only unsaved "new" work is ever at risk of being lost.
+  const clearTransferDraft = useClearPageDraft('transfer');
   const [tMode, setTMode] = useState<'new' | 'edit' | 'view'>('new');
   const [transferId, setTransferId] = useState<number | null>(null);
   const [transferStatus, setTransferStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
-  const [date, setDate] = useState(today());
-  const [fromBaId, setFromBaId] = useState('');
-  const [toBaId, setToBaId] = useState('');
-  const [amount, setAmount] = useState<number>(0);
-  const [remarks, setRemarks] = useState('');
+  const [date, setDate] = usePersistentField('transfer', 'date', today());
+  const [fromBaId, setFromBaId] = usePersistentField('transfer', 'fromBaId', '');
+  const [toBaId, setToBaId] = usePersistentField('transfer', 'toBaId', '');
+  const [amount, setAmount] = usePersistentField('transfer', 'amount', 0);
+  const [remarks, setRemarks] = usePersistentField('transfer', 'remarks', '');
 
   const isTransferViewMode = tMode === 'view';
   const isTransferPosted = transferStatus === 'CONFIRMED';
@@ -97,12 +104,12 @@ export default function TransferPage() {
   const [dMode, setDMode] = useState<'new' | 'edit' | 'view'>('new');
   const [depositId, setDepositId] = useState<number | null>(null);
   const [depositStatus, setDepositStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
-  const [depDirection, setDepDirection] = useState<'CREDIT' | 'DEBIT'>('CREDIT');
-  const [depDate, setDepDate] = useState(today());
-  const [depToBaId, setDepToBaId] = useState('');
-  const [depAmount, setDepAmount] = useState<number>(0);
-  const [depSource, setDepSource] = useState('');
-  const [depRemarks, setDepRemarks] = useState('');
+  const [depDirection, setDepDirection] = usePersistentField<'CREDIT' | 'DEBIT'>('transfer', 'depDirection', 'CREDIT');
+  const [depDate, setDepDate] = usePersistentField('transfer', 'depDate', today());
+  const [depToBaId, setDepToBaId] = usePersistentField('transfer', 'depToBaId', '');
+  const [depAmount, setDepAmount] = usePersistentField('transfer', 'depAmount', 0);
+  const [depSource, setDepSource] = usePersistentField('transfer', 'depSource', '');
+  const [depRemarks, setDepRemarks] = usePersistentField('transfer', 'depRemarks', '');
 
   const isDepositViewMode = dMode === 'view';
   const isDepositPosted = depositStatus === 'CONFIRMED';
@@ -125,6 +132,7 @@ export default function TransferPage() {
     setAmount(0);
     setRemarks('');
     setErrorMsg('');
+    clearTransferDraft();
   };
 
   const buildTransferPayload = (): TransferCreateInput | null => {
@@ -159,6 +167,7 @@ export default function TransferPage() {
     setErrorMsg('');
     flash(tMode === 'edit' ? 'Transfer updated.' : 'Transfer recorded as draft.');
     setTMode('view');
+    clearTransferDraft();
     refreshTransfers();
     bumpBalances();
   };
@@ -209,6 +218,7 @@ export default function TransferPage() {
     setDepSource('');
     setDepRemarks('');
     setErrorMsg('');
+    clearTransferDraft();
   };
 
   const buildDepositPayload = (): DepositCreateInput | null => {
@@ -246,6 +256,7 @@ export default function TransferPage() {
     setErrorMsg('');
     flash(dMode === 'edit' ? 'Entry updated.' : 'Entry recorded as draft.');
     setDMode('view');
+    clearTransferDraft();
     refreshDeposits();
     bumpBalances();
   };

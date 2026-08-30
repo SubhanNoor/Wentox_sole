@@ -12,6 +12,7 @@ import {
   type AccountClassRow,
   type ChartOfAccountRow,
 } from '@/lib/api';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 export default function GroupAcSetupPage() {
   const [groups, setGroups] = useState<GroupAccountRow[]>([]);
@@ -31,9 +32,11 @@ export default function GroupAcSetupPage() {
   const [dupMatch, setDupMatch] = useState<DuplicateNameMatch | null>(null);
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
-  // Form State
-  const [name, setName] = useState('');
-  const [classId, setClassId] = useState<number | null>(null);
+  // Form State — persisted only while adding a NEW group account (not editing an existing one,
+  // which is re-openable by id at any time and would risk a stale cached copy).
+  const clearDraft = useClearPageDraft('group-account-setup');
+  const [name, setName] = usePersistentField('group-account-setup', 'name', '');
+  const [classId, setClassId] = usePersistentField<number | null>('group-account-setup', 'classId', null);
 
   // Drill-down Modal State
   const [viewingGroupId, setViewingGroupId] = useState<number | null>(null);
@@ -52,6 +55,9 @@ export default function GroupAcSetupPage() {
       setClasses(cRes.data);
       setClassId(prev => prev ?? cRes.data[0]?.class_id ?? null);
     }
+    // setClassId's identity is stable (usePersistentField wraps a plain useState setter), same as
+    // every other setState setter already omitted from deps arrays throughout this codebase.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -77,6 +83,7 @@ export default function GroupAcSetupPage() {
     setSelectedId(null);
     setName('');
     setErrorMsg('');
+    clearDraft();
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -111,6 +118,7 @@ export default function GroupAcSetupPage() {
       setSelectedId(null);
       setName('');
       setErrorMsg('');
+      clearDraft();
       requestAnimationFrame(() => nameInputRef.current?.focus());
     }
 
@@ -129,6 +137,7 @@ export default function GroupAcSetupPage() {
     setSelectedId(null);
     setName('');
     setErrorMsg('');
+    clearDraft();
     requestAnimationFrame(() => nameInputRef.current?.focus());
   };
 

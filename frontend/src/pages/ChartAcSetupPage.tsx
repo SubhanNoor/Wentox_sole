@@ -13,6 +13,7 @@ import {
   type GroupAccountRow,
   type BusinessAccountRow,
 } from '@/lib/api';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 export default function ChartAcSetupPage() {
   const [charts, setCharts] = useState<ChartOfAccountRow[]>([]);
@@ -33,10 +34,12 @@ export default function ChartAcSetupPage() {
   const [dupMatch, setDupMatch] = useState<DuplicateNameMatch | null>(null);
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
-  // Form State
-  const [name, setName] = useState('');
-  const [groupId, setGroupId] = useState('');
-  const [linkCode, setLinkCode] = useState('');
+  // Form State — persisted only while adding a NEW chart account (not editing an existing one,
+  // which is re-openable by id at any time and would risk a stale cached copy).
+  const clearDraft = useClearPageDraft('chart-account-setup');
+  const [name, setName] = usePersistentField('chart-account-setup', 'name', '');
+  const [groupId, setGroupId] = usePersistentField('chart-account-setup', 'groupId', '');
+  const [linkCode, setLinkCode] = usePersistentField('chart-account-setup', 'linkCode', '');
 
   // Drill-down Modal State
   const [viewingChartId, setViewingChartId] = useState<number | null>(null);
@@ -81,6 +84,7 @@ export default function ChartAcSetupPage() {
     setGroupId('');
     setLinkCode('');
     setErrorMsg('');
+    clearDraft();
   };
 
   // G-06: after a successful create, the window stays open and clears — ready for the next
@@ -122,6 +126,7 @@ export default function ChartAcSetupPage() {
       setSuccessMsg('Account registered successfully.');
       await loadData();
       resetForNextChart();
+      clearDraft();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
@@ -137,6 +142,7 @@ export default function ChartAcSetupPage() {
     setIsDupModalOpen(false);
     setDupMatch(null);
     resetForNextChart();
+    clearDraft();
   };
 
 

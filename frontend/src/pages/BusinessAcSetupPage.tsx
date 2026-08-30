@@ -15,6 +15,7 @@ import {
   type RegionRow,
   type CityRow,
 } from '@/lib/api';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 export default function BusinessAcSetupPage() {
   const [accounts, setAccounts] = useState<BusinessAccountRow[]>([]);
@@ -32,13 +33,15 @@ export default function BusinessAcSetupPage() {
   // account at any time, it's only out of the Tab/Enter walk.
   const [chartLockedIn, setChartLockedIn] = useState(false);
 
-  // Form State
-  const [name, setName] = useState('');
-  const [controlId, setControlId] = useState(''); // parent chart account id
-  const [regionId, setRegionId] = useState('');
-  const [cityId, setCityId] = useState('');
-  const [openingBalance, setOpeningBalance] = useState('');
-  const [openingDate, setOpeningDate] = useState(getTodayDate());
+  // Form State — persisted only while adding a NEW account (not editing an existing one, which
+  // is re-openable by id at any time and would risk a stale cached copy).
+  const clearDraft = useClearPageDraft('business-account-setup');
+  const [name, setName] = usePersistentField('business-account-setup', 'name', '');
+  const [controlId, setControlId] = usePersistentField('business-account-setup', 'controlId', ''); // parent chart account id
+  const [regionId, setRegionId] = usePersistentField('business-account-setup', 'regionId', '');
+  const [cityId, setCityId] = usePersistentField('business-account-setup', 'cityId', '');
+  const [openingBalance, setOpeningBalance] = usePersistentField('business-account-setup', 'openingBalance', '');
+  const [openingDate, setOpeningDate] = usePersistentField('business-account-setup', 'openingDate', getTodayDate());
 
   // Search and Sort State
   const [searchQuery, setSearchQuery] = useState('');
@@ -102,6 +105,7 @@ export default function BusinessAcSetupPage() {
     setOpeningDate(getTodayDate());
     setErrorMsg('');
     setChartLockedIn(false);
+    clearDraft();
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -149,6 +153,7 @@ export default function BusinessAcSetupPage() {
       setChartLockedIn(true);
       requestAnimationFrame(() => nameInputRef.current?.focus());
       await loadData();
+      clearDraft();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);

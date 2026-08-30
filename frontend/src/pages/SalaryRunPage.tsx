@@ -5,6 +5,7 @@ import type { EmployeeRow, SalaryRunRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import AppLayout from '@/components/AppLayout';
 import { Save, BadgeDollarSign, History, Edit2, Undo2, AlertTriangle, RotateCcw, X } from 'lucide-react';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 interface FormLine {
   employee_id: number;
@@ -38,16 +39,22 @@ export default function SalaryRunPage() {
     }, 180);
   };
   const [editingRunId, setEditingRunId] = useState<number | null>(null);
-  const [periodMonth, setPeriodMonth] = useState(thisMonth());
+  // A New Salary Run's own in-progress fields persist across switching pages AND an app restart
+  // (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied to
+  // editingRunId — an already-saved run loaded for edit is safely re-openable by id at any time,
+  // so caching it risks showing a stale copy instead; only unsaved "new" work is ever at risk of
+  // being lost for good.
+  const clearSalaryRunDraft = useClearPageDraft('salary-run');
+  const [periodMonth, setPeriodMonth] = usePersistentField('salary-run', 'periodMonth', thisMonth());
 
   // A new run's lines are DERIVED from the current roster, never stored — so
   // adding a salaried employee shows up immediately without an effect syncing
   // state to state. Only what the operator actually typed over is held here.
-  const [overrides, setOverrides] = useState<Record<number, { amount?: number; remarks?: string }>>({});
+  const [overrides, setOverrides] = usePersistentField<Record<number, { amount?: number; remarks?: string }>>('salary-run', 'overrides', {});
 
   // An existing run carries its own snapshots, including for people whose
   // salary has since changed, so editing works from the stored items instead.
-  const [editingItems, setEditingItems] = useState<FormLine[] | null>(null);
+  const [editingItems, setEditingItems] = usePersistentField<FormLine[] | null>('salary-run', 'editingItems', null);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -129,6 +136,7 @@ export default function SalaryRunPage() {
     setEditingItems(null);
     setOverrides({});
     setPeriodMonth(thisMonth());
+    clearSalaryRunDraft();
   };
 
   const save = async (shouldPost: boolean) => {

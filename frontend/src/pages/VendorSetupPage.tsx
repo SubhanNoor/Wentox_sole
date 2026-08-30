@@ -8,6 +8,7 @@ import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { VendorRow, RegionRow, CityRow, ProductRow, PurchaseRow } from '@/lib/api';
 import { formatDate, getTodayDate } from '@/lib/utils';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 export default function VendorSetupPage() {
   const [vendorSearch, setVendorSearch] = useState('');
@@ -26,14 +27,15 @@ export default function VendorSetupPage() {
   const [purchasesLoading, setPurchasesLoading] = useState(false);
 
   // Form State
-  const [vendorName, setVendorName] = useState('');
-  const [vendorPhone, setVendorPhone] = useState('');
+  const clearVendorDraft = useClearPageDraft('vendor-setup');
+  const [vendorName, setVendorName] = usePersistentField('vendor-setup', 'vendorName', '');
+  const [vendorPhone, setVendorPhone] = usePersistentField('vendor-setup', 'vendorPhone', '');
   // The opening balance lives on the auto-created business account, not on this row — the service
   // forwards it there (same route bankAccounts.service.js has always used).
-  const [openingBalance, setOpeningBalance] = useState('');
-  const [openingDate, setOpeningDate] = useState(getTodayDate());
-  const [vendorRegionId, setVendorRegionId] = useState('');
-  const [vendorCityId, setVendorCityId] = useState('');
+  const [openingBalance, setOpeningBalance] = usePersistentField('vendor-setup', 'openingBalance', '');
+  const [openingDate, setOpeningDate] = usePersistentField('vendor-setup', 'openingDate', getTodayDate());
+  const [vendorRegionId, setVendorRegionId] = usePersistentField('vendor-setup', 'vendorRegionId', '');
+  const [vendorCityId, setVendorCityId] = usePersistentField('vendor-setup', 'vendorCityId', '');
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3000); };
@@ -95,6 +97,7 @@ export default function VendorSetupPage() {
     setVendorCityId('');
     setOpeningDate(getTodayDate());
     setErrorMsg('');
+    clearVendorDraft();
   };
 
   // G-06: after a successful create, the window stays open and clears — ready for the next
@@ -142,6 +145,7 @@ export default function VendorSetupPage() {
       }
       flash('New vendor registered successfully.');
       resetForNextVendor();
+      clearVendorDraft();
     }
 
     loadAll();
@@ -154,6 +158,7 @@ export default function VendorSetupPage() {
     if (!res.ok) return setErrorMsg('Failed to reactivate: ' + res.error.message);
     flash('Existing vendor reactivated.');
     resetForNextVendor();
+    clearVendorDraft();
     loadAll();
   };
 

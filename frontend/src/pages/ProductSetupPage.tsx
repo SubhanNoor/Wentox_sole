@@ -14,6 +14,7 @@ import ProductArticleForm, { emptyArticleValues } from '@/components/ProductArti
 import type { ArticleFormValues } from '@/components/ProductArticleForm';
 import * as api from '@/lib/api';
 import type { ProductRow, CategoryRow, VendorRow, ProductVariantRow, ProductBatchFieldError } from '@/lib/api';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 // Two tabs (per the user, 2026-08-30 follow-up):
 //   - Register Product — the bound-record toolbar screen (New/Delete/Edit/Done, First/Prev/Next/
@@ -90,9 +91,16 @@ export default function ProductSetupPage() {
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [selectedProductCode, setSelectedProductCode] = useState('');
   const [selectedBatchNo, setSelectedBatchNo] = useState<number | null>(null);
+  // A New Product's own in-progress fields persist across switching pages AND an app restart
+  // (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied to
+  // selectedProductId/selectedProductCode/selectedBatchNo/mode — an already-saved product loaded
+  // for view/edit is safely re-openable by id at any time, so caching it risks showing a stale
+  // copy instead; only unsaved "new" work (the category/form fields and the staged batch below)
+  // is ever at risk of being lost for good.
+  const clearProductSetupDraft = useClearPageDraft('product-setup-register');
   // Master field (per the user: "the master is category, detail is all the product thing").
-  const [categoryId, setCategoryId] = useState('');
-  const [formValues, setFormValues] = useState<ArticleFormValues>(emptyArticleValues());
+  const [categoryId, setCategoryId] = usePersistentField('product-setup-register', 'categoryId', '');
+  const [formValues, setFormValues] = usePersistentField<ArticleFormValues>('product-setup-register', 'formValues', emptyArticleValues());
   // Every color this article actually has — an article can carry more than one (added here, or via
   // Stock Voucher's own "+ Add New Color"), shown as chips instead of a single overwritten field.
   const [existingColors, setExistingColors] = useState<ProductVariantRow[]>([]);
@@ -150,7 +158,7 @@ export default function ProductSetupPage() {
   // Only the toolbar's Done writes the whole list to the database in one call and moves to a
   // fresh blank screen. All staged articles share the single Category master field above, so
   // changing category once any are staged is guarded (see handleCategoryChange).
-  const [stagedArticles, setStagedArticles] = useState<ArticleFormValues[]>([]);
+  const [stagedArticles, setStagedArticles] = usePersistentField<ArticleFormValues[]>('product-setup-register', 'stagedArticles', []);
   // Set when a staged (not-yet-saved) row was clicked to load it back into the form — Enter/Done
   // then update that entry in place instead of appending a new one, and the toolbar's Delete
   // removes it from the list (no API call — nothing was saved yet).
@@ -191,6 +199,7 @@ export default function ProductSetupPage() {
     setErrorMsg('');
     setStagedArticles([]);
     setEditingStagedIndex(null);
+    clearProductSetupDraft();
     requestAnimationFrame(() => categoryTriggerRef.current?.focus());
   };
 

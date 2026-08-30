@@ -3,6 +3,7 @@ import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchModal from '@/components/SearchModal';
 import { focusNextField } from '@/lib/fieldNav';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import * as api from '@/lib/api';
 import type {
   ProductRow, ProductVariantRow, StoreRow, StockVoucherRow, StockVoucherLineInput,
@@ -182,20 +183,27 @@ export default function StockVoucherPage() {
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
   const [svId, setSvId] = useState<number | null>(null);
   const [status, setStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
-  const [date, setDate] = useState(getTodayDate());
-  const [storeId, setStoreId] = useState('');
-  const [remarks, setRemarks] = useState('');
-  const [lines, setLines] = useState<UiLine[]>([]);
+  // A New Stock Voucher's own in-progress fields persist across switching pages AND an app
+  // restart (usePersistentField — see src/hooks/usePersistentField.ts), so typing one up and
+  // getting pulled away mid-entry never loses it. Deliberately NOT applied to mode/svId/status —
+  // an already-saved voucher loaded for view/edit is safely re-openable by id at any time, so
+  // caching it risks showing a stale copy instead; only unsaved "new" work is ever at risk of
+  // being lost for good.
+  const clearStockVoucherDraft = useClearPageDraft('stock-voucher');
+  const [date, setDate] = usePersistentField('stock-voucher', 'date', getTodayDate());
+  const [storeId, setStoreId] = usePersistentField('stock-voucher', 'storeId', '');
+  const [remarks, setRemarks] = usePersistentField('stock-voucher', 'remarks', '');
+  const [lines, setLines] = usePersistentField<UiLine[]>('stock-voucher', 'lines', []);
 
   // On Account / Main A/C, Bill No./Bilty No./IGP No., Delivery — ref-pic parity fields added
   // 2026-08-30. accountBaId '' means "use the default" (STOCK TRANSFER, resolved server-side on
   // save — see stockTransferAccount above for the client-side preview of that same default).
-  const [accountBaId, setAccountBaId] = useState('');
-  const [billNo, setBillNo] = useState('');
-  const [biltyNo, setBiltyNo] = useState('');
-  const [igpNo, setIgpNo] = useState('');
-  const [deliveryType, setDeliveryType] = useState<'SAME' | 'CUSTOM'>('SAME');
-  const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [accountBaId, setAccountBaId] = usePersistentField('stock-voucher', 'accountBaId', '');
+  const [billNo, setBillNo] = usePersistentField('stock-voucher', 'billNo', '');
+  const [biltyNo, setBiltyNo] = usePersistentField('stock-voucher', 'biltyNo', '');
+  const [igpNo, setIgpNo] = usePersistentField('stock-voucher', 'igpNo', '');
+  const [deliveryType, setDeliveryType] = usePersistentField<'SAME' | 'CUSTOM'>('stock-voucher', 'deliveryType', 'SAME');
+  const [deliveryAddress, setDeliveryAddress] = usePersistentField('stock-voucher', 'deliveryAddress', '');
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -219,6 +227,7 @@ export default function StockVoucherPage() {
     setEntry(emptyEntry());
     setEditingIndex(null);
     setErrorMsg('');
+    clearStockVoucherDraft();
     // Explicit focus, not just a mode-change effect: clicking New while already on a blank/new
     // voucher (mode is already 'new') wouldn't otherwise re-trigger any such effect, so focus
     // would stay wherever it was (same fix as SaleBillPage/JournalVoucherPage's own handleNew).
@@ -303,7 +312,7 @@ export default function StockVoucherPage() {
   // was clicked to re-open it — then always clears the strip and refocuses Article Code for the
   // next line (per the user: "mouse goes back to the first article field... modal pop up") —
   // Date/Store/Remarks above are never touched by this.
-  const [entry, setEntry] = useState<EntryLine>(emptyEntry());
+  const [entry, setEntry] = usePersistentField<EntryLine>('stock-voucher', 'entry', emptyEntry());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
   // Stock in Hand — read-only readout in the entry strip (ref-pic parity), looked up from the
@@ -665,6 +674,7 @@ export default function StockVoucherPage() {
     setErrorMsg('');
     flash('Stock Voucher saved — Post it to update stock.');
     setMode('view');
+    clearStockVoucherDraft();
     refresh();
     refreshUnposted();
     refreshNav();

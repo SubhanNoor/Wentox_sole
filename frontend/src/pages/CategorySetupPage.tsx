@@ -4,6 +4,7 @@ import { Plus, Edit2, Search, Settings, Save, X, RotateCcw } from 'lucide-react'
 import DataListTable from '@/components/DataListTable';
 import * as api from '@/lib/api';
 import type { CategoryRow, ProductRow } from '@/lib/api';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 export default function CategorySetupPage() {
   const [categorySearch, setCategorySearch] = useState('');
@@ -32,8 +33,10 @@ export default function CategorySetupPage() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // Form State
-  const [catName, setCatName] = useState('');
+  // Form State — persisted only while adding a NEW category (not editing an existing one, which
+  // is re-openable by id at any time and would risk a stale cached copy).
+  const clearDraft = useClearPageDraft('category-setup');
+  const [catName, setCatName] = usePersistentField('category-setup', 'catName', '');
   const [successCat, setSuccessCat] = useState('');
   const [errorCat, setErrorCat] = useState('');
   const flash = (m: string) => { setSuccessCat(m); setTimeout(() => setSuccessCat(''), 3000); };
@@ -57,6 +60,7 @@ export default function CategorySetupPage() {
     setSelectedCatId(null);
     setCatName('');
     setErrorCat('');
+    clearDraft();
   };
 
   // G-06: after a successful create, the window stays open and clears — ready for the next
@@ -89,6 +93,7 @@ export default function CategorySetupPage() {
       }
       flash('New product category registered successfully.');
       resetForNextCategory();
+      clearDraft();
     }
 
     loadAll();
@@ -101,6 +106,7 @@ export default function CategorySetupPage() {
     if (!res.ok) return setErrorCat('Failed to reactivate: ' + res.error.message);
     flash('Existing category reactivated.');
     resetForNextCategory();
+    clearDraft();
     loadAll();
   };
 

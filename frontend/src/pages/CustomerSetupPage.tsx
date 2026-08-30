@@ -12,6 +12,7 @@ import * as api from '@/lib/api';
 import type { CustomerRow, RegionRow, CityRow, AccountLedgerResult } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 export default function CustomerSetupPage() {
   // Directory view state
@@ -43,13 +44,14 @@ export default function CustomerSetupPage() {
   const nameInputRef = useRef<HTMLInputElement>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCustomerId, setEditingCustomerId] = useState<number | null>(null);
-  const [newCustomerName, setNewCustomerName] = useState('');
-  const [newCustomerRegionId, setNewCustomerRegionId] = useState('');
-  const [newCustomerCityId, setNewCustomerCityId] = useState('');
+  const clearCustomerDraft = useClearPageDraft('customer-setup');
+  const [newCustomerName, setNewCustomerName] = usePersistentField('customer-setup', 'newCustomerName', '');
+  const [newCustomerRegionId, setNewCustomerRegionId] = usePersistentField('customer-setup', 'newCustomerRegionId', '');
+  const [newCustomerCityId, setNewCustomerCityId] = usePersistentField('customer-setup', 'newCustomerCityId', '');
   // The opening balance lives on the auto-created business account, not on this row — the service
   // forwards it there (same route bankAccounts.service.js has always used).
-  const [openingBalance, setOpeningBalance] = useState('');
-  const [openingDate, setOpeningDate] = useState(getTodayDate());
+  const [openingBalance, setOpeningBalance] = usePersistentField('customer-setup', 'openingBalance', '');
+  const [openingDate, setOpeningDate] = usePersistentField('customer-setup', 'openingDate', getTodayDate());
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3000); };
@@ -119,6 +121,7 @@ export default function CustomerSetupPage() {
     setOpeningBalance('');
     setOpeningDate(getTodayDate());
     setErrorMsg('');
+    clearCustomerDraft();
   };
 
   // G-06: after a successful create, the window stays open and clears — ready for the next
@@ -139,6 +142,7 @@ export default function CustomerSetupPage() {
     if (!res.ok) return setErrorMsg(res.error.message);
     flash('New customer added successfully.');
     resetForNextCustomer();
+    clearCustomerDraft();
     loadAll();
   };
 
@@ -183,6 +187,7 @@ export default function CustomerSetupPage() {
     if (!res.ok) return setErrorMsg('Failed to reactivate: ' + res.error.message);
     flash('Customer reactivated successfully.');
     resetForNextCustomer();
+    clearCustomerDraft();
     loadAll();
   };
 

@@ -5,6 +5,7 @@ import DataListTable from '@/components/DataListTable';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import SearchableSelect from '@/components/SearchableSelect';
 import { cities as citiesApi, listRegions, type CityRow, type RegionRow } from '@/lib/api';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 export default function CitySetupPage() {
   const [cities, setCities] = useState<CityRow[]>([]);
@@ -21,8 +22,12 @@ export default function CitySetupPage() {
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
   // Form State
-  const [cityName, setCityName] = useState('');
-  const [regionId, setRegionId] = useState('');
+  // Persisted only while adding a NEW city (not editing an existing one — that's re-openable by
+  // id at any time, so caching it risks a stale copy). Cleared on close/save so the next Add New
+  // never opens to a stale leftover.
+  const clearCityDraft = useClearPageDraft('city-setup');
+  const [cityName, setCityName] = usePersistentField('city-setup', 'cityName', '');
+  const [regionId, setRegionId] = usePersistentField('city-setup', 'regionId', '');
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -59,6 +64,7 @@ export default function CitySetupPage() {
     setCityName('');
     setRegionId('');
     setErrorMsg('');
+    clearCityDraft();
   };
 
   // G-06: after a successful create, the window stays open and clears — ready for the next city —
@@ -102,6 +108,7 @@ export default function CitySetupPage() {
       setSuccessMsg('New city registered successfully.');
       await loadData();
       resetForNextCity();
+      clearCityDraft();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);

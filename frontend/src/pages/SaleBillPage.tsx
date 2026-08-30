@@ -17,6 +17,7 @@ import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
@@ -147,29 +148,34 @@ export default function SaleBillPage() {
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [passwordActionType, setPasswordActionType] = useState<'save_bill' | 'save_and_post' | 'post_bill' | 'delete_unposted_bill' | 'edit_item_row' | null>(null);
 
+  // Draft persistence — see src/hooks/usePersistentField.ts. Only real in-progress entry data is
+  // persisted; which EXISTING record is loaded (billId/currentBillIsPosted/mode) is deliberately
+  // left as plain useState, same as StockVoucherPage.
+  const clearSaleBillDraft = useClearPageDraft('sale-bill');
+
   // Form State
   const [billId, setBillId] = useState<number | null>(null);
   const [currentBillIsPosted, setCurrentBillIsPosted] = useState(false);
-  const [date, setDate] = useState(getTodayDate());
-  const [storeId, setStoreId] = useState('');
-  const [customerId, setCustomerId] = useState('');
-  const [subCustomerId, setSubCustomerId] = useState('');
-  const [billNo, setBillNo] = useState('');
-  const [gpNo, setGpNo] = useState('');
-  const [biltyNo, setBiltyNo] = useState('');
-  const [addaId, setAddaId] = useState('');
-  const [remarks, setRemarks] = useState('');
-  const [dueDate, setDueDate] = useState('');
-  const [invoiceDiscount, setInvoiceDiscount] = useState(0);
+  const [date, setDate] = usePersistentField('sale-bill', 'date', getTodayDate());
+  const [storeId, setStoreId] = usePersistentField('sale-bill', 'storeId', '');
+  const [customerId, setCustomerId] = usePersistentField('sale-bill', 'customerId', '');
+  const [subCustomerId, setSubCustomerId] = usePersistentField('sale-bill', 'subCustomerId', '');
+  const [billNo, setBillNo] = usePersistentField('sale-bill', 'billNo', '');
+  const [gpNo, setGpNo] = usePersistentField('sale-bill', 'gpNo', '');
+  const [biltyNo, setBiltyNo] = usePersistentField('sale-bill', 'biltyNo', '');
+  const [addaId, setAddaId] = usePersistentField('sale-bill', 'addaId', '');
+  const [remarks, setRemarks] = usePersistentField('sale-bill', 'remarks', '');
+  const [dueDate, setDueDate] = usePersistentField('sale-bill', 'dueDate', '');
+  const [invoiceDiscount, setInvoiceDiscount] = usePersistentField('sale-bill', 'invoiceDiscount', 0);
 
   // Line items state
-  const [items, setItems] = useState<UiItem[]>([]);
+  const [items, setItems] = usePersistentField<UiItem[]>('sale-bill', 'items', []);
 
-  const [deliveryType, setDeliveryType] = useState<'1' | 'custom'>('1');
+  const [deliveryType, setDeliveryType] = usePersistentField<'1' | 'custom'>('sale-bill', 'deliveryType', '1');
   // Ref-pic's literal "Delivery" field: a typed code, where "1" means SAME/direct delivery and
   // anything else means a custom destination (Sub-Customer picked separately still resolves to a
   // real sub_customer_id — the backend has no other way to identify a delivery destination).
-  const [deliveryCode, setDeliveryCode] = useState('1');
+  const [deliveryCode, setDeliveryCode] = usePersistentField('sale-bill', 'deliveryCode', '1');
   const handleDeliveryCodeChange = (code: string) => {
     setDeliveryCode(code);
     const same = code.trim() === '1';
@@ -181,7 +187,7 @@ export default function SaleBillPage() {
       setSubCustomerId(subCustomers[0] ? String(subCustomers[0].sub_customer_id) : '');
     }
   };
-  const [customAddress, setCustomAddress] = useState('');
+  const [customAddress, setCustomAddress] = usePersistentField('sale-bill', 'customAddress', '');
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
@@ -665,6 +671,7 @@ export default function SaleBillPage() {
   const createdInThisRun = useRef(false);
 
   const handleNew = () => {
+    clearSaleBillDraft();
     setMode('new');
     // SB-05: a blank form has nothing saved in it yet, so nothing to clear on post.
     createdInThisRun.current = false;
@@ -816,7 +823,10 @@ export default function SaleBillPage() {
     setCurrentBillIsPosted(false);
     // SB-05: only a freshly created bill counts as "part of this run" — an edit of an existing
     // bill must not clear the form out from under the user when it posts.
-    if (mode !== 'edit') createdInThisRun.current = true;
+    if (mode !== 'edit') {
+      createdInThisRun.current = true;
+      clearSaleBillDraft();
+    }
     setSuccessMsg(mode === 'edit' ? 'Sale bill updated successfully.' : 'New sale bill saved successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     setMode(finalize ? 'view' : 'edit');
@@ -998,7 +1008,7 @@ export default function SaleBillPage() {
   // table row was clicked to re-open it) and resets the strip, ready for the next article,
   // without ever touching the master fields above. This mirrors legacy grid-bound-entry software
   // (the ref-pic's own UI) more directly than editing cells inline inside the table itself.
-  const [entry, setEntry] = useState<UiItem>(newUiItem());
+  const [entry, setEntry] = usePersistentField<UiItem>('sale-bill', 'entry', newUiItem());
   // null while the strip is adding a brand-new row; the table index being replaced once a
   // committed row has been clicked back open for editing (see handleRowClick below).
   const [editingIndex, setEditingIndex] = useState<number | null>(null);

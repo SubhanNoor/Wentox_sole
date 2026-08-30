@@ -741,6 +741,13 @@ export interface State {
   selectedBillId: string | null;
   selectedReturnId: string | null;
 
+  // Per-page in-progress form data (usePersistentField, src/hooks/usePersistentField.ts) — keyed
+  // by page, then by field. Survives switching pages (this Provider never unmounts) AND an app
+  // restart (synced to localStorage below). A page clears its own entry once a document is
+  // actually saved/posted/deleted, so a stale draft never reappears after a real save. Never put
+  // transient UI state here (is a modal open, a loading flag) — only genuine typed form data.
+  pageDrafts: Record<string, Record<string, unknown>>;
+
   cities: City[];
   regions: Region[];
   stores: Store[];
@@ -861,7 +868,32 @@ type Action =
   | { type: 'ADD_MATERIAL_ADJUSTMENT'; adjustment: MaterialAdjustment }
   | { type: 'DELETE_MATERIAL_ADJUSTMENT'; id: string }
 
-  | { type: 'UPDATE_SETTINGS'; settings: { username: string; password: string } };
+  | { type: 'UPDATE_SETTINGS'; settings: { username: string; password: string } }
+
+  // Cross-page/cross-restart form draft persistence (usePersistentField) — see State.pageDrafts.
+  | { type: 'SET_PAGE_DRAFT_FIELD'; page: string; field: string; value: unknown }
+  | { type: 'CLEAR_PAGE_DRAFT'; page: string };
+
+// localStorage survives an app restart (Electron's renderer persists it to disk on its own — no
+// backend/IPC needed), so this is the one thing that makes page drafts restart-proof rather than
+// just switch-page-proof. Wrapped defensively: a private window, cleared site data, or corrupted
+// JSON must never crash the app on startup — it just falls back to no drafts.
+const PAGE_DRAFTS_STORAGE_KEY = 'wentox_page_drafts';
+function loadPageDrafts(): Record<string, Record<string, unknown>> {
+  try {
+    const raw = localStorage.getItem(PAGE_DRAFTS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+function savePageDrafts(drafts: Record<string, Record<string, unknown>>) {
+  try {
+    localStorage.setItem(PAGE_DRAFTS_STORAGE_KEY, JSON.stringify(drafts));
+  } catch {
+    // Storage full/unavailable — drafts just stop persisting, nothing to crash over.
+  }
+}
 
 const initialState: State = {
   isLoggedIn: false,
@@ -871,6 +903,7 @@ const initialState: State = {
   currentTab: null,
   selectedBillId: null,
   selectedReturnId: null,
+  pageDrafts: loadPageDrafts(),
 
   cities: demoCities,
   regions: demoRegions,
@@ -1216,6 +1249,23 @@ function reducer(state: State, action: Action): State {
 
     case 'UPDATE_SETTINGS':
       return { ...state, settings: action.settings };
+
+    case 'SET_PAGE_DRAFT_FIELD': {
+      const nextDrafts = {
+        ...state.pageDrafts,
+        [action.page]: { ...state.pageDrafts[action.page], [action.field]: action.value },
+      };
+      savePageDrafts(nextDrafts);
+      return { ...state, pageDrafts: nextDrafts };
+    }
+    case 'CLEAR_PAGE_DRAFT': {
+      if (!(action.page in state.pageDrafts)) return state;
+      const nextDrafts = { ...state.pageDrafts };
+      delete nextDrafts[action.page];
+      savePageDrafts(nextDrafts);
+      return { ...state, pageDrafts: nextDrafts };
+    }
+
     default:
       return state;
   }

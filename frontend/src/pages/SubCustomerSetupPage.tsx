@@ -6,6 +6,7 @@ import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { SubCustomerRow, RegionRow, CityRow } from '@/lib/api';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 export default function SubCustomerSetupPage() {
   const [searchQuery, setSearchQuery] = useState('');
@@ -24,9 +25,10 @@ export default function SubCustomerSetupPage() {
 
 
   // Form State
-  const [subName, setSubName] = useState('');
-  const [regionId, setRegionId] = useState('');
-  const [cityId, setCityId] = useState('');
+  const clearSubCustomerDraft = useClearPageDraft('sub-customer-setup');
+  const [subName, setSubName] = usePersistentField('sub-customer-setup', 'subName', '');
+  const [regionId, setRegionId] = usePersistentField('sub-customer-setup', 'regionId', '');
+  const [cityId, setCityId] = usePersistentField('sub-customer-setup', 'cityId', '');
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3000); };
@@ -76,6 +78,7 @@ export default function SubCustomerSetupPage() {
     setRegionId('');
     setCityId('');
     setErrorMsg('');
+    clearSubCustomerDraft();
   };
 
   // G-06: after a successful create, the window stays open and clears — ready for the next sub
@@ -94,6 +97,7 @@ export default function SubCustomerSetupPage() {
     if (!res.ok) return setErrorMsg(res.error.message);
     flash('New Sub Customer registered successfully.');
     resetForNextSubCustomer();
+    clearSubCustomerDraft();
     loadAll();
   };
 
@@ -137,6 +141,7 @@ export default function SubCustomerSetupPage() {
     if (!res.ok) return setErrorMsg('Failed to reactivate: ' + res.error.message);
     flash('Sub Customer reactivated successfully.');
     resetForNextSubCustomer();
+    clearSubCustomerDraft();
     loadAll();
   };
 

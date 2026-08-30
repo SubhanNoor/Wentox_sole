@@ -4,6 +4,7 @@ import { Plus, Search, Settings, Save, Edit2, X, Truck, MapPin } from 'lucide-re
 import DataListTable from '@/components/DataListTable';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import { addas as addasApi, listCities, type AddaRow, type CityRow } from '@/lib/api';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 export default function AddaSetupPage() {
   const [addas, setAddas] = useState<AddaRow[]>([]);
@@ -19,10 +20,12 @@ export default function AddaSetupPage() {
   const [dupMatch, setDupMatch] = useState<DuplicateNameMatch | null>(null);
   const [isDupModalOpen, setIsDupModalOpen] = useState(false);
 
-  // Form State
-  const [addaName, setAddaName] = useState('');
+  // Form State — persisted only while adding a NEW adda (not editing an existing one, which is
+  // re-openable by id at any time and would risk a stale cached copy).
+  const clearDraft = useClearPageDraft('adda-setup');
+  const [addaName, setAddaName] = usePersistentField('adda-setup', 'addaName', '');
   // AD-01: Route — every city (from Cities setup) this adda serves, checklist-style.
-  const [routeCityIds, setRouteCityIds] = useState<number[]>([]);
+  const [routeCityIds, setRouteCityIds] = usePersistentField<number[]>('adda-setup', 'routeCityIds', []);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -63,6 +66,7 @@ export default function AddaSetupPage() {
     setAddaName('');
     setRouteCityIds([]);
     setErrorMsg('');
+    clearDraft();
   };
 
   const handleSaveAdda = async (e: React.FormEvent) => {
@@ -102,6 +106,7 @@ export default function AddaSetupPage() {
       setSuccessMsg('New Transport Adda registered successfully.');
       await loadData();
       resetForNextAdda();
+      clearDraft();
     }
 
     setTimeout(() => setSuccessMsg(''), 3000);
@@ -127,6 +132,7 @@ export default function AddaSetupPage() {
     setIsDupModalOpen(false);
     setDupMatch(null);
     resetForNextAdda();
+    clearDraft();
   };
 
   // AD-02: searching an adda's own name works as before; searching a city/route name now also

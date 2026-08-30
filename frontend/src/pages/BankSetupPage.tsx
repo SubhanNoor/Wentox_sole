@@ -5,6 +5,7 @@ import * as api from '@/lib/api';
 import type { BankAccountRow } from '@/lib/api';
 import { Plus, Save, Edit2, Ban, RotateCcw, Landmark, Search, AlertTriangle, X } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 export default function BankSetupPage() {
   const { state } = useApp();
@@ -18,11 +19,14 @@ export default function BankSetupPage() {
   const [banks, setBanks] = useState<BankAccountRow[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const [name, setName] = useState('');
-  const [accountNo, setAccountNo] = useState('');
-  const [branch, setBranch] = useState('');
-  const [openingBalance, setOpeningBalance] = useState('');
-  const [openingDate, setOpeningDate] = useState(new Date().toISOString().split('T')[0]);
+  // Persisted only while adding a NEW bank account (not editing an existing one, which is
+  // re-openable by id at any time and would risk a stale cached copy).
+  const clearDraft = useClearPageDraft('bank-setup');
+  const [name, setName] = usePersistentField('bank-setup', 'name', '');
+  const [accountNo, setAccountNo] = usePersistentField('bank-setup', 'accountNo', '');
+  const [branch, setBranch] = usePersistentField('bank-setup', 'branch', '');
+  const [openingBalance, setOpeningBalance] = usePersistentField('bank-setup', 'openingBalance', '');
+  const [openingDate, setOpeningDate] = usePersistentField('bank-setup', 'openingDate', new Date().toISOString().split('T')[0]);
 
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -79,6 +83,7 @@ export default function BankSetupPage() {
     setName(''); setAccountNo(''); setBranch('');
     setOpeningBalance(''); setOpeningDate(new Date().toISOString().split('T')[0]);
     setErrorMsg('');
+    clearDraft();
   };
 
   // G-06: after a successful create, the window stays open and clears — ready for the next bank
@@ -130,6 +135,7 @@ export default function BankSetupPage() {
       }
       flash('Bank account added. It can now be selected on payments and receipts.');
       resetForNextBank();
+      clearDraft();
       loadBanks(showInactive);
     }
   };
@@ -157,6 +163,7 @@ export default function BankSetupPage() {
     if (!res.ok) return fail('Failed to reactivate: ' + res.error.message);
     flash('Existing bank account reactivated.');
     resetForNextBank();
+    clearDraft();
     setShowInactive(false);
     loadBanks(false);
   };

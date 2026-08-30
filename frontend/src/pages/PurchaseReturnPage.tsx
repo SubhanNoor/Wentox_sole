@@ -14,6 +14,7 @@ import {
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
 
@@ -89,19 +90,29 @@ export default function PurchaseReturnPage() {
 
   const [returnId, setReturnId] = useState<number | null>(null);
   const [currentIsPosted, setCurrentIsPosted] = useState(false);
-  const [date, setDate] = useState(getTodayDate());
-  const [vendorId, setVendorId] = useState('');
-  const [billNo, setBillNo] = useState('');
-  const [remarks, setRemarks] = useState('');
+  // A New Return's own in-progress fields persist across switching pages AND an app restart
+  // (usePersistentField — see src/hooks/usePersistentField.ts), so typing one up and getting
+  // pulled away mid-entry never loses it. Deliberately NOT applied to mode/returnId/
+  // currentIsPosted — an already-saved (or drafted) return loaded for view/edit is safely
+  // re-openable by id at any time, so caching it risks showing a stale copy instead; only unsaved
+  // "new" work is ever at real risk of being lost for good.
+  const clearPurchaseReturnDraft = useClearPageDraft('purchase-return');
+  const [date, setDate] = usePersistentField('purchase-return', 'date', getTodayDate());
+  const [vendorId, setVendorId] = usePersistentField('purchase-return', 'vendorId', '');
+  const [billNo, setBillNo] = usePersistentField('purchase-return', 'billNo', '');
+  const [remarks, setRemarks] = usePersistentField('purchase-return', 'remarks', '');
   // `items` holds only COMMITTED rows — the grid below the entry fields. The row currently being
   // typed lives separately in `currentRow` until Enter (or the Add button) commits it.
-  const [items, setItems] = useState<UiItem[]>([]);
-  const [currentRow, setCurrentRow] = useState<CurrentRow>(emptyCurrentRow());
+  const [items, setItems] = usePersistentField<UiItem[]>('purchase-return', 'items', []);
+  const [currentRow, setCurrentRow] = usePersistentField<CurrentRow>('purchase-return', 'currentRow', emptyCurrentRow());
   // Set while re-editing an existing grid row (clicked from the list below) — commit updates that
   // row in place instead of appending a new one. null means the entry fields are building a new row.
   const [editingUid, setEditingUid] = useState<string | null>(null);
   const [isCustomUnit, setIsCustomUnit] = useState(false);
-  const [copyFromPurchaseId, setCopyFromPurchaseId] = useState('');
+  // Which prior purchase this in-progress return is being built against — real not-yet-saved
+  // entry state (drives which articles/prices are valid to type), so persisted alongside the
+  // other entry fields above.
+  const [copyFromPurchaseId, setCopyFromPurchaseId] = usePersistentField('purchase-return', 'copyFromPurchaseId', '');
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -208,7 +219,7 @@ export default function PurchaseReturnPage() {
   // reference: any further edit through the entry row (bumping a copied row's quantity, or typing
   // in an extra article afterward) is checked against this list — must exist on the purchase, and
   // its quantity can't exceed what was actually purchased — see articleAgainstPurchaseError below.
-  const [sourcePurchaseItems, setSourcePurchaseItems] = useState<PurchaseItemRow[]>([]);
+  const [sourcePurchaseItems, setSourcePurchaseItems] = usePersistentField<PurchaseItemRow[]>('purchase-return', 'sourcePurchaseItems', []);
 
   // `copyItems` distinguishes the two ways a purchase gets attached here (2026-08-27, per the
   // user's correction): picking one explicitly via "Find Purchase to Return" copies EVERYTHING,
@@ -564,6 +575,7 @@ export default function PurchaseReturnPage() {
     setSourcePurchaseItems([]);
     lastResolvedNameRef.current = '';
     setErrorMsg('');
+    clearPurchaseReturnDraft();
   };
 
   // "New Return" (toolbar button and the entry-tab switch) focuses Date, matching PurchasePage's
@@ -619,6 +631,9 @@ export default function PurchaseReturnPage() {
 
     setReturnId(result.data.draft_id);
     setCurrentIsPosted(false);
+    // Only a freshly created return (not an edit of an existing draft) is "done" work whose
+    // draft should stop being cached — mirrors PurchasePage's isNewPurchase distinction.
+    if (mode !== 'edit') clearPurchaseReturnDraft();
     setErrorMsg('');
     setSuccessMsg(mode === 'edit' ? 'Purchase return updated successfully.' : 'Purchase return recorded successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);

@@ -14,6 +14,7 @@ import {
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Printer
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 /**
  * Journal Voucher — a real multi-line double-entry journal (legacy "Journal Entry" screen): N
@@ -130,9 +131,15 @@ export default function JournalVoucherPage() {
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
   const [jvId, setJvId] = useState<number | null>(null);
   const [status, setStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
-  const [date, setDate] = useState(getTodayDate());
-  const [reason, setReason] = useState('');
-  const [lines, setLines] = useState<UiLine[]>([]);
+  // A New Journal Voucher's own in-progress fields persist across switching pages AND an app
+  // restart (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied
+  // to mode/jvId/status — an already-saved JV loaded for view/edit is safely re-openable by id at
+  // any time, so caching it risks showing a stale copy instead; only unsaved "new" work is ever at
+  // risk of being lost for good.
+  const clearJournalVoucherDraft = useClearPageDraft('journal-voucher');
+  const [date, setDate] = usePersistentField('journal-voucher', 'date', getTodayDate());
+  const [reason, setReason] = usePersistentField('journal-voucher', 'reason', '');
+  const [lines, setLines] = usePersistentField<UiLine[]>('journal-voucher', 'lines', []);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -154,6 +161,7 @@ export default function JournalVoucherPage() {
     setEntry(emptyEntry());
     setEditingIndex(null);
     setErrorMsg('');
+    clearJournalVoucherDraft();
     // Explicit focus, not just a mode-change effect: clicking New while already on a blank/new JV
     // (mode is already 'new') wouldn't otherwise re-trigger any such effect, so focus would stay
     // wherever it was (same fix as SaleBillPage/SaleReturnPage's own handleNew).
@@ -169,7 +177,7 @@ export default function JournalVoucherPage() {
   // when a grid row was clicked to re-open it — then always clears the strip and refocuses A/C
   // Code for the next line (per the user: "it goes to the first field of account code... but the
   // master details remain same" — Date/Reason above are never touched by this).
-  const [entry, setEntry] = useState<EntryLine>(emptyEntry());
+  const [entry, setEntry] = usePersistentField<EntryLine>('journal-voucher', 'entry', emptyEntry());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const entryAccountTriggerRef = useRef<HTMLInputElement>(null);
   const [isEntryAccountModalOpen, setIsEntryAccountModalOpen] = useState(false);
@@ -322,6 +330,7 @@ export default function JournalVoucherPage() {
     setErrorMsg('');
     flash('Journal Voucher saved — Post it to update every line\'s ledger.');
     setMode('view');
+    clearJournalVoucherDraft();
     refresh();
     refreshUnposted();
     refreshNav();

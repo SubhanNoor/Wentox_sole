@@ -15,6 +15,7 @@ import {
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
 
@@ -104,14 +105,21 @@ export default function PurchasePage() {
 
   const [purchaseId, setPurchaseId] = useState<number | null>(null);
   const [currentIsPosted, setCurrentIsPosted] = useState(false);
-  const [date, setDate] = useState(getTodayDate());
-  const [vendorId, setVendorId] = useState('');
-  const [billNo, setBillNo] = useState('');
-  const [remarks, setRemarks] = useState('');
+  // A New Purchase's own in-progress fields persist across switching pages AND an app restart
+  // (usePersistentField — see src/hooks/usePersistentField.ts), so typing one up and getting
+  // pulled away mid-entry never loses it. Deliberately NOT applied to mode/purchaseId/
+  // currentIsPosted — an already-saved (or drafted) purchase loaded for view/edit is safely
+  // re-openable by id at any time, so caching it risks showing a stale copy instead; only unsaved
+  // "new" work is ever at real risk of being lost for good.
+  const clearPurchaseDraft = useClearPageDraft('purchase');
+  const [date, setDate] = usePersistentField('purchase', 'date', getTodayDate());
+  const [vendorId, setVendorId] = usePersistentField('purchase', 'vendorId', '');
+  const [billNo, setBillNo] = usePersistentField('purchase', 'billNo', '');
+  const [remarks, setRemarks] = usePersistentField('purchase', 'remarks', '');
   // `items` holds only COMMITTED rows — the grid below the entry fields. The row currently being
   // typed lives separately in `currentRow` until Enter (or the Add button) commits it.
-  const [items, setItems] = useState<UiItem[]>([]);
-  const [currentRow, setCurrentRow] = useState<CurrentRow>(emptyCurrentRow());
+  const [items, setItems] = usePersistentField<UiItem[]>('purchase', 'items', []);
+  const [currentRow, setCurrentRow] = usePersistentField<CurrentRow>('purchase', 'currentRow', emptyCurrentRow());
   // Set while re-editing an existing grid row (clicked from the list below) — commit updates that
   // row in place instead of appending a new one. null means the entry fields are building a new row.
   const [editingUid, setEditingUid] = useState<string | null>(null);
@@ -381,6 +389,7 @@ export default function PurchasePage() {
     setEditingUid(null);
     setIsCustomUnit(false);
     setErrorMsg('');
+    clearPurchaseDraft();
   };
 
   // P-02: a finished purchase clears straight back to a blank one so the next can be typed
@@ -491,7 +500,10 @@ export default function PurchasePage() {
     setCurrentIsPosted(false);
     // P-02: only a freshly created purchase counts as "part of this run" — an edit of an existing
     // one must not clear the form out from under the user when it posts.
-    if (mode !== 'edit') createdInThisRun.current = true;
+    if (mode !== 'edit') {
+      createdInThisRun.current = true;
+      clearPurchaseDraft();
+    }
     setErrorMsg('');
     setSuccessMsg(mode === 'edit' ? 'Purchase updated successfully.' : 'Purchase recorded successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);

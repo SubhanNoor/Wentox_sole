@@ -10,6 +10,7 @@ import type {
   ExpenseVoucherRow, VoucherActionResult
 } from '@/lib/api';
 import { focusNextField } from '@/lib/fieldNav';
+import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import {
   Save, Wallet, Edit, Trash2, Plus, CheckCircle2, Undo2, ChevronDown,
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, PackageCheck, Search
@@ -91,8 +92,14 @@ export default function ExpensesPage() {
   // Which table `expenseId` points into. An unposted expense now lives in dbo.draft_expenses and a
   // posted one in dbo.expenses, so the id alone is ambiguous — this says which id space it is in.
   const [entryIsDraft, setEntryIsDraft] = useState(false);
-  const [date, setDate] = useState(today());
-  const [baId, setBaId] = useState('');
+  // In-progress entry-row fields persist across switching pages AND an app restart
+  // (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied to
+  // mode/expenseId/entryIsDraft/voucher — an already-saved expense or voucher loaded for
+  // view/edit is safely re-openable by id at any time, so caching it risks showing a stale copy;
+  // only unsaved "new" work is ever at risk of being lost.
+  const clearExpensesDraft = useClearPageDraft('expenses');
+  const [date, setDate] = usePersistentField('expenses', 'date', today());
+  const [baId, setBaId] = usePersistentField('expenses', 'baId', '');
   // RJ-02/PN-01: previewed account while arrow-keying through the picker, for the live balance tooltip.
   const [previewBaId, setPreviewBaId] = useState<number | null>(null);
 
@@ -116,14 +123,14 @@ export default function ExpensesPage() {
   };
   // Bumped after anything that posts, so the balance panel re-reads instead of showing a stale figure.
   const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
-  const [amount, setAmount] = useState<number>(0);
-  const [paymentMode, setPaymentMode] = useState<ExpensePaymentMode>('CASH');
-  const [bankId, setBankId] = useState('');
-  const [chequeId, setChequeId] = useState('');
-  const [issuedChequeNo, setIssuedChequeNo] = useState('');
-  const [issuedChequeDate, setIssuedChequeDate] = useState('');
-  const [details, setDetails] = useState('');
-  const [remarks, setRemarks] = useState('');
+  const [amount, setAmount] = usePersistentField('expenses', 'amount', 0);
+  const [paymentMode, setPaymentMode] = usePersistentField<ExpensePaymentMode>('expenses', 'paymentMode', 'CASH');
+  const [bankId, setBankId] = usePersistentField('expenses', 'bankId', '');
+  const [chequeId, setChequeId] = usePersistentField('expenses', 'chequeId', '');
+  const [issuedChequeNo, setIssuedChequeNo] = usePersistentField('expenses', 'issuedChequeNo', '');
+  const [issuedChequeDate, setIssuedChequeDate] = usePersistentField('expenses', 'issuedChequeDate', '');
+  const [details, setDetails] = usePersistentField('expenses', 'details', '');
+  const [remarks, setRemarks] = usePersistentField('expenses', 'remarks', '');
 
   // ── PN-01: the open voucher ──────────────────────────────────────────────────────────────────
   // A run of payments is entered as ONE voucher with many entry lines, each line free to name its
@@ -132,7 +139,7 @@ export default function ExpensesPage() {
   // Created LAZILY, on the first Done — voucher_no ("C.Book No") is allocated MAX+1, so creating one
   // when the page opens would burn a number every time somebody merely visited and walked away.
   const [voucher, setVoucher] = useState<ExpenseVoucherRow | null>(null);
-  const [voucherRemarks, setVoucherRemarks] = useState('');
+  const [voucherRemarks, setVoucherRemarks] = usePersistentField('expenses', 'voucherRemarks', '');
   const [voucherBusy, setVoucherBusy] = useState(false);
   const [voucherResult, setVoucherResult] = useState<VoucherActionResult<'expense_id', ExpenseVoucherRow> | null>(null);
 
@@ -330,6 +337,7 @@ export default function ExpensesPage() {
     setDetails('');
     setRemarks('');
     setErrorMsg('');
+    clearExpensesDraft();
   };
 
   // "New Voucher" focuses Date, matching PurchasePage's startNewPurchase (frontend/pages_design.md §2).
@@ -387,6 +395,7 @@ export default function ExpensesPage() {
     setDetails('');
     setRemarks('');
     setErrorMsg('');
+    clearExpensesDraft();
     focusFirstEntryField();
   };
 
