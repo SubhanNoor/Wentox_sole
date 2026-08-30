@@ -10,11 +10,53 @@
 const repository = require('../repositories/stockVouchers.repository');
 const productColorsService = require('./productColors.service');
 const storesService = require('./stores.service');
+const businessAccountsService = require('./businessAccounts.service');
+const chartAccountsRepository = require('../repositories/chartAccounts.repository');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
+const CODES = require('../constants/reservedAccounts');
 
 function validateHeader(payload) {
   if (!payload.voucher_date) throw ApiError.badRequest('voucher_date is required');
+  if (payload.delivery_type && payload.delivery_type !== 'SAME' && payload.delivery_type !== 'CUSTOM') {
+    throw ApiError.badRequest("delivery_type must be 'SAME' or 'CUSTOM'");
+  }
+  if (payload.delivery_type === 'CUSTOM' && (!payload.delivery_address || !payload.delivery_address.trim())) {
+    throw ApiError.badRequest('delivery_address is required for Custom delivery');
+  }
+}
+
+// Bill No./Bilty No./IGP No. — optional whole numbers, per the user (2026-08-30): fillable at or
+// after save time, same convention as Sale Bill's own gp_no/bilty_no.
+function normalizeRefNo(value, label) {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  if (!Number.isInteger(n)) throw ApiError.badRequest(`${label} must be a whole number`);
+  return n;
+}
+
+// Stock Voucher's fixed ledger head (reservedAccounts.js#STOCK_TRANSFER) — resolved by code, same
+// pattern as journalVouchers.service.js#getCounterAccount / deposits.service.js's own MISC_ADJUSTMENTS
+// lookup. Always has exactly one business account beneath it (db/seeds/run.js).
+async function getStockTransferAccount() {
+  const chartAccount = await chartAccountsRepository.findByCode(CODES.STOCK_TRANSFER);
+  if (!chartAccount) throw new Error(`Reserved chart account STOCK TRANSFER (code ${CODES.STOCK_TRANSFER}) not found — run npm run seed`);
+  const account = await businessAccountsService.getByAcId(chartAccount.ac_id);
+  if (!account) throw new Error('STOCK TRANSFER business account not found — run npm run seed');
+  return account;
+}
+
+// On Account — user-picked, editable; defaults to the STOCK TRANSFER account itself when omitted
+// (matching the reference screen's own On Account/Main A/C both showing the same code). Main A/C
+// is never typed — it's a snapshot of the picked account's own parent chart account, same pattern
+// as dbo.sale_bills.main_ac_id snapshotting the customer's.
+async function resolveOnAccount(payload) {
+  if (payload.on_account_ba_id) {
+    const account = await businessAccountsService.getById(payload.on_account_ba_id); // 404s if it doesn't exist
+    return { on_account_ba_id: account.ba_id, main_ac_id: account.ac_id };
+  }
+  const stockTransfer = await getStockTransferAccount();
+  return { on_account_ba_id: stockTransfer.ba_id, main_ac_id: stockTransfer.ac_id };
 }
 
 function validateLines(rawLines) {
@@ -27,11 +69,26 @@ function validateLines(rawLines) {
     const pairs = Number(line.pairs) || 0;
     if (cartons < 0) throw ApiError.badRequest('Cartons cannot be negative');
     if (pairs <= 0) throw ApiError.badRequest('Each line must have pairs > 0');
+    const rate = Number(line.rate) || 0;
+    const discountPct = Number(line.discount_pct) || 0;
+    if (rate <= 0) throw ApiError.badRequest('Rate must be entered');
+    if (discountPct < 0 || discountPct > 100) throw ApiError.badRequest('D% must be between 0 and 100');
   }
 }
 
+// Money math, never trusted from the client — recomputed here from rate/pairs/discount_pct alone,
+// same convention as every other priced line in this app (e.g. SaleBillPage's own line totals).
+function round2(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+function computeValuation(rate, pairs, discountPct) {
+  const gross = round2(rate * pairs);
+  const discountValue = round2(gross * discountPct / 100);
+  const value = round2(gross - discountValue);
+  return { discount_value: discountValue, value };
+}
+
 async function resolveLines(payload) {
-  validateHeader(payload);
   validateLines(payload.lines);
 
   if (payload.store_id) await storesService.getById(payload.store_id); // 404s if it doesn't exist
@@ -39,20 +96,38 @@ async function resolveLines(payload) {
   const lines = [];
   for (const line of payload.lines) {
     await productColorsService.getById(line.variant_id); // 404s if it doesn't exist
+    const cartons = Math.max(0, Math.trunc(Number(line.cartons) || 0));
+    const pairs = Math.trunc(Number(line.pairs));
+    const rate = round2(Number(line.rate) || 0);
+    const discountPct = round2(Number(line.discount_pct) || 0);
+    const { discount_value, value } = computeValuation(rate, pairs, discountPct);
     lines.push({
       variant_id: line.variant_id,
-      cartons: Math.max(0, Math.trunc(Number(line.cartons) || 0)),
-      pairs: Math.trunc(Number(line.pairs)),
+      cartons,
+      pairs,
+      rate,
+      discount_pct: discountPct,
+      discount_value,
+      value,
     });
   }
   return lines;
 }
 
-function buildHeaderFields(payload) {
+async function buildHeaderFields(payload) {
+  validateHeader(payload);
+  const { on_account_ba_id, main_ac_id } = await resolveOnAccount(payload);
   return {
     voucher_date: payload.voucher_date,
     store_id: payload.store_id ?? null,
     remarks: payload.remarks ? payload.remarks.trim() : null,
+    bill_no: normalizeRefNo(payload.bill_no, 'Bill No.'),
+    bilty_no: normalizeRefNo(payload.bilty_no, 'Bilty No.'),
+    igp_no: normalizeRefNo(payload.igp_no, 'IGP No.'),
+    delivery_type: payload.delivery_type === 'CUSTOM' ? 'CUSTOM' : 'SAME',
+    delivery_address: payload.delivery_type === 'CUSTOM' ? payload.delivery_address.trim() : null,
+    on_account_ba_id,
+    main_ac_id,
   };
 }
 
@@ -66,11 +141,12 @@ async function getById(stockVoucherId) {
   return sv;
 }
 
-// Always created DRAFT — post() is the only thing that writes stock_movements.
+// Always created DRAFT — post() is the only thing that writes stock_movements/ledger_entries.
 async function create(payload, userId) {
   const lines = await resolveLines(payload);
+  const header = await buildHeaderFields(payload);
   const id = await withTransaction(async (transaction) => {
-    const stockVoucherId = await repository.insert(transaction, { ...buildHeaderFields(payload), created_by: userId });
+    const stockVoucherId = await repository.insert(transaction, { ...header, created_by: userId });
     await repository.insertLines(transaction, stockVoucherId, lines);
     return stockVoucherId;
   });
@@ -84,8 +160,9 @@ async function update(stockVoucherId, payload) {
     throw ApiError.conflict('Unpost the Stock Voucher before editing', 'POSTED_LOCK');
   }
   const lines = await resolveLines(payload);
+  const header = await buildHeaderFields(payload);
   await withTransaction(async (transaction) => {
-    await repository.updateHeader(transaction, stockVoucherId, buildHeaderFields(payload));
+    await repository.updateHeader(transaction, stockVoucherId, header);
     await repository.deleteLines(transaction, stockVoucherId);
     await repository.insertLines(transaction, stockVoucherId, lines);
   });
@@ -102,6 +179,9 @@ async function remove(stockVoucherId) {
   return { ok: true };
 }
 
+// Dr STOCK TRANSFER (fixed) / Cr on_account_ba_id, for the voucher's total line value — see
+// getStockTransferAccount()/resolveOnAccount() above. Skipped when total_value is 0 (an all-zero-
+// rate voucher, e.g. a pure quantity adjustment, has nothing to post financially).
 async function post(stockVoucherId, userId) {
   const sv = await getById(stockVoucherId);
   if (sv.status === 'CONFIRMED') {
@@ -110,10 +190,21 @@ async function post(stockVoucherId, userId) {
   // Defensive re-check: the lines were valid when saved, but re-validate before stock moves.
   validateLines(sv.lines);
 
+  const totalValue = round2(Number(sv.total_value) || 0);
+
   await withTransaction(async (transaction) => {
     await repository.insertStockMovements(transaction, {
       stockVoucherId, voucherDate: sv.voucher_date, lines: sv.lines, createdBy: userId,
     });
+    if (totalValue > 0) {
+      const stockTransfer = await getStockTransferAccount();
+      const onAccountBaId = sv.on_account_ba_id || stockTransfer.ba_id;
+      const narration = `Stock Voucher #${stockVoucherId}`;
+      await repository.insertLedgerEntries(transaction, [
+        { entry_date: sv.voucher_date, ba_id: stockTransfer.ba_id, debit: totalValue, credit: 0, source_type: 'STOCK_VOUCHER', source_id: stockVoucherId, narration },
+        { entry_date: sv.voucher_date, ba_id: onAccountBaId, debit: 0, credit: totalValue, source_type: 'STOCK_VOUCHER', source_id: stockVoucherId, narration },
+      ]);
+    }
     await repository.setStatus(transaction, stockVoucherId, 'CONFIRMED', userId);
   });
 
@@ -128,6 +219,7 @@ async function unpost(stockVoucherId, userId) {
 
   await withTransaction(async (transaction) => {
     await repository.deleteStockMovements(transaction, stockVoucherId);
+    await repository.deleteLedgerEntries(transaction, stockVoucherId);
     await repository.setStatus(transaction, stockVoucherId, 'DRAFT', userId);
   });
 
@@ -155,10 +247,7 @@ async function postAll(ids, userId) {
     const stockVoucherId = target.stock_voucher_id;
     try {
       const sv = await post(stockVoucherId, userId);
-      // bill_no: null — PostAllResult's shared shape (frontend's api.ts) names it that way
-      // regardless of document type, same as journalVouchers.service#postAll; stock vouchers have
-      // no equivalent manual number, so the UI's own `f.bill_no || '#'+id` fallback just shows id.
-      posted.push({ stock_voucher_id: stockVoucherId, bill_no: null, total_pairs: sv.total_pairs });
+      posted.push({ stock_voucher_id: stockVoucherId, bill_no: sv.bill_no ?? null, total_pairs: sv.total_pairs });
     } catch (err) {
       // Already posted by someone else meets the user's intent — not reported as a failure.
       if (err.code === 'ALREADY_POSTED') continue;

@@ -8,11 +8,12 @@ import { PaymentTrailContent } from '@/pages/PaymentTrailPage';
 import { ReportKhaataContent } from '@/pages/ReportKhaataPage';
 import { ReportCashBookContent } from '@/pages/ReportCashBookPage';
 import ProductLedgerContent from '@/pages/ProductLedgerContent';
+import StockVoucherLedgerContent from '@/pages/StockVoucherLedgerContent';
 import OverallTrailContent from '@/pages/OverallTrailContent';
 
 type ReportTab =
   | 'sale-analysis' | 'sale-report' | 'vendor' | 'payment-trail'
-  | 'account-ledger' | 'business-ledger' | 'cash-book' | 'product-ledger'
+  | 'account-ledger' | 'business-ledger' | 'cash-book' | 'product-ledger' | 'stock-voucher-ledger'
   | 'overall-trail' | 'vendor-balances' | 'customer-balances';
 
 const TABS: { key: ReportTab; label: string }[] = [
@@ -24,6 +25,7 @@ const TABS: { key: ReportTab; label: string }[] = [
   { key: 'business-ledger', label: 'Business Ledger' },
   { key: 'cash-book', label: 'Cash Book' },
   { key: 'product-ledger', label: 'Product Ledger' },
+  { key: 'stock-voucher-ledger', label: 'Stock Voucher Ledger' },
   { key: 'overall-trail', label: 'Overall Trail' },
   // Same Overall Trail content, just opened straight into its own Quick Filter pill (Account
   // Reports menu, 2026-08-26) instead of the unfiltered "All Accounts" view.
@@ -93,6 +95,7 @@ export default function ReportsHubPage() {
           {activeTab === 'business-ledger' && <ReportKhaataContent scope="all" />}
           {activeTab === 'cash-book' && <ReportCashBookContent />}
           {activeTab === 'product-ledger' && <ProductLedgerContent />}
+          {activeTab === 'stock-voucher-ledger' && <StockVoucherLedgerContent />}
           {activeTab === 'overall-trail' && <OverallTrailContent />}
           {activeTab === 'vendor-balances' && <OverallTrailContent initialGroup="vendor" />}
           {activeTab === 'customer-balances' && <OverallTrailContent initialGroup="customer" />}

@@ -6,7 +6,7 @@ import { focusNextField } from '@/lib/fieldNav';
 import * as api from '@/lib/api';
 import type {
   ProductRow, ProductVariantRow, StoreRow, StockVoucherRow, StockVoucherLineInput,
-  StockVoucherCreateInput, UnpostedStockVoucherRow, PostAllResult,
+  StockVoucherCreateInput, UnpostedStockVoucherRow, PostAllResult, StockRow, BusinessAccountRow,
 } from '@/lib/api';
 import { formatDate, getTodayDate } from '@/lib/utils';
 import {
@@ -28,6 +28,35 @@ function newLineUid() {
   return 'svl_' + Date.now() + Math.random().toString(36).slice(2, 7);
 }
 
+// Compact label-left field — ref-pic parity (stock.png): a small fixed-width label beside the
+// input instead of a label stacked above it, so the whole header reads as one dense bound-record
+// card rather than a stack of separate boxes. `gridArea` places it in the header's own named grid.
+function CompactField({
+  label, required, gridArea, children,
+}: { label: string; required?: boolean; gridArea?: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-1.5 min-w-0" style={gridArea ? { gridArea } : undefined}>
+      <label className="text-[11px] font-semibold text-slate-600 whitespace-nowrap shrink-0" style={{ width: '72px' }}>
+        {label}{required && <span className="text-red-500 font-bold"> *</span>}
+      </label>
+      <div className="flex-1 min-w-0">{children}</div>
+    </div>
+  );
+}
+
+// Money math — mirrors stockVouchers.service.js#computeValuation exactly (client-side is display
+// only; the server recomputes from rate/pairs/discount_pct and never trusts discount_value/value
+// off the wire).
+function round2(n: number) {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+function computeValuation(rate: number, pairs: number, discountPct: number) {
+  const gross = round2(rate * pairs);
+  const discountValue = round2(gross * discountPct / 100);
+  const value = round2(gross - discountValue);
+  return { discountValue, value };
+}
+
 // The committed shape, read-only in the grid and hydrated by loadSv.
 interface UiLine {
   uid: string;
@@ -39,6 +68,10 @@ interface UiLine {
   packing: number;
   cartons: number;
   pairs: number;
+  rate: number;
+  discountPct: number;
+  discountValue: number;
+  value: number;
 }
 
 // The entry strip's own "one line being typed" shape.
@@ -51,16 +84,22 @@ interface EntryLine {
   packing: number;
   cartons: number;
   pairs: number;
+  rate: number;
+  discountPct: number;
 }
 
 function emptyEntry(): EntryLine {
-  return { articleId: null, variantId: null, articleSearchText: '', label: '', categoryName: '', packing: 0, cartons: 0, pairs: 0 };
+  return {
+    articleId: null, variantId: null, articleSearchText: '', label: '', categoryName: '',
+    packing: 0, cartons: 0, pairs: 0, rate: 0, discountPct: 0,
+  };
 }
 
 export default function StockVoucherPage() {
   const { dispatch } = useApp();
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [stores, setStores] = useState<StoreRow[]>([]);
+  const [businessAccounts, setBusinessAccounts] = useState<BusinessAccountRow[]>([]);
   const [variantsByArticle, setVariantsByArticle] = useState<Record<number, ProductVariantRow[]>>({});
   const [vouchers, setVouchers] = useState<StockVoucherRow[]>([]);
   const [lookupError, setLookupError] = useState('');
@@ -101,12 +140,21 @@ export default function StockVoucherPage() {
 
   useEffect(() => {
     (async () => {
-      const [p, st] = await Promise.all([api.listProducts(), api.listStores()]);
+      const [p, st, ba] = await Promise.all([api.listProducts(), api.listStores(), api.listBusinessAccounts()]);
       if (p.ok) setProducts(p.data); else setLookupError('Failed to load products: ' + p.error.message);
       if (st.ok) setStores(st.data); else setLookupError('Failed to load stores: ' + st.error.message);
+      if (ba.ok) setBusinessAccounts(ba.data); else setLookupError('Failed to load accounts: ' + ba.error.message);
     })();
     refreshUnposted();
   }, [refreshUnposted]);
+
+  // On Account defaults to the STOCK TRANSFER business account (reservedAccounts.js) when the
+  // user hasn't picked one — same default the backend applies when the field is left blank, kept
+  // in sync client-side purely so the entry form can preview it before the first Save.
+  const stockTransferAccount = useMemo(
+    () => businessAccounts.find(a => a.name.toUpperCase() === 'STOCK TRANSFER'),
+    [businessAccounts]
+  );
 
   useEffect(() => {
     const t = setTimeout(refresh, 250);
@@ -139,10 +187,20 @@ export default function StockVoucherPage() {
   const [remarks, setRemarks] = useState('');
   const [lines, setLines] = useState<UiLine[]>([]);
 
+  // On Account / Main A/C, Bill No./Bilty No./IGP No., Delivery — ref-pic parity fields added
+  // 2026-08-30. accountBaId '' means "use the default" (STOCK TRANSFER, resolved server-side on
+  // save — see stockTransferAccount above for the client-side preview of that same default).
+  const [accountBaId, setAccountBaId] = useState('');
+  const [billNo, setBillNo] = useState('');
+  const [biltyNo, setBiltyNo] = useState('');
+  const [igpNo, setIgpNo] = useState('');
+  const [deliveryType, setDeliveryType] = useState<'SAME' | 'CUSTOM'>('SAME');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
+
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
-  const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
+  const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 2000); };
 
   const isViewMode = mode === 'view';
   const isPosted = status === 'CONFIRMED';
@@ -155,6 +213,8 @@ export default function StockVoucherPage() {
   const handleNew = () => {
     setMode('new'); setSvId(null); setStatus('DRAFT');
     setDate(getTodayDate()); setStoreId(''); setRemarks('');
+    setAccountBaId(''); setBillNo(''); setBiltyNo(''); setIgpNo('');
+    setDeliveryType('SAME'); setDeliveryAddress('');
     setLines([]);
     setEntry(emptyEntry());
     setEditingIndex(null);
@@ -197,6 +257,44 @@ export default function StockVoucherPage() {
     }
   }
 
+  // On Account field — same typable-trigger + centered SearchModal popup as Store, per the user
+  // (2026-08-30). Empty accountBaId means "use the default" (STOCK TRANSFER), so the trigger shows
+  // that default's name until the user actually picks something else.
+  const accountOptions = useMemo(
+    () => businessAccounts.map(a => ({ value: String(a.ba_id), label: `${a.name} (${a.code})` })),
+    [businessAccounts]
+  );
+  const selectedAccount = useMemo(
+    () => businessAccounts.find(a => String(a.ba_id) === accountBaId),
+    [businessAccounts, accountBaId]
+  );
+  const accountTriggerRef = useRef<HTMLInputElement>(null);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [accountSearchText, setAccountSearchText] = useState('');
+  const [accountModalSeed, setAccountModalSeed] = useState('');
+  useEffect(() => {
+    const acc = selectedAccount ?? stockTransferAccount;
+    setAccountSearchText(acc ? `${acc.name} (${acc.code})` : '');
+  }, [selectedAccount, stockTransferAccount]);
+  const openAccountModal = () => {
+    if (isViewMode) return;
+    setAccountModalSeed('');
+    setIsAccountModalOpen(true);
+  };
+  function handleAccountTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      openAccountModal();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (isViewMode) return;
+      setAccountModalSeed(accountSearchText);
+      setIsAccountModalOpen(true);
+    }
+  }
+
   // ── Entry strip (ref-pic bound-record pattern, per the user 2026-08-26) — ONE editable Article
   // Code/Product Name/Color/Cartons/Pairs row, NOT one editable row per grid line. Cartons is
   // typed; Pairs is auto-computed from the article/color's own packing (same convention as Sale
@@ -207,6 +305,29 @@ export default function StockVoucherPage() {
   // Date/Store/Remarks above are never touched by this.
   const [entry, setEntry] = useState<EntryLine>(emptyEntry());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+
+  // Stock in Hand — read-only readout in the entry strip (ref-pic parity), looked up from the
+  // Current Stock rollup (api.reports.stock) by variant_id whenever the picked color changes.
+  // Store-agnostic, same as the rest of this app's finished-goods stock (stock_movements carries
+  // no store_id) — not scoped to the voucher's own Store field.
+  const [stockInHand, setStockInHand] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (entry.articleId == null || entry.variantId == null) { setStockInHand(null); return; }
+    (async () => {
+      const res = await api.reports.stock({ article_id: entry.articleId! });
+      if (cancelled || !res.ok) return;
+      const row = res.data.find((r: StockRow) => r.variant_id === entry.variantId);
+      setStockInHand(row ? Number(row.total_pairs) : 0);
+    })();
+    return () => { cancelled = true; };
+  }, [entry.articleId, entry.variantId]);
+
+  // Live valuation preview — display only, mirrors stockVouchers.service.js#computeValuation.
+  const entryValuation = useMemo(
+    () => computeValuation(entry.rate, entry.pairs, entry.discountPct),
+    [entry.rate, entry.pairs, entry.discountPct]
+  );
   const entryArticleTriggerRef = useRef<HTMLInputElement>(null);
   const [isEntryArticleModalOpen, setIsEntryArticleModalOpen] = useState(false);
   const [entryArticleModalSeed, setEntryArticleModalSeed] = useState('');
@@ -242,6 +363,8 @@ export default function StockVoucherPage() {
   // lands once a freshly-created color is confirmed, so the "+ Add New Color" flow reads as one
   // continuous hop: pick "+ Add New Color..." -> type name -> Enter -> straight into Cartons.
   const cartonsInputRef = useRef<HTMLInputElement>(null);
+  const rateInputRef = useRef<HTMLInputElement>(null);
+  const discountPctInputRef = useRef<HTMLInputElement>(null);
   const [isColorModalOpen, setIsColorModalOpen] = useState(false);
   const [colorSearchText, setColorSearchText] = useState('');
   const [colorModalSeed, setColorModalSeed] = useState('');
@@ -370,13 +493,16 @@ export default function StockVoucherPage() {
 
   const handleCommitLine = () => {
     if (entry.articleId == null || entry.variantId == null) {
-      setErrorMsg('Select an article and color before adding the line.');
+      fail('Select an article and color before adding the line.');
       return;
     }
-    if (entry.cartons <= 0) { setErrorMsg('Cartons must be greater than 0.'); return; }
-    if (entry.pairs <= 0) { setErrorMsg('Pairs must be greater than 0 — check the article\'s packing.'); return; }
+    if (entry.cartons <= 0) { fail('Cartons must be greater than 0.'); return; }
+    if (entry.pairs <= 0) { fail('Pairs must be greater than 0 — check the article\'s packing.'); return; }
+    if (entry.rate <= 0) { fail('Rate must be entered.'); return; }
+    if (entry.discountPct < 0 || entry.discountPct > 100) { fail('D% must be between 0 and 100.'); return; }
     setErrorMsg('');
     const product = products.find(p => p.article_id === entry.articleId);
+    const { discountValue, value } = computeValuation(entry.rate, entry.pairs, entry.discountPct);
     const committed: UiLine = {
       uid: editingIndex != null ? lines[editingIndex].uid : newLineUid(),
       articleId: entry.articleId,
@@ -387,6 +513,10 @@ export default function StockVoucherPage() {
       packing: entry.packing,
       cartons: entry.cartons,
       pairs: entry.pairs,
+      rate: entry.rate,
+      discountPct: entry.discountPct,
+      discountValue,
+      value,
     };
     if (editingIndex != null) {
       setLines(prev => prev.map((l, i) => i === editingIndex ? committed : l));
@@ -398,6 +528,33 @@ export default function StockVoucherPage() {
     requestAnimationFrame(() => entryArticleTriggerRef.current?.focus());
   };
 
+  // Enter walks Cartons -> Rate -> D%, then commits on D% (the strip's true last editable field —
+  // DV/Value stay disabled/auto). Rate is this voucher's own free-typed value, independent of the
+  // article's Sale Price in both directions (per the user, 2026-08-30 follow-up — no read from or
+  // write to products). Cartons used to commit straight away, from before Rate/D% existed on this
+  // strip — that swallowed Enter before the user ever reached them (reported by the user,
+  // 2026-08-30).
+  function handleCartonsKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Cartons must be at least 1 before Enter moves on — an empty/0 Cartons field used to still
+    // advance to Rate, letting a line get committed with 0 cartons (reported by the user).
+    if (entry.cartons <= 0) { fail('Cartons must be at least 1.'); return; }
+    setErrorMsg('');
+    rateInputRef.current?.focus();
+    rateInputRef.current?.select();
+  }
+  function handleRateKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Rate must be entered before Enter moves on — same guard as Cartons (per the user).
+    if (entry.rate <= 0) { fail('Rate must be entered.'); return; }
+    setErrorMsg('');
+    discountPctInputRef.current?.focus();
+    discountPctInputRef.current?.select();
+  }
   function handleEntryLastFieldKeyDown(e: React.KeyboardEvent) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
@@ -411,6 +568,7 @@ export default function StockVoucherPage() {
     setEntry({
       articleId: row.articleId, variantId: row.variantId, articleSearchText: row.articleCode ? `${row.articleCode} — ${row.label.split(' — ')[0]}` : row.label,
       label: row.label, categoryName: row.categoryName, packing: row.packing, cartons: row.cartons, pairs: row.pairs,
+      rate: row.rate, discountPct: row.discountPct,
     });
     setEditingIndex(idx);
     if (row.articleId != null) fetchVariants(row.articleId);
@@ -448,33 +606,48 @@ export default function StockVoucherPage() {
   const totals = useMemo(() => {
     const totalCartons = lines.reduce((s, l) => s + (Number(l.cartons) || 0), 0);
     const totalPairs = lines.reduce((s, l) => s + (Number(l.pairs) || 0), 0);
-    return { totalCartons, totalPairs };
+    const totalValue = lines.reduce((s, l) => s + (Number(l.value) || 0), 0);
+    return { totalCartons, totalPairs, totalValue };
   }, [lines]);
 
   const isValid = useMemo(() => {
     if (!date || !storeId) return false;
     if (lines.length < 1) return false;
-    if (!lines.every(l => l.variantId && l.cartons > 0 && l.pairs > 0)) return false;
+    if (!lines.every(l => l.variantId && l.cartons > 0 && l.pairs > 0 && l.rate > 0)) return false;
     return true;
   }, [date, storeId, lines]);
 
   const buildPayload = (): StockVoucherCreateInput | null => {
-    if (!date) { setErrorMsg('Please pick a date.'); return null; }
-    if (!storeId) { setErrorMsg('Store is required.'); return null; }
-    if (lines.length < 1) { setErrorMsg('A Stock Voucher needs at least 1 line.'); return null; }
-    if (!lines.every(l => l.variantId)) { setErrorMsg('Every line needs an article/color.'); return null; }
+    if (!date) { fail('Please pick a date.'); return null; }
+    if (!storeId) { fail('Store is required.'); return null; }
+    if (lines.length < 1) { fail('A Stock Voucher needs at least 1 line.'); return null; }
+    if (!lines.every(l => l.variantId)) { fail('Every line needs an article/color.'); return null; }
     if (!lines.every(l => l.pairs > 0)) {
-      setErrorMsg('Every line needs pairs greater than 0.'); return null;
+      fail('Every line needs pairs greater than 0.'); return null;
+    }
+    if (!lines.every(l => l.rate > 0)) {
+      fail('Every line needs a Rate entered.'); return null;
+    }
+    if (deliveryType === 'CUSTOM' && !deliveryAddress.trim()) {
+      fail('Delivery address is required for Custom delivery.'); return null;
     }
     const payloadLines: StockVoucherLineInput[] = lines.map(l => ({
       variant_id: l.variantId!,
       cartons: l.cartons,
       pairs: l.pairs,
+      rate: l.rate,
+      discount_pct: l.discountPct,
     }));
     return {
       voucher_date: date,
       store_id: Number(storeId),
       remarks: remarks.trim() || undefined,
+      bill_no: billNo.trim() ? Number(billNo) : null,
+      bilty_no: biltyNo.trim() ? Number(biltyNo) : null,
+      igp_no: igpNo.trim() ? Number(igpNo) : null,
+      delivery_type: deliveryType,
+      delivery_address: deliveryType === 'CUSTOM' ? deliveryAddress.trim() : undefined,
+      on_account_ba_id: accountBaId ? Number(accountBaId) : null,
       lines: payloadLines,
     };
   };
@@ -535,6 +708,12 @@ export default function StockVoucherPage() {
     setDate(sv.voucher_date.slice(0, 10));
     setStoreId(sv.store_id != null ? String(sv.store_id) : '');
     setRemarks(sv.remarks || '');
+    setAccountBaId(sv.on_account_ba_id != null ? String(sv.on_account_ba_id) : '');
+    setBillNo(sv.bill_no != null ? String(sv.bill_no) : '');
+    setBiltyNo(sv.bilty_no != null ? String(sv.bilty_no) : '');
+    setIgpNo(sv.igp_no != null ? String(sv.igp_no) : '');
+    setDeliveryType(sv.delivery_type || 'SAME');
+    setDeliveryAddress(sv.delivery_address || '');
     setLines((sv.lines || []).map(l => ({
       uid: 'svl_' + l.line_id,
       articleId: l.article_id ?? null,
@@ -544,9 +723,16 @@ export default function StockVoucherPage() {
       // Not returned by the lines join — looked up from the already-loaded products list by
       // article_id, same as the entry strip does when an article is freshly picked.
       categoryName: products.find(p => p.article_id === l.article_id)?.category_name || '',
-      packing: l.pairs && l.cartons ? l.pairs / l.cartons : 0,
+      // cartons can legally be 0 (a pairs-only manual adjustment) — pairs/cartons would zero out
+      // packing then, silently corrupting the line if it's re-edited and cartons gets typed in
+      // (updateEntryCartons derives pairs from packing). Falls back to the article's own packing.
+      packing: l.cartons ? l.pairs / l.cartons : (products.find(p => p.article_id === l.article_id)?.packing || 0),
       cartons: l.cartons,
       pairs: l.pairs,
+      rate: Number(l.rate) || 0,
+      discountPct: Number(l.discount_pct) || 0,
+      discountValue: Number(l.discount_value) || 0,
+      value: Number(l.value) || 0,
     })));
     (sv.lines || []).forEach(l => { if (l.article_id != null) fetchVariants(l.article_id); });
     setEntry(emptyEntry());
@@ -623,7 +809,7 @@ export default function StockVoucherPage() {
     recompute();
     window.addEventListener('resize', recompute);
     return () => window.removeEventListener('resize', recompute);
-  }, [mode, lookupError, successMsg, errorMsg]);
+  }, [mode]);
 
   // ── Record navigation: First/Pre./Next/Last + Posted/Unposted dropdown — same mechanism as
   // JournalVoucherPage §. Fetched unfiltered, newest-first — reversed here for oldest-first
@@ -722,6 +908,12 @@ export default function StockVoucherPage() {
         className="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all bg-white border text-slate-600 hover:bg-slate-50"
       >
         Stock Ledger
+      </button>
+      <button
+        onClick={() => dispatch({ type: 'NAVIGATE', page: 'reports', tab: 'stock-voucher-ledger' })}
+        className="px-3 py-1.5 text-xs font-semibold rounded-lg transition-all bg-white border text-slate-600 hover:bg-slate-50"
+      >
+        Voucher Ledger
       </button>
     </div>
   );
@@ -877,9 +1069,17 @@ export default function StockVoucherPage() {
           </div>
         )}
 
-        {lookupError && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>}
-        {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>}
-        {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>}
+        {/* Toasts — fixed to the top-right corner instead of a full-width banner above the
+            toolbar (per the user: "the warning message must appear in right not above"). Out of
+            document flow, so a validation message popping up no longer pushes the entry card
+            down or shrinks the article grid's visible height. */}
+        {(lookupError || successMsg || errorMsg) && (
+          <div className="fixed top-20 right-4 z-50 flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]" data-no-print>
+            {lookupError && <div className="banner-error rounded-lg px-4 py-3 text-sm shadow-lg animate-fadeIn">{lookupError}</div>}
+            {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm shadow-lg animate-fadeIn">{successMsg}</div>}
+            {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm shadow-lg animate-fadeIn">{errorMsg}</div>}
+          </div>
+        )}
 
         {activeTab === 'entry' && (
         <>
@@ -1002,53 +1202,58 @@ export default function StockVoucherPage() {
             </div>
           </div>
 
-          {/* Date / Number / Store / Remarks — banded row, matching JournalVoucherPage's own.
-              Number is auto-generated by the system (stock_voucher_id) — read-only, previewing
-              what Save will assign. */}
+          {/* Header — ONE bound-record card (ref-pic parity: stock.png shows every header field
+              in a single block above the article grid, not several separate boxes), label-left
+              compact fields positioned to match the reference screen's own layout: No./Date/To
+              Store on top with Bill No. at the right; On Account and Main A/C each their own full
+              row with IGP/Bilty No. stacked at the right; Delivery+Address; Remarks last. */}
           <div
-            className="shrink-0 grid grid-cols-1 md:grid-cols-4 gap-4 mb-4 p-4 rounded-lg border"
-            style={{ background: 'rgba(176,141,87,0.06)', borderColor: 'var(--border-color)' }}
+            className="shrink-0 grid gap-x-3 gap-y-1.5 mb-2 p-3 rounded-lg border"
+            style={{
+              background: 'rgba(176,141,87,0.06)', borderColor: 'var(--border-color)',
+              gridTemplateColumns: '180px 220px 1fr 1fr 130px',
+              gridTemplateAreas: `
+                "no date store store bill"
+                "onacctno onacctname onacctname onacctname igp"
+                "mainacno mainacname mainacname mainacname bilty"
+                "deliv deliv addr addr ."
+                "remarks remarks remarks remarks remarks"
+              `,
+            }}
           >
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                Date <span className="text-red-500 font-bold">*</span>
-              </label>
+            <CompactField label="No." gridArea="no">
+              <input
+                type="text"
+                value={svId != null ? `#${svId}` : `#${nextSvNoPreview}`}
+                disabled
+                className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200 font-mono text-center"
+              />
+            </CompactField>
+            <CompactField label="Date" required gridArea="date">
               <input
                 ref={firstFieldRef} type="date" value={date} disabled={isViewMode}
-                onChange={e => setDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }}
+                onChange={e => setDate(e.target.value)} className="soleria-input soleria-input-compact"
               />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Number</label>
-              <input
-                type="text"
-                value={svId != null ? `#${svId}` : `#${nextSvNoPreview} (pending)`}
-                disabled
-                className="soleria-input bg-gray-50 text-gray-500 border-gray-200 font-mono"
-                style={{ fontSize: '13px' }}
-              />
-            </div>
-            <div className="relative">
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                Store <span className="text-red-500 font-bold">*</span>
-              </label>
-              <input
-                ref={storeTriggerRef}
-                type="text"
-                disabled={isViewMode}
-                value={storeSearchText}
-                onChange={e => setStoreSearchText(e.target.value)}
-                onKeyDown={handleStoreTriggerKeyDown}
-                placeholder="Type a store name, or press Enter to search..."
-                className="soleria-input pr-8"
-                style={{ fontSize: '13px' }}
-              />
+            </CompactField>
+            <div className="relative min-w-0" style={{ gridArea: 'store' }}>
+              <CompactField label="To >" required>
+                <input
+                  ref={storeTriggerRef}
+                  type="text"
+                  disabled={isViewMode}
+                  value={storeSearchText}
+                  onChange={e => setStoreSearchText(e.target.value)}
+                  onKeyDown={handleStoreTriggerKeyDown}
+                  placeholder="Type a store name, or Enter to search..."
+                  className="soleria-input soleria-input-compact pr-8"
+                />
+              </CompactField>
               <button
                 type="button"
                 disabled={isViewMode}
                 onClick={openStoreModal}
                 title="Browse all stores"
-                className="absolute right-2 bottom-2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <ChevronDown size={14} />
               </button>
@@ -1067,27 +1272,130 @@ export default function StockVoucherPage() {
                 initialSearch={storeModalSeed}
               />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">
-                Remarks <span className="text-slate-400 font-normal normal-case">— optional</span>
-              </label>
+            <CompactField label="Bill No." gridArea="bill">
               <input
-                type="text" value={remarks} disabled={isViewMode} onChange={e => setRemarks(e.target.value)}
-                placeholder="e.g. Physical count adjustment" className="soleria-input" style={{ fontSize: '13px' }}
+                type="number" value={billNo} disabled={isViewMode} onChange={e => setBillNo(e.target.value)}
+                className="soleria-input soleria-input-compact font-mono text-center"
+              />
+            </CompactField>
+
+            <CompactField label="On Account" gridArea="onacctno">
+              <input
+                type="text"
+                value={(selectedAccount ?? stockTransferAccount)?.code || '—'}
+                disabled
+                title="Auto-filled from the account picked on the right"
+                className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 font-mono text-center"
+              />
+            </CompactField>
+            <div className="relative min-w-0" style={{ gridArea: 'onacctname' }}>
+              <CompactField label="Account">
+                <input
+                  ref={accountTriggerRef}
+                  type="text"
+                  disabled={isViewMode}
+                  value={accountSearchText}
+                  onChange={e => setAccountSearchText(e.target.value)}
+                  onKeyDown={handleAccountTriggerKeyDown}
+                  placeholder="Defaults to Stock Transfer — type to change..."
+                  className="soleria-input soleria-input-compact pr-8"
+                />
+              </CompactField>
+              <button
+                type="button"
+                disabled={isViewMode}
+                onClick={openAccountModal}
+                title="Browse all accounts"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <ChevronDown size={14} />
+              </button>
+              <SearchModal
+                isOpen={isAccountModalOpen}
+                title="Select Account"
+                options={accountOptions}
+                value={accountBaId}
+                onSelect={(val) => {
+                  setAccountBaId(val);
+                  setIsAccountModalOpen(false);
+                  requestAnimationFrame(() => focusNextField(accountTriggerRef.current));
+                }}
+                onClose={() => setIsAccountModalOpen(false)}
+                searchPlaceholder="Search accounts..."
+                initialSearch={accountModalSeed}
               />
             </div>
+            <CompactField label="IGP No." gridArea="igp">
+              <input
+                type="number" value={igpNo} disabled={isViewMode} onChange={e => setIgpNo(e.target.value)}
+                className="soleria-input soleria-input-compact font-mono text-center"
+              />
+            </CompactField>
+
+            <CompactField label="Main A/C" gridArea="mainacno">
+              <input
+                type="text"
+                value={(selectedAccount ?? stockTransferAccount)?.ac_code || '—'}
+                disabled
+                className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 font-mono text-center"
+              />
+            </CompactField>
+            <CompactField label="Account" gridArea="mainacname">
+              <input
+                type="text"
+                value={(selectedAccount ?? stockTransferAccount)?.ac_name || '—'}
+                disabled
+                className="soleria-input soleria-input-compact bg-gray-100 text-gray-500"
+              />
+            </CompactField>
+            <CompactField label="Bilty No." gridArea="bilty">
+              <input
+                type="number" value={biltyNo} disabled={isViewMode} onChange={e => setBiltyNo(e.target.value)}
+                className="soleria-input soleria-input-compact font-mono text-center"
+              />
+            </CompactField>
+
+            <CompactField label="Delivery" gridArea="deliv">
+              <select
+                value={deliveryType}
+                disabled={isViewMode}
+                onChange={e => setDeliveryType(e.target.value as 'SAME' | 'CUSTOM')}
+                className="soleria-input soleria-input-compact cursor-pointer"
+              >
+                <option value="SAME">Same</option>
+                <option value="CUSTOM">Custom</option>
+              </select>
+            </CompactField>
+            <div className="min-w-0" style={{ gridArea: 'addr' }}>
+              <input
+                type="text"
+                value={deliveryType === 'CUSTOM' ? deliveryAddress : ''}
+                disabled={isViewMode || deliveryType !== 'CUSTOM'}
+                onChange={e => setDeliveryAddress(e.target.value)}
+                placeholder={deliveryType === 'CUSTOM' ? 'Delivery address...' : 'N/A — same as Store'}
+                className={`soleria-input soleria-input-compact ${deliveryType !== 'CUSTOM' ? 'bg-gray-100 text-gray-500' : ''}`}
+              />
+            </div>
+
+            <CompactField label="Remarks" gridArea="remarks">
+              <input
+                type="text" value={remarks} disabled={isViewMode} onChange={e => setRemarks(e.target.value)}
+                placeholder="e.g. Physical count adjustment — optional"
+                className="soleria-input soleria-input-compact"
+              />
+            </CompactField>
           </div>
 
           {/* Entry strip — Article Code + Product Name + Color on one row, Cartons/Pairs on the
               next. Enter on Cartons (Pairs stays disabled/auto) commits the line into the grid
               below and resets the strip back to Article Code. */}
           {!isViewMode && (
-          <div className="shrink-0 mb-3 p-3 rounded-lg border" style={{ background: 'rgba(176,141,87,0.06)', borderColor: 'var(--border-color)' }}>
+          <div className="shrink-0 mb-2 p-2.5 rounded-lg border" style={{ background: 'rgba(176,141,87,0.06)', borderColor: 'var(--border-color)' }}>
             <div
               className="grid gap-3 mb-2"
               style={{
-                gridTemplateColumns: '1fr 1.5fr 1fr 210px',
-                gridTemplateAreas: '"code name category color" ". . . cp"',
+                gridTemplateColumns: '1fr 1.5fr 1fr 480px',
+                gridTemplateAreas: '"code name category color" "stock stock stock cp"',
               }}
             >
               <div className="relative" style={{ gridArea: 'code' }}>
@@ -1207,7 +1515,7 @@ export default function StockVoucherPage() {
                   </div>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-2" style={{ gridArea: 'cp' }}>
+              <div className="grid grid-cols-6 gap-2" style={{ gridArea: 'cp' }}>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">Cartons <span className="text-red-500 font-bold">*</span></label>
                   <input
@@ -1216,7 +1524,7 @@ export default function StockVoucherPage() {
                     value={entry.cartons || ''}
                     min={0}
                     onChange={e => updateEntryCartons(parseInt(e.target.value) || 0)}
-                    onKeyDown={handleEntryLastFieldKeyDown}
+                    onKeyDown={handleCartonsKeyDown}
                     className="soleria-input font-mono text-center"
                     style={{ fontSize: '13px' }}
                   />
@@ -1224,6 +1532,56 @@ export default function StockVoucherPage() {
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">Pairs</label>
                   <input type="text" value={entry.pairs || '-'} disabled className="soleria-input bg-gray-100 text-gray-500 font-mono text-center" style={{ fontSize: '13px' }} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Rate</label>
+                  <input
+                    ref={rateInputRef}
+                    type="number"
+                    value={entry.rate || ''}
+                    min={0}
+                    step="0.01"
+                    title="This voucher's own value — independent of the article's Sale Price"
+                    onChange={e => setEntry(prev => ({ ...prev, rate: parseFloat(e.target.value) || 0 }))}
+                    onKeyDown={handleRateKeyDown}
+                    className="soleria-input font-mono text-center"
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">D%</label>
+                  <input
+                    ref={discountPctInputRef}
+                    type="number"
+                    value={entry.discountPct || ''}
+                    min={0}
+                    max={100}
+                    step="0.01"
+                    onChange={e => setEntry(prev => ({ ...prev, discountPct: parseFloat(e.target.value) || 0 }))}
+                    onKeyDown={handleEntryLastFieldKeyDown}
+                    className="soleria-input font-mono text-center"
+                    style={{ fontSize: '13px' }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">DV</label>
+                  <input type="text" value={entryValuation.discountValue.toFixed(2)} disabled className="soleria-input bg-gray-100 text-gray-500 font-mono text-center" style={{ fontSize: '13px' }} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Value</label>
+                  <input type="text" value={entryValuation.value.toFixed(2)} disabled className="soleria-input bg-gray-100 text-gray-500 font-mono text-right" style={{ fontSize: '13px' }} />
+                </div>
+              </div>
+              <div style={{ gridArea: 'stock' }} className="flex items-end">
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Stock in Hand</label>
+                  <input
+                    type="text"
+                    value={entry.variantId == null ? '—' : stockInHand == null ? '…' : stockInHand.toLocaleString()}
+                    disabled
+                    className="soleria-input bg-gray-100 text-gray-500 font-mono text-center"
+                    style={{ fontSize: '13px', width: '160px' }}
+                  />
                 </div>
               </div>
             </div>
@@ -1246,15 +1604,17 @@ export default function StockVoucherPage() {
           {/* Committed lines — read-only grid. Click a row to load it back into the entry strip
               above for editing. No per-row delete — that's the toolbar's own Delete button,
               enabled only while a row is selected. */}
-          <div className="flex-1 min-h-0 mb-4 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
+          <div className="flex-1 min-h-0 mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 pl-4" style={{ minWidth: '120px' }}>Article Code</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3">Article Description</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3" style={{ minWidth: '120px' }}>Category</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '110px' }}>Cartons</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: '110px' }}>Pairs</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 pl-4" style={{ minWidth: '120px' }}>Article Code</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5">Article Description</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5" style={{ minWidth: '120px' }}>Category</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '110px' }}>Cartons</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '110px' }}>Pairs</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '100px' }}>Rate</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '120px' }}>Value</th>
                 </tr>
               </thead>
               <tbody>
@@ -1265,16 +1625,18 @@ export default function StockVoucherPage() {
                     className={`border-b cursor-pointer hover:bg-slate-50/55 transition-colors ${idx === editingIndex ? 'bg-blue-50' : ''}`}
                     style={{ borderColor: 'var(--border-table)' }}
                   >
-                    <td className="p-2 pl-4 font-mono text-xs text-slate-600">{line.articleCode || '—'}</td>
-                    <td className="p-2 text-xs text-slate-800 font-semibold">{line.label || 'N/A'}</td>
-                    <td className="p-2 text-xs text-slate-600">{line.categoryName || '—'}</td>
-                    <td className="p-2 text-center font-mono text-sm text-slate-700">{line.cartons}</td>
-                    <td className="p-2 text-right font-mono text-sm text-slate-700">{line.pairs.toLocaleString()}</td>
+                    <td className="py-1 px-2 pl-4 font-mono text-xs text-slate-600">{line.articleCode || '—'}</td>
+                    <td className="py-1 px-2 text-xs text-slate-800 font-semibold">{line.label || 'N/A'}</td>
+                    <td className="py-1 px-2 text-xs text-slate-600">{line.categoryName || '—'}</td>
+                    <td className="py-1 px-2 text-center font-mono text-sm text-slate-700">{line.cartons}</td>
+                    <td className="py-1 px-2 text-right font-mono text-sm text-slate-700">{line.pairs.toLocaleString()}</td>
+                    <td className="py-1 px-2 text-right font-mono text-sm text-slate-700">{line.rate.toFixed(2)}</td>
+                    <td className="py-1 px-2 text-right font-mono text-sm text-slate-700">{line.value.toFixed(2)}</td>
                   </tr>
                 ))}
                 {lines.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="p-3 text-center text-xs text-slate-400">
+                    <td colSpan={7} className="p-3 text-center text-xs text-slate-400">
                       No lines added yet.
                     </td>
                   </tr>
@@ -1296,7 +1658,17 @@ export default function StockVoucherPage() {
                 value={totals.totalPairs.toLocaleString()}
                 disabled
                 className="soleria-input soleria-input-compact text-right font-mono font-bold"
-                style={{ width: '140px', color: 'var(--brand-gold)', background: '#111c2a', borderColor: '#334155' }}
+                style={{ width: '140px', color: '#ffffff', background: '#111c2a', borderColor: '#334155' }}
+              />
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Value</label>
+              <input
+                type="text"
+                value={totals.totalValue.toFixed(2)}
+                disabled
+                className="soleria-input soleria-input-compact text-right font-mono font-bold"
+                style={{ width: '150px', color: '#ffffff', background: '#111c2a', borderColor: '#334155' }}
               />
             </div>
           </div>
@@ -1343,6 +1715,7 @@ export default function StockVoucherPage() {
                     <th className="p-3">Remarks</th>
                     <th className="p-3 text-center">Lines</th>
                     <th className="p-3 text-right">Total Pairs</th>
+                    <th className="p-3 text-right">Total Value</th>
                     <th className="p-3 text-center">Status</th>
                   </tr>
                 </thead>
@@ -1355,6 +1728,7 @@ export default function StockVoucherPage() {
                       <td className="p-3 text-xs text-slate-500">{v.remarks || '—'}</td>
                       <td className="p-3 text-center text-xs text-slate-500">{v.line_count}</td>
                       <td className="p-3 text-right font-bold font-mono text-slate-800">{Number(v.total_pairs ?? 0).toLocaleString()}</td>
+                      <td className="p-3 text-right font-mono text-slate-600">{Number(v.total_value ?? 0).toFixed(2)}</td>
                       <td className="p-3 text-center">
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${v.status === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
                           {v.status === 'CONFIRMED' ? 'Posted' : 'Not Posted'}

@@ -42,4 +42,8 @@ module.exports = {
   // name). Unlike the old fixed-counter-account model, this is only a convenience default — the
   // user can still edit or remove that line, or add more lines, for a real multi-account journal.
   DISCOUNTS_CLAIMS_COMMISSIONS: '400008',
+  // Stock Voucher's counter-account (2026-08-30 follow-up): Dr STOCK TRANSFER / Cr the
+  // user-picked On Account, for the voucher's total line value — same "fixed head + one real
+  // business account beneath it" shape as JOURNAL_VOUCHER above, see stockVouchers.service.js#post.
+  STOCK_TRANSFER: '400009',
 };

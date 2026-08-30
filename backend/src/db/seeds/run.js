@@ -178,6 +178,14 @@ async function seed() {
   });
   await ensureNamedBusinessAccount(pool, dccAcId, CODES.DISCOUNTS_CLAIMS_COMMISSIONS, 'DISCOUNTS, CLAIMS & COMMISSIONS');
 
+  // --- Stock Voucher's counter-account (2026-08-30 follow-up) ---
+  // Seeded WITH a business account, same reasoning as JOURNAL VOUCHER above: post() needs a real
+  // ba_id to debit, and it's also the Stock Voucher entry form's own default On Account.
+  const stAcId = await ensureChartAccount(pool, {
+    code: CODES.STOCK_TRANSFER, name: 'STOCK TRANSFER', groupId: expensesGroup,
+  });
+  await ensureNamedBusinessAccount(pool, stAcId, CODES.STOCK_TRANSFER, 'STOCK TRANSFER');
+
   // --- Stages (payroll.md §4) — the 12 manufacturing stages, defined once as data ---
   for (const [index, stage] of STAGES.entries()) {
     const exists = await pool.request()

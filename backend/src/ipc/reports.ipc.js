@@ -21,6 +21,11 @@ module.exports = function register() {
     return service.productLedger(payload);
   }));
 
+  ipcMain.handle('reports:stock-voucher-detail', wrap((payload) => {
+    requireSession();
+    return service.stockVoucherDetail(payload);
+  }));
+
   ipcMain.handle('reports:vendor-stock', wrap(() => {
     requireSession();
     return service.vendorStock();

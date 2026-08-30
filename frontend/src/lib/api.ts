@@ -840,6 +840,8 @@ export interface StockVoucherLineInput {
   variant_id: number;
   cartons: number;
   pairs: number;
+  rate: number;
+  discount_pct: number;
 }
 
 export interface StockVoucherLineRow extends StockVoucherLineInput {
@@ -849,6 +851,9 @@ export interface StockVoucherLineRow extends StockVoucherLineInput {
   article_code?: string;
   article_name?: string;
   color?: string;
+  /** Server-computed — never trust a client-typed value/discount_value, only rate/discount_pct. */
+  discount_value: number;
+  value: number;
 }
 
 export interface StockVoucherRow {
@@ -858,18 +863,38 @@ export interface StockVoucherRow {
   store_name?: string;
   remarks: string | null;
   status: 'CONFIRMED' | 'DRAFT';
+  bill_no: number | null;
+  bilty_no: number | null;
+  igp_no: number | null;
+  delivery_type: 'SAME' | 'CUSTOM';
+  delivery_address: string | null;
+  on_account_ba_id: number | null;
+  on_account_name?: string;
+  on_account_code?: string;
+  /** main_ac_id is never picked directly — it's a snapshot of on_account_ba_id's own parent chart
+   *  account, taken server-side at save time (same pattern as sale_bills.main_ac_id). */
+  main_ac_id: number | null;
+  main_ac_name?: string;
+  main_ac_code?: string;
   /** Only present on get()/create()/update()/post()/unpost() — list() returns the rolled-up
    *  totals below without the per-line detail, to keep the listing query a single aggregate. */
   lines?: StockVoucherLineRow[];
   line_count: number;
   total_cartons: number;
   total_pairs: number;
+  total_value: number;
 }
 
 export interface StockVoucherCreateInput {
   voucher_date: string;
   store_id?: number | null;
   remarks?: string;
+  bill_no?: number | null;
+  bilty_no?: number | null;
+  igp_no?: number | null;
+  delivery_type?: 'SAME' | 'CUSTOM';
+  delivery_address?: string;
+  on_account_ba_id?: number | null;
   lines: StockVoucherLineInput[];
 }
 
@@ -1563,6 +1588,47 @@ export interface ProductLedgerFilters extends DateRangeFilters {
   search?: string;
 }
 
+// Stock Voucher Ledger (Reports Hub sub-page) — one row per stock_voucher_lines line, flattened
+// with its own header (date/store/status) and article/color, per the user (2026-08-30): "show the
+// details of the voucher like that [Product Ledger] ... color and price and cartons each and
+// every detail".
+export interface StockVoucherDetailRow {
+  line_id: number;
+  stock_voucher_id: number;
+  line_no: number;
+  cartons: number;
+  pairs: number;
+  rate: number;
+  discount_pct: number;
+  discount_value: number;
+  value: number;
+  voucher_date: string;
+  status: 'CONFIRMED' | 'DRAFT';
+  remarks: string | null;
+  store_id: number | null;
+  store_name?: string;
+  color: string;
+  article_id: number;
+  article_code: string;
+  article_name: string;
+  category_name: string;
+}
+
+export interface StockVoucherDetailResult {
+  rows: StockVoucherDetailRow[];
+  total_cartons: number;
+  total_pairs: number;
+  total_value: number;
+}
+
+export interface StockVoucherDetailFilters extends DateRangeFilters {
+  status?: 'CONFIRMED' | 'DRAFT';
+  store_id?: number;
+  article_id?: number;
+  category_id?: number;
+  search?: string;
+}
+
 export interface LogProductionInput {
   movement_date: string;
   input_qty: number;
@@ -2236,6 +2302,7 @@ declare global {
         stock: (payload?: StockFilters) => Promise<ApiResult<StockRow[]>>;
         production: (payload?: ProductionFilters) => Promise<ApiResult<StockMovementRow[]>>;
         'product-ledger': (payload?: ProductLedgerFilters) => Promise<ApiResult<ProductLedgerResult>>;
+        'stock-voucher-detail': (payload?: StockVoucherDetailFilters) => Promise<ApiResult<StockVoucherDetailResult>>;
         'vendor-stock': () => Promise<ApiResult<VendorStockRow[]>>;
         'sale-analysis': (payload?: SaleReportFilters) => Promise<ApiResult<SaleAnalysisRow[] | SaleAnalysisRegionGroup[]>>;
         'sale-report': (payload?: SaleReportFilters) => Promise<ApiResult<SaleReportRow[] | SaleReportRegionGroup[]>>;
@@ -3316,6 +3383,10 @@ function normalizeProductLedgerResult(result: ProductLedgerResult): ProductLedge
   return { ...result, rows: result.rows.map(r => ({ ...r, movement_date: normalizeDate(r.movement_date) })) };
 }
 
+function normalizeStockVoucherDetailResult(result: StockVoucherDetailResult): StockVoucherDetailResult {
+  return { ...result, rows: result.rows.map(r => ({ ...r, voucher_date: normalizeDate(r.voucher_date) })) };
+}
+
 function normalizeLedgerRow(row: LedgerRow): LedgerRow {
   return {
     ...row,
@@ -3362,6 +3433,8 @@ export const reports = {
     window.api ? window.api.reports.production(payload).then(r => mapResult(r, rows => rows.map(normalizeStockMovementRow))) : Promise.resolve(NO_BRIDGE),
   productLedger: (payload?: ProductLedgerFilters) =>
     window.api ? window.api.reports['product-ledger'](payload).then(r => mapResult(r, normalizeProductLedgerResult)) : Promise.resolve(NO_BRIDGE),
+  stockVoucherDetail: (payload?: StockVoucherDetailFilters) =>
+    window.api ? window.api.reports['stock-voucher-detail'](payload).then(r => mapResult(r, normalizeStockVoucherDetailResult)) : Promise.resolve(NO_BRIDGE),
   vendorStock: () =>
     window.api ? window.api.reports['vendor-stock']() : Promise.resolve(NO_BRIDGE),
   saleAnalysis: (payload?: SaleReportFilters) =>

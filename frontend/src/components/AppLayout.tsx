@@ -398,9 +398,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
               )}
             </div>
           </div>
-          {headerAction && (
-            <div className="flex-shrink-0 overflow-x-auto">{headerAction}</div>
-          )}
           <ZoomControl />
           <NotificationBell />
 
@@ -468,6 +465,19 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
             )}
           </div>
         </header>
+
+        {/* Sub-page tab bar — its own full-width row, not squeezed into the fixed-height header
+            next to the brand mark/title/icons. A page with many sub-tabs (Reports Hub) used to
+            share the header's single line with WENTOX/title/Zoom/Notifications/user chip, and once
+            there were enough tabs to overflow that line, flex-shrink pushed the brand mark out of
+            view entirely (reported by the user, 2026-08-30). This row gets the full window width
+            and wraps (most tab bars already use flex-wrap internally), so the header above it never
+            has to give up space for it. */}
+        {headerAction && (
+          <div data-no-print className="flex items-center flex-wrap gap-1.5 px-6 md:px-8 py-2" style={{ borderBottom: '1px solid var(--border-color)', background: 'var(--app-bg)' }}>
+            {headerAction}
+          </div>
+        )}
 
         {/* The classic menu bar from the client's previous software — five hover menus, directly
             above the Quick Menu row, replacing the sidebar. */}

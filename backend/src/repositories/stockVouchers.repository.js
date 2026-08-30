@@ -9,7 +9,8 @@ function linesSubquery(alias = 'sv') {
   return `(
     SELECT COUNT(*) AS line_count,
            SUM(svl.cartons) AS total_cartons,
-           SUM(svl.pairs) AS total_pairs
+           SUM(svl.pairs) AS total_pairs,
+           SUM(svl.value) AS total_value
     FROM dbo.stock_voucher_lines svl
     WHERE svl.stock_voucher_id = ${alias}.stock_voucher_id
   )`;
@@ -53,9 +54,14 @@ async function list(filters = {}) {
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT sv.*, st.name AS store_name, totals.line_count, totals.total_cartons, totals.total_pairs
+    `SELECT sv.*, st.name AS store_name,
+            boa.name AS on_account_name, boa.code AS on_account_code,
+            mac.name AS main_ac_name, mac.code AS main_ac_code,
+            totals.line_count, totals.total_cartons, totals.total_pairs, totals.total_value
      FROM dbo.stock_vouchers sv
      LEFT JOIN dbo.stores st ON st.store_id = sv.store_id
+     LEFT JOIN dbo.business_accounts boa ON boa.ba_id = sv.on_account_ba_id
+     LEFT JOIN dbo.chart_of_accounts mac ON mac.ac_id = sv.main_ac_id
      CROSS APPLY ${linesSubquery('sv')} totals
      ${where}
      ORDER BY sv.voucher_date DESC, sv.stock_voucher_id DESC`,
@@ -92,9 +98,14 @@ async function getLines(stockVoucherId) {
 
 async function findById(stockVoucherId) {
   const result = await query(
-    `SELECT sv.*, st.name AS store_name, totals.line_count, totals.total_cartons, totals.total_pairs
+    `SELECT sv.*, st.name AS store_name,
+            boa.name AS on_account_name, boa.code AS on_account_code,
+            mac.name AS main_ac_name, mac.code AS main_ac_code,
+            totals.line_count, totals.total_cartons, totals.total_pairs, totals.total_value
      FROM dbo.stock_vouchers sv
      LEFT JOIN dbo.stores st ON st.store_id = sv.store_id
+     LEFT JOIN dbo.business_accounts boa ON boa.ba_id = sv.on_account_ba_id
+     LEFT JOIN dbo.chart_of_accounts mac ON mac.ac_id = sv.main_ac_id
      CROSS APPLY ${linesSubquery('sv')} totals
      WHERE sv.stock_voucher_id = @stockVoucherId`,
     { stockVoucherId: { type: sql.Int, value: stockVoucherId } },
@@ -109,12 +120,23 @@ async function insert(transaction, sv) {
     voucherDate: { type: sql.Date, value: sv.voucher_date },
     storeId: { type: sql.Int, value: sv.store_id ?? null },
     remarks: { type: sql.NVarChar(500), value: sv.remarks ?? null },
+    billNo: { type: sql.Int, value: sv.bill_no ?? null },
+    biltyNo: { type: sql.Int, value: sv.bilty_no ?? null },
+    igpNo: { type: sql.Int, value: sv.igp_no ?? null },
+    deliveryType: { type: sql.VarChar(10), value: sv.delivery_type },
+    deliveryAddress: { type: sql.NVarChar(300), value: sv.delivery_address ?? null },
+    onAccountBaId: { type: sql.Int, value: sv.on_account_ba_id ?? null },
+    mainAcId: { type: sql.Int, value: sv.main_ac_id ?? null },
     createdBy: { type: sql.Int, value: sv.created_by ?? null },
   });
   const result = await request.query(`
-    INSERT INTO dbo.stock_vouchers (voucher_date, store_id, remarks, status, created_by)
+    INSERT INTO dbo.stock_vouchers
+      (voucher_date, store_id, remarks, bill_no, bilty_no, igp_no, delivery_type, delivery_address,
+       on_account_ba_id, main_ac_id, status, created_by)
     OUTPUT inserted.stock_voucher_id
-    VALUES (@voucherDate, @storeId, @remarks, 'DRAFT', @createdBy)
+    VALUES
+      (@voucherDate, @storeId, @remarks, @billNo, @biltyNo, @igpNo, @deliveryType, @deliveryAddress,
+       @onAccountBaId, @mainAcId, 'DRAFT', @createdBy)
   `);
   return result.recordset[0].stock_voucher_id;
 }
@@ -125,10 +147,20 @@ async function updateHeader(transaction, stockVoucherId, sv) {
     voucherDate: { type: sql.Date, value: sv.voucher_date },
     storeId: { type: sql.Int, value: sv.store_id ?? null },
     remarks: { type: sql.NVarChar(500), value: sv.remarks ?? null },
+    billNo: { type: sql.Int, value: sv.bill_no ?? null },
+    biltyNo: { type: sql.Int, value: sv.bilty_no ?? null },
+    igpNo: { type: sql.Int, value: sv.igp_no ?? null },
+    deliveryType: { type: sql.VarChar(10), value: sv.delivery_type },
+    deliveryAddress: { type: sql.NVarChar(300), value: sv.delivery_address ?? null },
+    onAccountBaId: { type: sql.Int, value: sv.on_account_ba_id ?? null },
+    mainAcId: { type: sql.Int, value: sv.main_ac_id ?? null },
   });
   await request.query(`
     UPDATE dbo.stock_vouchers SET
-      voucher_date = @voucherDate, store_id = @storeId, remarks = @remarks
+      voucher_date = @voucherDate, store_id = @storeId, remarks = @remarks,
+      bill_no = @billNo, bilty_no = @biltyNo, igp_no = @igpNo,
+      delivery_type = @deliveryType, delivery_address = @deliveryAddress,
+      on_account_ba_id = @onAccountBaId, main_ac_id = @mainAcId
     WHERE stock_voucher_id = @stockVoucherId
   `);
 }
@@ -141,10 +173,16 @@ async function insertLines(transaction, stockVoucherId, lines) {
       variantId: { type: sql.Int, value: line.variant_id },
       cartons: { type: sql.Int, value: line.cartons },
       pairs: { type: sql.Int, value: line.pairs },
+      rate: { type: sql.Decimal(18, 4), value: line.rate },
+      discountPct: { type: sql.Decimal(9, 4), value: line.discount_pct },
+      discountValue: { type: sql.Decimal(18, 4), value: line.discount_value },
+      value: { type: sql.Decimal(18, 4), value: line.value },
     });
     await request.query(`
-      INSERT INTO dbo.stock_voucher_lines (stock_voucher_id, line_no, variant_id, cartons, pairs)
-      VALUES (@stockVoucherId, @lineNo, @variantId, @cartons, @pairs)
+      INSERT INTO dbo.stock_voucher_lines
+        (stock_voucher_id, line_no, variant_id, cartons, pairs, rate, discount_pct, discount_value, value)
+      VALUES
+        (@stockVoucherId, @lineNo, @variantId, @cartons, @pairs, @rate, @discountPct, @discountValue, @value)
     `);
   }
 }
@@ -196,7 +234,35 @@ async function deleteStockMovements(transaction, stockVoucherId) {
   );
 }
 
+// Dr STOCK TRANSFER (fixed) / Cr on_account_ba_id — see stockVouchers.service.js#post. Mirrors
+// deposits.repository.js#insertLedgerEntries exactly.
+async function insertLedgerEntries(transaction, rows) {
+  for (const row of rows) {
+    const request = requestWithParams(transaction, {
+      entryDate: { type: sql.Date, value: row.entry_date },
+      acId: { type: sql.Int, value: row.ac_id ?? null },
+      baId: { type: sql.Int, value: row.ba_id ?? null },
+      debit: { type: sql.Decimal(14, 2), value: row.debit },
+      credit: { type: sql.Decimal(14, 2), value: row.credit },
+      sourceType: { type: sql.VarChar(20), value: row.source_type },
+      sourceId: { type: sql.Int, value: row.source_id },
+      narration: { type: sql.NVarChar(500), value: row.narration ?? null },
+    });
+    await request.query(`
+      INSERT INTO dbo.ledger_entries (entry_date, ac_id, ba_id, debit, credit, source_type, source_id, narration)
+      VALUES (@entryDate, @acId, @baId, @debit, @credit, @sourceType, @sourceId, @narration)
+    `);
+  }
+}
+
+async function deleteLedgerEntries(transaction, stockVoucherId) {
+  const request = requestWithParams(transaction, { stockVoucherId: { type: sql.Int, value: stockVoucherId } });
+  await request.query(
+    `DELETE FROM dbo.ledger_entries WHERE source_type = 'STOCK_VOUCHER' AND source_id = @stockVoucherId`,
+  );
+}
+
 module.exports = {
   list, listUnposted, findById, getLines, insert, updateHeader, insertLines, deleteLines, remove,
-  setStatus, insertStockMovements, deleteStockMovements,
+  setStatus, insertStockMovements, deleteStockMovements, insertLedgerEntries, deleteLedgerEntries,
 };

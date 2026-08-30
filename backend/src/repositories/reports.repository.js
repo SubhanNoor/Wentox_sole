@@ -670,9 +670,68 @@ async function overallDirectory(searchQuery, entityType) {
   return result.recordset;
 }
 
+// Stock Voucher Ledger (Reports Hub sub-page) — every stock_voucher_lines row, flattened with its
+// own header (date/store/status) and article/color, for a full per-line detail listing: color,
+// rate, D%, value, cartons/pairs, same idea as productLedger() above but scoped to Stock Voucher
+// lines specifically rather than every stock_movements type. Defaults to posted vouchers only
+// (status filter lets the caller widen it) since an unposted voucher's numbers can still change.
+async function stockVoucherDetail(filters = {}) {
+  const conditions = [];
+  const params = {};
+
+  if (filters.status) {
+    conditions.push('sv.status = @status');
+    params.status = { type: sql.VarChar(10), value: filters.status };
+  }
+  if (filters.store_id) {
+    conditions.push('sv.store_id = @storeId');
+    params.storeId = { type: sql.Int, value: filters.store_id };
+  }
+  if (filters.article_id) {
+    conditions.push('a.article_id = @articleId');
+    params.articleId = { type: sql.Int, value: filters.article_id };
+  }
+  if (filters.category_id) {
+    conditions.push('a.category_id = @categoryId');
+    params.categoryId = { type: sql.Int, value: filters.category_id };
+  }
+  if (filters.search) {
+    conditions.push('(a.name LIKE @search OR a.code LIKE @search OR ac.color LIKE @search)');
+    params.search = { type: sql.NVarChar(150), value: `%${filters.search}%` };
+  }
+  if (filters.date_from) {
+    conditions.push('sv.voucher_date >= @dateFrom');
+    params.dateFrom = { type: sql.Date, value: filters.date_from };
+  }
+  if (filters.date_to) {
+    conditions.push('sv.voucher_date <= @dateTo');
+    params.dateTo = { type: sql.Date, value: filters.date_to };
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const result = await query(
+    `SELECT svl.line_id, svl.stock_voucher_id, svl.line_no, svl.cartons, svl.pairs,
+            svl.rate, svl.discount_pct, svl.discount_value, svl.value,
+            sv.voucher_date, sv.status, sv.remarks, sv.store_id, st.name AS store_name,
+            ac.color, a.article_id, a.code AS article_code, a.name AS article_name,
+            c.name AS category_name
+     FROM dbo.stock_voucher_lines svl
+     JOIN dbo.stock_vouchers sv ON sv.stock_voucher_id = svl.stock_voucher_id
+     JOIN dbo.article_colors ac ON ac.variant_id = svl.variant_id
+     JOIN dbo.articles a ON a.article_id = ac.article_id
+     JOIN dbo.product_categories c ON c.category_id = a.category_id
+     LEFT JOIN dbo.stores st ON st.store_id = sv.store_id
+     ${where}
+     ORDER BY sv.voucher_date DESC, sv.stock_voucher_id DESC, svl.line_no`,
+    params,
+  );
+  return result.recordset;
+}
+
 module.exports = {
   productionLog,
   productLedger,
+  stockVoucherDetail,
   vendorStock,
   ledgerRows,
   netBalance,

@@ -98,6 +98,31 @@ async function productLedger(filters = {}) {
   return { rows: mapped, total_in: totalIn, total_out: totalOut, net: totalIn - totalOut };
 }
 
+// Stock Voucher Ledger (Reports Hub sub-page, per the user 2026-08-30: "show the details of the
+// voucher like that [Product Ledger] ... color and price and cartons each and every detail") —
+// every stock_voucher_lines row, flattened with totals. Defaults to CONFIRMED (posted) vouchers
+// only, same reasoning as every other financial report — an unposted voucher's numbers can still
+// change, so it shouldn't count toward a report total until posted; pass status to widen it.
+async function stockVoucherDetail(filters = {}) {
+  const rows = await repository.stockVoucherDetail({
+    status: filters.status || 'CONFIRMED',
+    store_id: filters.store_id,
+    article_id: filters.article_id,
+    category_id: filters.category_id,
+    search: filters.search,
+    ...resolveDateRange(filters),
+  });
+  let totalCartons = 0;
+  let totalPairs = 0;
+  let totalValue = 0;
+  for (const r of rows) {
+    totalCartons += Number(r.cartons) || 0;
+    totalPairs += Number(r.pairs) || 0;
+    totalValue += Number(r.value) || 0;
+  }
+  return { rows, total_cartons: totalCartons, total_pairs: totalPairs, total_value: totalValue };
+}
+
 // UC-30 Vendor Stock — read side; the write side (reduce quantity) lives on stock.service.js
 // (stock:reduce-vendor-stock), since Reports itself is read-only (UC-30's own note is the one
 // exception, and it belongs with the rest of the stock-writing surface, not here).
@@ -695,6 +720,7 @@ module.exports = {
   stock,
   production,
   productLedger,
+  stockVoucherDetail,
   vendorStock,
   accountLedger,
   vendorLedger,
