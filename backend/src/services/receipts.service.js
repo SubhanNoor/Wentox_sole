@@ -24,8 +24,14 @@ function validateHeader(payload) {
   if (!['CASH', 'ONLINE', 'CHEQUE'].includes(payload.payment_mode)) {
     throw ApiError.badRequest("payment_mode must be 'CASH', 'ONLINE', or 'CHEQUE'");
   }
-  if (payload.payment_mode === 'ONLINE' && !payload.bank_id) {
-    throw ApiError.badRequest('bank_id is required for an ONLINE receipt');
+  // ONLINE names EITHER a bank (bank_id, the original path every existing row uses) OR any
+  // business account (online_ba_id, migration 028). Never both — they are alternatives, and the
+  // CHECK on dbo.receipts enforces the same rule at the database level.
+  if (payload.payment_mode === 'ONLINE' && !payload.bank_id && !payload.online_ba_id) {
+    throw ApiError.badRequest('An ONLINE receipt needs an account — pass bank_id or online_ba_id');
+  }
+  if (payload.bank_id && payload.online_ba_id) {
+    throw ApiError.badRequest('Pass either bank_id or online_ba_id for an ONLINE receipt, not both');
   }
   if (payload.payment_mode === 'CHEQUE') {
     if (!payload.cheque_no) throw ApiError.badRequest('cheque_no is required for a CHEQUE receipt');
@@ -41,7 +47,8 @@ function buildFields(payload) {
     commission: payload.commission || 0,
     payment_mode: payload.payment_mode,
     details: payload.details,
-    bank_id: payload.payment_mode === 'ONLINE' ? payload.bank_id : null,
+    bank_id: payload.payment_mode === 'ONLINE' ? (payload.bank_id ?? null) : null,
+    online_ba_id: payload.payment_mode === 'ONLINE' ? (payload.online_ba_id ?? null) : null,
     remarks: payload.remarks,
     // RJ-03: which voucher this entry belongs to. Only insert() reads it — updateHeader
     // deliberately does not, so editing a line can never move it to another voucher.
@@ -190,13 +197,17 @@ async function remove(receiptId) {
 // Resolves which chart account / business account gets debited for a given payment_mode — the
 // same lookup used both when posting a receipt and when reversing it on bounce/return, so a
 // reversal always lands back exactly where the original posting came from.
-async function resolveDebitSide(paymentMode, bankId) {
+async function resolveDebitSide(paymentMode, bankId, onlineBaId = null) {
   if (paymentMode === 'CASH') {
     const cash = await chartAccountsRepository.findByCode(CODES.CASH_IN_HAND);
     if (!cash) throw new Error(`Reserved chart account CASH IN HAND (code ${CODES.CASH_IN_HAND}) not found — run npm run seed`);
     return { ac_id: cash.ac_id };
   }
   if (paymentMode === 'ONLINE') {
+    // A directly-named business account wins when present (migration 028). Everything recorded
+    // before that migration has online_ba_id NULL and falls through to the bank lookup below —
+    // the exact path it originally posted through, so reversals still land where they came from.
+    if (onlineBaId) return { ba_id: onlineBaId };
     const bank = await bankAccountsService.getById(bankId);
     if (!bank.ba_id) throw ApiError.conflict('Bank account has no linked ledger account yet', 'NO_BANK_ACCOUNT');
     return { ba_id: bank.ba_id };
@@ -215,7 +226,7 @@ async function postWithinTransaction(transaction, receiptId, receipt) {
   // a director's, an employee's, a vendor's or a bank's. No customer lookup is needed any more:
   // receipts.ba_id is a NOT NULL FK, so the account is guaranteed to exist, which is what the old
   // NO_CUSTOMER_ACCOUNT guard was compensating for.
-  const debitSide = await resolveDebitSide(receipt.payment_mode, receipt.bank_id);
+  const debitSide = await resolveDebitSide(receipt.payment_mode, receipt.bank_id, receipt.online_ba_id);
 
   const rows = [
     { entry_date: receipt.receipt_date, ...debitSide, debit: receipt.amount, credit: 0, source_type: 'RECEIPT', source_id: receiptId, narration: `Receipt #${receiptId}` },

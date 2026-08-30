@@ -240,7 +240,11 @@ export default function StockVoucherPage() {
   // On Account field — same typable-trigger + centered SearchModal popup as Store, per the user
   // (2026-08-30). No default — blank until the user actually picks something.
   const accountOptions = useMemo(
-    () => businessAccounts.map(a => ({ value: String(a.ba_id), label: `${a.name} (${a.code})` })),
+    // Business accounts show their PARENT chart account inline, appended to the same field with an em-dash rather than in a field of its own (2026-08-30, per the user). Matches how ReceiptsPage's own account picker already reads. `ac_name` is joined in by businessAccounts.repository.js's list().
+    () => businessAccounts.map(a => ({
+      value: String(a.ba_id),
+      label: `${a.name} (${a.code})${a.ac_name ? ` — ${a.ac_name}` : ''}`,
+    })),
     [businessAccounts]
   );
   const selectedAccount = useMemo(
@@ -1043,7 +1047,8 @@ export default function StockVoucherPage() {
             own: New/Delete/Edit/Done, First/Previous/Next/Last, Print/Find, Un Post/Post. */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-0.5">
-            <button ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
+            <button
+              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>

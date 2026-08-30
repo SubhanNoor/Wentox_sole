@@ -942,6 +942,10 @@ export interface ReceiptRow {
   payment_mode: 'CASH' | 'ONLINE' | 'CHEQUE';
   details: string | null;
   bank_id: number | null;
+  /** Migration 028: an ONLINE entry may name ANY business account instead of a bank. Exactly
+   *  one of bank_id / online_ba_id is ever set; rows recorded before 028 use bank_id. */
+  online_ba_id: number | null;
+  online_ba_name?: string;
   remarks: string | null;
   status: 'CONFIRMED' | 'DRAFT';
   customer_name?: string;
@@ -1021,6 +1025,10 @@ export interface DraftReceiptRow {
   payment_mode: 'CASH' | 'ONLINE' | 'CHEQUE';
   details: string | null;
   bank_id: number | null;
+  /** Migration 028: an ONLINE entry may name ANY business account instead of a bank. Exactly
+   *  one of bank_id / online_ba_id is ever set; rows recorded before 028 use bank_id. */
+  online_ba_id: number | null;
+  online_ba_name?: string;
   remarks: string | null;
   customer_name?: string;
   bank_name?: string;
@@ -1041,6 +1049,9 @@ export interface ReceiptCreateInput {
   payment_mode: 'CASH' | 'ONLINE' | 'CHEQUE';
   details?: string;
   bank_id?: number;
+  /** Alternative to bank_id for ONLINE (migration 028) — any business account, not just a
+   *  bank. Pass one or the other, never both. */
+  online_ba_id?: number;
   cheque_no?: string;
   cheque_date?: string;
   cheque_received_date?: string;
@@ -1257,6 +1268,10 @@ export interface ExpenseRow {
   details: string | null;
   cheque_id: number | null;
   bank_id: number | null;
+  /** Migration 028: an ONLINE entry may name ANY business account instead of a bank. Exactly
+   *  one of bank_id / online_ba_id is ever set; rows recorded before 028 use bank_id. */
+  online_ba_id: number | null;
+  online_ba_name?: string;
   issued_cheque_no: string | null;
   issued_cheque_date: string | null;
   remarks: string | null;
@@ -1327,6 +1342,9 @@ export interface ExpenseCreateInput {
   details?: string;
   remarks?: string;
   bank_id?: number;
+  /** Alternative to bank_id for ONLINE (migration 028) — any business account, not just a
+   *  bank. Pass one or the other, never both. */
+  online_ba_id?: number;
   cheque_id?: number;
   issued_cheque_no?: string;
   issued_cheque_date?: string;
@@ -1352,6 +1370,10 @@ export interface DraftExpenseRow {
   details: string | null;
   cheque_id: number | null;
   bank_id: number | null;
+  /** Migration 028: an ONLINE entry may name ANY business account instead of a bank. Exactly
+   *  one of bank_id / online_ba_id is ever set; rows recorded before 028 use bank_id. */
+  online_ba_id: number | null;
+  online_ba_name?: string;
   issued_cheque_no: string | null;
   issued_cheque_date: string | null;
   remarks: string | null;

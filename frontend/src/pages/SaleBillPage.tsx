@@ -297,7 +297,15 @@ export default function SaleBillPage() {
   // nextSystemBillNo: what Save actually assigns is the next draft_sale_bill.draft_id, a
   // separate IDENTITY sequence from the real bill_id assigned later on Post. Client-side preview
   // only, correct as long as nothing else inserts a draft between now and Save.
-  const nextSystemBillNo = useMemo(
+    // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
+  // It stays blank until the user actually starts a record with the New button (2026-08-30, per
+  // the user: landing on a voucher page should not already show a number). Deliberately set from
+  // the button's own onClick rather than inside the New handler: that handler is also called
+  // internally on mount, after Post, and after a delete, so keying off it would light the preview
+  // up without the user having asked for a new record.
+  const [startedNew, setStartedNew] = useState(false);
+
+const nextSystemBillNo = useMemo(
     () => Math.max(0, ...unpostedBills.map(d => d.draft_id)) + 1,
     [unpostedBills]
   );
@@ -1601,7 +1609,8 @@ export default function SaleBillPage() {
               neutral, amber = navigation. */}
           <div className="flex flex-wrap items-center gap-2">
           <div className="flex flex-wrap items-center gap-0.5">
-            <button ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
+            <button
+              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); handleNew(); }} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -2201,7 +2210,7 @@ export default function SaleBillPage() {
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 No. &gt;&gt;&gt;&gt;
               </label>
-              <input type="text" value={billId != null ? `#${billId}` : `#${nextSystemBillNo} (pending)`} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
+              <input type="text" value={billId != null ? `#${billId}` : (startedNew ? `#${nextSystemBillNo} (pending)` : '')} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
           </div>
 

@@ -150,7 +150,11 @@ export default function JournalVoucherPage() {
   const isPosted = status === 'CONFIRMED';
 
   const accountOptions = useMemo(
-    () => accounts.map(a => ({ value: String(a.ba_id), label: `${a.name} (${a.code})` })),
+    // Business accounts show their PARENT chart account inline, appended to the same field with an em-dash rather than in a field of its own (2026-08-30, per the user). Matches how ReceiptsPage's own account picker already reads. `ac_name` is joined in by businessAccounts.repository.js's list().
+    () => accounts.map(a => ({
+      value: String(a.ba_id),
+      label: `${a.name} (${a.code})${a.ac_name ? ` — ${a.ac_name}` : ''}`,
+    })),
     [accounts]
   );
 
@@ -541,7 +545,15 @@ export default function JournalVoucherPage() {
   // Preview of the Number a brand-new JV will get — jv_id is assigned the moment Save actually
   // creates the row (draft or posted alike), so this is a client-side preview only, correct as
   // long as nothing else inserts a JV between now and Save.
-  const nextJvNoPreview = useMemo(
+    // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
+  // It stays blank until the user actually starts a record with the New button (2026-08-30, per
+  // the user: landing on a voucher page should not already show a number). Deliberately set from
+  // the button's own onClick rather than inside the New handler: that handler is also called
+  // internally on mount, after Post, and after a delete, so keying off it would light the preview
+  // up without the user having asked for a new record.
+  const [startedNew, setStartedNew] = useState(false);
+
+const nextJvNoPreview = useMemo(
     () => Math.max(0, ...navVouchers.map(v => v.jv_id), ...unpostedJvs.map(v => v.jv_id)) + 1,
     [navVouchers, unpostedJvs]
   );
@@ -760,7 +772,8 @@ export default function JournalVoucherPage() {
             state, instead of whole button groups mounting/unmounting per mode. */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-0.5">
-            <button ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
+            <button
+              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); handleNew(); }} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -902,7 +915,7 @@ export default function JournalVoucherPage() {
               <label className="block text-xs font-medium text-slate-600 mb-1">Number</label>
               <input
                 type="text"
-                value={jvId != null ? `#${jvId}` : `#${nextJvNoPreview} (pending)`}
+                value={jvId != null ? `#${jvId}` : (startedNew ? `#${nextJvNoPreview} (pending)` : '')}
                 disabled
                 className="soleria-input bg-gray-50 text-gray-500 border-gray-200 font-mono"
                 style={{ fontSize: '13px' }}

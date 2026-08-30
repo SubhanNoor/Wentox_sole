@@ -38,8 +38,14 @@ function validateHeader(payload) {
   if (!['CASH', 'ONLINE', 'CHEQUE_ENDORSED', 'CHEQUE_ISSUED'].includes(payload.payment_mode)) {
     throw ApiError.badRequest("payment_mode must be 'CASH', 'ONLINE', 'CHEQUE_ENDORSED', or 'CHEQUE_ISSUED'");
   }
-  if (payload.payment_mode === 'ONLINE' && !payload.bank_id) {
-    throw ApiError.badRequest('bank_id is required for an ONLINE expense');
+  // ONLINE names EITHER a bank OR any business account (online_ba_id, migration 028).
+  // CHEQUE_ISSUED deliberately keeps requiring a real bank below: an issued cheque is drawn on a
+  // bank's cheque book, so a non-bank account has no meaning there.
+  if (payload.payment_mode === 'ONLINE' && !payload.bank_id && !payload.online_ba_id) {
+    throw ApiError.badRequest('An ONLINE expense needs an account — pass bank_id or online_ba_id');
+  }
+  if (payload.bank_id && payload.online_ba_id) {
+    throw ApiError.badRequest('Pass either bank_id or online_ba_id, not both');
   }
   if (payload.payment_mode === 'CHEQUE_ENDORSED' && !payload.cheque_id) {
     throw ApiError.badRequest('cheque_id is required for a CHEQUE_ENDORSED expense');
@@ -59,7 +65,8 @@ function buildFields(payload, baId) {
     payment_mode: payload.payment_mode,
     details: payload.details,
     cheque_id: payload.payment_mode === 'CHEQUE_ENDORSED' ? payload.cheque_id : null,
-    bank_id: (payload.payment_mode === 'ONLINE' || payload.payment_mode === 'CHEQUE_ISSUED') ? payload.bank_id : null,
+    bank_id: (payload.payment_mode === 'ONLINE' || payload.payment_mode === 'CHEQUE_ISSUED') ? (payload.bank_id ?? null) : null,
+    online_ba_id: payload.payment_mode === 'ONLINE' ? (payload.online_ba_id ?? null) : null,
     issued_cheque_no: payload.payment_mode === 'CHEQUE_ISSUED' ? payload.issued_cheque_no : null,
     issued_cheque_date: payload.payment_mode === 'CHEQUE_ISSUED' ? payload.issued_cheque_date : null,
     remarks: payload.remarks,
@@ -161,13 +168,18 @@ async function remove(expenseId) {
 // deducted the day the cheque is written (deduct-on-write, cash_and_bank.md §6), issued_cheque_no/
 // issued_cheque_date are already stored on the row for the record, no separate cheques row (that
 // table is for cheques RECEIVED, not written).
-async function resolveCreditSide(paymentMode, bankId) {
+async function resolveCreditSide(paymentMode, bankId, onlineBaId = null) {
   if (paymentMode === 'CASH') {
     const cash = await chartAccountsRepository.findByCode(CODES.CASH_IN_HAND);
     if (!cash) throw new Error(`Reserved chart account CASH IN HAND (code ${CODES.CASH_IN_HAND}) not found — run npm run seed`);
     return { ac_id: cash.ac_id };
   }
-  // ONLINE or CHEQUE_ISSUED
+  // An ONLINE expense that named a business account directly (migration 028) credits it as-is.
+  // Anything recorded before that has online_ba_id NULL and falls through to the bank lookup —
+  // the same path it originally posted through. CHEQUE_ISSUED never reaches this branch with a
+  // value set, since validate() only accepts online_ba_id for ONLINE.
+  if (paymentMode === 'ONLINE' && onlineBaId) return { ba_id: onlineBaId };
+  // ONLINE (bank-named) or CHEQUE_ISSUED
   const bank = await bankAccountsService.getById(bankId);
   if (!bank.ba_id) throw ApiError.conflict('Bank account has no linked ledger account yet', 'NO_BANK_ACCOUNT');
   return { ba_id: bank.ba_id };
@@ -211,7 +223,7 @@ async function post(expenseId, userId, session) {
     return getById(expenseId);
   }
 
-  const creditSide = await resolveCreditSide(expense.payment_mode, expense.bank_id);
+  const creditSide = await resolveCreditSide(expense.payment_mode, expense.bank_id, expense.online_ba_id);
 
   await withTransaction(async (transaction) => {
     const narration = `Expense #${expenseId}`;

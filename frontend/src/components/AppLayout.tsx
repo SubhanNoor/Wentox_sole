@@ -151,6 +151,26 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
       return true;
     }
 
+    // Page arrival lands on that page's New button when it has one (2026-08-30, per the user:
+    // "whenever i go to some page the auto focus must be on new button after on date"). From
+    // there Enter clicks New, and each page's own handleNew/startNew* already moves focus on to
+    // Date — so the two halves of the requested flow are New -> Date.
+    //
+    // Deferred through TWO animation frames on purpose. Several pages focus their own first field
+    // from a single rAF scheduled in their own mount effect, and a page's effect runs AFTER this
+    // one (AppLayout sits inside the page's returned tree, so React commits it first and runs its
+    // effects first). A single rAF here would be queued BEFORE theirs and lose the race; the
+    // second frame lands after every same-frame focus call has already run. Pages with no New
+    // button fall through to the original first-field behaviour below, unchanged.
+    const newButton = document.querySelector<HTMLElement>('button[data-new-action]');
+    if (newButton) {
+      let inner = 0;
+      const outer = requestAnimationFrame(() => {
+        inner = requestAnimationFrame(() => newButton.focus());
+      });
+      return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
+    }
+
     if (focusFirstField(document)) return;
 
     const observer = new MutationObserver((mutations) => {

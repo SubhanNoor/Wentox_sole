@@ -34,8 +34,13 @@ function validateHeader(payload) {
   if (!['CASH', 'ONLINE', 'CHEQUE_ENDORSED', 'CHEQUE_ISSUED'].includes(payload.payment_mode)) {
     throw ApiError.badRequest("payment_mode must be 'CASH', 'ONLINE', 'CHEQUE_ENDORSED', or 'CHEQUE_ISSUED'");
   }
-  if (payload.payment_mode === 'ONLINE' && !payload.bank_id) {
-    throw ApiError.badRequest('bank_id is required for an ONLINE expense');
+  // Same rule as expenses.service.js, kept in step so a draft can never hold something confirm()
+  // would reject: ONLINE takes a bank OR any business account; CHEQUE_ISSUED stays bank-only.
+  if (payload.payment_mode === 'ONLINE' && !payload.bank_id && !payload.online_ba_id) {
+    throw ApiError.badRequest('An ONLINE expense needs an account — pass bank_id or online_ba_id');
+  }
+  if (payload.bank_id && payload.online_ba_id) {
+    throw ApiError.badRequest('Pass either bank_id or online_ba_id, not both');
   }
   if (payload.payment_mode === 'CHEQUE_ENDORSED' && !payload.cheque_id) {
     throw ApiError.badRequest('cheque_id is required for a CHEQUE_ENDORSED expense');
@@ -55,7 +60,8 @@ function buildFields(payload, baId) {
     payment_mode: payload.payment_mode,
     details: payload.details,
     cheque_id: payload.payment_mode === 'CHEQUE_ENDORSED' ? payload.cheque_id : null,
-    bank_id: (payload.payment_mode === 'ONLINE' || payload.payment_mode === 'CHEQUE_ISSUED') ? payload.bank_id : null,
+    bank_id: (payload.payment_mode === 'ONLINE' || payload.payment_mode === 'CHEQUE_ISSUED') ? (payload.bank_id ?? null) : null,
+    online_ba_id: payload.payment_mode === 'ONLINE' ? (payload.online_ba_id ?? null) : null,
     issued_cheque_no: payload.payment_mode === 'CHEQUE_ISSUED' ? payload.issued_cheque_no : null,
     issued_cheque_date: payload.payment_mode === 'CHEQUE_ISSUED' ? payload.issued_cheque_date : null,
     remarks: payload.remarks,
@@ -166,6 +172,7 @@ async function confirm(draftId, userId, session) {
     details: draft.details,
     cheque_id: draft.cheque_id,
     bank_id: draft.bank_id,
+    online_ba_id: draft.online_ba_id,
     issued_cheque_no: draft.issued_cheque_no,
     issued_cheque_date: draft.issued_cheque_date,
     remarks: draft.remarks,

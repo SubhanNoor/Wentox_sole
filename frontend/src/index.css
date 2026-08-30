@@ -85,6 +85,54 @@ input, select, textarea {
 
 label {
   font-weight: 700 !important;
+  /* Field labels read as true black, not the grey they carry today (2026-08-30, per the user —
+     "this page has field name and now it is grey set it black and for every page"). Nearly every
+     label site-wide is written with a Tailwind grey (text-slate-400/500/600) or
+     var(--secondary-text), so this needs !important for the same reason the weight above does:
+     a utility class beats a bare element selector on specificity. Verified first that no <label>
+     anywhere relies on being LIGHT — none sit on a dark background — so this can't hide any text.
+     Applies to <label> only; surrounding help text and values keep their own colours. */
+  color: #000000 !important;
+}
+
+/* Button TEXT reads bold everywhere (2026-08-30, per the user). Two deliberate limits:
+   1. WEIGHT ONLY, never colour — plenty of buttons are coloured surfaces with light text (Post is
+      white-on-emerald, Print white-on-blue, Save gold-on-navy), so forcing black would make their
+      labels unreadable. .toolbar-btn is handled separately below; that one genuinely WAS grey.
+   2. :not([data-field-nav]) — SearchableSelect renders its trigger as a <button> carrying that
+      marker, so those "buttons" are really ENTRY FIELDS showing a selected value (Customer, Store,
+      Colour, Adda...). The user excluded entry fields, and without this they'd bold along with the
+      real buttons. Same marker G-01's field-walk uses, so it stays in step with what the app
+      already treats as a field. */
+button:not([data-field-nav]) {
+  font-weight: 700 !important;
+}
+
+/* Grid column headers (PRODUCT NAME / PACKING / CARTONS / ...) are <th>, not <label>, so the rule
+   above misses them — they were the remaining grey "field name" text on screen. Same treatment.
+   <td> is deliberately left alone: those hold entered values, which stay as they are, exactly like
+   the text typed into an input. */
+th {
+  font-weight: 700 !important;
+  color: #000000 !important;
+}
+
+/* Makes bold text genuinely heavier (2026-08-30, per the user: "make bold little bit strong").
+   Raising font-weight further does NOT work here: Arial ships only Regular (400) and Bold (700),
+   so 800/900 just resolve back to 700 and look identical — and Tailwind's font-semibold (600)
+   already resolves UP to 700 too, so semibold and bold currently render the same.
+   Thickening the glyph outline is the only lever that actually changes anything while staying on
+   Arial. -webkit-text-stroke is safe to rely on because this only ever runs in Electron/Chromium.
+   0.3px is deliberately subtle — bump it toward 0.5px for heavier, drop this block to undo. */
+label,
+th,
+strong,
+b,
+.font-bold,
+.font-semibold,
+.font-extrabold,
+.font-black {
+  -webkit-text-stroke: 0.3px currentColor;
 }
 
 select option:checked,
@@ -254,9 +302,9 @@ select option:hover {
   height: 46px;
   border-radius: 0.375rem;
   font-size: 9.5px;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1;
-  color: #475569; /* slate-600 */
+  color: #000000;
   transition: background-color 150ms ease;
 }
 
@@ -687,6 +735,15 @@ select option:hover {
 
 /* Print styles */
 @media print {
+  /* The screen's -webkit-text-stroke bold-thickening (see the label rule above) is deliberately
+     dropped for paper: printers render at far higher DPI than the screen, where an outline stroke
+     stops reading as "heavier" and starts reading as smudged. Printed bold uses the real Arial
+     Bold face only. */
+  label, th, strong, b,
+  .font-bold, .font-semibold, .font-extrabold, .font-black {
+    -webkit-text-stroke: 0 !important;
+  }
+
   .report-modal-print-source {
     position: static !important;
     left: auto !important;

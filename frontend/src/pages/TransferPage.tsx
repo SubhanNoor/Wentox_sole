@@ -4,7 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import AccountBalancePanel from '@/components/AccountBalancePanel';
 import * as api from '@/lib/api';
-import type { BankAccountRow, TransferRow, TransferCreateInput, DepositRow, DepositCreateInput } from '@/lib/api';
+import type { BankAccountRow, BusinessAccountRow, TransferRow, TransferCreateInput, DepositRow, DepositCreateInput } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import {
   ArrowLeftRight, PiggyBank, Save, AlertTriangle, TrendingUp, TrendingDown, Edit
@@ -19,6 +19,10 @@ export default function TransferPage() {
   const [mode, setMode] = useState<'transfer' | 'deposit'>('transfer');
 
   const [banks, setBanks] = useState<BankAccountRow[]>([]);
+  // Every business account, for the TRANSFER form — transfers.service.js only asserts both sides
+  // exist and are accessible, so it never restricted this to banks; the UI did (per the user,
+  // 2026-08-30). Not used by the DEPOSIT form, which is still banks-only.
+  const [businessAccounts, setBusinessAccounts] = useState<BusinessAccountRow[]>([]);
   // Cash is a business_accounts row, NOT a bank_accounts row, so bankAccounts.list() never returns
   // it. Without this the From/To dropdowns only ever contained banks, which made a cash transfer
   // impossible to select — the whole point of the page. transfers.from_ba_id/to_ba_id reference
@@ -33,19 +37,30 @@ export default function TransferPage() {
     () => banks.filter(b => b.ba_id != null).map(b => ({ value: String(b.ba_id), label: b.name })),
     [banks]
   );
-  // Cash + banks, for TRANSFERS, which move money between any two business accounts.
-  // Cash first — it's the most common side of a transfer on the shop floor.
+  // Every business account, for TRANSFERS, which move money between any two of them.
+  // Cash stays pinned first — it's the most common side of a transfer on the shop floor — and is
+  // filtered out of the tail so it can't appear twice when it's also in the business-account list.
   const accountOptions = useMemo(
     () => [
       ...(cashAccount ? [{ value: String(cashAccount.ba_id), label: cashAccount.name }] : []),
-      ...bankOptions,
+      ...businessAccounts
+        .filter(b => b.ba_id !== cashAccount?.ba_id)
+        .map(b => ({
+          value: String(b.ba_id),
+          label: `${b.name} (${b.code})${b.ac_name ? ` — ${b.ac_name}` : ''}`,
+        })),
     ],
-    [bankOptions, cashAccount]
+    [businessAccounts, cashAccount]
   );
+  // Resolves BOTH sides of a saved transfer. Banks are checked first (that's the common case and
+  // the name the user knows it by); the wider business-account list backs it up now that a transfer
+  // side can be any account, otherwise those rows would read "Unknown Account".
   const bankName = useCallback((baId: number) => {
     if (cashAccount && cashAccount.ba_id === baId) return cashAccount.name;
-    return banks.find(b => b.ba_id === baId)?.name || 'Unknown Account';
-  }, [banks, cashAccount]);
+    return banks.find(b => b.ba_id === baId)?.name
+      || businessAccounts.find(b => b.ba_id === baId)?.name
+      || 'Unknown Account';
+  }, [banks, businessAccounts, cashAccount]);
 
   // Bumped by every save/post/delete handler — the balance panels are stale the moment a document
   // moves money. Deliberately NOT bumped inside refreshTransfers/refreshDeposits, which the mount
@@ -71,6 +86,11 @@ export default function TransferPage() {
       const res = await api.bankAccounts.list();
       if (res.ok) setBanks(res.data);
       else setLookupError('Failed to load bank accounts: ' + res.error.message);
+    })();
+    (async () => {
+      const res = await api.listBusinessAccounts();
+      if (res.ok) setBusinessAccounts(res.data);
+      else setLookupError('Failed to load business accounts: ' + res.error.message);
     })();
     (async () => {
       const res = await api.businessAccounts.getCashAccount();

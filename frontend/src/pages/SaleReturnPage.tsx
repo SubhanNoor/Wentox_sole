@@ -656,7 +656,15 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // Preview of the Return No. a brand-new return will get — same idea as SaleBillPage's own
   // nextSystemBillNo: what Save actually assigns is the next draft_sale_return.draft_id, a
   // separate IDENTITY sequence from the real return_id assigned later on Post.
-  const nextSystemReturnNo = useMemo(
+    // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
+  // It stays blank until the user actually starts a record with the New button (2026-08-30, per
+  // the user: landing on a voucher page should not already show a number). Deliberately set from
+  // the button's own onClick rather than inside the New handler: that handler is also called
+  // internally on mount, after Post, and after a delete, so keying off it would light the preview
+  // up without the user having asked for a new record.
+  const [startedNew, setStartedNew] = useState(false);
+
+const nextSystemReturnNo = useMemo(
     () => Math.max(0, ...drafts.map(d => d.draft_id)) + 1,
     [drafts]
   );
@@ -1684,7 +1692,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-2">
           <div className="flex flex-wrap items-center gap-0.5">
-            <button ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
+            <button
+              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); handleNew(); }} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1907,7 +1916,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Return No.
               </label>
-              <input type="text" value={returnId != null ? `#${returnId}` : `#${nextSystemReturnNo} (pending)`} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
+              <input type="text" value={returnId != null ? `#${returnId}` : (startedNew ? `#${nextSystemReturnNo} (pending)` : '')} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
             <div className="flex items-center gap-1.5">
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>

@@ -254,7 +254,11 @@ export default function ChequesTab() {
     [vendors]
   );
   const businessAccountOptions = useMemo(
-    () => businessAccounts.map(b => ({ value: String(b.ba_id), label: b.name })),
+    // Business accounts show their PARENT chart account inline, appended to the same field with an em-dash rather than in a field of its own (2026-08-30, per the user). Matches how ReceiptsPage's own account picker already reads. `ac_name` is joined in by businessAccounts.repository.js's list().
+    () => businessAccounts.map(b => ({
+      value: String(b.ba_id),
+      label: `${b.name}${b.ac_name ? ` — ${b.ac_name}` : ''}`,
+    })),
     [businessAccounts]
   );
   const bankOptions = useMemo(

@@ -373,9 +373,16 @@ export default function ReceiptsPage() {
     requestAnimationFrame(() => focusNextField(accountTriggerRef.current));
   }
 
+  // ONLINE can settle against ANY business account, not only a bank (migration 028, per the user
+  // 2026-08-30). Values are ba_id now, sent as online_ba_id — bank_id is left untouched on every
+  // row already recorded, and posting still resolves those through the original bank lookup.
+  // Parent chart account shown inline, same as every other business-account picker.
   const bankOptions = useMemo(
-    () => banks.filter(b => b.is_active).map(b => ({ value: String(b.bank_id), label: b.name })),
-    [banks]
+    () => businessAccounts.map(b => ({
+      value: String(b.ba_id),
+      label: `${b.name} (${b.code})${b.ac_name ? ` — ${b.ac_name}` : ''}`,
+    })),
+    [businessAccounts]
   );
 
   const handleNew = () => {
@@ -416,7 +423,7 @@ export default function ReceiptsPage() {
       commission: selectedCustomer ? (commission || undefined) : undefined,
       payment_mode: paymentMode,
       details: details.trim() || undefined,
-      bank_id: paymentMode === 'ONLINE' ? Number(bankId) : undefined,
+      online_ba_id: paymentMode === 'ONLINE' ? Number(bankId) : undefined,
       cheque_no: paymentMode === 'CHEQUE' ? chequeNo.trim() : undefined,
       cheque_date: paymentMode === 'CHEQUE' ? chequeDate : undefined,
       cheque_received_date: paymentMode === 'CHEQUE' ? (chequeReceivedDate || date) : undefined,
@@ -606,7 +613,15 @@ export default function ReceiptsPage() {
   // across the whole receipt_vouchers table regardless of status (`MAX(voucher_no)+1`, allocated
   // inside receiptVouchers.create() on the backend), unlike Purchase's split real-id/draft-id
   // sequences, so this preview needs no draft/posted distinction.
-  const nextVoucherNo = useMemo(
+    // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
+  // It stays blank until the user actually starts a record with the New button (2026-08-30, per
+  // the user: landing on a voucher page should not already show a number). Deliberately set from
+  // the button's own onClick rather than inside the New handler: that handler is also called
+  // internally on mount, after Post, and after a delete, so keying off it would light the preview
+  // up without the user having asked for a new record.
+  const [startedNew, setStartedNew] = useState(false);
+
+const nextVoucherNo = useMemo(
     () => Math.max(0, ...allVouchers.map(v => v.voucher_no)) + 1,
     [allVouchers]
   );
@@ -716,7 +731,16 @@ export default function ReceiptsPage() {
     setAmount(Number(line.amount));
     setCommission(Number(line.commission) || 0);
     setPaymentMode(line.payment_mode);
-    setBankId(line.bank_id != null ? String(line.bank_id) : '');
+    // online_ba_id when present; otherwise a pre-migration-028 row, whose bank_id must be
+    // mapped through to that bank's linked business account (bank_accounts.ba_id) — the picker
+    // is keyed by ba_id now, and posting resolved such rows to this same account anyway.
+    setBankId(
+      line.online_ba_id != null
+        ? String(line.online_ba_id)
+        : (line.bank_id != null
+            ? String(banks.find(b => b.bank_id === line.bank_id)?.ba_id ?? '')
+            : '')
+    );
     setDetails(line.details || '');
     setChequeNo(line.cheque_no || '');
     setChequeDate(line.cheque_date ? line.cheque_date.slice(0, 10) : '');
@@ -952,7 +976,8 @@ export default function ReceiptsPage() {
                     <span>{mode === 'edit' ? 'Update' : 'Done'}</span>
                   </button>
                 )}
-                <button ref={newButtonRef} type="button" onClick={startNewVoucher} title="New Voucher" className="toolbar-btn">
+                <button
+              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); startNewVoucher(); }} title="New Voucher" className="toolbar-btn">
                   <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
                   <span>New</span>
                 </button>
@@ -1187,7 +1212,7 @@ export default function ReceiptsPage() {
                     <label className="block text-xs font-bold text-slate-900 mb-1">System Voucher No. (C.Book No)</label>
                     <input
                       type="text"
-                      value={voucher ? `#${voucher.voucher_no}` : `#${nextVoucherNo} (pending)`}
+                      value={voucher ? `#${voucher.voucher_no}` : (startedNew ? `#${nextVoucherNo} (pending)` : '')}
                       disabled
                       readOnly
                       className="soleria-input bg-slate-100 text-slate-500 font-mono"
@@ -1401,7 +1426,10 @@ export default function ReceiptsPage() {
                           <div className="flex-1 min-w-0">
                             <SearchableSelect
                               options={businessAccounts.filter(a => String(a.ba_id) !== baId)
-                                .map(a => ({ value: String(a.ba_id), label: `${a.name} (${a.code})` }))}
+                                .map(a => ({
+                                  value: String(a.ba_id),
+                                  label: `${a.name} (${a.code})${a.ac_name ? ` — ${a.ac_name}` : ''}`,
+                                }))}
                               value={endorseToBaId}
                               onChange={setEndorseToBaId}
                               onHighlightChange={val => setPreviewEndorseBaId(val ? Number(val) : null)}
@@ -1423,14 +1451,14 @@ export default function ReceiptsPage() {
                       </label>
                       {bankOptions.length === 0 ? (
                         <div className="soleria-input text-rose-600 text-sm flex items-center font-semibold">
-                          Add a bank account first
+                          No business accounts yet — add one in Setup first
                         </div>
                       ) : (
                         <SearchableSelect
                           options={bankOptions}
                           value={bankId}
                           onChange={setBankId}
-                          placeholder="Select bank account..."
+                          placeholder="Select account..."
                           disabled={isViewMode}
                         />
                       )}

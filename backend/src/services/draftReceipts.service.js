@@ -25,8 +25,13 @@ function validateHeader(payload) {
   if (!['CASH', 'ONLINE', 'CHEQUE'].includes(payload.payment_mode)) {
     throw ApiError.badRequest("payment_mode must be 'CASH', 'ONLINE', or 'CHEQUE'");
   }
-  if (payload.payment_mode === 'ONLINE' && !payload.bank_id) {
-    throw ApiError.badRequest('bank_id is required for an ONLINE receipt');
+  // ONLINE names EITHER a bank OR any business account (online_ba_id, migration 028) — same rule
+  // as receipts.service.js, kept in step so a draft can never hold something confirm() rejects.
+  if (payload.payment_mode === 'ONLINE' && !payload.bank_id && !payload.online_ba_id) {
+    throw ApiError.badRequest('An ONLINE receipt needs an account — pass bank_id or online_ba_id');
+  }
+  if (payload.bank_id && payload.online_ba_id) {
+    throw ApiError.badRequest('Pass either bank_id or online_ba_id for an ONLINE receipt, not both');
   }
   if (payload.payment_mode === 'CHEQUE') {
     if (!payload.cheque_no) throw ApiError.badRequest('cheque_no is required for a CHEQUE receipt');
@@ -42,7 +47,8 @@ function buildFields(payload) {
     commission: payload.commission || 0,
     payment_mode: payload.payment_mode,
     details: payload.details,
-    bank_id: payload.payment_mode === 'ONLINE' ? payload.bank_id : null,
+    bank_id: payload.payment_mode === 'ONLINE' ? (payload.bank_id ?? null) : null,
+    online_ba_id: payload.payment_mode === 'ONLINE' ? (payload.online_ba_id ?? null) : null,
     remarks: payload.remarks,
     cheque_no: payload.payment_mode === 'CHEQUE' ? payload.cheque_no : null,
     cheque_date: payload.payment_mode === 'CHEQUE' ? payload.cheque_date : null,
@@ -120,6 +126,7 @@ async function confirm(draftId, userId, session) {
     payment_mode: draft.payment_mode,
     details: draft.details,
     bank_id: draft.bank_id,
+    online_ba_id: draft.online_ba_id,
     remarks: draft.remarks,
     cheque_no: draft.cheque_no,
     cheque_date: draft.cheque_date,

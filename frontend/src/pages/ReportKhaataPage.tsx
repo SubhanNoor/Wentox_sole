@@ -77,7 +77,13 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
   // BL-01: search bar inside the detail view to jump straight to another account's ledger,
   // without going back to the directory first.
   const switcherOptions = useMemo(
-    () => directory.map(a => ({ value: String(a.ba_id), label: a.code ? `${a.name} (${a.code})` : a.name })),
+    // Parent chart account appended inline with an em-dash, same as every other business-account
+    // picker (2026-08-30, per the user). `main_account` is reports.service.js's own alias for
+    // the joined ca.name, so it's already on the row — no query change needed.
+    () => directory.map(a => ({
+      value: String(a.ba_id),
+      label: `${a.code ? `${a.name} (${a.code})` : a.name}${a.main_account ? ` — ${a.main_account}` : ''}`,
+    })),
     [directory]
   );
 

@@ -181,10 +181,27 @@ export default function ExpensesPage() {
     else fail('Failed to reload voucher: ' + res.error.message);
   };
 
-  const bankOptions = useMemo(
+  // CHEQUE_ISSUED stays bank-only: an issued cheque is drawn on a real bank's cheque book, so a
+  // non-bank account has no meaning there (the backend enforces the same rule).
+  const bankOnlyOptions = useMemo(
     () => banks.filter(b => b.is_active).map(b => ({ value: String(b.bank_id), label: b.name })),
     [banks]
   );
+
+  // ONLINE can settle against ANY business account (migration 028, per the user 2026-08-30).
+  // Keyed by ba_id and sent as online_ba_id; bank_id is untouched on rows already recorded.
+  const onlineAccountOptions = useMemo(
+    () => businessAccounts.map(b => ({
+      value: String(b.ba_id),
+      label: `${b.name} (${b.code})${b.ac_name ? ` — ${b.ac_name}` : ''}`,
+    })),
+    [businessAccounts]
+  );
+
+  // The single Paid-From field swaps its list on payment mode — and because the two lists are keyed
+  // by DIFFERENT ids (bank_id vs ba_id), `bankId` means different things per mode. Both the payload
+  // and the line-loader below branch on the same condition, so the two never get crossed.
+  const bankOptions = paymentMode === 'ONLINE' ? onlineAccountOptions : bankOnlyOptions;
 
   // Combined vendor + any-other-business-account picker. A vendor's own ba_id is a
   // business account too, so listBusinessAccounts() already covers it — options are
@@ -194,7 +211,9 @@ export default function ExpensesPage() {
       const vendor = vendors.find(v => v.ba_id === ba.ba_id);
       return {
         value: String(ba.ba_id),
-        label: vendor ? `${vendor.name} (Vendor)` : `${ba.name} (${ba.code})`
+        // Business accounts show their PARENT chart account inline, appended to the same field with an em-dash rather than in a field of its own (2026-08-30, per the user). Matches how ReceiptsPage's own account picker already reads. `ac_name` is joined in by businessAccounts.repository.js's list().
+        label: (vendor ? `${vendor.name} (Vendor)` : `${ba.name} (${ba.code})`)
+          + (ba.ac_name ? ` — ${ba.ac_name}` : '')
       };
     });
   }, [businessAccounts, vendors]);
@@ -379,7 +398,8 @@ export default function ExpensesPage() {
       ba_id: vendor ? undefined : Number(baId),
       details: details.trim() || undefined,
       remarks: remarks.trim() || undefined,
-      bank_id: (paymentMode === 'ONLINE' || paymentMode === 'CHEQUE_ISSUED') ? Number(bankId) : undefined,
+      bank_id: paymentMode === 'CHEQUE_ISSUED' ? Number(bankId) : undefined,
+      online_ba_id: paymentMode === 'ONLINE' ? Number(bankId) : undefined,
       cheque_id: paymentMode === 'CHEQUE_ENDORSED' ? Number(chequeId) : undefined,
       issued_cheque_no: paymentMode === 'CHEQUE_ISSUED' ? issuedChequeNo.trim() : undefined,
       issued_cheque_date: paymentMode === 'CHEQUE_ISSUED' ? issuedChequeDate : undefined
@@ -517,7 +537,16 @@ export default function ExpensesPage() {
     setPreviewBaId(line.ba_id);
     setAmount(Number(line.amount));
     setPaymentMode(line.payment_mode);
-    setBankId(line.bank_id != null ? String(line.bank_id) : '');
+    // ONLINE prefers online_ba_id; a pre-028 ONLINE row only has bank_id, so map it through to
+    // that bank's own linked business account, since the ONLINE list is keyed by ba_id.
+    // CHEQUE_ISSUED keeps using bank_id directly — its list is still banks.
+    setBankId(
+      line.payment_mode === 'ONLINE'
+        ? (line.online_ba_id != null
+            ? String(line.online_ba_id)
+            : (line.bank_id != null ? String(banks.find(b => b.bank_id === line.bank_id)?.ba_id ?? '') : ''))
+        : (line.bank_id != null ? String(line.bank_id) : '')
+    );
     setChequeId(line.cheque_id != null ? String(line.cheque_id) : '');
     setIssuedChequeNo(line.issued_cheque_no || '');
     setIssuedChequeDate(line.issued_cheque_date ? line.issued_cheque_date.slice(0, 10) : '');
@@ -613,7 +642,15 @@ export default function ExpensesPage() {
   // Preview of the System Voucher No. a brand-new voucher will get — voucher_no is ONE sequence
   // across the whole expense_vouchers table regardless of status (MAX+1, allocated inside
   // expenseVouchers.create() on the backend).
-  const nextVoucherNo = useMemo(
+    // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
+  // It stays blank until the user actually starts a record with the New button (2026-08-30, per
+  // the user: landing on a voucher page should not already show a number). Deliberately set from
+  // the button's own onClick rather than inside the New handler: that handler is also called
+  // internally on mount, after Post, and after a delete, so keying off it would light the preview
+  // up without the user having asked for a new record.
+  const [startedNew, setStartedNew] = useState(false);
+
+const nextVoucherNo = useMemo(
     () => Math.max(0, ...allVouchers.map(v => v.voucher_no)) + 1,
     [allVouchers]
   );
@@ -773,7 +810,8 @@ export default function ExpensesPage() {
                     <span>{mode === 'edit' ? 'Update' : 'Done'}</span>
                   </button>
                 )}
-                <button ref={newButtonRef} type="button" onClick={startNewVoucher} title="New Voucher" className="toolbar-btn">
+                <button
+              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); startNewVoucher(); }} title="New Voucher" className="toolbar-btn">
                   <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
                   <span>New</span>
                 </button>
@@ -957,7 +995,7 @@ export default function ExpensesPage() {
                     <label className="block text-xs font-bold text-slate-900 mb-1">System Voucher No. (C.Book No)</label>
                     <input
                       type="text"
-                      value={voucher ? `#${voucher.voucher_no}` : `#${nextVoucherNo} (pending)`}
+                      value={voucher ? `#${voucher.voucher_no}` : (startedNew ? `#${nextVoucherNo} (pending)` : '')}
                       disabled
                       readOnly
                       className="soleria-input bg-slate-100 text-slate-500 font-mono"
@@ -1098,18 +1136,18 @@ export default function ExpensesPage() {
                   {(paymentMode === 'ONLINE' || paymentMode === 'CHEQUE_ISSUED') && (
                     <div>
                       <label className="block text-xs font-bold text-slate-900 mb-1">
-                        Paid From Bank Account <span className="text-red-500 font-bold">*</span>
+                        {paymentMode === 'ONLINE' ? 'Paid From Account' : 'Paid From Bank Account'} <span className="text-red-500 font-bold">*</span>
                       </label>
                       {bankOptions.length === 0 ? (
                         <div className="soleria-input text-rose-600 text-sm flex items-center font-semibold">
-                          Add a bank account first
+                          {paymentMode === 'ONLINE' ? 'No business accounts yet — add one in Setup first' : 'Add a bank account first'}
                         </div>
                       ) : (
                         <SearchableSelect
                           options={bankOptions}
                           value={bankId}
                           onChange={setBankId}
-                          placeholder="Select bank account..."
+                          placeholder={paymentMode === 'ONLINE' ? 'Select account...' : 'Select bank account...'}
                           disabled={isViewMode}
                         />
                       )}

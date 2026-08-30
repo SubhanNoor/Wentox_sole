@@ -259,7 +259,11 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
     // cheque should never have reached disposal in the first place (assertDisposable() requires
     // CONFIRMED), but this guards defensively regardless.
     if (receipt.status === 'CONFIRMED') {
-      const debitSide = await receiptsService.resolveDebitSide(receipt.payment_mode, receipt.bank_id);
+      // online_ba_id has to be passed here too, not only on the posting path: a reversal must land
+      // back on the SAME account the original posting used. An ONLINE receipt that named a business
+      // account directly (migration 028) would otherwise reverse against whatever bank_id held —
+      // crediting an account that was never debited.
+      const debitSide = await receiptsService.resolveDebitSide(receipt.payment_mode, receipt.bank_id, receipt.online_ba_id);
       const narration = `${mode} reversal of receipt #${receipt.receipt_id}`;
 
       const rows = [

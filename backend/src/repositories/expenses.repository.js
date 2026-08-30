@@ -13,6 +13,7 @@ async function insert(transaction, expense) {
     details: { type: sql.NVarChar(200), value: expense.details ?? null },
     chequeId: { type: sql.Int, value: expense.cheque_id ?? null },
     bankId: { type: sql.Int, value: expense.bank_id ?? null },
+    onlineBaId: { type: sql.Int, value: expense.online_ba_id ?? null },
     issuedChequeNo: { type: sql.VarChar(50), value: expense.issued_cheque_no ?? null },
     issuedChequeDate: { type: sql.Date, value: expense.issued_cheque_date ?? null },
     remarks: { type: sql.NVarChar(500), value: expense.remarks ?? null },
@@ -27,12 +28,12 @@ async function insert(transaction, expense) {
   });
   const result = await request.query(`
     INSERT INTO dbo.expenses (
-      expense_date, ba_id, amount, payment_mode, details, cheque_id, bank_id,
+      expense_date, ba_id, amount, payment_mode, details, cheque_id, bank_id, online_ba_id,
       issued_cheque_no, issued_cheque_date, remarks, status, created_by, voucher_id, created_at
     )
     OUTPUT inserted.expense_id
     VALUES (
-      @expenseDate, @baId, @amount, @paymentMode, @details, @chequeId, @bankId,
+      @expenseDate, @baId, @amount, @paymentMode, @details, @chequeId, @bankId, @onlineBaId,
       @issuedChequeNo, @issuedChequeDate, @remarks, 'DRAFT', @createdBy, @voucherId,
       ISNULL(@createdAt, SYSUTCDATETIME())
     )
@@ -100,6 +101,7 @@ async function updateHeader(transaction, expenseId, expense) {
     details: { type: sql.NVarChar(200), value: expense.details ?? null },
     chequeId: { type: sql.Int, value: expense.cheque_id ?? null },
     bankId: { type: sql.Int, value: expense.bank_id ?? null },
+    onlineBaId: { type: sql.Int, value: expense.online_ba_id ?? null },
     issuedChequeNo: { type: sql.VarChar(50), value: expense.issued_cheque_no ?? null },
     issuedChequeDate: { type: sql.Date, value: expense.issued_cheque_date ?? null },
     remarks: { type: sql.NVarChar(500), value: expense.remarks ?? null },
@@ -107,7 +109,7 @@ async function updateHeader(transaction, expenseId, expense) {
   await request.query(`
     UPDATE dbo.expenses SET
       expense_date = @expenseDate, ba_id = @baId, amount = @amount, payment_mode = @paymentMode,
-      details = @details, cheque_id = @chequeId, bank_id = @bankId,
+      details = @details, cheque_id = @chequeId, bank_id = @bankId, online_ba_id = @onlineBaId,
       issued_cheque_no = @issuedChequeNo, issued_cheque_date = @issuedChequeDate, remarks = @remarks
     WHERE expense_id = @expenseId
   `);

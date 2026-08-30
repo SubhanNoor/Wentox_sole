@@ -15,6 +15,9 @@ async function insert(transaction, receipt) {
     paymentMode: { type: sql.VarChar(10), value: receipt.payment_mode },
     details: { type: sql.NVarChar(200), value: receipt.details ?? null },
     bankId: { type: sql.Int, value: receipt.bank_id ?? null },
+    // Migration 028's alternative to bankId: an ONLINE entry may name any business account
+    // directly instead of a bank. Exactly one of the two is ever set.
+    onlineBaId: { type: sql.Int, value: receipt.online_ba_id ?? null },
     remarks: { type: sql.NVarChar(500), value: receipt.remarks ?? null },
     createdBy: { type: sql.Int, value: receipt.created_by ?? null },
     // RJ-03: the voucher this entry belongs to. Nullable in the column so migration 022's backfill
@@ -28,12 +31,12 @@ async function insert(transaction, receipt) {
   });
   const result = await request.query(`
     INSERT INTO dbo.receipts (
-      receipt_date, ba_id, amount, commission, payment_mode, details, bank_id, remarks,
+      receipt_date, ba_id, amount, commission, payment_mode, details, bank_id, online_ba_id, remarks,
       status, created_by, voucher_id, created_at
     )
     OUTPUT inserted.receipt_id
     VALUES (
-      @receiptDate, @baId, @amount, @commission, @paymentMode, @details, @bankId, @remarks,
+      @receiptDate, @baId, @amount, @commission, @paymentMode, @details, @bankId, @onlineBaId, @remarks,
       'DRAFT', @createdBy, @voucherId, ISNULL(@createdAt, SYSUTCDATETIME())
     )
   `);
@@ -131,13 +134,14 @@ async function updateHeader(transaction, receiptId, receipt) {
     paymentMode: { type: sql.VarChar(10), value: receipt.payment_mode },
     details: { type: sql.NVarChar(200), value: receipt.details ?? null },
     bankId: { type: sql.Int, value: receipt.bank_id ?? null },
+    onlineBaId: { type: sql.Int, value: receipt.online_ba_id ?? null },
     remarks: { type: sql.NVarChar(500), value: receipt.remarks ?? null },
   });
   await request.query(`
     UPDATE dbo.receipts SET
       receipt_date = @receiptDate, ba_id = @baId, amount = @amount,
       commission = @commission, payment_mode = @paymentMode, details = @details,
-      bank_id = @bankId, remarks = @remarks
+      bank_id = @bankId, online_ba_id = @onlineBaId, remarks = @remarks
     WHERE receipt_id = @receiptId
   `);
 }

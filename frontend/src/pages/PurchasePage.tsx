@@ -188,7 +188,15 @@ export default function PurchasePage() {
   // Computed client-side from the currently-loaded unposted list, so it's a preview, not a
   // guarantee: correct as long as nothing else inserts a draft between now and Save (true for this
   // app's single-admin-session model — see backend/CLAUDE.md).
-  const nextSystemBillNo = useMemo(
+    // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
+  // It stays blank until the user actually starts a record with the New button (2026-08-30, per
+  // the user: landing on a voucher page should not already show a number). Deliberately set from
+  // the button's own onClick rather than inside the New handler: that handler is also called
+  // internally on mount, after Post, and after a delete, so keying off it would light the preview
+  // up without the user having asked for a new record.
+  const [startedNew, setStartedNew] = useState(false);
+
+const nextSystemBillNo = useMemo(
     () => Math.max(0, ...unpostedPurchases.map(d => d.draft_id)) + 1,
     [unpostedPurchases]
   );
@@ -995,7 +1003,8 @@ export default function PurchasePage() {
           <div className="flex flex-wrap items-center gap-0.5">
             {/* ref-pics/batch2/sale bill.png toolbar style: small square buttons, icon on top,
                 label underneath, tightly packed in one strip — not pill-shaped colored buttons. */}
-            <button ref={newButtonRef} type="button" onClick={startNewPurchase} title="New Purchase" className="toolbar-btn">
+            <button
+              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); startNewPurchase(); }} title="New Purchase" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1162,7 +1171,7 @@ export default function PurchasePage() {
               <label className="block text-xs font-bold text-slate-900 mb-1">System Bill No.</label>
               <input
                 type="text"
-                value={purchaseId != null ? `#${purchaseId}` : `#${nextSystemBillNo} (pending)`}
+                value={purchaseId != null ? `#${purchaseId}` : (startedNew ? `#${nextSystemBillNo} (pending)` : '')}
                 disabled
                 readOnly
                 className="soleria-input bg-slate-100 text-slate-500 font-mono"

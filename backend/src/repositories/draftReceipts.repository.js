@@ -27,6 +27,7 @@ function headerParams(draft) {
     paymentMode: { type: sql.VarChar(10), value: draft.payment_mode },
     details: { type: sql.NVarChar(200), value: draft.details ?? null },
     bankId: { type: sql.Int, value: draft.bank_id ?? null },
+    onlineBaId: { type: sql.Int, value: draft.online_ba_id ?? null },
     remarks: { type: sql.NVarChar(500), value: draft.remarks ?? null },
     // Cheque details live directly on the draft (migration 024) — no dbo.cheques row exists for an
     // unposted receipt, because cheques.receipt_id is NOT NULL and there is no receipt yet.
@@ -48,12 +49,12 @@ async function insert(transaction, draft) {
   });
   const result = await request.query(`
     INSERT INTO dbo.draft_receipts (
-      receipt_date, ba_id, amount, commission, payment_mode, details, bank_id, remarks,
+      receipt_date, ba_id, amount, commission, payment_mode, details, bank_id, online_ba_id, remarks,
       cheque_no, cheque_date, cheque_received_date, created_by, voucher_id, created_at
     )
     OUTPUT inserted.draft_id
     VALUES (
-      @receiptDate, @baId, @amount, @commission, @paymentMode, @details, @bankId, @remarks,
+      @receiptDate, @baId, @amount, @commission, @paymentMode, @details, @bankId, @onlineBaId, @remarks,
       @chequeNo, @chequeDate, @chequeReceivedDate, @createdBy, @voucherId,
       ISNULL(@createdAt, SYSUTCDATETIME())
     )
@@ -73,7 +74,7 @@ async function updateHeader(transaction, draftId, draft) {
     UPDATE dbo.draft_receipts SET
       receipt_date = @receiptDate, ba_id = @baId, amount = @amount,
       commission = @commission, payment_mode = @paymentMode, details = @details,
-      bank_id = @bankId, remarks = @remarks,
+      bank_id = @bankId, online_ba_id = @onlineBaId, remarks = @remarks,
       cheque_no = @chequeNo, cheque_date = @chequeDate,
       cheque_received_date = @chequeReceivedDate,
       updated_at = SYSUTCDATETIME()

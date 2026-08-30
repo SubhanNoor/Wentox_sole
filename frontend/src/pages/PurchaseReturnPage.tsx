@@ -133,7 +133,15 @@ export default function PurchaseReturnPage() {
   // nextSystemBillNo for why this is the next draft_purchase_returns.draft_id, not the next real
   // return_id (a separate IDENTITY sequence only assigned later, on Post), and why it's a preview
   // rather than a guarantee.
-  const nextSystemBillNo = useMemo(
+    // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
+  // It stays blank until the user actually starts a record with the New button (2026-08-30, per
+  // the user: landing on a voucher page should not already show a number). Deliberately set from
+  // the button's own onClick rather than inside the New handler: that handler is also called
+  // internally on mount, after Post, and after a delete, so keying off it would light the preview
+  // up without the user having asked for a new record.
+  const [startedNew, setStartedNew] = useState(false);
+
+const nextSystemBillNo = useMemo(
     () => Math.max(0, ...unpostedReturns.map(d => d.draft_id)) + 1,
     [unpostedReturns]
   );
@@ -1101,7 +1109,8 @@ export default function PurchaseReturnPage() {
           <div className="flex flex-wrap items-center gap-0.5">
             {/* ref-pics/batch2/sale bill.png toolbar style: small square buttons, icon on top,
                 label underneath, tightly packed — see frontend/pages_design.md §1. */}
-            <button ref={newButtonRef} type="button" onClick={startNewReturn} title="New Return" className="toolbar-btn">
+            <button
+              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); startNewReturn(); }} title="New Return" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1307,7 +1316,7 @@ export default function PurchaseReturnPage() {
               <label className="block text-xs font-bold text-slate-900 mb-1">System Bill No.</label>
               <input
                 type="text"
-                value={returnId != null ? `#${returnId}` : `#${nextSystemBillNo} (pending)`}
+                value={returnId != null ? `#${returnId}` : (startedNew ? `#${nextSystemBillNo} (pending)` : '')}
                 disabled
                 readOnly
                 className="soleria-input bg-slate-100 text-slate-500 font-mono"

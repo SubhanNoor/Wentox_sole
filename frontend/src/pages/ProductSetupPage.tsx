@@ -537,7 +537,8 @@ export default function ProductSetupPage() {
             master record has no draft/posted concept to toggle. */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-4 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }}>
           <div className="flex flex-wrap items-center gap-0.5">
-            <button type="button" onClick={handleNew} title="New" className="toolbar-btn">
+            <button
+              data-new-action="true" type="button" onClick={handleNew} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
