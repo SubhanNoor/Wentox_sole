@@ -22,9 +22,10 @@ interface AccountBalanceTooltipProps {
   className?: string;
   /** Bump to force a re-fetch after a save — the balance is stale the moment an entry posts. */
   refreshKey?: number;
+  hideLabel?: boolean;
 }
 
-export default function AccountBalanceTooltip({ baId, className = '', refreshKey = 0 }: AccountBalanceTooltipProps) {
+export default function AccountBalanceTooltip({ baId, className = '', refreshKey = 0, hideLabel = false }: AccountBalanceTooltipProps) {
   const [loaded, setLoaded] = useState<{ baId: number; balance: number } | null>(null);
 
   useEffect(() => {
@@ -51,11 +52,11 @@ export default function AccountBalanceTooltip({ baId, className = '', refreshKey
   const tone = balanceTone(current);
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-white text-xs font-bold font-mono shadow-2xs ${className}`}
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg border bg-white text-xs font-bold font-mono shadow-2xs ${className}`}
       style={{ color: tone.color, borderColor: 'var(--border-color)' }}
     >
       {formatCurrency(Math.abs(current))}
-      <span className="text-[9px] font-semibold uppercase tracking-wider">{tone.label}</span>
+      {!hideLabel && <span className="text-[9px] font-semibold uppercase tracking-wider">{tone.label}</span>}
     </span>
   );
 }

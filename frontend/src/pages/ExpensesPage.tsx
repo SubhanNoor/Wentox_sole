@@ -1,7 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
 import * as api from '@/lib/api';
 import type {
@@ -12,7 +11,7 @@ import type {
 import { focusNextField } from '@/lib/fieldNav';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import {
-  Save, Wallet, Edit, Trash2, Plus, CheckCircle2, Undo2, ChevronDown,
+  Save, Edit, Trash2, Plus, CheckCircle2, Undo2, ChevronDown,
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, PackageCheck, Search
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
@@ -117,8 +116,8 @@ export default function ExpensesPage() {
     const res = deleteTarget.kind === 'draft'
       ? await api.draftExpenses.remove(deleteTarget.id, password)
       : deleteTarget.kind === 'voucher'
-      ? await api.expenseVouchers.remove(deleteTarget.id, password)
-      : await api.expenses.remove(deleteTarget.id, password);
+        ? await api.expenseVouchers.remove(deleteTarget.id, password)
+        : await api.expenses.remove(deleteTarget.id, password);
     setDeleteTarget(null);
     if (!res.ok) return fail('Failed to delete: ' + res.error.message);
     flash(deleteTarget.kind === 'voucher' ? 'Voucher deleted.' : 'Expense deleted.');
@@ -137,6 +136,7 @@ export default function ExpensesPage() {
   const [issuedChequeDate, setIssuedChequeDate] = usePersistentField('expenses', 'issuedChequeDate', '');
   const [details, setDetails] = usePersistentField('expenses', 'details', '');
   const [remarks, setRemarks] = usePersistentField('expenses', 'remarks', '');
+  const [isSourceAccountModalOpen, setIsSourceAccountModalOpen] = useState(false);
 
   // ── PN-01: the open voucher ──────────────────────────────────────────────────────────────────
   // A run of payments is entered as ONE voucher with many entry lines, each line free to name its
@@ -305,15 +305,46 @@ export default function ExpensesPage() {
         value: String(x.cheque.cheque_id),
         label: `${x.cheque.cheque_no} — ${formatCurrency(x.left)} left`
       }));
-    // A previously-endorsed cheque (viewing/editing a posted expense) may no longer
-    // carry remaining balance and drop out of the list above — keep it selectable so
-    // the field doesn't render blank.
     if (chequeId && !list.some(o => o.value === chequeId) && selectedCheque) {
       list.unshift({ value: chequeId, label: `${selectedCheque.cheque_no} (${selectedCheque.cheque_status})` });
     }
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cheques, allocationsByReceipt, chequeId, selectedCheque]);
+
+  // Paid-From / Bank Account field for Online / Cheques — typable input + SearchModal pop up on Enter
+  const sourceAccountTriggerRef = useRef<HTMLInputElement>(null);
+  const [sourceAccountSearchText, setSourceAccountSearchText] = useState('');
+  const [sourceAccountModalSeed, setSourceAccountModalSeed] = useState('');
+
+  useEffect(() => {
+    if (paymentMode === 'CHEQUE_ENDORSED') {
+      const opt = endorsableCheques.find(o => o.value === chequeId);
+      setSourceAccountSearchText(opt?.label ?? '');
+    } else {
+      const opt = bankOptions.find(o => o.value === bankId);
+      setSourceAccountSearchText(opt?.label ?? '');
+    }
+  }, [bankId, chequeId, paymentMode, bankOptions, endorsableCheques]);
+
+  const openSourceAccountModal = () => {
+    if (isViewMode) return;
+    setSourceAccountModalSeed('');
+    setIsSourceAccountModalOpen(true);
+  };
+
+  function handleSourceAccountTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      openSourceAccountModal();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      setSourceAccountModalSeed(sourceAccountSearchText);
+      setIsSourceAccountModalOpen(true);
+    }
+  }
 
   const resetModeFields = () => {
     setBankId('');
@@ -328,25 +359,39 @@ export default function ExpensesPage() {
     if (m === 'CASH') setDetails('');
   };
 
-  // Payment Mode is a 4-way button toggle, not a native input/select — AppLayout's G-01 Enter-walk
-  // only recognizes input/select/textarea/button[data-field-nav], so plain button[type="button"]s
-  // were invisible to it and Enter silently skipped the whole group (same issue fixed on
-  // ReceiptsPage). Roving-stop: only the currently SELECTED button carries data-field-nav, so the
-  // group is exactly one stop, landing on whichever mode is active; Left/Right cycles the
-  // selection and moves focus with it.
-  const PAYMENT_MODES: ExpensePaymentMode[] = ['CASH', 'CHEQUE_ENDORSED', 'CHEQUE_ISSUED', 'ONLINE'];
-  const PAYMENT_MODE_LABELS: Record<ExpensePaymentMode, string> = {
-    CASH: 'Cash', CHEQUE_ENDORSED: 'Cheque Endorsed', CHEQUE_ISSUED: 'Cheque Issued', ONLINE: 'Online',
+  const handleSelectEndorsedCheque = (chequeVal: string) => {
+    setChequeId(chequeVal);
+    const found = cheques.find(c => String(c.cheque_id) === chequeVal);
+    if (found) {
+      if (found.cheque_no) setIssuedChequeNo(found.cheque_no);
+      if (found.cheque_date) setIssuedChequeDate(found.cheque_date);
+    }
   };
-  const paymentModeRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
-  function handlePaymentModeKeyDown(e: React.KeyboardEvent, idx: number) {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    e.preventDefault();
-    e.stopPropagation(); // don't also let AppLayout's own Left/Right field-walk fire on this keystroke
-    const nextIdx = e.key === 'ArrowRight' ? (idx + 1) % PAYMENT_MODES.length : (idx - 1 + PAYMENT_MODES.length) % PAYMENT_MODES.length;
-    selectPaymentMode(PAYMENT_MODES[nextIdx]);
-    paymentModeRefs.current[nextIdx]?.focus();
+  // Payment Mode dropdown keydown handler:
+  // Pressing 'c' / 'C' cycles through Cash -> Cheque -> Cheque Endorsement -> Cash
+  // Pressing 'o' / 'O' selects Online
+  function handlePaymentModeKeyDown(e: React.KeyboardEvent<HTMLSelectElement>) {
+    if (isViewMode) return;
+    const key = e.key.toLowerCase();
+
+    if (key === 'c') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (paymentMode === 'CASH') {
+        selectPaymentMode('CHEQUE_ISSUED');
+      } else if (paymentMode === 'CHEQUE_ISSUED') {
+        selectPaymentMode('CHEQUE_ENDORSED');
+      } else if (paymentMode === 'CHEQUE_ENDORSED') {
+        selectPaymentMode('CASH');
+      } else {
+        selectPaymentMode('CASH');
+      }
+    } else if (key === 'o') {
+      e.preventDefault();
+      e.stopPropagation();
+      selectPaymentMode('ONLINE');
+    }
   }
 
   const handleNew = () => {
@@ -401,8 +446,8 @@ export default function ExpensesPage() {
       bank_id: paymentMode === 'CHEQUE_ISSUED' ? Number(bankId) : undefined,
       online_ba_id: paymentMode === 'ONLINE' ? Number(bankId) : undefined,
       cheque_id: paymentMode === 'CHEQUE_ENDORSED' ? Number(chequeId) : undefined,
-      issued_cheque_no: paymentMode === 'CHEQUE_ISSUED' ? issuedChequeNo.trim() : undefined,
-      issued_cheque_date: paymentMode === 'CHEQUE_ISSUED' ? issuedChequeDate : undefined
+      issued_cheque_no: (paymentMode === 'CHEQUE_ISSUED' || paymentMode === 'CHEQUE_ENDORSED') && issuedChequeNo.trim() ? issuedChequeNo.trim() : undefined,
+      issued_cheque_date: (paymentMode === 'CHEQUE_ISSUED' || paymentMode === 'CHEQUE_ENDORSED') && issuedChequeDate ? issuedChequeDate : undefined
     };
   };
 
@@ -425,17 +470,17 @@ export default function ExpensesPage() {
     focusFirstEntryField();
   };
 
-  // PN-01: "Done" — commit the entry row as a line of the open voucher and re-arm the form.
-  // Creates the voucher on first use (see the `voucher` state note).
-  const handleDone = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Commits the entry strip as one line of the open voucher, opening the voucher on first use
+  // (see the `voucher` state note). Returns whether it succeeded — buildPayload/the save call
+  // already set errorMsg on failure, so callers just bail out without their own message.
+  const commitEntryLine = async (): Promise<boolean> => {
     const payload = buildPayload();
-    if (!payload) return;
+    if (!payload) return false;
 
     let openVoucher = voucher;
     if (!openVoucher) {
       const created = await api.expenseVouchers.create({ voucher_date: date, remarks: voucherRemarks.trim() || undefined });
-      if (!created.ok) { fail('Failed to open voucher: ' + created.error.message); return; }
+      if (!created.ok) { fail('Failed to open voucher: ' + created.error.message); return false; }
       openVoucher = created.data;
     }
 
@@ -449,20 +494,44 @@ export default function ExpensesPage() {
       ? await api.draftExpenses.update(expenseId, linePayload)
       : await api.draftExpenses.create(linePayload);
 
-    if (!result.ok) { fail('Failed to save entry: ' + result.error.message); return; }
+    if (!result.ok) { fail('Failed to save entry: ' + result.error.message); return false; }
 
     const wasEdit = mode === 'edit';
     const paidVendor = isVendorPayment ? linkedVendor?.name : null;
     await refreshVoucher(openVoucher.voucher_id);
-    refreshAllVouchers(); // a first Done on a fresh entry just created a new voucher
-    clearEntryRow();
+    refreshAllVouchers(); // a first line on a fresh entry just created a new voucher
     flash(
       wasEdit ? 'Entry updated.'
         : paidVendor ? `Payment to ${paidVendor} added to the voucher.`
-        : 'Entry added to the voucher.'
+          : 'Entry added to the voucher.'
     );
     setBalanceRefreshKey(k => k + 1);
     refreshCheques();
+    return true;
+  };
+
+  // PN-01: Enter on any entry field submits the form — commits the line and re-arms the strip for
+  // the NEXT entry on the SAME voucher. Only the toolbar's Done button finishes the voucher (per
+  // the user, 2026-08-30 follow-up: Enter keeps adding to this voucher; Done is the one that closes
+  // it and starts a new one).
+  const handleEntrySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!(await commitEntryLine())) return;
+    clearEntryRow();
+  };
+
+  // Toolbar's Done button — finishes the OPEN voucher (still unposted/pending, ready to Post
+  // later) and opens a fresh blank one for the next voucher, committing whatever's in the entry
+  // strip first if it's been filled in (per the user, 2026-08-30 follow-up).
+  const handleDoneButton = async () => {
+    const hasEntryContent = !!baId || amount > 0;
+    if (hasEntryContent) {
+      if (!(await commitEntryLine())) return;
+    } else if (!voucher) {
+      setErrorMsg('Nothing to finish — fill in a payment first.');
+      return;
+    }
+    startNewVoucher();
   };
 
   // PN-01: post every line of the voucher in one action. Each line posts in its own transaction on
@@ -543,8 +612,8 @@ export default function ExpensesPage() {
     setBankId(
       line.payment_mode === 'ONLINE'
         ? (line.online_ba_id != null
-            ? String(line.online_ba_id)
-            : (line.bank_id != null ? String(banks.find(b => b.bank_id === line.bank_id)?.ba_id ?? '') : ''))
+          ? String(line.online_ba_id)
+          : (line.bank_id != null ? String(banks.find(b => b.bank_id === line.bank_id)?.ba_id ?? '') : ''))
         : (line.bank_id != null ? String(line.bank_id) : '')
     );
     setChequeId(line.cheque_id != null ? String(line.cheque_id) : '');
@@ -642,7 +711,7 @@ export default function ExpensesPage() {
   // Preview of the System Voucher No. a brand-new voucher will get — voucher_no is ONE sequence
   // across the whole expense_vouchers table regardless of status (MAX+1, allocated inside
   // expenseVouchers.create() on the backend).
-    // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
+  // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
   // It stays blank until the user actually starts a record with the New button (2026-08-30, per
   // the user: landing on a voucher page should not already show a number). Deliberately set from
   // the button's own onClick rather than inside the New handler: that handler is also called
@@ -650,7 +719,7 @@ export default function ExpensesPage() {
   // up without the user having asked for a new record.
   const [startedNew, setStartedNew] = useState(false);
 
-const nextVoucherNo = useMemo(
+  const nextVoucherNo = useMemo(
     () => Math.max(0, ...allVouchers.map(v => v.voucher_no)) + 1,
     [allVouchers]
   );
@@ -728,41 +797,37 @@ const nextVoucherNo = useMemo(
     <div className="flex flex-wrap gap-1.5" data-no-print>
       <button
         onClick={() => setActiveTab('entry')}
-        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
-          activeTab === 'entry'
-            ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-        }`}
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${activeTab === 'entry'
+          ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+          : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+          }`}
       >
         Expense Entry
       </button>
       <button
         onClick={() => setActiveTab('weekly')}
-        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
-          activeTab === 'weekly'
-            ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-        }`}
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${activeTab === 'weekly'
+          ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+          : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+          }`}
       >
         Weekly Records
       </button>
       <button
         onClick={() => setActiveTab('monthly')}
-        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
-          activeTab === 'monthly'
-            ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-        }`}
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${activeTab === 'monthly'
+          ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+          : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+          }`}
       >
         Monthly Records
       </button>
       <button
         onClick={() => setActiveTab('overall')}
-        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
-          activeTab === 'overall'
-            ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
-            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-        }`}
+        className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${activeTab === 'overall'
+          ? 'bg-[#111c2a] text-[#B08D57] shadow-sm'
+          : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+          }`}
       >
         Overall Records
       </button>
@@ -782,7 +847,7 @@ const nextVoucherNo = useMemo(
           <div className="max-w-5xl mx-auto relative animate-fadeIn">
 
             {/* The left-hand "Pending Posting" panel that used to live here was removed
-                2026-08-27 at the user's request, same as Receipts: Payments should read like Sale
+                226-08-27 at the user's request, same as Receipts: Payments should read like Sale
                 Bill, with the voucher and its entries in the main area rather than as cards off
                 to one side. Reaching another pending voucher is now the toolbar's
                 First/Prev./Next/Last, with the Posted/Unposted dropdown choosing which list —
@@ -800,18 +865,32 @@ const nextVoucherNo = useMemo(
 
             {/* Toolbar — restyled per frontend/pages_design.md §1: small square icon-over-label
                 buttons instead of pill-shaped colored ones, matching Purchase/Purchase Return/
-                Receipts. "Done" submits the form below via the form="" attribute since the button
-                itself now sits outside the <form> tag. */}
+                Receipts. Done/Update is a plain button now, not a form submit — Enter (the form's
+                own onSubmit) and Done diverge on purpose, see their own comments above. */}
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
               <div className="flex flex-wrap items-center gap-0.5">
+                {/* Update (editing a line) just commits that one correction and stays on the open
+                    voucher, same as Enter — only Done (a fresh line) finishes the whole voucher and
+                    starts a new one (per the user, 2026-08-30 follow-up). */}
                 {!isViewMode && (
-                  <button type="submit" form="expense-entry-form" title={mode === 'edit' ? 'Update Entry' : 'Done'} className="toolbar-btn">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (mode === 'edit') {
+                        if (await commitEntryLine()) clearEntryRow();
+                      } else {
+                        await handleDoneButton();
+                      }
+                    }}
+                    title={mode === 'edit' ? 'Update Entry' : 'Done — finish this voucher and start a new one'}
+                    className="toolbar-btn"
+                  >
                     <Save size={20} strokeWidth={2.5} className="text-blue-600" />
                     <span>{mode === 'edit' ? 'Update' : 'Done'}</span>
                   </button>
                 )}
                 <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); startNewVoucher(); }} title="New Voucher" className="toolbar-btn">
+                  data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); startNewVoucher(); }} title="New Voucher" className="toolbar-btn">
                   <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
                   <span>New</span>
                 </button>
@@ -932,49 +1011,20 @@ const nextVoucherNo = useMemo(
               )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 mb-6 px-1" data-no-print>
-              <span className="font-lora font-bold text-sm text-slate-900 flex items-center gap-1.5">
-                <Wallet size={16} className="text-[#B08D57]" />
-                {voucher ? `Payment Voucher — C.Book No ${voucher.voucher_no}` : 'New Payment Voucher (Naam)'}
-              </span>
-              {voucher && (
-                voucher.status === 'POSTED' ? (
-                  <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Posted</span>
-                ) : voucher.status === 'PARTIAL' ? (
-                  <span
-                    className="px-2 py-0.5 rounded text-xs font-semibold bg-orange-100 text-orange-900"
-                    title="Some entries on this voucher are in the ledger and some are not — post it again to finish, or unpost to back it all out."
-                  >
-                    Partly Posted
-                  </span>
-                ) : (
-                  <span
-                    className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-900"
-                    title="Saved but not yet in the ledger — Post it to affect any balance or report."
-                  >
-                    Not Posted
-                  </span>
-                )
-              )}
-              {mode === 'edit' && expenseId != null && (
-                <span className="px-2 py-0.5 rounded text-xs font-semibold bg-sky-100 text-sky-800">
-                  Editing entry #{expenseId}
-                </span>
-              )}
-            </div>
+
 
             {/* Entry Form Card */}
             <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print>
 
-              <form id="expense-entry-form" onSubmit={handleDone} className="flex flex-col gap-4">
-                {/* Row 1 — matches ref-pics/batch2/payment naam.png's own top row: Date, C.Book No
-                    and Remarks together (voucher-level fields). */}
+              <form id="expense-entry-form" onSubmit={handleEntrySubmit} className="flex flex-col gap-4">
+                {/* Hidden submit target for the app-wide G-01 rule (see fieldNav.ts#findSubmitButton)
+                    — it looks for a type="submit" button to click when Enter lands on the form's
+                    last field, so Enter can commit-this-line-and-stay-open (handleEntrySubmit) even
+                    though the visible Done/Update button below is a plain type="button" with its
+                    own, different click behavior (finish the whole voucher). */}
+                <button type="submit" className="hidden" aria-hidden="true" tabIndex={-1} />
+                {/* Row 1 — Date, System Voucher No. (C.Book No), Remarks */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {/* MASTER field, matching Receipts' correction: Date/System Voucher No./Remarks
-                      are selected ONCE and locked for the whole voucher until "New Voucher" is
-                      pressed — Account/Narration/Payment Mode/Amount are the DETAIL, re-entered
-                      fresh for every payment. Locked the moment the voucher exists at all (first
-                      Done), not only once posted. */}
                   <div>
                     <label className="block text-xs font-bold text-slate-900 mb-1">Date</label>
                     <input
@@ -983,14 +1033,10 @@ const nextVoucherNo = useMemo(
                       value={voucher ? voucher.voucher_date : date}
                       disabled={!!voucher}
                       onChange={e => setDate(e.target.value)}
-                      className="soleria-input font-semibold"
+                      className="soleria-input py-1.5 text-xs font-semibold"
                     />
                   </div>
 
-                  {/* System Voucher No. (C.Book No) — voucher.voucher_no, assigned by the database
-                      (MAX+1 over the whole expense_vouchers table), never typed. Read-only always.
-                      Before the first Done creates the voucher, shows nextVoucherNo — a PREVIEW of
-                      what will be assigned. */}
                   <div>
                     <label className="block text-xs font-bold text-slate-900 mb-1">System Voucher No. (C.Book No)</label>
                     <input
@@ -998,11 +1044,10 @@ const nextVoucherNo = useMemo(
                       value={voucher ? `#${voucher.voucher_no}` : (startedNew ? `#${nextVoucherNo} (pending)` : '')}
                       disabled
                       readOnly
-                      className="soleria-input bg-slate-100 text-slate-500 font-mono"
+                      className="soleria-input py-1.5 text-xs bg-slate-100 text-slate-500 font-mono"
                     />
                   </div>
 
-                  {/* MASTER field — see the Date field's own comment above. */}
                   <div>
                     <label className="block text-xs font-bold text-slate-900 mb-1">Remarks</label>
                     <input
@@ -1011,42 +1056,38 @@ const nextVoucherNo = useMemo(
                       disabled={!!voucher}
                       onChange={e => setVoucherRemarks(e.target.value)}
                       placeholder="Applies to the whole voucher (each payment has its own narration below)"
-                      className="soleria-input"
+                      className="soleria-input py-1.5 text-xs"
                     />
                   </div>
                 </div>
 
-                {/* Row 2 — Account, full width and prominent, matching the ref screenshot's own
-                    A/C Code + Account Description row. */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-900 mb-1">
-                    Select Account (Who to Pay) <span className="text-red-500 font-bold">*</span>
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 min-w-0" ref={firstEntryFieldWrapRef}>
-                      <div className="relative">
-                        <input
-                          ref={accountTriggerRef}
-                          type="text"
-                          data-field-nav="true"
-                          disabled={isViewMode}
-                          value={accountSearchText}
-                          onChange={e => setAccountSearchText(e.target.value)}
-                          onKeyDown={handleAccountTriggerKeyDown}
-                          placeholder="Type an account name, or press Enter to search..."
-                          className="soleria-input pr-9"
-                          style={{ fontSize: '13px' }}
-                        />
-                        <button
-                          type="button"
-                          disabled={isViewMode}
-                          onClick={openAccountModal}
-                          title="Browse all accounts"
-                          className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                          <ChevronDown size={16} />
-                        </button>
-                      </div>
+                {/* Row 2 — Select Account & Narration in the SAME line */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">
+                      Select Account (Who to Pay) <span className="text-red-500 font-bold">*</span>
+                    </label>
+                    <div className="relative" ref={firstEntryFieldWrapRef}>
+                      <input
+                        ref={accountTriggerRef}
+                        type="text"
+                        data-field-nav="true"
+                        disabled={isViewMode}
+                        value={accountSearchText}
+                        onChange={e => setAccountSearchText(e.target.value)}
+                        onKeyDown={handleAccountTriggerKeyDown}
+                        placeholder="Type an account name, or press Enter to search..."
+                        className="soleria-input py-1 pr-9 text-xs font-medium"
+                      />
+                      <button
+                        type="button"
+                        disabled={isViewMode}
+                        onClick={openAccountModal}
+                        title="Browse all accounts"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        <ChevronDown size={16} />
+                      </button>
                       <SearchModal
                         isOpen={isAccountModalOpen}
                         title="Select Account"
@@ -1059,21 +1100,8 @@ const nextVoucherNo = useMemo(
                         initialSearch={accountModalSeed}
                       />
                     </div>
-                    <AccountBalanceTooltip baId={previewBaId ?? (baId ? Number(baId) : null)} refreshKey={balanceRefreshKey} />
                   </div>
-                  {selectedBa && (
-                    <div className="mt-2 p-3 bg-amber-50/60 border border-amber-200/80 rounded-lg text-xs flex justify-between items-center">
-                      <span className="text-amber-900 font-medium">Control Account Head:</span>
-                      <span className="font-bold text-amber-950 uppercase tracking-wide">
-                        {selectedBa.ac_name || 'EXPENSES ACCOUNTS'}
-                      </span>
-                    </div>
-                  )}
-                </div>
 
-                {/* Row 3 — Narration, Payment Mode, Amount, grouped together as one row matching
-                    the ref screenshot's own Narration/Type/Amount row. */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-xs font-bold text-slate-900 mb-1">Narration</label>
                     <input
@@ -1082,32 +1110,67 @@ const nextVoucherNo = useMemo(
                       disabled={isViewMode}
                       onChange={e => setRemarks(e.target.value)}
                       placeholder="Enter narration..."
-                      className="soleria-input"
+                      className="soleria-input py-1 text-xs"
+                    />
+                  </div>
+                </div>
+
+                {/* Row 3 — Payment Method Dropdown, Cheque No, Cheque Date, Amount Paid (Always shown by default) */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">Payment Method</label>
+                    <select
+                      value={paymentMode}
+                      data-field-nav="true"
+                      disabled={isViewMode}
+                      onChange={e => selectPaymentMode(e.target.value as ExpensePaymentMode)}
+                      onKeyDown={handlePaymentModeKeyDown}
+                      className="soleria-input py-1 text-xs font-semibold cursor-pointer"
+                      title="Press 'c' to cycle Cash -> Cheque -> Cheque Endorsement, or 'o' for Online"
+                    >
+                      <option value="CASH">Cash</option>
+                      <option value="CHEQUE_ISSUED">Cheque</option>
+                      <option value="CHEQUE_ENDORSED">Cheque Endorsement</option>
+                      <option value="ONLINE">Online</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">
+                      Cheque No. {(paymentMode === 'CHEQUE_ISSUED' || paymentMode === 'CHEQUE_ENDORSED') && <span className="text-red-500 font-bold">*</span>}
+                    </label>
+                    <input
+                      type="text"
+                      value={issuedChequeNo}
+                      disabled={isViewMode || (paymentMode !== 'CHEQUE_ISSUED' && paymentMode !== 'CHEQUE_ENDORSED')}
+                      onChange={e => setIssuedChequeNo(e.target.value)}
+                      placeholder="e.g. 109283"
+                      className="soleria-input py-1 text-xs font-mono disabled:bg-slate-100/60 disabled:text-slate-400"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-900 mb-1">Payment Mode</label>
-                    <div className="grid grid-cols-4 gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
-                      {PAYMENT_MODES.map((pm, idx) => (
-                        <button
-                          key={pm}
-                          type="button"
-                          ref={el => { paymentModeRefs.current[idx] = el; }}
-                          data-field-nav={paymentMode === pm ? 'true' : undefined}
-                          disabled={isViewMode}
-                          onClick={() => selectPaymentMode(pm)}
-                          onKeyDown={e => handlePaymentModeKeyDown(e, idx)}
-                          className={`py-2 rounded-md transition-colors ${paymentMode === pm ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-                        >
-                          {PAYMENT_MODE_LABELS[pm]}
-                        </button>
-                      ))}
-                    </div>
+                    <label className="block text-xs font-bold text-slate-900 mb-1">
+                      Cheque Date {(paymentMode === 'CHEQUE_ISSUED' || paymentMode === 'CHEQUE_ENDORSED') && <span className="text-red-500 font-bold">*</span>}
+                    </label>
+                    <input
+                      type="date"
+                      value={issuedChequeDate}
+                      disabled={isViewMode || (paymentMode !== 'CHEQUE_ISSUED' && paymentMode !== 'CHEQUE_ENDORSED')}
+                      onChange={e => setIssuedChequeDate(e.target.value)}
+                      className="soleria-input py-1 text-xs disabled:bg-slate-100/60 disabled:text-slate-400"
+                    />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-900 mb-1">Amount Paid (PKR)</label>
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <label className="block text-xs font-bold text-slate-900 truncate">Amount Paid (PKR)</label>
+                      {baId && (
+                        <div className="flex items-center gap-1 text-[11px] font-medium text-slate-500 shrink-0">
+                          <AccountBalanceTooltip baId={previewBaId ?? Number(baId)} refreshKey={balanceRefreshKey} hideLabel className="py-0 px-1 text-[10px] shadow-none border-none bg-transparent" />
+                        </div>
+                      )}
+                    </div>
                     <input
                       type="number"
                       min={0}
@@ -1115,112 +1178,94 @@ const nextVoucherNo = useMemo(
                       disabled={isViewMode}
                       onChange={e => setAmount(Math.max(0, parseInt(e.target.value) || 0))}
                       placeholder="Enter amount in Rs..."
-                      className="soleria-input font-semibold font-mono"
+                      className="soleria-input py-1 text-xs font-semibold font-mono"
                     />
-                    {/* Current account balance alongside what's being entered right now. */}
-                    {baId && (
-                      <div className="mt-1.5 flex items-center gap-2 text-[11px] text-slate-500">
-                        <span>Current:</span>
-                        <AccountBalanceTooltip baId={Number(baId)} refreshKey={balanceRefreshKey} />
-                        {amount > 0 && (
-                          <span className="font-mono font-semibold text-slate-700">
-                            - {formatCurrency(amount)} paying
-                          </span>
-                        )}
-                      </div>
-                    )}
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-4">
-                  {(paymentMode === 'ONLINE' || paymentMode === 'CHEQUE_ISSUED') && (
+                {/* Row 4 — Paid-From Bank/Cheque Account & Optional Notes in the SAME line */}
+                {(paymentMode === 'ONLINE' || paymentMode === 'CHEQUE_ISSUED' || paymentMode === 'CHEQUE_ENDORSED') && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-slate-900 mb-1">
-                        {paymentMode === 'ONLINE' ? 'Paid From Account' : 'Paid From Bank Account'} <span className="text-red-500 font-bold">*</span>
+                        {paymentMode === 'ONLINE'
+                          ? 'Paid From Account'
+                          : paymentMode === 'CHEQUE_ISSUED'
+                            ? 'Paid From Bank Account'
+                            : 'Select Cheque to Endorse'} <span className="text-red-500 font-bold">*</span>
                       </label>
-                      {bankOptions.length === 0 ? (
-                        <div className="soleria-input text-rose-600 text-sm flex items-center font-semibold">
-                          {paymentMode === 'ONLINE' ? 'No business accounts yet — add one in Setup first' : 'Add a bank account first'}
-                        </div>
-                      ) : (
-                        <SearchableSelect
-                          options={bankOptions}
-                          value={bankId}
-                          onChange={setBankId}
-                          placeholder={paymentMode === 'ONLINE' ? 'Select account...' : 'Select bank account...'}
-                          disabled={isViewMode}
-                        />
-                      )}
-                    </div>
-                  )}
-
-                  {paymentMode === 'CHEQUE_ISSUED' && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-900 mb-1">
-                          Issued Cheque No. <span className="text-red-500 font-bold">*</span>
-                        </label>
+                      <div className="relative">
                         <input
+                          ref={sourceAccountTriggerRef}
                           type="text"
-                          value={issuedChequeNo}
+                          data-field-nav="true"
                           disabled={isViewMode}
-                          onChange={e => setIssuedChequeNo(e.target.value)}
-                          placeholder="e.g. 109283"
-                          className="soleria-input font-mono"
+                          value={sourceAccountSearchText}
+                          onChange={e => setSourceAccountSearchText(e.target.value)}
+                          onKeyDown={handleSourceAccountTriggerKeyDown}
+                          placeholder={
+                            paymentMode === 'CHEQUE_ENDORSED'
+                              ? 'Type cheque no or press Enter to search...'
+                              : 'Type bank/account name or press Enter to search...'
+                          }
+                          className="soleria-input py-1 pr-9 text-xs font-medium"
                         />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-900 mb-1">
-                          Date Written on Cheque <span className="text-red-500 font-bold">*</span>
-                        </label>
-                        <input
-                          type="date"
-                          value={issuedChequeDate}
+                        <button
+                          type="button"
                           disabled={isViewMode}
-                          onChange={e => setIssuedChequeDate(e.target.value)}
-                          className="soleria-input"
-                        />
+                          onClick={openSourceAccountModal}
+                          title="Browse all accounts/cheques"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <ChevronDown size={16} />
+                        </button>
                       </div>
                     </div>
-                  )}
 
-                  {paymentMode === 'CHEQUE_ENDORSED' && (
                     <div>
                       <label className="block text-xs font-bold text-slate-900 mb-1">
-                        Select Cheque to Hand Over <span className="text-red-500 font-bold">*</span>
-                      </label>
-                      {endorsableCheques.length === 0 ? (
-                        <div className="soleria-input text-slate-400 text-sm flex items-center">
-                          No cheques in hand with value left
-                        </div>
-                      ) : (
-                        <SearchableSelect
-                          options={endorsableCheques}
-                          value={chequeId}
-                          onChange={setChequeId}
-                          placeholder="Select cheque to endorse..."
-                          disabled={isViewMode}
-                        />
-                      )}
-                    </div>
-                  )}
-
-                  {paymentMode !== 'CASH' && (
-                    <div>
-                      <label className="block text-xs font-bold text-slate-900 mb-1">
-                        {paymentMode === 'ONLINE' ? 'Online Reference Code / Details' : 'Details'}
+                        {paymentMode === 'ONLINE' ? 'Online Reference Code / Details' : 'Details / Optional Notes'}
                       </label>
                       <input
                         type="text"
                         value={details}
                         disabled={isViewMode}
                         onChange={e => setDetails(e.target.value)}
-                        placeholder={paymentMode === 'ONLINE' ? 'e.g. Alfa ref 980124' : 'Optional notes'}
-                        className="soleria-input"
+                        placeholder={paymentMode === 'ONLINE' ? 'e.g. Alfa ref 980124' : 'Optional notes...'}
+                        className="soleria-input py-1 text-xs"
                       />
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
+
+                <SearchModal
+                  isOpen={isSourceAccountModalOpen}
+                  title={
+                    paymentMode === 'ONLINE'
+                      ? 'Select Paid-From Account'
+                      : paymentMode === 'CHEQUE_ISSUED'
+                        ? 'Select Drawn-On Bank Account'
+                        : 'Select Cheque to Endorse'
+                  }
+                  options={paymentMode === 'CHEQUE_ENDORSED' ? endorsableCheques : bankOptions}
+                  value={paymentMode === 'CHEQUE_ENDORSED' ? chequeId : bankId}
+                  onSelect={val => {
+                    if (paymentMode === 'CHEQUE_ENDORSED') {
+                      handleSelectEndorsedCheque(val);
+                    } else {
+                      setBankId(val);
+                    }
+                    setIsSourceAccountModalOpen(false);
+                    requestAnimationFrame(() => focusNextField(sourceAccountTriggerRef.current));
+                  }}
+                  onClose={() => setIsSourceAccountModalOpen(false)}
+                  searchPlaceholder={
+                    paymentMode === 'CHEQUE_ENDORSED'
+                      ? 'Search cheque number or status...'
+                      : 'Search account or bank name...'
+                  }
+                  initialSearch={sourceAccountModalSeed}
+                />
               </form>
 
               {/* ── PN-01: the voucher's committed entry lines ──────────────────────────────────
@@ -1229,137 +1274,137 @@ const nextVoucherNo = useMemo(
                   Purchase's own articles box, which shows its empty state ("No articles added
                   yet...") rather than disappearing entirely (per the user, 2026-08-26). */}
               <div className="mt-6 pt-5 border-t" style={{ borderColor: 'var(--border-color)' }}>
-                  <h4 className="font-lora font-semibold text-slate-800 mb-3">
-                    Entries in this Voucher
-                    <span className="ml-2 text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
-                      {voucherLines.length}
-                    </span>
-                  </h4>
+                <h4 className="font-lora font-semibold text-slate-800 mb-3">
+                  Entries in this Voucher
+                  <span className="ml-2 text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
+                    {voucherLines.length}
+                  </span>
+                </h4>
 
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-sm">
-                      <thead>
-                        <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                          <th className="p-2.5 pl-3">A/C Code</th>
-                          <th className="p-2.5">Account Description</th>
-                          <th className="p-2.5">Narration</th>
-                          <th className="p-2.5">Cheque No</th>
-                          <th className="p-2.5 text-center">Type</th>
-                          <th className="p-2.5 text-right">Rs. (Naam)</th>
-                          <th className="p-2.5 text-center">Status</th>
-                          <th className="p-2.5 text-center" data-no-print>Actions</th>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                        <th className="p-2.5 pl-3">A/C Code</th>
+                        <th className="p-2.5">Account Description</th>
+                        <th className="p-2.5">Narration</th>
+                        <th className="p-2.5">Cheque No</th>
+                        <th className="p-2.5 text-center">Type</th>
+                        <th className="p-2.5 text-right">Rs. (Naam)</th>
+                        <th className="p-2.5 text-center">Status</th>
+                        <th className="p-2.5 text-center" data-no-print>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {voucherLines.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="p-6 text-center text-slate-400 text-sm">
+                            No payments added yet — fill the fields above and press Enter.
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {voucherLines.length === 0 ? (
-                          <tr>
-                            <td colSpan={8} className="p-6 text-center text-slate-400 text-sm">
-                              No payments added yet — fill the fields above and press Enter.
-                            </td>
-                          </tr>
-                        ) : voucherLines.map(line => (
-                          <tr key={line.expense_id} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
-                            <td className="p-2.5 pl-3 font-mono text-xs text-slate-600">{line.account_code || '—'}</td>
-                            <td className="p-2.5 font-semibold text-slate-800">{line.account_name || accountName(line.ba_id)}</td>
-                            <td className="p-2.5 text-slate-600 text-xs">{line.remarks || '—'}</td>
-                            {/* A line is paid by a cheque WE wrote (issued_cheque_no) or one we
+                      ) : voucherLines.map(line => (
+                        <tr key={line.expense_id} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                          <td className="p-2.5 pl-3 font-mono text-xs text-slate-600">{line.account_code || '—'}</td>
+                          <td className="p-2.5 font-semibold text-slate-800">{line.account_name || accountName(line.ba_id)}</td>
+                          <td className="p-2.5 text-slate-600 text-xs">{line.remarks || '—'}</td>
+                          {/* A line is paid by a cheque WE wrote (issued_cheque_no) or one we
                                 received and handed on (endorsed_cheque_no) — never both. */}
-                            <td className="p-2.5 font-mono text-xs text-slate-600">
-                              {line.issued_cheque_no || line.endorsed_cheque_no || '—'}
-                            </td>
-                            <td className="p-2.5 text-center text-xs font-semibold text-slate-700">{line.payment_mode}</td>
-                            <td className="p-2.5 text-right font-mono font-semibold text-slate-900">
-                              {formatCurrency(Number(line.amount))}
-                            </td>
-                            <td className="p-2.5 text-center">
-                              {line.status === 'CONFIRMED' ? (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-100 text-emerald-800">Posted</span>
-                              ) : (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-100 text-amber-900">Pending</span>
+                          <td className="p-2.5 font-mono text-xs text-slate-600">
+                            {line.issued_cheque_no || line.endorsed_cheque_no || '—'}
+                          </td>
+                          <td className="p-2.5 text-center text-xs font-semibold text-slate-700">{line.payment_mode}</td>
+                          <td className="p-2.5 text-right font-mono font-semibold text-slate-900">
+                            {formatCurrency(Number(line.amount))}
+                          </td>
+                          <td className="p-2.5 text-center">
+                            {line.status === 'CONFIRMED' ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-100 text-emerald-800">Posted</span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-100 text-amber-900">Pending</span>
+                            )}
+                          </td>
+                          <td className="p-2.5 text-center" data-no-print>
+                            <div className="flex items-center justify-center gap-1.5">
+                              {line.status === 'DRAFT' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEditLine(line)}
+                                    title="Pull this entry back into the form to correct it"
+                                    className="text-slate-500 hover:text-slate-800 transition-colors"
+                                  >
+                                    <Edit size={14} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDeleteTarget(line.draft_id != null
+                                      ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
+                                      : { kind: 'expense', id: line.expense_id as number, amount: Number(line.amount) })}
+                                    title="Delete this entry (asks for your password)"
+                                    className="text-rose-500 hover:text-rose-700 transition-colors"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </>
                               )}
-                            </td>
-                            <td className="p-2.5 text-center" data-no-print>
-                              <div className="flex items-center justify-center gap-1.5">
-                                {line.status === 'DRAFT' && (
-                                  <>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleEditLine(line)}
-                                      title="Pull this entry back into the form to correct it"
-                                      className="text-slate-500 hover:text-slate-800 transition-colors"
-                                    >
-                                      <Edit size={14} />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => setDeleteTarget(line.draft_id != null
-                                        ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
-                                        : { kind: 'expense', id: line.expense_id as number, amount: Number(line.amount) })}
-                                      title="Delete this entry (asks for your password)"
-                                      className="text-rose-500 hover:text-rose-700 transition-colors"
-                                    >
-                                      <Trash2 size={14} />
-                                    </button>
-                                  </>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
 
-                  {/* PN-03: ref-pic's small boxed totals — Total Cheque/Online/Cash on the bottom
+                {/* PN-03: ref-pic's small boxed totals — Total Cheque/Online/Cash on the bottom
                       right plus a Total Amount field, matching Sale Bill's totals-row style
                       instead of the old inline footer text. */}
-                  <div className="flex flex-wrap items-end justify-end gap-3 mt-3 pt-3 border-t" style={{ borderColor: 'var(--border-table)' }}>
-                    <div className="flex flex-col gap-0.5">
-                      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cheque</label>
-                      <input type="text" value={formatCurrency(Number(voucher?.total_cheque ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
-                    </div>
-                    <div className="flex flex-col gap-0.5">
-                      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Online</label>
-                      <input type="text" value={formatCurrency(Number(voucher?.total_online ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
-                    </div>
-                    <div className="flex flex-col gap-0.5">
-                      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cash</label>
-                      <input type="text" value={formatCurrency(Number(voucher?.total_cash ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
-                    </div>
-                    <div className="flex flex-col gap-0.5">
-                      <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Amount</label>
-                      <input
-                        type="text"
-                        value={formatCurrency(Number(voucher?.total_amount ?? 0))}
-                        disabled
-                        className="soleria-input soleria-input-compact text-right font-mono font-bold"
-                        style={{ width: '140px', color: 'var(--brand-gold)', background: '#111c2a', borderColor: '#334155' }}
-                      />
-                    </div>
+                <div className="flex flex-wrap items-end justify-end gap-3 mt-3 pt-3 border-t" style={{ borderColor: 'var(--border-table)' }}>
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cheque</label>
+                    <input type="text" value={formatCurrency(Number(voucher?.total_cheque ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
                   </div>
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Online</label>
+                    <input type="text" value={formatCurrency(Number(voucher?.total_online ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cash</label>
+                    <input type="text" value={formatCurrency(Number(voucher?.total_cash ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Amount</label>
+                    <input
+                      type="text"
+                      value={formatCurrency(Number(voucher?.total_amount ?? 0))}
+                      disabled
+                      className="soleria-input soleria-input-compact text-right font-mono font-bold"
+                      style={{ width: '140px', color: 'var(--brand-gold)', background: '#111c2a', borderColor: '#334155' }}
+                    />
+                  </div>
+                </div>
 
-                  {voucherResult && voucherResult.failed.length > 0 && (
-                    <div className="mt-4 p-3 rounded-lg bg-rose-50 border border-rose-200">
-                      <p className="text-xs font-bold text-rose-900">
-                        {voucherResult.failed.length} entr{voucherResult.failed.length === 1 ? 'y' : 'ies'} could not be posted — the rest went through.
-                      </p>
-                      <ul className="mt-1.5 space-y-1">
-                        {voucherResult.failed.map(f => (
-                          <li key={f.expense_id} className="text-xs text-rose-800">
-                            <span className="font-semibold">{f.account_name || `#${f.expense_id}`}</span>
-                            {' '}({formatCurrency(Number(f.amount))}){' — '}{f.message}
-                          </li>
-                        ))}
-                      </ul>
-                      <button
-                        type="button"
-                        onClick={() => setVoucherResult(null)}
-                        className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
-                      >
-                        Dismiss
-                      </button>
-                    </div>
-                  )}
+                {voucherResult && voucherResult.failed.length > 0 && (
+                  <div className="mt-4 p-3 rounded-lg bg-rose-50 border border-rose-200">
+                    <p className="text-xs font-bold text-rose-900">
+                      {voucherResult.failed.length} entr{voucherResult.failed.length === 1 ? 'y' : 'ies'} could not be posted — the rest went through.
+                    </p>
+                    <ul className="mt-1.5 space-y-1">
+                      {voucherResult.failed.map(f => (
+                        <li key={f.expense_id} className="text-xs text-rose-800">
+                          <span className="font-semibold">{f.account_name || `#${f.expense_id}`}</span>
+                          {' '}({formatCurrency(Number(f.amount))}){' — '}{f.message}
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      type="button"
+                      onClick={() => setVoucherResult(null)}
+                      className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
