@@ -19,6 +19,8 @@ import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
 import MonthlyExpensesTab from '@/components/MonthlyExpensesTab';
 import OverallExpensesTab from '@/components/OverallExpensesTab';
 import AccountBalanceTooltip from '@/components/AccountBalanceTooltip';
+import ConfirmModal from '@/components/ConfirmModal';
+import PageToasts from '@/components/PageToasts';
 import { toDateInputValue } from '@/lib/utils';
 
 const today = () => new Date().toISOString().split('T')[0];
@@ -160,7 +162,16 @@ export default function ExpensesPage() {
   const [voucher, setVoucher] = useState<ExpenseVoucherRow | null>(null);
   const [voucherRemarks, setVoucherRemarks] = usePersistentField('expenses', 'voucherRemarks', '');
   const [voucherBusy, setVoucherBusy] = useState(false);
-  const [voucherResult, setVoucherResult] = useState<VoucherActionResult<'expense_id', ExpenseVoucherRow> | null>(null);
+  // The ACTION is stored with the result, not inferred from it. When every line fails, both the
+  // `posted` and `unposted` arrays come back empty, so inferring picks the wrong verb — which is
+  // exactly the bug this replaces ("could not be posted" shown after pressing Unpost).
+  const [voucherResult, setVoucherResult] = useState<
+    { action: 'post' | 'unpost'; data: VoucherActionResult<'expense_id', ExpenseVoucherRow> } | null
+  >(null);
+  // Unposting a voucher that paid with an endorsed cheque also reverses that endorsement — stated
+  // and confirmed before it happens, since it changes a cheque's disposition (per the user,
+  // 2026-08-31: doing it via Cheque -> Returns first was "too hectic").
+  const [confirmEndorsementUnpost, setConfirmEndorsementUnpost] = useState(false);
 
   // `voucher` itself is plain useState (re-fetched from the server, never something to hand-persist
   // — see refreshVoucher's own comment), so it was empty again every time this page remounted after
@@ -607,7 +618,7 @@ export default function ExpensesPage() {
     setVoucherBusy(false);
 
     if (!res.ok) { fail('Failed to post voucher: ' + res.error.message); return; }
-    setVoucherResult(res.data);
+    setVoucherResult({ action: 'post', data: res.data });
     setVoucher(res.data.voucher);
     setBalanceRefreshKey(k => k + 1);
     refreshAllVouchers();
@@ -621,15 +632,22 @@ export default function ExpensesPage() {
     }
   };
 
-  const handleUnpostVoucher = async () => {
+  // Does the voucher pay anyone with a cheque endorsed to them? Such a line cannot be unposted on
+  // its own — its money movement lives in a cheque allocation, not in the expense — so unposting
+  // has to reverse that allocation as well, and the operator is told before it happens.
+  const hasEndorsedLine = (voucher?.lines ?? []).some(
+    l => l.payment_mode === 'CHEQUE_ENDORSED' && l.status === 'CONFIRMED',
+  );
+
+  const runUnpostVoucher = async (reverseEndorsement: boolean) => {
     if (!voucher) return;
     setVoucherBusy(true);
     setVoucherResult(null);
-    const res = await api.expenseVouchers.unpost(voucher.voucher_id);
+    const res = await api.expenseVouchers.unpost(voucher.voucher_id, reverseEndorsement);
     setVoucherBusy(false);
 
     if (!res.ok) { fail('Failed to unpost voucher: ' + res.error.message); return; }
-    setVoucherResult(res.data);
+    setVoucherResult({ action: 'unpost', data: res.data });
     setVoucher(res.data.voucher);
     setBalanceRefreshKey(k => k + 1);
     refreshAllVouchers();
@@ -639,6 +657,14 @@ export default function ExpensesPage() {
     // user, 2026-08-30) rather than staying on Posted looking at a voucher that no longer belongs
     // there.
     setNavFilter('unposted');
+  };
+
+  // What the Unpost button calls. Straight through for the ordinary voucher — no dialog for the
+  // common case — and only stops to confirm when a cheque disposition is about to be undone too.
+  const handleUnpostVoucher = async () => {
+    if (!voucher) return;
+    if (hasEndorsedLine) { setConfirmEndorsementUnpost(true); return; }
+    await runUnpostVoucher(false);
   };
 
   // PN-01: abandon the voucher on screen and start a blank one. Nothing is deleted — an unposted
@@ -950,15 +976,17 @@ export default function ExpensesPage() {
                 First/Prev./Next/Last, with the Posted/Unposted dropdown choosing which list —
                 and "Post All" moved into that same toolbar. */}
 
-            {lookupError && (
-              <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>
-            )}
-            {successMsg && (
-              <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
-            )}
-            {errorMsg && (
-              <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
-            )}
+            {/* Floated into the right-hand gutter rather than rendered here, so a message never
+                pushes the toolbar and card down under the cursor (per the user, 2026-08-31).
+                lookupError and errorMsg share the error slot — a page-load failure and an action
+                failure are never usefully on screen at once, and lookupError wins because nothing
+                else will work until the lookups load. */}
+            <PageToasts
+              error={lookupError || errorMsg}
+              success={successMsg}
+              onDismissError={() => { setLookupError(''); setErrorMsg(''); }}
+              onDismissSuccess={() => setSuccessMsg('')}
+            />
 
             {/* Toolbar — restyled per frontend/pages_design.md §1: small square icon-over-label
                 buttons instead of pill-shaped colored ones, matching Purchase/Purchase Return/
@@ -1513,13 +1541,21 @@ export default function ExpensesPage() {
                   </div>
                 </div>
 
-                {voucherResult && voucherResult.failed.length > 0 && (
+                {voucherResult && voucherResult.data.failed.length > 0 && (
                   <div className="mt-4 p-3 rounded-lg bg-rose-50 border border-rose-200">
                     <p className="text-xs font-bold text-rose-900">
-                      {voucherResult.failed.length} entr{voucherResult.failed.length === 1 ? 'y' : 'ies'} could not be posted — the rest went through.
+                      {/* Verb from the action that actually ran, and the "rest went through"
+                          clause only when some entries really did — it read "could not be posted
+                          — the rest went through" after an Unpost of a single-line voucher whose
+                          only entry failed, which was wrong twice over. */}
+                      {voucherResult.data.failed.length} entr{voucherResult.data.failed.length === 1 ? 'y' : 'ies'}
+                      {' '}could not be {voucherResult.action === 'post' ? 'posted' : 'unposted'}
+                      {(voucherResult.action === 'post'
+                        ? voucherResult.data.posted?.length
+                        : voucherResult.data.unposted?.length) ? ' — the rest went through' : ''}.
                     </p>
                     <ul className="mt-1.5 space-y-1">
-                      {voucherResult.failed.map(f => (
+                      {voucherResult.data.failed.map(f => (
                         <li key={f.expense_id} className="text-xs text-rose-800">
                           <span className="font-semibold">{f.account_name || `#${f.expense_id}`}</span>
                           {' '}({formatCurrency(Number(f.amount))}){' — '}{f.message}
@@ -1542,6 +1578,32 @@ export default function ExpensesPage() {
         )}
 
       </div>
+
+      {/* Unposting a voucher that paid with an endorsed cheque necessarily reverses that
+          endorsement — the money movement belongs to the allocation, not the expense, so undoing
+          one without the other would leave the cheque spent against an unposted document. Said
+          plainly here rather than done silently. */}
+      <ConfirmModal
+        isOpen={confirmEndorsementUnpost}
+        title="This also reverses a cheque endorsement"
+        body={(
+          <>
+            A line on this voucher pays with a cheque <strong>endorsed over to that account</strong>.
+            Unposting will reverse that endorsement, putting the cheque back in
+            {' '}<strong>Cheques in Hand</strong> and free to use again.
+            <span className="block mt-1.5 text-xs text-slate-500">
+              The endorsement and its reversal both stay in the ledger, so the history is kept.
+            </span>
+          </>
+        )}
+        confirmLabel="Reverse & unpost"
+        busy={voucherBusy}
+        onCancel={() => setConfirmEndorsementUnpost(false)}
+        onConfirm={async () => {
+          setConfirmEndorsementUnpost(false);
+          await runUnpostVoucher(true);
+        }}
+      />
 
       <PasswordPromptModal
         isOpen={deleteTarget != null}

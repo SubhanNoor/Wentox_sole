@@ -164,6 +164,16 @@ async function remove(draftId) {
 // is only ever deleted on full success.
 async function confirm(draftId, userId, session) {
   const draft = await getById(draftId);
+
+  // Same reasoning as draftReceipts.service.js#confirm: draft_expenses carries no CHECK, so an
+  // ONLINE draft naming neither account only fails at the INSERT into dbo.expenses, as a raw
+  // constraint error that wrap.js can report only as "Unexpected error". Say what to fix instead.
+  if (draft.payment_mode === 'ONLINE' && !draft.bank_id && !draft.online_ba_id) {
+    throw ApiError.badRequest(
+      'This ONLINE entry names no account to pay from. Open it, pick the account, save, then post.',
+    );
+  }
+
   const payload = {
     expense_date: draft.expense_date,
     ba_id: draft.ba_id,

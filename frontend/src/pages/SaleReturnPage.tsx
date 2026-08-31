@@ -17,6 +17,7 @@ import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
+import PageToasts from '@/components/PageToasts';
 import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
 import * as api from '@/lib/api';
 import type {
@@ -1730,19 +1731,14 @@ const nextSystemReturnNo = useMemo(
         <form onSubmit={e => e.preventDefault()} className={activeTab === 'return' ? 'block' : 'hidden'}>
 
         {/* Banner Messages */}
-        {lookupError && (
-          <div className="banner-error rounded-lg px-4 py-2.5 text-sm mb-3">{lookupError}</div>
-        )}
-        {successMsg && (
-          <div className="banner-success rounded-lg px-4 py-2.5 text-sm mb-3 flex items-center justify-between">
-            <span>{successMsg}</span>
-          </div>
-        )}
-        {errorMsg && (
-          <div className="banner-error rounded-lg px-4 py-2.5 text-sm mb-3 flex items-center justify-between">
-            <span>{errorMsg}</span>
-          </div>
-        )}
+        {/* Floated into the right-hand gutter, not rendered inline: a message used to push the
+            toolbar and card down under the cursor mid-click (per the user, 2026-08-31). */}
+        <PageToasts
+          error={lookupError || errorMsg}
+          success={successMsg}
+          onDismissError={() => { setLookupError(''); setErrorMsg(''); }}
+          onDismissSuccess={() => setSuccessMsg('')}
+        />
 
         {/* Toolbar - data-no-print — icon-over-label buttons (`.toolbar-btn`), same style as
             SaleBillPage's own toolbar (per the user, 2026-08-26: "copy sale bill... from button to

@@ -41,7 +41,9 @@ module.exports = function register() {
   // Reverses every posted line, with the same per-line reporting as post().
   ipcMain.handle('expense-vouchers:unpost', wrap((payload) => {
     const session = requireSession();
-    return service.unpost(payload.id, session);
+    // reverse_endorsement: the caller has confirmed with the operator that undoing this voucher
+    // also undoes a cheque endorsement it made. Absent/false keeps the old refusal.
+    return service.unpost(payload.id, session, { reverseEndorsement: payload.reverse_endorsement === true });
   }));
 
   // Password required, matching 'expenses:remove' (RJ-06/PN-01) — this deletes the header AND every line

@@ -537,75 +537,67 @@ async function chartAccountsWithActivity() {
   return result.recordset;
 }
 
-// UC-37 Cash Book — CASH_IN_HAND account's ledger rows for a date/month, reusing ledgerRows()'s
-// join set so cheque-allocation and expense narrations come along for free.
-function cashBookRows(cashAcId, filters) {
-  return ledgerRows({ ac_id: cashAcId, date_from: filters.date_from, date_to: filters.date_to });
-}
-
-// UC-37 Cash Book, "Cheq./Online" columns — the day's NON-cash receipts and payments, listed for
-// visibility only. They are deliberately NOT read from the cash ledger, because they never touch
-// it: a CHEQUE receipt posts to CHEQUES IN HAND and an ONLINE one to the receiving bank, so no
-// query over CASH IN HAND could ever surface them. Read from the source documents instead, which
-// also means zero risk of double-counting a cash row — the two sets are disjoint by construction.
+// CB-05 — UNPOSTED money documents for the period, shaped like the posted ones so the Cash Book
+// can list them alongside (per the user, 2026-08-31: "unposted records should also be displayed
+// like posted records").
 //
-// The caller keeps these out of every cash total (they only reach the Totals strip); the summary
-// box stays strictly "what the cash drawer did", per UC-37.
+// These have NO ledger entries — that is what unposted means — so both ends have to be derived
+// from the document itself, mirroring what posting would write:
 //
-// Receipts: CHEQUE (cheque_no via cheques) and ONLINE. Expenses: CHEQUE_ISSUED (our own cheque,
-// number on the expense row itself), CHEQUE_ENDORSED (a customer's cheque handed on, number via
-// cheques) and ONLINE. DRAFT documents are excluded — nothing unconfirmed belongs on a day book.
+//   draft receipt  money IN : FROM the payer (ba_id) TO cash / cheques-in-hand / the online account
+//   draft expense  money OUT: FROM cash / bank / cheques-in-hand TO the payee (ba_id)
 //
-// Third source: cheque_allocations, which UC-37 requires ("an endorsed cheque posts as an outflow
-// on its allocation date"). Only VENDOR_PAYMENT, and only while ACTIVE. The other two dispositions
-// are deliberately excluded because they would DOUBLE-COUNT:
-//   EXPENSE_PAYMENT — carries an expense_id, so its dbo.expenses row (payment_mode
-//                     'CHEQUE_ENDORSED') is already picked up by the UNION above.
-//   DEPOSIT         — banking a cheque is an internal asset move (Dr bank / Cr CHEQUES IN HAND),
-//                     not new money; the receipt that brought the cheque in already appears as a
-//                     Receipts Cheq./Online row on its own date.
-// A REVERSED allocation (bounce/return cascade, §6.1 reverse-never-delete) is excluded for the
-// same reason a reversed anything is: the money went back.
-async function cashBookNonCashRows({ date_from, date_to }) {
+// The destination resolves the same way the services do at post time: online_ba_id when set,
+// otherwise the named bank's own linked business account, otherwise the reserved chart account for
+// the mode. A draft can be malformed in ways a posted row cannot (no CHECK constraints on the
+// draft tables), so the far side may come back NULL — the caller renders that rather than dropping
+// the row, since a broken draft is exactly what someone reading this report needs to see.
+async function cashBookUnpostedSides({ date_from, date_to }, { cashAcId, chequesAcId }) {
   const result = await query(
-    `SELECT 'RECEIPT' AS kind, rc.receipt_id AS source_id, rc.receipt_date AS entry_date,
-            rc_ba.name AS account_name, COALESCE(rc.remarks, rc.details) AS remarks,
-            rc.payment_mode, ch.cheque_no, rc.amount
-     FROM dbo.receipts rc
-     JOIN dbo.business_accounts rc_ba ON rc_ba.ba_id = rc.ba_id
-     LEFT JOIN dbo.cheques ch ON ch.cheque_id = rc.cheque_id
-     WHERE rc.status = 'CONFIRMED' AND rc.payment_mode <> 'CASH'
-       AND rc.receipt_date >= @dateFrom AND rc.receipt_date <= @dateTo
+    `SELECT 'RECEIPT' AS kind, dr.draft_id AS source_id, dr.receipt_date AS entry_date, dr.amount,
+            dr.payment_mode, dr.remarks, dr.cheque_no,
+            payer.name AS party_name, payer.code AS party_code,
+            COALESCE(oba.name, bba.name, ca.name)  AS money_name,
+            COALESCE(oba.code, bba.code, ca.code)  AS money_code,
+            CASE WHEN dr.payment_mode = 'CASH' THEN 1 ELSE 0 END AS touches_cash
+     FROM dbo.draft_receipts dr
+     LEFT JOIN dbo.business_accounts payer ON payer.ba_id = dr.ba_id
+     LEFT JOIN dbo.business_accounts oba   ON oba.ba_id   = dr.online_ba_id
+     LEFT JOIN dbo.bank_accounts     bk    ON bk.bank_id  = dr.bank_id
+     LEFT JOIN dbo.business_accounts bba   ON bba.ba_id   = bk.ba_id
+     LEFT JOIN dbo.chart_of_accounts ca
+            ON ca.ac_id = CASE dr.payment_mode WHEN 'CASH' THEN @cashAcId WHEN 'CHEQUE' THEN @chequesAcId END
+     WHERE dr.receipt_date >= @dateFrom AND dr.receipt_date <= @dateTo
      UNION ALL
-     SELECT 'EXPENSE' AS kind, ex.expense_id, ex.expense_date,
-            ba.name, COALESCE(ex.remarks, ex.details),
-            ex.payment_mode, COALESCE(ex.issued_cheque_no, ch.cheque_no), ex.amount
-     FROM dbo.expenses ex
-     JOIN dbo.business_accounts ba ON ba.ba_id = ex.ba_id
-     LEFT JOIN dbo.cheques ch ON ch.cheque_id = ex.cheque_id
-     WHERE ex.status = 'CONFIRMED' AND ex.payment_mode <> 'CASH'
-       AND ex.expense_date >= @dateFrom AND ex.expense_date <= @dateTo
-     UNION ALL
-     SELECT 'ALLOCATION' AS kind, ca.allocation_id, ca.allocation_date,
-            v.name, COALESCE(ca.remarks, 'Cheque endorsed to vendor'),
-            'CHEQUE', ch.cheque_no, ca.amount
-     FROM dbo.cheque_allocations ca
-     JOIN dbo.vendors v   ON v.vendor_id   = ca.target_vendor_id
-     JOIN dbo.receipts rc2 ON rc2.receipt_id = ca.receipt_id
-     LEFT JOIN dbo.cheques ch ON ch.cheque_id = rc2.cheque_id
-     WHERE ca.status = 'ACTIVE' AND ca.disposition_type = 'VENDOR_PAYMENT'
-       AND ca.allocation_date >= @dateFrom AND ca.allocation_date <= @dateTo
+     SELECT 'EXPENSE', de.draft_id, de.expense_date, de.amount,
+            de.payment_mode, de.remarks, de.issued_cheque_no,
+            payee.name, payee.code,
+            COALESCE(oba.name, bba.name, ca.name),
+            COALESCE(oba.code, bba.code, ca.code),
+            CASE WHEN de.payment_mode = 'CASH' THEN 1 ELSE 0 END
+     FROM dbo.draft_expenses de
+     LEFT JOIN dbo.business_accounts payee ON payee.ba_id = de.ba_id
+     LEFT JOIN dbo.business_accounts oba   ON oba.ba_id   = de.online_ba_id
+     LEFT JOIN dbo.bank_accounts     bk    ON bk.bank_id  = de.bank_id
+     LEFT JOIN dbo.business_accounts bba   ON bba.ba_id   = bk.ba_id
+     LEFT JOIN dbo.chart_of_accounts ca
+            ON ca.ac_id = CASE de.payment_mode
+                            WHEN 'CASH' THEN @cashAcId
+                            WHEN 'CHEQUE_ENDORSED' THEN @chequesAcId END
+     WHERE de.expense_date >= @dateFrom AND de.expense_date <= @dateTo
      ORDER BY entry_date, kind, source_id`,
     {
       dateFrom: { type: sql.Date, value: date_from },
       dateTo: { type: sql.Date, value: date_to },
+      cashAcId: { type: sql.Int, value: cashAcId },
+      chequesAcId: { type: sql.Int, value: chequesAcId },
     },
   );
   return result.recordset;
 }
 
 // CB-01 — bank-to-bank transfers, shown on the Cash Book as informational-only rows (never
-// counted in the cash totals, same treatment as cashBookNonCashRows' cheque/online rows): a
+// counted in the cash totals, same treatment as the grid's own cheque/online rows): a
 // transfer where NEITHER side is the cash business account never touches CASH IN HAND, so
 // ledgerRows() correctly never surfaces it, but the client still wants it visible for the day.
 async function cashBookBankTransfers(cashBaId, { date_from, date_to }) {
@@ -628,9 +620,9 @@ async function cashBookBankTransfers(cashBaId, { date_from, date_to }) {
 }
 
 // CB-03 — a cheque being DEPOSITED (banked), shown as its own informational-only Cash Book event
-// alongside Issued/Endorsed/Received (which cashBookNonCashRows already covers). Deliberately
+// alongside Issued/Endorsed/Received (which cashBookTransactionSides already covers). Deliberately
 // excluded from cash totals — depositing a cheque already on CHEQUES IN HAND isn't new money, it's
-// the same reasoning cashBookNonCashRows' own comment gives for skipping DEPOSIT there.
+// the same reasoning the both-sides query gives for scoping to money movements.
 async function cashBookChequeDeposits({ date_from, date_to }) {
   const result = await query(
     `SELECT ca.allocation_id, ca.allocation_date AS entry_date, ca.amount,
@@ -652,6 +644,88 @@ async function cashBookChequeDeposits({ date_from, date_to }) {
 }
 
 // New "Overall Searching" (UC-none — user-requested) — backed by the migration 008 VIEW so it
+// CB-04 — BOTH sides of every money transaction in the period, for the Cash Book's two-row-per-
+// transaction view (per the user, 2026-08-31: "first row is shown from which the payment is
+// received and then next row shows in which account the payment is received into").
+//
+// A transaction qualifies EITHER of two ways, and needs both tests:
+//
+//   (a) any of its lines touches one of WentoX's own money heads — CASH IN HAND, BANK ACCOUNTS or
+//       CHEQUES IN HAND — reached as a chart account directly (le.ac_id) or through a business
+//       account sitting under one (ba.ac_id). This is what catches a journal voucher posted
+//       straight to cash.
+//
+//   (b) it IS a money document by type. Test (a) alone used to be enough, but since ONLINE
+//       settlements were opened up to ANY business account (migration 028/029) the money can land
+//       somewhere with no money head above it at all: an ONLINE receipt paid into a VENDOR account
+//       posts Dr <vendor> / Cr <customer> and touches none of the three heads, so it vanished from
+//       this report entirely while showing as POSTED on its voucher (reported by the user,
+//       2026-08-31 — a 21,000 receipt from "kjn" received into "IKRAM LEATHER").
+//
+// SALE_BILL/PURCHASE are deliberately absent from (b): sold or bought on credit, they move no
+// money and belong on a ledger, not in a cash book. If one is settled, the settling RECEIPT or
+// EXPENSE is its own document and qualifies on its own.
+//
+// Once a transaction qualifies, EVERY line of it is returned, including the counterparty (a
+// customer, a vendor, an expense head) — that counterparty is the other endpoint the report was
+// missing.
+//
+// Scoped to money transactions on purpose. Reading every ledger line in the period would drag in
+// sales and purchases on credit, which move no cash and have no place in a cash book.
+//
+// `is_money_side` marks which end is ours, so the caller can compute the cash summary from our own
+// side alone while still printing both. `touches_cash` picks the column pair — both lines of one
+// transaction MUST land in the same pair or the two totals cannot tie.
+async function cashBookTransactionSides({ date_from, date_to }, { cashAcId, bankAcId, chequesAcId }) {
+  const result = await query(
+    `WITH money_lines AS (
+       SELECT le.source_type, le.source_id,
+              MAX(CASE WHEN le.ac_id = @cashAcId OR ba.ac_id = @cashAcId THEN 1 ELSE 0 END) AS touches_cash
+       FROM dbo.ledger_entries le
+       LEFT JOIN dbo.business_accounts ba ON ba.ba_id = le.ba_id
+       WHERE le.entry_date >= @dateFrom AND le.entry_date <= @dateTo
+         AND (le.ac_id IN (@cashAcId, @bankAcId, @chequesAcId)
+              OR ba.ac_id IN (@cashAcId, @bankAcId, @chequesAcId)
+              OR le.source_type IN ('RECEIPT', 'EXPENSE', 'TRANSFER', 'DEPOSIT',
+                                    'CHEQUE_ALLOCATION', 'COMMISSION'))
+         -- OPENING is a bookkeeping seed against OPENING BALANCE EQUITY, not money moving between
+         -- two parties, and it is posted on the day an account is CREATED — so adding a bank with
+         -- a 7,500,000 opening balance would otherwise land a 7,500,000 "transaction" in that
+         -- day's book and swamp every real movement. The balance it establishes is already carried
+         -- by every account balance, and by Opening Cash on this very report.
+         AND le.source_type <> 'OPENING'
+       GROUP BY le.source_type, le.source_id
+     )
+     SELECT le.entry_id, le.source_type, le.source_id, le.entry_date,
+            le.debit, le.credit, le.narration,
+            COALESCE(ba.name, ca.name) AS side_name,
+            COALESCE(ba.code, ca.code) AS side_code,
+            m.touches_cash,
+            CASE WHEN le.ac_id IN (@cashAcId, @bankAcId, @chequesAcId)
+                   OR ba.ac_id IN (@cashAcId, @bankAcId, @chequesAcId)
+                 THEN 1 ELSE 0 END AS is_money_side,
+            CASE WHEN le.ac_id = @cashAcId OR ba.ac_id = @cashAcId THEN 1 ELSE 0 END AS is_cash_side
+     FROM money_lines m
+     JOIN dbo.ledger_entries le
+       ON le.source_type = m.source_type AND le.source_id = m.source_id
+     LEFT JOIN dbo.business_accounts ba ON ba.ba_id = le.ba_id
+     LEFT JOIN dbo.chart_of_accounts ca ON ca.ac_id = le.ac_id
+     -- NATURAL POSTING ORDER (entry_id), not credit-first. One source document can hold more than
+     -- one posting event — a receipt that later BOUNCED carries the original two lines and the
+     -- reversal's two under the same source_id — and the caller separates them by walking this
+     -- order until debits and credits balance. Reordering here would destroy that adjacency.
+     ORDER BY le.entry_date, le.source_type, le.source_id, le.entry_id`,
+    {
+      dateFrom: { type: sql.Date, value: date_from },
+      dateTo: { type: sql.Date, value: date_to },
+      cashAcId: { type: sql.Int, value: cashAcId },
+      bankAcId: { type: sql.Int, value: bankAcId },
+      chequesAcId: { type: sql.Int, value: chequesAcId },
+    },
+  );
+  return result.recordset;
+}
+
 // stays current with customers/vendors/employees/sub_customers/business_accounts automatically,
 // no app-side UNION to keep in sync by hand.
 async function overallDirectory(searchQuery, entityType) {
@@ -683,9 +757,9 @@ module.exports = {
   businessAccountBalancesAsOf,
   chartAccountBalancesAsOf,
   chartAccountsWithActivity,
-  cashBookRows,
-  cashBookNonCashRows,
   cashBookBankTransfers,
   cashBookChequeDeposits,
+  cashBookTransactionSides,
+  cashBookUnpostedSides,
   overallDirectory,
 };

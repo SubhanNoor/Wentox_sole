@@ -38,12 +38,31 @@ export function ReportCashBookContent() {
   const [result, setResult] = useState<CashBookResult>({
     opening_cash: 0, cash_received: 0, total_cash: 0, cash_paid: 0, cash_in_hand: 0,
     totals: { receipt_bank: 0, payment_bank: 0, receipt_cash: 0, payment_cash: 0 },
+    unposted_totals: { receipt_bank: 0, payment_bank: 0, receipt_cash: 0, payment_cash: 0 },
     rows: [], bank_transfers: [], cheque_deposits: [],
   });
   const [loading, setLoading] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const periodLabel = filterBy === 'date' ? specificDate : `${MONTHS[filterMonth]} ${filterYear}`;
+
+  // Computed from the server's own totals, not the filtered view: a search box narrowing the rows
+  // must not make a balanced book look broken.
+  // Outgoing amounts print as red parentheses via formatCurrency's negative branch. Negating a
+  // ZERO total would yield -0, which is NOT < 0, so it slips past that branch and prints the
+  // nonsense "Rs -0" (seen by the user on an empty Payments column, 2026-08-31).
+  const outgoing = (v: number) => (v === 0 ? 0 : -v);
+
+  // Both legs of every posting are listed and counted, so each pair must tie Receipts against
+  // Payments. Shown rather than assumed: if it ever doesn't, a document posted only one side.
+  // Defaulted, never read through directly: an older main process (Electron does not hot-reload
+  // it) returns a payload without this field, and reading through it blanked the whole page behind
+  // the error boundary — "Cannot read properties of undefined (reading 'receipt_bank')".
+  const unpostedTotals = result.unposted_totals ?? { receipt_bank: 0, payment_bank: 0, receipt_cash: 0, payment_cash: 0 };
+  const hasUnposted = result.rows.some(r => !r.is_posted);
+  const cashTies = result.totals.receipt_cash === result.totals.payment_cash;
+  const bankTies = result.totals.receipt_bank === result.totals.payment_bank;
+
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -73,16 +92,19 @@ export function ReportCashBookContent() {
 
   const handleExportExcel = () => {
     const headers = [
-      'No.', 'Account Name', 'Remarks',
+      'No.', 'Status', 'From / To', 'Account Name', 'Remarks',
       ...(showDate ? ['Date'] : []),
       'Type', 'Cheque No',
       'Receipts Cheq./Online', 'Payments Cheq./Online', 'Receipts Cash', 'Payments Cash',
     ];
-    const rows = filteredRows.map((row, idx) => [
-      idx + 1, row.account_name, row.remarks,
+    // Amounts stay RAW NUMBERS here, unlike the screen and print views: Excel has to be able to
+    // sum the columns, and "(Rs 3,500)" is text. The sign carries the direction instead.
+    const rows = filteredRows.map((row) => [
+      row.is_first_of_txn ? row.txn_seq : '', row.is_posted ? 'Posted' : 'Unposted', row.side, row.account_name, row.remarks,
       ...(showDate ? [formatDate(row.date)] : []),
       row.mode, row.cheque_no || '',
-      row.receipt_bank, row.payment_bank, row.receipt_cash, row.payment_cash,
+      row.receipt_bank, row.payment_bank ? -row.payment_bank : 0,
+      row.receipt_cash, row.payment_cash ? -row.payment_cash : 0,
     ]);
     exportRowsToExcel(`cash-book-${periodLabel}`, headers, rows);
   };
@@ -131,16 +153,26 @@ export function ReportCashBookContent() {
           <tbody>
             {filteredRows.map((row, idx) => (
               <tr key={idx}>
-                <td style={{ ...td('center'), fontFamily: 'monospace' }}>{idx + 1}</td>
-                <td style={{ ...td('left'), fontWeight: 'bold' }}>{row.account_name}</td>
+                <td style={{ ...td('center'), fontFamily: 'monospace' }}>{row.is_first_of_txn ? row.txn_seq : ''}</td>
+                <td style={{ ...td('left'), fontWeight: 'bold', paddingLeft: row.side === 'TO' ? '18px' : '6px', fontStyle: row.is_posted ? 'normal' : 'italic' }}>
+                  <span style={{ fontSize: '8px', fontWeight: 'bold', color: row.side === 'FROM' ? '#e11d48' : '#047857', marginRight: '5px' }}>
+                    {row.side === 'FROM' ? 'FROM' : '\u21b3 TO'}
+                  </span>
+                  {row.account_name}
+                  {/* Printed too — a paper cash book that silently mixes posted and unposted money
+                      is worse than one that doesn't list drafts at all. */}
+                  {!row.is_posted && row.is_first_of_txn && (
+                    <span style={{ fontSize: '8px', fontWeight: 'bold', marginLeft: '5px', color: '#92400e' }}>(UNPOSTED)</span>
+                  )}
+                </td>
                 <td style={td('left')}>{row.remarks || '—'}</td>
                 {showDate && <td style={{ ...td('left'), fontFamily: 'monospace' }}>{formatDate(row.date)}</td>}
                 <td style={td('left')}>{row.mode}</td>
                 <td style={{ ...td('left'), fontFamily: 'monospace' }}>{row.cheque_no || '—'}</td>
                 <td style={{ ...td('right'), fontFamily: 'monospace', color: '#047857' }}>{row.receipt_bank > 0 ? formatCurrency(row.receipt_bank) : '-'}</td>
-                <td style={{ ...td('right'), fontFamily: 'monospace', color: '#e11d48' }}>{row.payment_bank > 0 ? formatCurrency(row.payment_bank) : '-'}</td>
+                <td style={{ ...td('right'), fontFamily: 'monospace', color: '#e11d48' }}>{row.payment_bank > 0 ? formatCurrency(-row.payment_bank) : '-'}</td>
                 <td style={{ ...td('right'), fontFamily: 'monospace', fontWeight: 'bold', color: '#047857' }}>{row.receipt_cash > 0 ? formatCurrency(row.receipt_cash) : '-'}</td>
-                <td style={{ ...td('right'), fontFamily: 'monospace', fontWeight: 'bold', color: '#e11d48' }}>{row.payment_cash > 0 ? formatCurrency(row.payment_cash) : '-'}</td>
+                <td style={{ ...td('right'), fontFamily: 'monospace', fontWeight: 'bold', color: '#e11d48' }}>{row.payment_cash > 0 ? formatCurrency(-row.payment_cash) : '-'}</td>
               </tr>
             ))}
           </tbody>
@@ -148,9 +180,9 @@ export function ReportCashBookContent() {
             <tr>
               <td colSpan={showDate ? 6 : 5} style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold' }}>Totals :</td>
               <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(result.totals.receipt_bank)}</td>
-              <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(result.totals.payment_bank)}</td>
+              <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace', color: '#e11d48' }}>{formatCurrency(outgoing(result.totals.payment_bank))}</td>
               <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(result.totals.receipt_cash)}</td>
-              <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(result.totals.payment_cash)}</td>
+              <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace', color: '#e11d48' }}>{formatCurrency(outgoing(result.totals.payment_cash))}</td>
             </tr>
           </tfoot>
         </table>
@@ -320,9 +352,32 @@ export function ReportCashBookContent() {
                   <tr><td colSpan={colCount} className="text-center p-8 text-slate-400">No cash entries found for this period.</td></tr>
                 ) : (
                   filteredRows.map((row, idx) => (
-                    <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                      <td className="p-3 pl-4 text-center text-xs font-mono text-slate-400">{idx + 1}</td>
-                      <td className="p-3 font-semibold text-slate-800">{row.account_name}</td>
+                    // A transaction is a FROM row immediately followed by its TO row. The pair is
+                    // kept visually together by hanging the S# and the top border on the FROM row
+                    // only, so the eye reads "this money left here -> and landed here" as one unit
+                    // instead of two unrelated lines.
+                    <tr
+                      key={idx}
+                      className={`hover:bg-slate-50/50 ${row.is_first_of_txn ? 'border-t' : ''}`}
+                      style={{ borderColor: 'var(--border-table)' }}
+                    >
+                      <td className="p-3 pl-4 text-center text-xs font-mono text-slate-400">
+                        {row.is_first_of_txn ? row.txn_seq : ''}
+                      </td>
+                      <td className={`p-3 ${row.side === 'TO' ? 'pl-7' : ''}`}>
+                        <span className={`inline-block w-11 shrink-0 text-[9px] font-bold uppercase tracking-wider ${row.side === 'FROM' ? 'text-rose-500' : 'text-emerald-600'}`}>
+                          {row.side === 'FROM' ? 'From' : '\u21b3 To'}
+                        </span>
+                        <span className={row.is_posted ? 'font-semibold text-slate-800' : 'font-semibold text-slate-500 italic'}>{row.account_name}</span>
+                        {/* Only on the first line of an unposted entry, so the pair reads as one
+                            thing rather than repeating the badge. Money that has not moved has to
+                            be distinguishable at a glance from money that has. */}
+                        {!row.is_posted && row.is_first_of_txn && (
+                          <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-amber-100 text-amber-800 align-middle">
+                            Unposted
+                          </span>
+                        )}
+                      </td>
                       <td className="p-3 text-xs text-slate-500">{row.remarks || '-'}</td>
                       {showDate && <td className="p-3 text-xs font-mono text-slate-600">{formatDate(row.date)}</td>}
                       <td className="p-3">
@@ -332,9 +387,9 @@ export function ReportCashBookContent() {
                       </td>
                       <td className="p-3 text-xs font-mono text-slate-500">{row.cheque_no || '-'}</td>
                       <td className="p-3 text-right text-emerald-700">{row.receipt_bank > 0 ? formatCurrency(row.receipt_bank) : '-'}</td>
-                      <td className="p-3 text-right text-rose-700">{row.payment_bank > 0 ? formatCurrency(row.payment_bank) : '-'}</td>
+                      <td className="p-3 text-right text-rose-700">{row.payment_bank > 0 ? formatCurrency(-row.payment_bank) : '-'}</td>
                       <td className="p-3 text-right font-bold text-emerald-700">{row.receipt_cash > 0 ? formatCurrency(row.receipt_cash) : '-'}</td>
-                      <td className="p-3 text-right font-bold text-rose-700">{row.payment_cash > 0 ? formatCurrency(row.payment_cash) : '-'}</td>
+                      <td className="p-3 text-right font-bold text-rose-700">{row.payment_cash > 0 ? formatCurrency(-row.payment_cash) : '-'}</td>
                     </tr>
                   ))
                 )}
@@ -344,9 +399,45 @@ export function ReportCashBookContent() {
                 <tr className="bg-slate-50 font-bold border-t-2 border-b text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
                   <td colSpan={showDate ? 6 : 5} className="p-4 text-right font-lora">TOTALS</td>
                   <td className="p-4 text-right text-emerald-800">{formatCurrency(result.totals.receipt_bank)}</td>
-                  <td className="p-4 text-right text-rose-800">{formatCurrency(result.totals.payment_bank)}</td>
+                  <td className="p-4 text-right text-rose-800">{formatCurrency(outgoing(result.totals.payment_bank))}</td>
                   <td className="p-4 text-right text-emerald-800">{formatCurrency(result.totals.receipt_cash)}</td>
-                  <td className="p-4 text-right text-rose-800">{formatCurrency(result.totals.payment_cash)}</td>
+                  <td className="p-4 text-right text-rose-800">{formatCurrency(outgoing(result.totals.payment_cash))}</td>
+                </tr>
+                {/* Each pair must tie, since both legs are listed. If one ever doesn't, a document
+                    posted a single side and this says so rather than printing a wrong total. */}
+                <tr className="text-[11px] font-semibold" style={{ borderColor: 'var(--border-color)' }}>
+                  <td colSpan={showDate ? 6 : 5} className="px-4 pb-1 text-right text-slate-400 uppercase tracking-wider">Balanced</td>
+                  <td colSpan={2} className={`px-4 pb-1 text-center ${bankTies ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    {bankTies ? '\u2713 Cheq./Online ties' : `\u26a0 out by ${formatCurrency(result.totals.receipt_bank - result.totals.payment_bank)}`}
+                  </td>
+                  <td colSpan={2} className={`px-4 pb-1 text-center ${cashTies ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    {cashTies ? '\u2713 Cash ties' : `\u26a0 out by ${formatCurrency(result.totals.receipt_cash - result.totals.payment_cash)}`}
+                  </td>
+                </tr>
+                {/* Splits out the part of each column that hasn't been posted, so the posted-only
+                    figure stays readable — otherwise listing drafts would silently inflate a total
+                    the drawer summary below is read against. Hidden when everything is posted. */}
+                {hasUnposted && (
+                  <tr className="text-[11px] font-semibold text-amber-700">
+                    <td colSpan={showDate ? 6 : 5} className="px-4 pb-1 text-right uppercase tracking-wider">of which unposted</td>
+                    <td className="px-4 pb-1 text-right">{unpostedTotals.receipt_bank ? formatCurrency(unpostedTotals.receipt_bank) : '-'}</td>
+                    <td className="px-4 pb-1 text-right">{unpostedTotals.payment_bank ? formatCurrency(outgoing(unpostedTotals.payment_bank)) : '-'}</td>
+                    <td className="px-4 pb-1 text-right">{unpostedTotals.receipt_cash ? formatCurrency(unpostedTotals.receipt_cash) : '-'}</td>
+                    <td className="px-4 pb-1 text-right">{unpostedTotals.payment_cash ? formatCurrency(outgoing(unpostedTotals.payment_cash)) : '-'}</td>
+                  </tr>
+                )}
+
+                {/* Why these totals differ from the summary box inches below them. Deliberately
+                    states no ratio: the columns sum both legs of every entry, the drawer sums
+                    debits and credits on the cash account alone, and those two measures have no
+                    fixed relationship (a "twice the drawer" rule held on one day here purely
+                    because that day had one entry each way). */}
+                <tr className="text-[10px]">
+                  <td colSpan={showDate ? 10 : 9} className="px-4 pb-3 text-right text-slate-400">
+                    Columns count both sides of every entry{hasUnposted ? ', posted and unposted alike' : ''}.
+                    {' '}Cash Received / Cash Paid below count only what actually entered or left the
+                    {' '}cash drawer{hasUnposted ? ' — so nothing unposted reaches them' : ''}, so the two differ by design.
+                  </td>
                 </tr>
               </tfoot>
             </table>

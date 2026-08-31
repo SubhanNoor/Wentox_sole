@@ -4,6 +4,11 @@
 @import url("tailwindcss/utilities");
 
 :root {
+  /* Height of the fixed header stack (top bar + section nav + Quick Menu). Measured at 144px on
+     AppLayout's own <main>, which begins exactly below it. PageToasts offsets from this so a
+     floating message clears the header instead of hiding under it — update here if the header
+     gains or loses a row. */
+  --app-header-h: 144px;
   /* Soleria Brand Colors */
   --brand-navy: #1B2A41;
   --brand-gold: #B08D57;

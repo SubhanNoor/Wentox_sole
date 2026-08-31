@@ -1756,13 +1756,25 @@ export interface BusinessLedgerFilters extends DateRangeFilters {
 
 export type BusinessLedgerResult = BusinessLedgerSummaryRow[] | ({ account: BusinessLedgerSummaryRow } & AccountLedgerResult);
 
-// UC-37 Cash Book row. The four amount columns are mutually exclusive per row: a cash movement
-// fills receipt_cash/payment_cash, a cheque or online one fills receipt_bank/payment_bank. Only
-// rows with affects_cash reach the summary figures below — cheque/online lines are shown for
-// visibility and total in `totals` alone.
+// UC-37 Cash Book row — ONE SIDE of a transaction. Every money transaction emits two adjacent
+// rows: `side: 'FROM'` (the credit — the account the money left) immediately followed by
+// `side: 'TO'` (the debit — the account it landed in). Because both legs are present, the
+// Receipts and Payments totals tie exactly within each column pair.
+//
+// The four amount columns are mutually exclusive per row: the FROM row fills a RECEIPTS column
+// (the amount received, against the account it came from) and the TO row fills a PAYMENTS column
+// (the credit into the account it landed in). Which PAIR (cash vs cheque/online) is decided once
+// per transaction, so a transaction's two rows always sit in the same pair — that is what makes
+// the two totals tie.
+//
+// `affects_cash` marks OUR OWN cash side, not the column — it is what the drawer summary
+// (opening/received/paid/in hand) reads, which is why that summary can legitimately be unbalanced
+// while the column totals tie.
 export interface CashBookRow {
   date: string;
   account_name: string;
+  account_code: string | null;
+  side: 'FROM' | 'TO';
   remarks: string;
   mode: string;
   cheque_no: string | null;
@@ -1771,6 +1783,20 @@ export interface CashBookRow {
   receipt_cash: number;
   payment_cash: number;
   affects_cash: boolean;
+  is_money_side: boolean;
+  source_type: string;
+  source_id: number;
+  /** 1-based transaction number within the report. Several rows share one — a document is not
+   *  always a two-line pair (a bounced-then-reallocated cheque posts four lines under one id). */
+  /** True on the ONE row per posting that the column totals count. Both rows show a figure so a
+   *  debit always faces a credit, but counting both would double every column against the drawer. */
+  counts_in_total: boolean;
+  /** false for a document that has not been posted: shown for visibility, but it has moved no
+   *  money, so it never reaches Opening / Cash Received / Cash Paid / Cash In Hand. */
+  is_posted: boolean;
+  txn_seq: number;
+  /** First row of its transaction — drives the grouping border and where the number prints. */
+  is_first_of_txn: boolean;
 }
 
 export interface CashBookBankTransferRow {
@@ -1796,6 +1822,18 @@ export interface CashBookResult {
   cash_paid: number;
   cash_in_hand: number;
   totals: {
+    receipt_bank: number;
+    payment_bank: number;
+    receipt_cash: number;
+    payment_cash: number;
+  };
+  /** How much of each column is unposted. Lets the posted-only figure stay derivable, so listing
+   *  drafts doesn't quietly inflate a total the drawer summary is read against.
+   *
+   *  OPTIONAL on purpose: the renderer hot-reloads but Electron's main process does not, so a
+   *  freshly-built UI routinely talks to a backend from before this field existed. Typed optional
+   *  forces every read site to cope instead of destructuring straight into a crash. */
+  unposted_totals?: {
     receipt_bank: number;
     payment_bank: number;
     receipt_cash: number;
@@ -2189,7 +2227,7 @@ declare global {
         create: (payload: { voucher_date: string; remarks?: string }) => Promise<ApiResult<ExpenseVoucherRow>>;
         update: (payload: { id: number; voucher_date: string; remarks?: string }) => Promise<ApiResult<ExpenseVoucherRow>>;
         post: (payload: { id: number }) => Promise<ApiResult<VoucherActionResult<'expense_id', ExpenseVoucherRow>>>;
-        unpost: (payload: { id: number }) => Promise<ApiResult<VoucherActionResult<'expense_id', ExpenseVoucherRow>>>;
+        unpost: (payload: { id: number; reverse_endorsement?: boolean }) => Promise<ApiResult<VoucherActionResult<'expense_id', ExpenseVoucherRow>>>;
         remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
       };
       draftExpenses: {
@@ -3257,8 +3295,11 @@ export const expenseVouchers = {
     window.api ? window.api.expenseVouchers.update({ id, ...payload }).then(r => mapResult(r, normalizeExpenseVoucher)) : Promise.resolve(NO_BRIDGE),
   post: (id: number) =>
     window.api ? window.api.expenseVouchers.post({ id }).then(r => mapResult(r, d => ({ ...d, voucher: normalizeExpenseVoucher(d.voucher) }))) : Promise.resolve(NO_BRIDGE),
-  unpost: (id: number) =>
-    window.api ? window.api.expenseVouchers.unpost({ id }).then(r => mapResult(r, d => ({ ...d, voucher: normalizeExpenseVoucher(d.voucher) }))) : Promise.resolve(NO_BRIDGE),
+  // reverseEndorsement: a CHEQUE_ENDORSED line refuses to unpost on its own, because its money
+  // movement belongs to a cheque allocation rather than to the expense. Passing this says the
+  // operator confirmed that allocation should be reversed too (ExpensesPage prompts first).
+  unpost: (id: number, reverseEndorsement = false) =>
+    window.api ? window.api.expenseVouchers.unpost({ id, reverse_endorsement: reverseEndorsement }).then(r => mapResult(r, d => ({ ...d, voucher: normalizeExpenseVoucher(d.voucher) }))) : Promise.resolve(NO_BRIDGE),
   remove: (id: number, password: string) =>
     window.api ? window.api.expenseVouchers.remove({ id, password }) : Promise.resolve(NO_BRIDGE)
 };

@@ -118,6 +118,18 @@ async function confirm(draftId, userId, session) {
   const draft = await getById(draftId);
   if (session) await businessAccountsService.assertAccessible(draft.ba_id, session);
 
+  // A draft is not protected by dbo.receipts' CHECK constraints while it sits in draft_receipts,
+  // so re-validate the shape BEFORE trying to post it. Without this the INSERT is what fails, and
+  // a raw "The INSERT statement conflicted with the CHECK constraint CK_receipts_bank" is not an
+  // ApiError — wrap.js sanitizes it to "Unexpected error while posting this entry", which tells
+  // the user nothing about what to fix (reported 2026-08-31 on a receipt whose ONLINE account had
+  // been dropped by the unpost round-trip, since fixed in receipts.service.js#unconfirm).
+  if (draft.payment_mode === 'ONLINE' && !draft.bank_id && !draft.online_ba_id) {
+    throw ApiError.badRequest(
+      'This ONLINE entry names no account to receive the money. Open it, pick the account under "Received Into", save, then post.',
+    );
+  }
+
   const payload = {
     receipt_date: draft.receipt_date,
     ba_id: draft.ba_id,

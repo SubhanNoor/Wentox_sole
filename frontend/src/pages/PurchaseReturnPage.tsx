@@ -14,6 +14,7 @@ import {
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
+import PageToasts from '@/components/PageToasts';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
@@ -1133,15 +1134,14 @@ const nextSystemBillNo = useMemo(
           </aside>
         )}
 
-        {lookupError && (
-          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>
-        )}
-        {successMsg && (
-          <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
-        )}
-        {errorMsg && (
-          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
-        )}
+        {/* Floated into the right-hand gutter, not rendered inline: a message used to push the
+            toolbar and card down under the cursor mid-click (per the user, 2026-08-31). */}
+        <PageToasts
+          error={lookupError || errorMsg}
+          success={successMsg}
+          onDismissError={() => { setLookupError(''); setErrorMsg(''); }}
+          onDismissSuccess={() => setSuccessMsg('')}
+        />
 
         {activeTab === 'entry' && (
         <>

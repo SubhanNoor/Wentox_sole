@@ -208,6 +208,13 @@ async function resolveDebitSide(paymentMode, bankId, onlineBaId = null) {
     // before that migration has online_ba_id NULL and falls through to the bank lookup below —
     // the exact path it originally posted through, so reversals still land where they came from.
     if (onlineBaId) return { ba_id: onlineBaId };
+    // Neither column set. The CHECK constraint makes this unreachable for a CONFIRMED row, but a
+    // DRAFT carries no such constraint, so a bad draft reached here and failed inside the bank
+    // lookup as a raw driver/type error — which wrap.js correctly sanitizes to "Unexpected error",
+    // telling the user nothing (reported 2026-08-31). Name the real problem instead.
+    if (!bankId) {
+      throw ApiError.badRequest('This ONLINE entry names no account to receive the money — open it, pick an account and save, then post.');
+    }
     const bank = await bankAccountsService.getById(bankId);
     if (!bank.ba_id) throw ApiError.conflict('Bank account has no linked ledger account yet', 'NO_BANK_ACCOUNT');
     return { ba_id: bank.ba_id };
@@ -319,6 +326,11 @@ async function unconfirm(receiptId, session) {
       payment_mode: receipt.payment_mode,
       details: receipt.details,
       bank_id: receipt.bank_id,
+      // Must travel with bank_id, not instead of it: since migration 028 an ONLINE receipt names
+      // EITHER a bank OR any business account, and dropping this on the way back turned an
+      // unposted ONLINE receipt into a draft naming NEITHER — which then failed to re-post with an
+      // "Unexpected error" (reported by the user, 2026-08-31, on a 3,400 receipt).
+      online_ba_id: receipt.online_ba_id,
       remarks: receipt.remarks,
       // findById joins dbo.cheques, so these are the live cheque's own details for a CHEQUE
       // receipt and NULL for CASH/ONLINE.

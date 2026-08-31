@@ -15,6 +15,7 @@ import {
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Printer
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
+import PageToasts from '@/components/PageToasts';
 
 /**
  * Stock Voucher — a manual "add stock" document (legacy Journal Entry-style bound-record screen,
@@ -1135,13 +1136,15 @@ export default function StockVoucherPage() {
             toolbar (per the user: "the warning message must appear in right not above"). Out of
             document flow, so a validation message popping up no longer pushes the entry card
             down or shrinks the article grid's visible height. */}
-        {(lookupError || successMsg || errorMsg) && (
-          <div className="fixed top-20 right-4 z-50 flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]" data-no-print>
-            {lookupError && <div className="banner-error rounded-lg px-4 py-3 text-sm shadow-lg animate-fadeIn">{lookupError}</div>}
-            {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm shadow-lg animate-fadeIn">{successMsg}</div>}
-            {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm shadow-lg animate-fadeIn">{errorMsg}</div>}
-          </div>
-        )}
+        {/* Was a hand-rolled fixed panel at top-20 (80px), which tucked under the 144px header
+            stack. Same idea, now the shared component so the offset is right and every entry page
+            behaves alike. */}
+        <PageToasts
+          error={lookupError || errorMsg}
+          success={successMsg}
+          onDismissError={() => { setLookupError(''); setErrorMsg(''); }}
+          onDismissSuccess={() => setSuccessMsg('')}
+        />
 
         {activeTab === 'entry' && (
         <>

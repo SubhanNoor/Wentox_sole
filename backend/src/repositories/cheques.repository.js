@@ -177,12 +177,42 @@ async function insertAllocation(transaction, allocation) {
 // retrying — makes posting a CHEQUE_ENDORSED expense safely idempotent across a retry, since
 // endorseToExpense() and the expense's own status flip are two separately-committing operations
 // (see migration 006's note).
+// ACTIVE only. A reversed allocation keeps its row (status 'REVERSED') — reverse-never-erase — so
+// an unfiltered lookup answers "this expense was endorsed once" when the caller is really asking
+// "is this expense endorsed RIGHT NOW". expenses.service.js#post uses it to decide whether to
+// endorse, so without the filter, re-posting an expense whose endorsement had been reversed would
+// find the dead row, skip endorseToExpense(), and mark the expense CONFIRMED having moved no money
+// and left the cheque still free. Unreachable until unpost gained the ability to reverse its own
+// allocation (2026-08-31); that is what made this filter necessary.
 async function findAllocationByExpenseId(expenseId) {
+  const result = await query(
+    "SELECT * FROM dbo.cheque_allocations WHERE expense_id = @expenseId AND status = 'ACTIVE'",
+    { expenseId: { type: sql.Int, value: expenseId } },
+  );
+  return result.recordset[0] || null;
+}
+
+// Detaches a REVERSED allocation from the expense that made it, so that expense can be moved out
+// of dbo.expenses (unconfirm sends it to dbo.draft_expenses, which is a DELETE here, and
+// FK_cheque_allocations_expense blocks that while the pointer stands).
+//
+// Nothing of the audit trail is lost: the allocation keeps its receipt, target, amount, date,
+// remarks and REVERSED status, plus both sets of ledger entries. Only the back-pointer goes, and
+// it was about to dangle anyway — the document is re-created in draft_expenses under a NEW id, so
+// the old expense_id stops identifying anything the moment the row moves.
+// Any allocation for this expense regardless of status — the retry-safe counterpart to
+// findAllocationByExpenseId(). See reverseEndorsementFor() for why both exist.
+async function findAnyAllocationByExpenseId(expenseId) {
   const result = await query(
     'SELECT * FROM dbo.cheque_allocations WHERE expense_id = @expenseId',
     { expenseId: { type: sql.Int, value: expenseId } },
   );
   return result.recordset[0] || null;
+}
+
+async function detachAllocationFromExpense(transaction, allocationId) {
+  const request = requestWithParams(transaction, { allocationId: { type: sql.Int, value: allocationId } });
+  await request.query('UPDATE dbo.cheque_allocations SET expense_id = NULL WHERE allocation_id = @allocationId');
 }
 
 async function listAllocations(receiptId) {
@@ -331,6 +361,7 @@ async function insertLedgerEntries(transaction, rows) {
 module.exports = {
   insert, updateDetails, deleteCheque, findById, findByReceiptId, list, setBank, setStatus,
   markBounced, markReturned, insertAllocation, findAllocationByExpenseId, listAllocations,
+  detachAllocationFromExpense, findAnyAllocationByExpenseId,
   findAllocationById, listEndorsedAllocations, sumActiveAllocations,
   sumActiveAllocationsInTransaction, reverseAllocations, reverseOneAllocation, insertLedgerEntries,
 };

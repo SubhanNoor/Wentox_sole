@@ -410,50 +410,12 @@ async function accountBalance({ ba_id, as_of }, session) {
   return { ba_id, as_of: as_of || null, balance };
 }
 
-// UC-37 Cash Book — the "Account Name" column. A cash-book line names the OTHER side of the
-// movement, never "Cash" itself: money came from a customer or a bank, and went to an expense head,
-// a worker, a director or a bank. Which table holds that name depends on what produced the entry,
-// so this resolves per source_type and falls back to the type label when nothing better exists.
-// A transfer names whichever party isn't cash — a debit to cash came FROM the other account.
-function cashBookAccountName(r, formatted) {
-  switch (r.source_type) {
-    case 'EXPENSE': return r.ex_ba_name || formatted.type;
-    case 'RECEIPT':
-    case 'COMMISSION': return r.rc_account_name || formatted.type;
-    case 'TRANSFER': return (Number(r.debit) > 0 ? r.tr_from_name : r.tr_to_name) || formatted.type;
-    case 'WAGE_RUN': return r.wr_employee_name || formatted.type;
-    case 'SALARY_RUN': return formatted.type;
-    default: return formatted.type;
-  }
-}
-
-// TYPE column. Cash-ledger rows are cash by definition EXCEPT an expense paid by cheque against a
-// bank — which never reaches this ledger anyway — so the mode comes from the paying document where
-// one exists. expenses.payment_mode's CHEQUE_ISSUED/CHEQUE_ENDORSED both print as CHEQUE; the
-// distinction matters to the posting engine, not to someone reading a day book.
-function cashBookMode(r) {
-  const raw = r.ex_payment_mode || r.rc_payment_mode;
-  if (!raw) return 'CASH';
-  return raw.startsWith('CHEQUE') ? 'CHEQUE' : raw;
-}
-
-// Remarks column. Deliberately NOT formatLedgerRow()'s narration, which falls back to the paying
-// account's own name — useful on an Account Ledger, but here it would print the Account Name column
-// twice on every expense that carries no remarks of its own. Only the document's typed-in remarks
-// count; with none, the reference prints the payment type ("CASH"), so that is the fallback.
-// A bounce/return reversal still wins, same reasoning as formatLedgerRow(): its narration is the
-// only thing distinguishing the reversal row from the receipt it undoes.
-function cashBookRemarks(r, mode) {
-  if (r.narration && /reversal/i.test(r.narration)) return r.narration;
-  let remarks;
-  switch (r.source_type) {
-    case 'EXPENSE': remarks = r.ex_remarks; break;
-    case 'RECEIPT':
-    case 'COMMISSION': remarks = r.rc_remarks || r.rc_details; break;
-    case 'TRANSFER': remarks = r.tr_remarks; break;
-    default: remarks = r.narration; break;
-  }
-  return remarks || mode;
+// TYPE for a both-sides grid row. The ledger itself carries no payment mode, so it is inferred
+// from the money account the transaction touched: cash lines are CASH, anything reaching a bank or
+// the cheque drawer is CHEQUE/ONLINE. Both lines of a transaction share the value, since
+// touches_cash is decided once per transaction.
+function cashBookSideMode(r) {
+  return r.touches_cash === 1 ? 'CASH' : 'CHEQ./ONLINE';
 }
 
 // UC-37 Cash Book of the Day — CASH IN HAND's own ledger for a date or month, plus the same
@@ -467,7 +429,7 @@ function cashBookRemarks(r, mode) {
 // cash − Σ transfers FROM cash"). cheque_allocations stay out: they post against CHEQUES IN HAND
 // and already appear on that account's own ledger.
 //
-// The cheque/online side comes from repository.cashBookNonCashRows() — source documents, not the
+// The cheque/online side comes from repository.cashBookTransactionSides() — the ledger, not the
 // ledger, since by definition they never post to cash. They fill their own two columns and the
 // Totals strip, and are excluded from opening/received/paid/in-hand entirely: the summary box
 // answers "what did the cash drawer do today", which a cheque cannot change.
@@ -491,68 +453,269 @@ async function cashBook(filters = {}) {
     range = { date_from: todayISO(), date_to: todayISO() };
   }
 
-  const [opening, ledgerRaw, nonCashRaw, bankTransfersRaw, chequeDepositsRaw] = await Promise.all([
+  // The other two money heads, needed to scope the both-sides query below to money movements.
+  const bankAc = await findByCode(CODES.BANK_ACCOUNTS);
+  const chequesAc = await findByCode(CODES.CHEQUES_IN_HAND);
+
+  const [opening, ledgerRaw, sidesRaw, unpostedRaw, bankTransfersRaw, chequeDepositsRaw] = await Promise.all([
     repository.netBalance({
       ba_id: cashBa.ba_id, ac_id: cash.ac_id, up_to_date: range.date_from, exclusive: true,
     }),
     repository.ledgerRows({ ba_id: cashBa.ba_id, ac_id: cash.ac_id, ...range }),
-    repository.cashBookNonCashRows(range),
+    repository.cashBookTransactionSides(range, {
+      cashAcId: cash.ac_id,
+      bankAcId: bankAc ? bankAc.ac_id : -1,
+      chequesAcId: chequesAc ? chequesAc.ac_id : -1,
+    }),
+    repository.cashBookUnpostedSides(range, {
+      cashAcId: cash.ac_id,
+      chequesAcId: chequesAc ? chequesAc.ac_id : -1,
+    }),
     repository.cashBookBankTransfers(cashBa.ba_id, range),
     repository.cashBookChequeDeposits(range),
   ]);
 
-  const cashRows = ledgerRaw.map((r) => {
-    const formatted = formatLedgerRow(r);
+  // ── The grid: BOTH endpoints of every money transaction, as two adjacent rows ──────────────
+  // Rebuilt 2026-08-31 on the user's description: "if I receive a payment from customer then first
+  // row is shown from which the payment is received and then next row shows in which account the
+  // payment is received into". Previously each transaction printed ONE row naming only the far
+  // side, so a receipt never showed where the money landed and a payment never showed what it came
+  // out of.
+  //
+  // FROM is the credit line (money leaving that account), TO is the debit (money arriving) — true
+  // for both directions: a receipt is FROM customer TO cash; an expense is FROM cash TO vendor.
+  // The repository already returns credit-before-debit within each transaction, so DOM order is
+  // simply the order rows come back in.
+  //
+  // Because every transaction now contributes exactly its own debit AND its own credit, the two
+  // Receipts/Payments totals within a column pair tie by construction — which is what the user
+  // asked for. That only holds while BOTH lines of a transaction sit in the SAME pair, hence
+  // touches_cash being decided per transaction (in SQL) rather than per row.
+  // ── Split the raw lines into POSTING EVENTS, not documents ────────────────────────────────
+  // source_id alone is the wrong grouping key: one document can hold several postings. A cheque
+  // receipt that later BOUNCED writes its original Dr/Cr pair AND the reversal's pair under the
+  // SAME source_id, so keying on it printed a single 4-row entry mixing a receipt with its own
+  // undo (reported by the user, 2026-08-31: "why is entry 9 split into 4 rows").
+  //
+  // Every posting is balanced by construction, so walking the lines in entry_id order and closing
+  // a batch the moment running debits equal running credits recovers the real events — here,
+  // "Receipt #2" and "BOUNCED reversal of receipt #2" as two separate numbered entries. This needs
+  // no narration parsing and holds for postings of any size (a receipt with commission is 3+
+  // lines), which is why it is done by arithmetic rather than by matching text.
+  const batches = [];
+  let current = [];
+  let runDr = 0;
+  let runCr = 0;
+  let lastDocKey = null;
+  for (const r of sidesRaw) {
+    const docKey = `${r.source_type}#${r.source_id}`;
+    // A new document always starts a new batch, even if the previous one never balanced (it
+    // cannot, but a half-posted document must not swallow the next one's lines).
+    if (docKey !== lastDocKey && current.length) {
+      batches.push(current); current = []; runDr = 0; runCr = 0;
+    }
+    lastDocKey = docKey;
+    current.push(r);
+    runDr += Number(r.debit);
+    runCr += Number(r.credit);
+    if (runDr === runCr && runDr > 0) {
+      batches.push(current); current = []; runDr = 0; runCr = 0;
+    }
+  }
+  if (current.length) batches.push(current);
+
+  // Within a posting, FROM (the credits — money leaving) is listed before TO (the debits).
+  //
+  // Each posting also gets a DIRECTION and a single amount-carrying row. Both legs used to carry
+  // the amount, which made the column totals exactly double the drawer (the user, 2026-08-31:
+  // "receipt cash is 24000 and cash receive is 12000, numbers don't match") and — worse — printed
+  // an expense's own cash leg under RECEIPTS, claiming cash had received money it actually paid
+  // out. Direction is a property of the posting, not of a row, so it is decided once here:
+  //
+  //   RECEIPT / COMMISSION            money IN  -> the amount belongs in a Receipts column
+  //   EXPENSE / CHEQUE_ALLOCATION     money OUT -> a Payments column
+  //   TRANSFER / DEPOSIT / anything   read our own money leg: debited = IN, credited = OUT
+  //
+  // The amount then sits on the COUNTERPARTY row — who paid us, or who we paid — because that is
+  // the line a reader scans for. Money IN puts it on FROM (the payer); money OUT puts it on TO
+  // (the payee). Our own account's row still prints, naming where the money landed or came from,
+  // just without repeating the figure. One amount per posting is what lets the column totals
+  // reconcile against Cash Received / Cash Paid in the summary box.
+  const IN_TYPES = new Set(['RECEIPT', 'COMMISSION']);
+  const OUT_TYPES = new Set(['EXPENSE', 'CHEQUE_ALLOCATION']);
+  let txnSeq = 0;
+  const ordered = [];
+  for (const batch of batches) {
+    txnSeq += 1;
+    const credits = batch.filter((r) => !(Number(r.debit) > 0));
+    const debits = batch.filter((r) => Number(r.debit) > 0);
+
+    const type = batch[0].source_type;
+    const cashLegs = batch.filter((r) => r.is_cash_side === 1);
+    const isCashBatch = cashLegs.length > 0;
+    // Both legs on the cash account — a receipt whose PAYING account is Cash itself, for instance
+    // (Receipt #1029 in this data). It nets to nothing, but the drawer counts it on both sides, so
+    // the grid must too or the two disagree. Each leg then carries its own direction.
+    const selfContained = isCashBatch && cashLegs.length === batch.length;
+
+    let isIn;
+    if (isCashBatch) {
+      // Direction comes from what CASH itself did, never from the document type: Cash Received and
+      // Cash Paid in the summary box are literally the debits and credits on this account, so
+      // reading the same leg is what makes the column totals agree with them by construction.
+      isIn = Number(cashLegs[0].debit) > 0;
+    } else if (IN_TYPES.has(type)) isIn = true;
+    else if (OUT_TYPES.has(type)) isIn = false;
+    else {
+      const ourLeg = batch.find((r) => r.is_money_side === 1);
+      isIn = ourLeg ? Number(ourLeg.debit) > 0 : true;
+    }
+    const carrierSide = isIn ? 'FROM' : 'TO';
+
+    [...credits, ...debits].forEach((r, i) => {
+      const side = Number(r.debit) > 0 ? 'TO' : 'FROM';
+      ordered.push({
+        ...r,
+        __txnSeq: txnSeq,
+        __isFirst: i === 0,
+        // Self-contained: every leg speaks for itself, so each is its own direction and carrier.
+        __isIn: selfContained ? side === 'TO' : isIn,
+        __carries: selfContained ? true : side === carrierSide,
+      });
+    });
+  }
+
+  const rows = ordered.map((r) => {
+    const isFirstOfTxn = r.__isFirst;
     const debit = Number(r.debit);
     const credit = Number(r.credit);
-    const mode = cashBookMode(r);
+    const isDebit = debit > 0;
+    // FROM is the credit line — the account the money left. TO is the debit, where it arrived.
+    const isFrom = !isDebit;
+    const amount = isDebit ? debit : credit;
+    const isCashPair = r.touches_cash === 1;
     return {
-      date: formatted.date,
-      account_name: cashBookAccountName(r, formatted),
-      remarks: cashBookRemarks(r, mode),
-      mode,
-      cheque_no: formatted.cheque_no || r.ex_issued_cheque_no || null,
-      receipt_bank: 0,
-      payment_bank: 0,
-      receipt_cash: debit,
-      payment_cash: credit,
-      affects_cash: true,
+      date: toISODate(r.entry_date),
+      // Kept as `account_name` so the existing column, search filter and Excel export keep working;
+      // it now names THIS side of the entry rather than always the far one.
+      account_name: r.side_name || '—',
+      account_code: r.side_code || null,
+      // FROM/TO is what makes a pair readable at a glance without re-deriving it from the columns.
+      side: isDebit ? 'TO' : 'FROM',
+      remarks: r.narration || '',
+      mode: cashBookSideMode(r),
+      cheque_no: null,
+      // DISPLAY: every row carries its own figure, so a debit on one line always faces a credit on
+      // the adjacent one (the user, 2026-08-31). FROM prints under Receipts, TO under Payments,
+      // within whichever pair the posting belongs to.
+      receipt_bank: !isCashPair && isFrom ? amount : 0,
+      payment_bank: !isCashPair && !isFrom ? amount : 0,
+      receipt_cash: isCashPair && isFrom ? amount : 0,
+      payment_cash: isCashPair && !isFrom ? amount : 0,
+      // Marks the leg that IS the transaction rather than its mirror — the receipt itself, not the
+      // contra. Kept for callers that need "how much actually moved" (and for the drawer cross-
+      // check below); it deliberately does NOT gate the column totals any more. A totals row that
+      // doesn't add up its own column is indefensible however sound the reasoning behind it, and
+      // that is what gating produced: a Payments Cheq./Online column showing four red figures
+      // under a total of Rs 0 (the user, 2026-08-31 — "total still don't match").
+      counts_in_total: r.__carries,
+      // Our own money account vs the counterparty — drives the cash summary, never the columns.
+      affects_cash: r.is_cash_side === 1,
+      is_money_side: r.is_money_side === 1,
+      source_type: r.source_type,
+      source_id: r.source_id,
+      txn_seq: r.__txnSeq,
+      is_first_of_txn: isFirstOfTxn,
+      is_posted: true,
     };
   });
 
-  const nonCashRows = nonCashRaw.map((r) => {
-    const amount = Number(r.amount);
-    // Only 'RECEIPT' is money in. 'EXPENSE' and 'ALLOCATION' (a cheque endorsed to a vendor) are
-    // both outflows and land in Payments Cheq./Online.
-    const isReceipt = r.kind === 'RECEIPT';
-    return {
-      date: r.entry_date,
-      account_name: r.account_name,
-      remarks: r.remarks || '',
-      mode: r.payment_mode.startsWith('CHEQUE') ? 'CHEQUE' : r.payment_mode,
-      cheque_no: r.cheque_no || null,
-      receipt_bank: isReceipt ? amount : 0,
-      payment_bank: isReceipt ? 0 : amount,
-      receipt_cash: 0,
-      payment_cash: 0,
+  // ── Unposted documents, in the same two-row shape ──────────────────────────────────────────
+  // Listed alongside the posted ones (per the user, 2026-08-31) and flagged is_posted: false. They
+  // have no ledger entries, so both ends are derived from the document itself — see
+  // repository.cashBookUnpostedSides for how the far side resolves.
+  //
+  // Direction comes from the document type rather than from a cash leg, because there is no ledger
+  // to read: a receipt brings money in, an expense sends it out. FROM/TO then follow the same rule
+  // as the posted rows — FROM is where the money leaves, TO where it lands.
+  let unpostedSeq = txnSeq;
+  for (const u of unpostedRaw) {
+    unpostedSeq += 1;
+    const amount = Number(u.amount);
+    const isIn = u.kind === 'RECEIPT';
+    const isCashPair = u.touches_cash === 1;
+    // A draft table carries no CHECK constraints, so a malformed draft (ONLINE naming no account,
+    // say) can reach here with no far side. It still prints, named as such — that is exactly the
+    // row someone reading this report needs to notice.
+    const money = { name: u.money_name || '(no account set)', code: u.money_code || null };
+    const party = { name: u.party_name || '(no account set)', code: u.party_code || null };
+    const from = isIn ? party : money;
+    const to = isIn ? money : party;
+    const base = {
+      date: toISODate(u.entry_date),
+      remarks: u.remarks || `${isIn ? 'Receipt' : 'Expense'} — not yet posted`,
+      mode: isCashPair ? 'CASH' : 'CHEQ./ONLINE',
+      cheque_no: u.cheque_no || null,
+      // Never true: an unposted document has moved nothing in or out of the drawer, which is why
+      // it cannot reach the Opening/Received/Paid/In Hand figures below.
       affects_cash: false,
+      is_money_side: false,
+      source_type: u.kind,
+      source_id: u.source_id,
+      txn_seq: unpostedSeq,
+      is_posted: false,
     };
-  });
+    rows.push({
+      ...base,
+      account_name: from.name,
+      account_code: from.code,
+      side: 'FROM',
+      is_first_of_txn: true,
+      receipt_bank: !isCashPair ? amount : 0,
+      payment_bank: 0,
+      receipt_cash: isCashPair ? amount : 0,
+      payment_cash: 0,
+      counts_in_total: isIn,
+    });
+    rows.push({
+      ...base,
+      account_name: to.name,
+      account_code: to.code,
+      side: 'TO',
+      is_first_of_txn: false,
+      receipt_bank: 0,
+      payment_bank: !isCashPair ? amount : 0,
+      receipt_cash: 0,
+      payment_cash: isCashPair ? amount : 0,
+      counts_in_total: !isIn,
+    });
+  }
 
-  // Cash first within a day, then that day's cheque/online lines. Grouping the view-only rows after
-  // the ones that actually moved money keeps the four amount columns readable on a month view;
-  // on a single date (the reference layout) it simply puts the cheques at the bottom of the page.
-  // Array.prototype.sort is stable (ES2019), so equal dates keep the concat order above.
-  const rows = [...cashRows, ...nonCashRows]
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  // Chronological, so an unposted entry sits on its own day among the posted ones rather than in a
+  // block at the end. Array.prototype.sort is stable (ES2019), so a posting and a draft on the same
+  // date keep the order they were appended in — posted first.
+  rows.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
+  // Every row, so each column adds up to the total printed beneath it. Both legs of a posting are
+  // listed, so each pair also ties Receipts against Payments — the double-entry check the user
+  // asked for originally. These totals are therefore TWICE the drawer's Cash Received / Cash Paid,
+  // which count only the cash leg; the two answer different questions and the footer says so.
   const sum = (key) => rows.reduce((acc, r) => acc + r[key], 0);
-  const cashReceived = sum('receipt_cash');
-  const cashPaid = sum('payment_cash');
+
+  // Opening/Received/Paid/In Hand describe the DRAWER, so they read the cash account's own ledger
+  // lines (ledgerRaw), NOT the grid. The grid now carries both sides of every transaction, so
+  // summing its cash columns would add the counterparty's leg too and roughly double these.
+  const cashReceived = ledgerRaw.reduce((acc, r) => acc + Number(r.debit), 0);
+  const cashPaid = ledgerRaw.reduce((acc, r) => acc + Number(r.credit), 0);
+
+  // How much of each column is money that has NOT moved yet. Printed under the totals so the
+  // posted-only figure stays derivable — otherwise listing drafts would quietly inflate a total
+  // that the drawer summary is expected to be reconcilable against.
+  const unpostedSum = (key) => rows.reduce((acc, r) => acc + (r.is_posted ? 0 : r[key]), 0);
 
   // CB-01/CB-03: bank-to-bank transfers and cheque deposits, listed for visibility only — neither
   // is a cash movement, so neither feeds any total above (same "informational, not counted"
-  // treatment cashBookNonCashRows already gives cheque/online receipts and payments).
+  // treatment the grid's own cheque/online rows already get).
   const bankTransfers = bankTransfersRaw.map((r) => ({
     date: toISODate(r.entry_date),
     from_name: r.from_name,
@@ -577,8 +740,17 @@ async function cashBook(filters = {}) {
     totals: {
       receipt_bank: sum('receipt_bank'),
       payment_bank: sum('payment_bank'),
-      receipt_cash: cashReceived,
-      payment_cash: cashPaid,
+      // The GRID's own column totals — both sides of every transaction, so each pair ties.
+      // Deliberately not cashReceived/cashPaid: those describe the drawer and appear in the
+      // summary box above, where they are meant to differ (the gap is the day's net movement).
+      receipt_cash: sum('receipt_cash'),
+      payment_cash: sum('payment_cash'),
+    },
+    unposted_totals: {
+      receipt_bank: unpostedSum('receipt_bank'),
+      payment_bank: unpostedSum('payment_bank'),
+      receipt_cash: unpostedSum('receipt_cash'),
+      payment_cash: unpostedSum('payment_cash'),
     },
     rows,
     bank_transfers: bankTransfers,

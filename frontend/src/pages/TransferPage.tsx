@@ -3,6 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import AccountBalancePanel from '@/components/AccountBalancePanel';
+import PageToasts from '@/components/PageToasts';
 import * as api from '@/lib/api';
 import type { BankAccountRow, BusinessAccountRow, TransferRow, TransferCreateInput, DepositRow, DepositCreateInput } from '@/lib/api';
 import { formatDate, toDateInputValue } from '@/lib/utils';
@@ -374,9 +375,14 @@ export default function TransferPage() {
     <AppLayout pageTitle="Bank Transactions" headerAction={tabBar}>
       <div className="mx-auto" style={{ maxWidth: 1750 }}>
 
-        {lookupError && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{lookupError}</div>}
-        {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>}
-        {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>}
+        {/* Floated into the right-hand gutter, not rendered inline: a message used to push the
+            toolbar and card down under the cursor mid-click (per the user, 2026-08-31). */}
+        <PageToasts
+          error={lookupError || errorMsg}
+          success={successMsg}
+          onDismissError={() => { setLookupError(''); setErrorMsg(''); }}
+          onDismissSuccess={() => setSuccessMsg('')}
+        />
 
         <div key={mode} className="animate-in fade-in slide-in-from-bottom-3 duration-300">
           {mode === 'transfer' ? (

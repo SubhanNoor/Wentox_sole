@@ -11,7 +11,7 @@ const chartAccountsRepository = require('../repositories/chartAccounts.repositor
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 const CODES = require('../constants/reservedAccounts');
-const { toISODate } = require('../utils/dates');
+const { toISODate, todayISO } = require('../utils/dates');
 
 // Resolves who gets paid — either a vendor (pick a vendor, resolves to vendors.ba_id) or any other
 // business account directly (a generic expense head). Either way expenses.ba_id ends up holding
@@ -179,6 +179,13 @@ async function resolveCreditSide(paymentMode, bankId, onlineBaId = null) {
   // the same path it originally posted through. CHEQUE_ISSUED never reaches this branch with a
   // value set, since validate() only accepts online_ba_id for ONLINE.
   if (paymentMode === 'ONLINE' && onlineBaId) return { ba_id: onlineBaId };
+  // Neither column set on an ONLINE row. Unreachable for a CONFIRMED row (the CHECK forbids it)
+  // but a DRAFT carries no such constraint, so say what is actually wrong rather than failing
+  // inside the bank lookup as a raw error that wrap.js can only report as "Unexpected error".
+  // Same fix as receipts.service.js#resolveDebitSide.
+  if (paymentMode === 'ONLINE' && !bankId) {
+    throw ApiError.badRequest('This ONLINE entry names no account to pay from — open it, pick an account and save, then post.');
+  }
   // ONLINE (bank-named) or CHEQUE_ISSUED
   const bank = await bankAccountsService.getById(bankId);
   if (!bank.ba_id) throw ApiError.conflict('Bank account has no linked ledger account yet', 'NO_BANK_ACCOUNT');
@@ -237,6 +244,46 @@ async function post(expenseId, userId, session) {
   return getById(expenseId);
 }
 
+// Shared by unpost() and unconfirm(): undoes the cheque endorsement a CHEQUE_ENDORSED expense
+// made when it posted, so the document and the money movement come apart together.
+//
+// Its ledger rows belong to a cheque_allocations row (source_type 'CHEQUE_ALLOCATION'), not to the
+// expense — see post()'s own comment — so unposting the expense alone would leave the cheque spent
+// while the document read "unposted". That is what the USE_CHEQUE_REVERSAL guard protects against,
+// and `reverseEndorsement` is the caller stating it has confirmed the reversal with the operator
+// (ExpensesPage prompts before setting it).
+//
+// reverseAllocation() commits its own transaction, exactly as endorseToExpense() does on the way
+// in, so this is two commits like post() is. The ACTIVE lookup is what makes a retry safe: if the
+// first commit succeeded and the second failed, the allocation is already REVERSED and this
+// becomes a no-op instead of double-reversing. Same reasoning as post()'s existingAllocation check.
+async function reverseEndorsementFor(expense, userId) {
+  // Deliberately NOT findAllocationByExpenseId(), which is ACTIVE-only: a retry after a
+  // half-finished attempt must still find the already-REVERSED row, so it can clear the
+  // back-pointer that the failed run left behind.
+  const allocation = await chequesRepository.findAnyAllocationByExpenseId(expense.expense_id);
+  if (!allocation) return; // never endorsed — nothing owed
+
+  if (allocation.status === 'ACTIVE') {
+    await chequesService.reverseAllocation(
+      allocation.allocation_id,
+      {
+        // Today, not the expense date: the reversal happens now and says so. The endorsement keeps
+        // its own date, so the two sit on their real days rather than netting out on a backdate.
+        date: todayISO(),
+        remarks: `Unposted expense #${expense.expense_id}`,
+      },
+      userId,
+    );
+  }
+
+  // Drop the back-pointer, or FK_cheque_allocations_expense blocks unconfirm() from moving the
+  // expense out of dbo.expenses (that move is a DELETE). Outside the ACTIVE branch on purpose, so
+  // a retry still clears a link a half-finished attempt left standing.
+  await withTransaction((transaction) =>
+    chequesRepository.detachAllocationFromExpense(transaction, allocation.allocation_id));
+}
+
 // CASH/ONLINE/CHEQUE_ISSUED unpost normally. CHEQUE_ENDORSED is deliberately NOT unpostable here —
 // its real ledger effect belongs to a cheque_allocations row, and the only correct way to undo a
 // cheque disposition is the cheque's own bounce/return-to-sender flow (which already knows how to
@@ -247,17 +294,20 @@ async function post(expenseId, userId, session) {
 // rows, so an unguarded unpost would erase the reversal history too and strand issued_cheque_status
 // at a terminal value on a DRAFT row (same class of bug receipts.service.js#unpost() already guards
 // against for a disposed-of received cheque).
-async function unpost(expenseId, session) {
+async function unpost(expenseId, session, { reverseEndorsement = false } = {}, userId = null) {
   const expense = await getById(expenseId);
   if (expense.ba_id) await businessAccountsService.assertAccessible(expense.ba_id, session);
   if (expense.status !== 'CONFIRMED') {
     throw ApiError.conflict('Expense is not posted', 'NOT_POSTED');
   }
   if (expense.payment_mode === 'CHEQUE_ENDORSED') {
-    throw ApiError.conflict(
-      'A cheque-endorsed expense cannot be unposted directly — bounce or return the cheque itself instead',
-      'USE_CHEQUE_REVERSAL',
-    );
+    if (!reverseEndorsement) {
+      throw ApiError.conflict(
+        'A cheque-endorsed expense cannot be unposted directly — reverse the endorsement first (Cheque \u2192 Returns), or confirm the prompt to do both at once',
+        'USE_CHEQUE_REVERSAL',
+      );
+    }
+    await reverseEndorsementFor(expense, userId ?? session?.userId ?? null);
   }
   if (expense.payment_mode === 'CHEQUE_ISSUED' && expense.issued_cheque_status !== 'PENDING') {
     throw ApiError.conflict(
@@ -287,17 +337,20 @@ async function unpost(expenseId, session) {
 //   - a CHEQUE_ISSUED cheque that has already bounced/been returned is refused
 //     (ISSUED_CHEQUE_TERMINAL): deleteLedgerEntries() cannot tell the original post's rows apart
 //     from the reversal's, so unposting would erase the reversal history too.
-async function unconfirm(expenseId, session) {
+async function unconfirm(expenseId, session, { reverseEndorsement = false } = {}, userId = null) {
   const expense = await getById(expenseId);
   if (expense.ba_id) await businessAccountsService.assertAccessible(expense.ba_id, session);
   if (expense.status !== 'CONFIRMED') {
     throw ApiError.conflict('Expense is not posted', 'NOT_POSTED');
   }
   if (expense.payment_mode === 'CHEQUE_ENDORSED') {
-    throw ApiError.conflict(
-      'A cheque-endorsed expense cannot be unposted directly — bounce or return the cheque itself instead',
-      'USE_CHEQUE_REVERSAL',
-    );
+    if (!reverseEndorsement) {
+      throw ApiError.conflict(
+        'A cheque-endorsed expense cannot be unposted directly — reverse the endorsement first (Cheque \u2192 Returns), or confirm the prompt to do both at once',
+        'USE_CHEQUE_REVERSAL',
+      );
+    }
+    await reverseEndorsementFor(expense, userId ?? session?.userId ?? null);
   }
   if (expense.payment_mode === 'CHEQUE_ISSUED' && expense.issued_cheque_status !== 'PENDING') {
     throw ApiError.conflict(
@@ -317,6 +370,9 @@ async function unconfirm(expenseId, session) {
       details: expense.details,
       cheque_id: expense.cheque_id,
       bank_id: expense.bank_id,
+      // Same round-trip gap as receipts.service.js#unpost — see its comment. An ONLINE expense
+      // settled against a non-bank business account lost its only account on the way back.
+      online_ba_id: expense.online_ba_id,
       issued_cheque_no: expense.issued_cheque_no,
       issued_cheque_date: expense.issued_cheque_date,
       remarks: expense.remarks,

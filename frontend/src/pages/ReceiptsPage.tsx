@@ -3,6 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
+import PageToasts from '@/components/PageToasts';
 import * as api from '@/lib/api';
 import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
@@ -200,7 +201,12 @@ export default function ReceiptsPage() {
   const [voucher, setVoucher] = useState<ReceiptVoucherRow | null>(null);
   const [voucherRemarks, setVoucherRemarks] = usePersistentField('receipts', 'voucherRemarks', '');
   const [voucherBusy, setVoucherBusy] = useState(false);
-  const [voucherResult, setVoucherResult] = useState<VoucherActionResult<'receipt_id', ReceiptVoucherRow> | null>(null);
+  // Action stored WITH the result, not inferred from it: when every line fails, both `posted` and
+  // `unposted` come back empty and inference picks the wrong verb — the bug this replaces, which
+  // said "could not be posted" after an Unpost.
+  const [voucherResult, setVoucherResult] = useState<
+    { action: 'post' | 'unpost'; data: VoucherActionResult<'receipt_id', ReceiptVoucherRow> } | null
+  >(null);
 
   // `voucher` itself is plain useState (re-fetched from the server, never something to hand-persist
   // — see refreshVoucher's own comment), so it was empty again every time this page remounted after
@@ -690,7 +696,7 @@ export default function ReceiptsPage() {
     setVoucherBusy(false);
 
     if (!res.ok) { fail('Failed to post voucher: ' + res.error.message); return; }
-    setVoucherResult(res.data);
+    setVoucherResult({ action: 'post', data: res.data });
     setVoucher(res.data.voucher);
     setBalanceRefreshKey(k => k + 1);
     refreshAllVouchers();
@@ -709,7 +715,7 @@ export default function ReceiptsPage() {
     setVoucherBusy(false);
 
     if (!res.ok) { fail('Failed to unpost voucher: ' + res.error.message); return; }
-    setVoucherResult(res.data);
+    setVoucherResult({ action: 'unpost', data: res.data });
     setVoucher(res.data.voucher);
     setBalanceRefreshKey(k => k + 1);
     refreshAllVouchers();
@@ -1110,15 +1116,17 @@ const nextVoucherNo = useMemo(
                 and "Post All" moved into that same toolbar. */}
 
             {/* Banner Alerts */}
-            {lookupError && (
-              <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{lookupError}</div>
-            )}
-            {successMsg && (
-              <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>
-            )}
-            {errorMsg && (
-              <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
-            )}
+            {/* Floated into the right-hand gutter rather than rendered here, so a message never
+                pushes the toolbar and card down under the cursor (per the user, 2026-08-31).
+                lookupError and errorMsg share the error slot — a page-load failure and an action
+                failure are never usefully on screen at once, and lookupError wins because nothing
+                else will work until the lookups load. */}
+            <PageToasts
+              error={lookupError || errorMsg}
+              success={successMsg}
+              onDismissError={() => { setLookupError(''); setErrorMsg(''); }}
+              onDismissSuccess={() => setSuccessMsg('')}
+            />
 
             {/* RJ-03: Toolbar — every action for the voucher on screen (Done, Post/Un Post, New
                 Voucher, the endorsement's own Post/Unpost, and record navigation) lives in one
@@ -1915,13 +1923,19 @@ const nextVoucherNo = useMemo(
                   {/* Per-line outcome of the last Post/Un Post. Deliberately NOT auto-hidden on a
                       timer like the ordinary banner: a voucher can post 8 of 10 lines, and the two
                       that failed are the entire point of the message. */}
-                  {voucherResult && voucherResult.failed.length > 0 && (
+                  {voucherResult && voucherResult.data.failed.length > 0 && (
                     <div className="mt-4 p-3 rounded-lg bg-rose-50 border border-rose-200">
                       <p className="text-xs font-bold text-rose-900">
-                        {voucherResult.failed.length} entr{voucherResult.failed.length === 1 ? 'y' : 'ies'} could not be posted — the rest went through.
+                        {/* Verb from the action that ran, and "the rest went through" only when
+                            some entries actually did — see ExpensesPage for the same fix. */}
+                        {voucherResult.data.failed.length} entr{voucherResult.data.failed.length === 1 ? 'y' : 'ies'}
+                        {' '}could not be {voucherResult.action === 'post' ? 'posted' : 'unposted'}
+                        {(voucherResult.action === 'post'
+                          ? voucherResult.data.posted?.length
+                          : voucherResult.data.unposted?.length) ? ' — the rest went through' : ''}.
                       </p>
                       <ul className="mt-1.5 space-y-1">
-                        {voucherResult.failed.map(f => (
+                        {voucherResult.data.failed.map(f => (
                           <li key={f.receipt_id} className="text-xs text-rose-800">
                             <span className="font-semibold">{f.account_name || `#${f.receipt_id}`}</span>
                             {' '}({formatCurrency(Number(f.amount))}){' — '}{f.message}

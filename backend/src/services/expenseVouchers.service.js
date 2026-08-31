@@ -158,7 +158,11 @@ async function post(voucherId, session) {
 // Reverses the whole voucher, line by line, with the same per-line isolation and reporting as
 // post(). A line that refuses to unpost is reported and leaves the rest reversed — the voucher then
 // reads PARTIAL, which is the truth.
-async function unpost(voucherId, session) {
+// `reverseEndorsement` rides through to each line. A CHEQUE_ENDORSED line refuses to unpost on its
+// own — its money movement belongs to a cheque allocation, not to the expense — and this flag is
+// the caller confirming the operator agreed to undo that allocation too. Off by default, so the
+// refusal stands for anything that hasn't asked.
+async function unpost(voucherId, session, { reverseEndorsement = false } = {}) {
   const voucher = await getById(voucherId);
 
   const unposted = [];
@@ -167,7 +171,7 @@ async function unpost(voucherId, session) {
   for (const line of voucher.lines) {
     if (line.status !== 'CONFIRMED') continue;
     try {
-      await expensesService.unconfirm(line.expense_id, session);
+      await expensesService.unconfirm(line.expense_id, session, { reverseEndorsement }, session?.userId ?? null);
       unposted.push({ expense_id: line.expense_id, amount: Number(line.amount) });
     } catch (err) {
       if (!err.status) console.error(`expenseVouchers.unpost: unexpected failure on line ${line.expense_id}:`, err);
