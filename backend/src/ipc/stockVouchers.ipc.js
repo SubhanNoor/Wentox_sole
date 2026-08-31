@@ -58,4 +58,11 @@ module.exports = function register() {
     const session = requireSession();
     return service.postAll(payload?.ids, session.userId);
   }));
+
+  // Per-variant cartons/pairs already sitting in OTHER draft vouchers — the entry strip's Stock
+  // in Hand readout subtracts these from real stock, per the user (2026-08-31).
+  ipcMain.handle('stock-vouchers:unpostedReservations', wrap((payload) => {
+    requireSession();
+    return service.unpostedReservations(payload?.excludeStockVoucherId);
+  }));
 };

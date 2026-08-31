@@ -110,6 +110,22 @@ export default function StockVoucherPage() {
     };
   }, [stockRows]);
 
+  // Cartons/pairs already sitting in OTHER draft (unposted) Stock Vouchers, per variant — nothing
+  // here has reached dbo.stock_movements yet (only post() writes those), but the entry strip's
+  // Stock in Hand readout treats it as already spoken for anyway, per the user (2026-08-31):
+  // "the stock in hand [must] calculate the remaining stock — minus any unposted voucher cartons
+  // and the cartons used [in the] current voucher". Refetched whenever the open voucher changes
+  // (its own lines move from "another voucher's reservation" to "this voucher's own lines",
+  // handled separately below) and after anything that could change who owns what (save/post/
+  // unpost/delete elsewhere).
+  const [unpostedReservations, setUnpostedReservations] = useState<Record<number, { cartons: number; pairs: number }>>({});
+  const refreshUnpostedReservations = useCallback(async (excludeId?: number | null) => {
+    const res = await api.stockVouchers.unpostedReservations(excludeId ?? undefined);
+    if (res.ok) {
+      setUnpostedReservations(Object.fromEntries(res.data.map(r => [r.variant_id, { cartons: r.cartons, pairs: r.pairs }])));
+    }
+  }, []);
+
   // Stock Voucher Ledger — search + status filter, both applied server-side.
   const [svSearch, setSvSearch] = useState('');
   const [svStatusFilter, setSvStatusFilter] = useState<'all' | 'CONFIRMED' | 'DRAFT'>('all');
@@ -177,6 +193,7 @@ export default function StockVoucherPage() {
     setPostAllResult(res.data);
     refresh();
     refreshUnposted();
+    refreshUnpostedReservations(svId);
     refreshNav();
     const workingDate = date;
     handleNew();
@@ -190,6 +207,9 @@ export default function StockVoucherPage() {
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
   const [svId, setSvId] = useState<number | null>(null);
   const [status, setStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
+  // Refetches whenever the open voucher changes (New/loading a different one) — this voucher's own
+  // id is excluded, since its lines are accounted for separately, client-side, from `lines` itself.
+  useEffect(() => { refreshUnpostedReservations(svId); }, [svId, refreshUnpostedReservations]);
   // No. stays blank until New is explicitly clicked (per the user, 2026-08-31) — not shown just
   // because the page happens to be sitting in its default blank/new state on first load.
   const [numberRevealed, setNumberRevealed] = useState(false);
@@ -323,10 +343,29 @@ export default function StockVoucherPage() {
   // finished-goods stock (stock_movements carries no store_id) — not scoped to the voucher's own
   // Store field. Shows as soon as an ARTICLE is picked — the total across every one of its colors
   // — then narrows to that one color's own count once a color is also picked.
-  const stockInHand = useMemo(
-    () => getStockInfo(entry.articleId, entry.variantId)?.pairs ?? null,
-    [entry.articleId, entry.variantId, getStockInfo]
-  );
+  // Also subtracts what's already spoken for by OTHER draft vouchers (unpostedReservations) and by
+  // this SAME voucher's own other committed lines (`lines`, excluding whichever one is being
+  // re-edited) — per the user (2026-08-31): "the stock in hand [must] calculate the remaining
+  // stock — minus any unposted voucher cartons and the cartons used [in the] current voucher".
+  // Clamped at 0 rather than shown negative, same convention as SaleBillPage's own entryStockInHand.
+  const stockInHand = useMemo(() => {
+    const raw = getStockInfo(entry.articleId, entry.variantId)?.pairs;
+    if (raw == null) return null;
+    // At article-level (no color picked yet) a variant counts only if it's actually one of THIS
+    // article's own colors — stockRows is the only place variant_id -> article_id is known here.
+    const matchesTarget = (variantId: number | null) => {
+      if (entry.variantId != null) return variantId === entry.variantId;
+      return variantId != null && stockRows.some(r => r.variant_id === variantId && r.article_id === entry.articleId);
+    };
+    const reserved = Object.entries(unpostedReservations)
+      .filter(([variantId]) => matchesTarget(Number(variantId)))
+      .reduce((sum, [, r]) => sum + r.pairs, 0);
+    const usedInThisVoucher = lines.reduce((sum, l, i) => {
+      if (i === editingIndex) return sum; // the line being corrected — not a separate reservation
+      return matchesTarget(l.variantId) ? sum + l.pairs : sum;
+    }, 0);
+    return Math.max(0, raw - reserved - usedInThisVoucher);
+  }, [entry.articleId, entry.variantId, getStockInfo, unpostedReservations, lines, editingIndex, stockRows]);
 
   const entryArticleTriggerRef = useRef<HTMLInputElement>(null);
   const [isEntryArticleModalOpen, setIsEntryArticleModalOpen] = useState(false);
@@ -638,6 +677,7 @@ export default function StockVoucherPage() {
     clearStockVoucherDraft();
     refresh();
     refreshUnposted();
+    refreshUnpostedReservations(svId);
     refreshNav();
   };
 
@@ -651,6 +691,7 @@ export default function StockVoucherPage() {
     flash('Stock Voucher posted — stock updated.');
     refresh();
     refreshUnposted();
+    refreshUnpostedReservations(svId);
     refreshNav();
     const workingDate = date;
     handleNew();
@@ -665,6 +706,7 @@ export default function StockVoucherPage() {
     flash('Stock Voucher unposted.');
     refresh();
     refreshUnposted();
+    refreshUnpostedReservations(svId);
     refreshNav();
     // It's a draft again now, so the window follows it back to the Unposted view (per the user,
     // 2026-08-30) rather than staying on Posted looking at a record that no longer belongs there.
@@ -722,6 +764,7 @@ export default function StockVoucherPage() {
     flash(`Stock Voucher #${res.data.stock_voucher_id} posted.`);
     refresh();
     refreshUnposted();
+    refreshUnpostedReservations(svId);
     refreshNav();
     if (targetId === svId) setStatus(res.data.status);
   };
@@ -748,6 +791,7 @@ export default function StockVoucherPage() {
     if (svId === targetId) handleNew();
     refresh();
     refreshUnposted();
+    refreshUnpostedReservations(svId);
     refreshNav();
   };
 

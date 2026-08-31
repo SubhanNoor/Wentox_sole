@@ -898,6 +898,14 @@ export interface UnpostedStockVoucherRow {
   total_pairs: number;
 }
 
+/** Per-variant cartons/pairs summed across every OTHER draft (unposted) Stock Voucher — what the
+ *  entry strip's Stock in Hand readout subtracts, since none of it is in dbo.stock_movements yet. */
+export interface UnpostedReservationRow {
+  variant_id: number;
+  cartons: number;
+  pairs: number;
+}
+
 export interface DepositRow {
   deposit_id: number;
   deposit_date: string;
@@ -2059,6 +2067,7 @@ declare global {
         unpost: (payload: { id: number }) => Promise<ApiResult<StockVoucherRow>>;
         listUnposted: () => Promise<ApiResult<UnpostedStockVoucherRow[]>>;
         postAll: (payload?: { ids?: number[] }) => Promise<ApiResult<PostAllResult<'stock_voucher_id'>>>;
+        unpostedReservations: (payload?: { excludeStockVoucherId?: number }) => Promise<ApiResult<UnpostedReservationRow[]>>;
       };
       settlements: {
         list: (payload?: SettlementListFilters) => Promise<ApiResult<SettlementRow[]>>;
@@ -2933,6 +2942,8 @@ export const stockVouchers = {
     window.api ? window.api.stockVouchers.listUnposted() : Promise.resolve(NO_BRIDGE),
   postAll: (ids?: number[]) =>
     window.api ? window.api.stockVouchers.postAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE),
+  unpostedReservations: (excludeStockVoucherId?: number) =>
+    window.api ? window.api.stockVouchers.unpostedReservations(excludeStockVoucherId != null ? { excludeStockVoucherId } : undefined) : Promise.resolve(NO_BRIDGE),
 };
 
 export const settlements = {

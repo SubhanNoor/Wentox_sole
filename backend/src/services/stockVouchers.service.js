@@ -180,6 +180,14 @@ function listUnposted() {
   return repository.listUnposted();
 }
 
+// Per-variant cartons/pairs already sitting in OTHER draft vouchers — see repository's own
+// comment. Passed through as-is; `excludeStockVoucherId` is optional (Number(payload) is called
+// on whatever the ipc layer forwards, since it arrives over IPC as a plain value, not typed).
+function unpostedReservations(excludeStockVoucherId) {
+  const id = excludeStockVoucherId != null ? Number(excludeStockVoucherId) : undefined;
+  return repository.listUnpostedCartonsByVariant(Number.isFinite(id) ? id : undefined);
+}
+
 // Post a run of stock vouchers in one action. Each posts in its own transaction (via post()
 // above), so one failure never rolls back the ones that already posted — mirrors
 // journalVouchers.service#postAll exactly. Sequential, not parallel: posting reads live state,
@@ -213,4 +221,6 @@ async function postAll(ids, userId) {
   return { posted, failed, attempted: targets.length };
 }
 
-module.exports = { list, getById, create, update, remove, post, unpost, listUnposted, postAll };
+module.exports = {
+  list, getById, create, update, remove, post, unpost, listUnposted, postAll, unpostedReservations,
+};

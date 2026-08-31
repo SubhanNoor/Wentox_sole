@@ -81,6 +81,23 @@ async function listUnposted() {
   return result.recordset;
 }
 
+// Cartons/pairs still sitting in DRAFT (unposted) vouchers, summed per variant — nothing here has
+// reached dbo.stock_movements yet (only post() writes those), so this is what the Stock In Hand
+// readout subtracts from real stock as a "already spoken for by other pending vouchers" reserve,
+// per the user (2026-08-31). `excludeStockVoucherId` leaves out the voucher currently open in the
+// entry form — its own lines are accounted for separately, client-side, from the in-progress grid.
+async function listUnpostedCartonsByVariant(excludeStockVoucherId) {
+  const result = await query(`
+    SELECT svl.variant_id, SUM(svl.cartons) AS cartons, SUM(svl.pairs) AS pairs
+    FROM dbo.stock_voucher_lines svl
+    JOIN dbo.stock_vouchers sv ON sv.stock_voucher_id = svl.stock_voucher_id
+    WHERE sv.status = 'DRAFT'
+    ${excludeStockVoucherId != null ? 'AND sv.stock_voucher_id <> @excludeId' : ''}
+    GROUP BY svl.variant_id
+  `, excludeStockVoucherId != null ? { excludeId: { type: sql.Int, value: excludeStockVoucherId } } : {});
+  return result.recordset;
+}
+
 async function getLines(stockVoucherId) {
   const result = await query(
     `SELECT svl.*, ac.color, a.code AS article_code, a.name AS article_name, a.article_id
@@ -232,5 +249,5 @@ async function deleteStockMovements(transaction, stockVoucherId) {
 
 module.exports = {
   list, listUnposted, findById, getLines, insert, updateHeader, insertLines, deleteLines, remove,
-  setStatus, insertStockMovements, deleteStockMovements,
+  setStatus, insertStockMovements, deleteStockMovements, listUnpostedCartonsByVariant,
 };
