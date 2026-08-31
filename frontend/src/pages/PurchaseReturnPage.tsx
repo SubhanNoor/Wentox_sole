@@ -7,7 +7,7 @@ import type {
   VendorRow, CityRow, PurchaseRow, PurchaseItemRow, PurchaseReturnRow, PurchaseReturnCreateInput,
   PurchaseReturnItemInput, DraftPurchaseReturnRow, ConfirmAllResult
 } from '@/lib/api';
-import { formatDate, getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { formatDate, getTodayDate, getThreeMonthsAgoDate, toDateInputValue } from '@/lib/utils';
 import { focusNextField } from '@/lib/fieldNav';
 import {
   Plus, Trash2, Save, Undo2, Edit, CheckCircle2, XCircle, ChevronDown,
@@ -687,7 +687,7 @@ const nextSystemBillNo = useMemo(
 
     setReturnId(row.return_id);
     setCurrentIsPosted(row.is_posted);
-    setDate(row.return_date.slice(0, 10));
+    setDate(toDateInputValue(row.return_date));
     setVendorId(String(row.vendor_id));
     setBillNo(row.bill_no || '');
     setRemarks(row.remarks || '');
@@ -790,7 +790,7 @@ const nextSystemBillNo = useMemo(
     }
     setReturnId(draft.draft_id);
     setCurrentIsPosted(false);
-    setDate(draft.return_date.slice(0, 10));
+    setDate(toDateInputValue(draft.return_date));
     setVendorId(String(draft.vendor_id));
     setBillNo(draft.bill_no || '');
     setRemarks(draft.remarks || '');
@@ -947,7 +947,7 @@ const nextSystemBillNo = useMemo(
 
   const filteredReturns = useMemo(() => {
     return sortedReturns.filter(r => {
-      const d = r.return_date.slice(0, 10);
+      const d = toDateInputValue(r.return_date);
       if (recordsDateFrom && d < recordsDateFrom) return false;
       if (recordsDateTo && d > recordsDateTo) return false;
       return true;

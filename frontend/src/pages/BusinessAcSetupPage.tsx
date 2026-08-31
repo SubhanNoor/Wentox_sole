@@ -4,7 +4,7 @@ import { Plus, Search, Settings, Save, Edit2, RotateCcw, X, Landmark } from 'luc
 import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
 import OpeningBalanceFields from '@/components/OpeningBalanceFields';
-import { getTodayDate } from '@/lib/utils';
+import { getTodayDate, toDateInputValue } from '@/lib/utils';
 import {
   businessAccounts as businessAccountsApi,
   chartAccounts as chartAccountsApi,
@@ -89,7 +89,7 @@ export default function BusinessAcSetupPage() {
     // Load what is actually stored — these were blanked and the fields hidden while editing, which
     // is why an opening balance could only ever be set at creation.
     setOpeningBalance(biz.opening_balance != null ? String(biz.opening_balance) : '');
-    setOpeningDate(biz.opening_date ? biz.opening_date.slice(0, 10) : '');
+    setOpeningDate(toDateInputValue(biz.opening_date));
     setErrorMsg('');
     setIsModalOpen(true);
   };

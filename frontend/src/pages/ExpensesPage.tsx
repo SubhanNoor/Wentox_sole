@@ -19,6 +19,7 @@ import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
 import MonthlyExpensesTab from '@/components/MonthlyExpensesTab';
 import OverallExpensesTab from '@/components/OverallExpensesTab';
 import AccountBalanceTooltip from '@/components/AccountBalanceTooltip';
+import { toDateInputValue } from '@/lib/utils';
 
 const today = () => new Date().toISOString().split('T')[0];
 
@@ -618,7 +619,7 @@ export default function ExpensesPage() {
     );
     setChequeId(line.cheque_id != null ? String(line.cheque_id) : '');
     setIssuedChequeNo(line.issued_cheque_no || '');
-    setIssuedChequeDate(line.issued_cheque_date ? line.issued_cheque_date.slice(0, 10) : '');
+    setIssuedChequeDate(toDateInputValue(line.issued_cheque_date));
     setDetails(line.details || '');
     setRemarks(line.remarks || '');
     setErrorMsg('');

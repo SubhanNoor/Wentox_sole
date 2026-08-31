@@ -8,7 +8,7 @@ import type {
   BusinessAccountRow, JournalVoucherRow, JournalVoucherLineInput, JournalVoucherCreateInput,
   UnpostedJournalVoucherRow, PostAllResult,
 } from '@/lib/api';
-import { formatDate, getTodayDate } from '@/lib/utils';
+import { formatDate, getTodayDate, toDateInputValue } from '@/lib/utils';
 import {
   Edit, Search, Plus, Trash2, BookText, ChevronDown, CheckCircle2, PackageCheck, Undo2,
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Printer
@@ -381,7 +381,7 @@ export default function JournalVoucherPage() {
     const jv = res.data;
     setJvId(jv.jv_id);
     setStatus(jv.status);
-    setDate(jv.jv_date.slice(0, 10));
+    setDate(toDateInputValue(jv.jv_date));
     setReason(jv.reason);
     setLines((jv.lines || []).map(l => ({
       uid: 'jvl_' + l.line_id,

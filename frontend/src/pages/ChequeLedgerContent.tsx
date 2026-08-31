@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
-import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate, toDateInputValue } from '@/lib/utils';
 import { exportRowsToExcel } from '@/lib/export';
 import { Eye, Search } from 'lucide-react';
 import * as api from '@/lib/api';
@@ -46,7 +46,7 @@ function receivedEvents(c: ChequeRow, allocations: ChequeAllocationRow[]): Ledge
     key: `received-${c.cheque_id}-received`,
     chequeType: 'Received',
     chequeNo: c.cheque_no,
-    date: c.cheque_received_date || c.cheque_date,
+    date: toDateInputValue(c.cheque_received_date || c.cheque_date),
     dueDate: c.cheque_date,
     eventType: 'Received',
     party: c.customer_name || c.account_name || '-',
@@ -64,7 +64,7 @@ function receivedEvents(c: ChequeRow, allocations: ChequeAllocationRow[]): Ledge
       dueDate: c.cheque_date,
       chequeType: 'Received',
       chequeNo: c.cheque_no,
-      date: a.allocation_date,
+      date: toDateInputValue(a.allocation_date),
       eventType,
       party: a.vendor_name || a.target_name || '-',
       bank: a.disposition_type === 'DEPOSIT' ? (c.bank_name || '-') : '-',
@@ -76,14 +76,14 @@ function receivedEvents(c: ChequeRow, allocations: ChequeAllocationRow[]): Ledge
   if (c.bounced_date) {
     events.push({
       key: `received-${c.cheque_id}-bounced`, chequeType: 'Received', chequeNo: c.cheque_no, dueDate: c.cheque_date,
-      date: c.bounced_date, eventType: 'Bounced', party: c.customer_name || '-', bank: '-',
+      date: toDateInputValue(c.bounced_date), eventType: 'Bounced', party: c.customer_name || '-', bank: '-',
       amount: c.receipt_amount || 0, reversed: false,
     });
   }
   if (c.returned_date) {
     events.push({
       key: `received-${c.cheque_id}-returned`, chequeType: 'Received', chequeNo: c.cheque_no, dueDate: c.cheque_date,
-      date: c.returned_date, eventType: 'Returned', party: c.customer_name || '-', bank: '-',
+      date: toDateInputValue(c.returned_date), eventType: 'Returned', party: c.customer_name || '-', bank: '-',
       amount: c.receipt_amount || 0, reversed: false,
     });
   }
@@ -98,7 +98,7 @@ function issuedEvents(e: IssuedChequeRow): LedgerEvent[] {
     key: `issued-${e.expense_id}-issued`,
     chequeType: 'Issued',
     chequeNo: e.issued_cheque_no || '-',
-    date: e.issued_cheque_date || e.expense_date,
+    date: toDateInputValue(e.issued_cheque_date || e.expense_date),
     dueDate: e.issued_cheque_date,
     eventType: 'Issued',
     party: e.ba_name || '-',
@@ -110,7 +110,7 @@ function issuedEvents(e: IssuedChequeRow): LedgerEvent[] {
     events.push({
       key: `issued-${e.expense_id}-bounced`, chequeType: 'Issued', chequeNo: e.issued_cheque_no || '-',
       dueDate: e.issued_cheque_date,
-      date: e.issued_cheque_bounced_date, eventType: 'Bounced', party: e.ba_name || '-',
+      date: toDateInputValue(e.issued_cheque_bounced_date), eventType: 'Bounced', party: e.ba_name || '-',
       bank: e.bank_name || '-', amount: e.amount, reversed: false,
     });
   }
@@ -118,7 +118,7 @@ function issuedEvents(e: IssuedChequeRow): LedgerEvent[] {
     events.push({
       key: `issued-${e.expense_id}-returned`, chequeType: 'Issued', chequeNo: e.issued_cheque_no || '-',
       dueDate: e.issued_cheque_date,
-      date: e.issued_cheque_returned_date, eventType: 'Returned', party: e.ba_name || '-',
+      date: toDateInputValue(e.issued_cheque_returned_date), eventType: 'Returned', party: e.ba_name || '-',
       bank: e.bank_name || '-', amount: e.amount, reversed: false,
     });
   }
@@ -188,8 +188,8 @@ export function ChequeLedgerContent() {
     return events
       .filter(r => typeFilter === 'all' || (typeFilter === 'received' ? r.chequeType === 'Received' : r.chequeType === 'Issued'))
       .filter(r => !q || r.chequeNo.toLowerCase().includes(q) || r.party.toLowerCase().includes(q))
-      .filter(r => !fromDate || r.date.slice(0, 10) >= fromDate)
-      .filter(r => !toDate || r.date.slice(0, 10) <= toDate)
+      .filter(r => !fromDate || r.date >= fromDate)
+      .filter(r => !toDate || r.date <= toDate)
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [events, typeFilter, search, fromDate, toDate]);
 

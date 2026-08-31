@@ -9,7 +9,7 @@ import type {
   ProductRow, ProductVariantRow, StoreRow, StockVoucherRow, StockVoucherLineInput,
   StockVoucherCreateInput, UnpostedStockVoucherRow, PostAllResult, StockRow, BusinessAccountRow,
 } from '@/lib/api';
-import { formatDate, getTodayDate } from '@/lib/utils';
+import { formatDate, getTodayDate, toDateInputValue } from '@/lib/utils';
 import {
   Edit, Search, Plus, Trash2, Boxes, ChevronDown, CheckCircle2, PackageCheck, Undo2,
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Printer
@@ -653,7 +653,7 @@ export default function StockVoucherPage() {
     const sv = res.data;
     setSvId(sv.stock_voucher_id);
     setStatus(sv.status);
-    setDate(sv.voucher_date.slice(0, 10));
+    setDate(toDateInputValue(sv.voucher_date));
     setStoreId(sv.store_id != null ? String(sv.store_id) : '');
     setRemarks(sv.remarks || '');
     setAccountBaId(sv.on_account_ba_id != null ? String(sv.on_account_ba_id) : '');

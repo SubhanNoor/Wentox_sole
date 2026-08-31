@@ -11,7 +11,7 @@ import {
   PackageCheck, ChevronDown
 } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
-import { formatDate, getTodayDate } from '@/lib/utils';
+import { formatDate, getTodayDate, toDateInputValue } from '@/lib/utils';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
@@ -279,7 +279,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
     setReturnId(row.return_id);
     setCurrentReturnIsPosted(row.is_posted);
-    setDate(row.return_date.slice(0, 10));
+    setDate(toDateInputValue(row.return_date));
     setStoreId(row.store_id != null ? String(row.store_id) : '');
     setCustomerId(String(row.customer_id));
     setSubCustomerId(row.sub_customer_id != null ? String(row.sub_customer_id) : '');
@@ -978,7 +978,7 @@ const nextSystemReturnNo = useMemo(
     }
     setReturnId(draft.draft_id);
     setCurrentReturnIsPosted(false);
-    setDate(draft.return_date.slice(0, 10));
+    setDate(toDateInputValue(draft.return_date));
     setStoreId(draft.store_id != null ? String(draft.store_id) : '');
     setCustomerId(String(draft.customer_id));
     setSubCustomerId(draft.sub_customer_id != null ? String(draft.sub_customer_id) : '');

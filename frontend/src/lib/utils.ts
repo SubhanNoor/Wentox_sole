@@ -71,3 +71,26 @@ export function formatDateDMY(dateInput?: string | Date | number | null, fallbac
   return formatDate(dateInput, fallback);
 }
 
+
+/**
+ * Value for an `<input type="date">` from whatever the backend actually sends.
+ *
+ * Every date column reaches the renderer as a real `Date`, not a string: mssql returns Date
+ * objects and Electron's IPC uses structured clone, which preserves them (there is no JSON step
+ * anywhere on the path — see backend/src/ipc/wrap.js). The API types in lib/api.ts nonetheless
+ * declare these fields as `string`, so `someRow.the_date.slice(0, 10)` type-checks fine and then
+ * throws "slice is not a function" at runtime. That crash was reported by the user on the
+ * Receipts entry-edit path (2026-08-31); the same call shape existed at ~20 sites across the
+ * voucher pages, all latent.
+ *
+ * Uses toISOString, NOT the local getFullYear/getMonth/getDate parts: these are date-only columns
+ * that arrive as UTC midnight, so the UTC calendar date is the intended one. Reading local parts
+ * would land on the previous day for any user west of UTC.
+ */
+export function toDateInputValue(value?: string | Date | null): string {
+  if (!value) return '';
+  if (value instanceof Date) {
+    return isNaN(value.getTime()) ? '' : value.toISOString().slice(0, 10);
+  }
+  return String(value).slice(0, 10);
+}

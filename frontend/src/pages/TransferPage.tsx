@@ -5,7 +5,7 @@ import SearchableSelect from '@/components/SearchableSelect';
 import AccountBalancePanel from '@/components/AccountBalancePanel';
 import * as api from '@/lib/api';
 import type { BankAccountRow, BusinessAccountRow, TransferRow, TransferCreateInput, DepositRow, DepositCreateInput } from '@/lib/api';
-import { formatDate } from '@/lib/utils';
+import { formatDate, toDateInputValue } from '@/lib/utils';
 import {
   ArrowLeftRight, PiggyBank, Save, AlertTriangle, TrendingUp, TrendingDown, Edit
 } from 'lucide-react';
@@ -195,7 +195,7 @@ export default function TransferPage() {
   const loadTransferRow = (row: TransferRow) => {
     setTransferId(row.transfer_id);
     setTransferStatus(row.status);
-    setDate(row.transfer_date.slice(0, 10));
+    setDate(toDateInputValue(row.transfer_date));
     setFromBaId(String(row.from_ba_id));
     setToBaId(String(row.to_ba_id));
     setAmount(row.amount);
@@ -285,7 +285,7 @@ export default function TransferPage() {
     setDepositId(row.deposit_id);
     setDepositStatus(row.status);
     setDepDirection(row.direction);
-    setDepDate(row.deposit_date.slice(0, 10));
+    setDepDate(toDateInputValue(row.deposit_date));
     setDepToBaId(String(row.to_ba_id));
     setDepAmount(row.amount);
     setDepSource(row.source);
