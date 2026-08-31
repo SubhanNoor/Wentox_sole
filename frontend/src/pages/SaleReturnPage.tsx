@@ -103,8 +103,9 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     return [];
   }, [variantsByArticle]);
 
-  // Mode: 'view' | 'edit' | 'new'
-  const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');
+  // Mode: 'view' | 'edit' | 'new'. Persisted with the rest of the draft (2026-08-31) — a page
+  // restored into 'view' has Save disabled, so the state it was left in has to survive too.
+  const [mode, setMode] = usePersistentField<'view' | 'edit' | 'new'>('sale-return', 'mode', 'new');
   // Master/Detail edit-scope radio (left-side widget, per the user 2026-08-31): which half of the
   // form Edit actually unlocks. Only meaningful once Edit has already been clicked while unposted
   // — it narrows what THAT click reaches, it doesn't reopen the existing isPosted gate on Edit
@@ -123,8 +124,14 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   const hasSaleReturnDraft = useHasPageDraft('sale-return');
 
   // Form State
-  const [returnId, setReturnId] = useState<number | null>(null);
-  const [currentReturnIsPosted, setCurrentReturnIsPosted] = useState(false);
+  //
+  // returnId/currentReturnIsPosted are persisted alongside the field values, NOT plain useState —
+  // see SaleBillPage's own comment for the full reasoning. Short version: leaving them out lost
+  // track of WHICH record was on screen after a page switch, and the earlier "persist the id and
+  // re-fetch on mount" attempt was worse still — it overwrote the user's unsaved edits with the
+  // last-saved copy and reopened in 'view' mode, which disables Save.
+  const [returnId, setReturnId] = usePersistentField<number | null>('sale-return', 'returnId', null);
+  const [currentReturnIsPosted, setCurrentReturnIsPosted] = usePersistentField('sale-return', 'currentReturnIsPosted', false);
   const [date, setDate] = usePersistentField('sale-return', 'date', getTodayDate());
   const [storeId, setStoreId] = usePersistentField('sale-return', 'storeId', '');
   const [customerId, setCustomerId] = usePersistentField('sale-return', 'customerId', '');
@@ -660,15 +667,9 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   // Preview of the Return No. a brand-new return will get — same idea as SaleBillPage's own
   // nextSystemBillNo: what Save actually assigns is the next draft_sale_return.draft_id, a
-  // separate IDENTITY sequence from the real return_id assigned later on Post.
-    // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
-  // It stays blank until the user actually starts a record with the New button (2026-08-30, per
-  // the user: landing on a voucher page should not already show a number). Deliberately set from
-  // the button's own onClick rather than inside the New handler: that handler is also called
-  // internally on mount, after Post, and after a delete, so keying off it would light the preview
-  // up without the user having asked for a new record.
-  const [startedNew, setStartedNew] = useState(false);
-
+  // separate IDENTITY sequence from the real return_id assigned later on Post. Client-side preview
+  // only (MAX(id)+1, never reserved server-side). Always shown, from the moment the page opens — an
+  // earlier round gated it behind pressing New, which the user reversed (2026-08-31).
 const nextSystemReturnNo = useMemo(
     () => Math.max(0, ...drafts.map(d => d.draft_id)) + 1,
     [drafts]
@@ -1098,6 +1099,7 @@ const nextSystemReturnNo = useMemo(
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const entryProductCellRef = useRef<HTMLDivElement>(null);
   const pendingRowEditIndex = useRef<number | null>(null);
+
   // Product field's SearchModal — same pattern as Customer's: type the article code, Enter opens
   // a big centered popup to pick from.
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
@@ -1749,7 +1751,7 @@ const nextSystemReturnNo = useMemo(
           <div className="flex flex-wrap items-center gap-2">
           <div className="flex flex-wrap items-center gap-0.5">
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); handleNew(); }} title="New" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1972,7 +1974,7 @@ const nextSystemReturnNo = useMemo(
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Return No.
               </label>
-              <input type="text" value={returnId != null ? `#${returnId}` : (startedNew ? `#${nextSystemReturnNo} (pending)` : '')} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
+              <input type="text" value={returnId != null ? `#${returnId}` : `#${nextSystemReturnNo} (pending)`} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
             <div className="flex items-center gap-1.5">
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>

@@ -101,16 +101,22 @@ export default function PurchasePage() {
     refreshUnposted();
   }, [refreshPurchases, refreshUnposted]);
 
-  // Mode: 'view' | 'edit' | 'new'
-  const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');
+  // Mode: 'view' | 'edit' | 'new'. Persisted with the rest of the draft (2026-08-31) — a page
+  // restored into 'view' has Save disabled, so the state it was left in has to survive too.
+  const [mode, setMode] = usePersistentField<'view' | 'edit' | 'new'>('purchase', 'mode', 'new');
   // Master/Detail edit-scope radio (left-side widget, below) — which half of the form Edit
   // actually unlocks. Per the user, 2026-08-31: Edit used to unlock the whole document at once;
   // now Master unlocks only the header fields, Detail only the entry strip + grid. Reset to
   // 'master' on New/loading a record so a stale scope never carries over from the last edit.
   const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
 
-  const [purchaseId, setPurchaseId] = useState<number | null>(null);
-  const [currentIsPosted, setCurrentIsPosted] = useState(false);
+  // purchaseId/currentIsPosted are persisted alongside the field values, NOT plain useState — see
+  // SaleBillPage's own comment for the full reasoning. Short version: leaving them out lost track
+  // of WHICH record was on screen after a page switch, and the earlier "persist the id and
+  // re-fetch on mount" attempt was worse still — it overwrote the user's unsaved edits with the
+  // last-saved copy and reopened in 'view' mode, which disables Save.
+  const [purchaseId, setPurchaseId] = usePersistentField<number | null>('purchase', 'purchaseId', null);
+  const [currentIsPosted, setCurrentIsPosted] = usePersistentField('purchase', 'currentIsPosted', false);
   // A New Purchase's own in-progress fields persist across switching pages AND an app restart
   // (usePersistentField — see src/hooks/usePersistentField.ts), so typing one up and getting
   // pulled away mid-entry never loses it. Deliberately NOT applied to mode/purchaseId/
@@ -193,14 +199,9 @@ export default function PurchasePage() {
   // Computed client-side from the currently-loaded unposted list, so it's a preview, not a
   // guarantee: correct as long as nothing else inserts a draft between now and Save (true for this
   // app's single-admin-session model — see backend/CLAUDE.md).
-    // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
-  // It stays blank until the user actually starts a record with the New button (2026-08-30, per
-  // the user: landing on a voucher page should not already show a number). Deliberately set from
-  // the button's own onClick rather than inside the New handler: that handler is also called
-  // internally on mount, after Post, and after a delete, so keying off it would light the preview
-  // up without the user having asked for a new record.
-  const [startedNew, setStartedNew] = useState(false);
-
+  // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
+  // Always shown, from the moment the page opens — an earlier round gated it behind pressing New,
+  // which the user reversed (2026-08-31): the number should just be there.
 const nextSystemBillNo = useMemo(
     () => Math.max(0, ...unpostedPurchases.map(d => d.draft_id)) + 1,
     [unpostedPurchases]
@@ -1050,7 +1051,7 @@ const nextSystemBillNo = useMemo(
             {/* ref-pics/batch2/sale bill.png toolbar style: small square buttons, icon on top,
                 label underneath, tightly packed in one strip — not pill-shaped colored buttons. */}
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); startNewPurchase(); }} title="New Purchase" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={startNewPurchase} title="New Purchase" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1224,7 +1225,7 @@ const nextSystemBillNo = useMemo(
               <label className="block text-xs font-bold text-slate-900 mb-1">System Bill No.</label>
               <input
                 type="text"
-                value={purchaseId != null ? `#${purchaseId}` : (startedNew ? `#${nextSystemBillNo} (pending)` : '')}
+                value={purchaseId != null ? `#${purchaseId}` : `#${nextSystemBillNo} (pending)`}
                 disabled
                 readOnly
                 className="soleria-input bg-slate-100 text-slate-500 font-mono"

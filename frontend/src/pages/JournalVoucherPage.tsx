@@ -128,9 +128,15 @@ export default function JournalVoucherPage() {
   const [activeTab, setActiveTab] = useState<'entry' | 'records'>('entry');
 
   // ── entry form ──
-  const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
-  const [jvId, setJvId] = useState<number | null>(null);
-  const [status, setStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
+  //
+  // mode/jvId/status are persisted alongside the field values, NOT plain useState — see
+  // SaleBillPage's own comment for the full reasoning. Short version: leaving them out lost track
+  // of WHICH record was on screen after a page switch (no System No.), and the earlier "persist
+  // the id and re-fetch on mount" attempt was worse still — it overwrote the user's unsaved edits
+  // with the last-saved copy and reopened in 'view' mode, which disables Save.
+  const [mode, setMode] = usePersistentField<'new' | 'edit' | 'view'>('journal-voucher', 'mode', 'new');
+  const [jvId, setJvId] = usePersistentField<number | null>('journal-voucher', 'jvId', null);
+  const [status, setStatus] = usePersistentField<'CONFIRMED' | 'DRAFT'>('journal-voucher', 'status', 'DRAFT');
   // Master/Detail edit-scope radio, per the user 2026-08-31: with a JV already unlocked via the
   // toolbar's Edit, this further splits WHICH half becomes editable — the header (Master) or the
   // entry strip/grid (Detail), never both at once. Only bites once mode is actually 'edit';
@@ -558,14 +564,9 @@ export default function JournalVoucherPage() {
   // Preview of the Number a brand-new JV will get — jv_id is assigned the moment Save actually
   // creates the row (draft or posted alike), so this is a client-side preview only, correct as
   // long as nothing else inserts a JV between now and Save.
-    // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
-  // It stays blank until the user actually starts a record with the New button (2026-08-30, per
-  // the user: landing on a voucher page should not already show a number). Deliberately set from
-  // the button's own onClick rather than inside the New handler: that handler is also called
-  // internally on mount, after Post, and after a delete, so keying off it would light the preview
-  // up without the user having asked for a new record.
-  const [startedNew, setStartedNew] = useState(false);
-
+  // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
+  // Always shown, from the moment the page opens — an earlier round gated it behind pressing New,
+  // which the user reversed (2026-08-31): the number should just be there.
 const nextJvNoPreview = useMemo(
     () => Math.max(0, ...navVouchers.map(v => v.jv_id), ...unpostedJvs.map(v => v.jv_id)) + 1,
     [navVouchers, unpostedJvs]
@@ -813,7 +814,7 @@ const nextJvNoPreview = useMemo(
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-0.5">
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); handleNew(); }} title="New" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -964,7 +965,7 @@ const nextJvNoPreview = useMemo(
               <label className="block text-xs font-medium text-slate-600 mb-1">Number</label>
               <input
                 type="text"
-                value={jvId != null ? `#${jvId}` : (startedNew ? `#${nextJvNoPreview} (pending)` : '')}
+                value={jvId != null ? `#${jvId}` : `#${nextJvNoPreview} (pending)`}
                 disabled
                 className="soleria-input bg-gray-50 text-gray-500 border-gray-200 font-mono"
                 style={{ fontSize: '13px' }}

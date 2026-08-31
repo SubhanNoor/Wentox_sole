@@ -80,6 +80,10 @@ export default function SaleBillPage() {
   const [cities, setCities] = useState<CityRow[]>([]);
   const [variantsByArticle, setVariantsByArticle] = useState<Record<number, ProductVariantRow[]>>({});
   const [stockRows, setStockRows] = useState<StockRow[]>([]);
+  // Whether the stock rollup has actually come back yet. `stockRows` starts as `[]`, which is
+  // indistinguishable from "every article genuinely has zero stock" — see stockExceededRows below
+  // for why that distinction decides whether Save is clickable.
+  const [stockLoaded, setStockLoaded] = useState(false);
   // "Main A/C" (ref-pic) — the customer's linked business account's PARENT chart account
   // (ac_code/ac_name), e.g. "552000010 / CUSTOMERS ACCOUNTS" — distinct from the customer's own
   // account code shown in the Customer field.
@@ -101,7 +105,7 @@ export default function SaleBillPage() {
       if (ad.ok) setAddas(ad.data); else failures.push(ad.error.message);
       if (rg.ok) setRegions(rg.data); else failures.push(rg.error.message);
       if (ct.ok) setCities(ct.data); else failures.push(ct.error.message);
-      if (stRes.ok) setStockRows(stRes.data);
+      if (stRes.ok) { setStockRows(stRes.data); setStockLoaded(true); }
       if (baRes.ok) setBusinessAccounts(baRes.data);
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
@@ -109,7 +113,7 @@ export default function SaleBillPage() {
 
   const refreshStock = useCallback(async () => {
     const res = await api.reports.stock();
-    if (res.ok) setStockRows(res.data);
+    if (res.ok) { setStockRows(res.data); setStockLoaded(true); }
   }, []);
 
   const getStockInfo = useCallback((articleId: number | null, variantId: number | null) => {
@@ -141,8 +145,10 @@ export default function SaleBillPage() {
     return [];
   }, [variantsByArticle]);
 
-  // Mode: 'view' | 'edit' | 'new'
-  const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');
+  // Mode: 'view' | 'edit' | 'new'. Persisted with the rest of the draft (2026-08-31) — leaving it
+  // as plain useState meant coming back to a half-typed bill landed in whatever the default was
+  // rather than the state it was left in, and a page restored into 'view' has Save disabled.
+  const [mode, setMode] = usePersistentField<'view' | 'edit' | 'new'>('sale-bill', 'mode', 'new');
   // Master/Detail edit-scope radio (left-side widget, per the user 2026-08-31): which half of the
   // form Edit actually unlocks. Only meaningful once Edit has already been clicked while unposted
   // — it narrows what THAT click reaches, it doesn't reopen the existing isPosted gate on Edit
@@ -161,8 +167,21 @@ export default function SaleBillPage() {
   const hasSaleBillDraft = useHasPageDraft('sale-bill');
 
   // Form State
-  const [billId, setBillId] = useState<number | null>(null);
-  const [currentBillIsPosted, setCurrentBillIsPosted] = useState(false);
+  //
+  // billId/currentBillIsPosted are persisted alongside the field values, NOT plain useState:
+  // leaving them out meant switching pages and back lost track of WHICH record was on screen
+  // (they reset to their new-bill defaults) while customerId/items/etc. were still restored from
+  // the draft store — a bill's data displayed as if it were a brand-new, unsaved one, with no
+  // System No. (reported by the user, 2026-08-31).
+  //
+  // An earlier attempt persisted only the id and RE-FETCHED the record on mount. That was worse:
+  // the re-fetch overwrote whatever the user had typed since (their in-progress edits) with the
+  // last-saved server copy, and reopened the page in 'view' mode, which disables Save — "it did
+  // not allow me to save" (the user, same day). There is nothing to re-fetch: the persisted field
+  // values ARE the user's own unsaved work, which is exactly what has to survive. Restoring the
+  // ids as-is is both simpler and the only correct behaviour.
+  const [billId, setBillId] = usePersistentField<number | null>('sale-bill', 'billId', null);
+  const [currentBillIsPosted, setCurrentBillIsPosted] = usePersistentField('sale-bill', 'currentBillIsPosted', false);
   const [date, setDate] = usePersistentField('sale-bill', 'date', getTodayDate());
   const [storeId, setStoreId] = usePersistentField('sale-bill', 'storeId', '');
   const [customerId, setCustomerId] = usePersistentField('sale-bill', 'customerId', '');
@@ -301,15 +320,9 @@ export default function SaleBillPage() {
   // Preview of the System No. a brand-new bill will get — same idea as Purchase's own
   // nextSystemBillNo: what Save actually assigns is the next draft_sale_bill.draft_id, a
   // separate IDENTITY sequence from the real bill_id assigned later on Post. Client-side preview
-  // only, correct as long as nothing else inserts a draft between now and Save.
-    // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
-  // It stays blank until the user actually starts a record with the New button (2026-08-30, per
-  // the user: landing on a voucher page should not already show a number). Deliberately set from
-  // the button's own onClick rather than inside the New handler: that handler is also called
-  // internally on mount, after Post, and after a delete, so keying off it would light the preview
-  // up without the user having asked for a new record.
-  const [startedNew, setStartedNew] = useState(false);
-
+  // only (MAX(id)+1, never reserved server-side), correct as long as nothing else inserts a draft
+  // between now and Save. Always shown, from the moment the page opens — an earlier round gated it
+  // behind pressing New, which the user reversed (2026-08-31): the number should just be there.
 const nextSystemBillNo = useMemo(
     () => Math.max(0, ...unpostedBills.map(d => d.draft_id)) + 1,
     [unpostedBills]
@@ -398,6 +411,14 @@ const nextSystemBillNo = useMemo(
   const isCustomDelivery = useMemo(() => deliveryType === 'custom', [deliveryType]);
 
   const stockExceededRows = useMemo(() => {
+    // Nothing can be judged "over stock" before the stock rollup has loaded — getStockInfo reports
+    // 0 available for every variant while `stockRows` is still `[]`, so EVERY line looks exceeded,
+    // which flips hasStockExceeded true and disables Save. Harmless on a blank form (no lines to
+    // judge), but on returning to a page whose lines were restored from the draft store, those
+    // lines exist immediately while the stock fetch is still in flight — so Save came back
+    // disabled, reported by the user (2026-08-31): "when I switch the page the save button set
+    // blank". Also covers the fetch failing outright, which would otherwise disable Save forever.
+    if (!stockLoaded) return {};
     const requestedByVariant: Record<number, number> = {};
     items.forEach(it => {
       if (it.variantId != null && it.cartons > 0) {
@@ -417,7 +438,7 @@ const nextSystemBillNo = useMemo(
       }
     });
     return exceededMap;
-  }, [items, getStockInfo]);
+  }, [items, getStockInfo, stockLoaded]);
 
   const hasStockExceeded = useMemo(() => Object.keys(stockExceededRows).length > 0, [stockExceededRows]);
 
@@ -1093,6 +1114,7 @@ const nextSystemBillNo = useMemo(
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const entryProductCellRef = useRef<HTMLDivElement>(null);
   const pendingRowEditIndex = useRef<number | null>(null);
+
   // Product field's SearchModal — same pattern as Customer's (pages_design.md §5): type the
   // article code, Enter opens a big centered popup to pick from, matching stock shown per row.
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
@@ -1675,7 +1697,7 @@ const nextSystemBillNo = useMemo(
           <div className="flex flex-wrap items-center gap-2">
           <div className="flex flex-wrap items-center gap-0.5">
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); handleNew(); }} title="New" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -2275,7 +2297,7 @@ const nextSystemBillNo = useMemo(
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 No. &gt;&gt;&gt;&gt;
               </label>
-              <input type="text" value={billId != null ? `#${billId}` : (startedNew ? `#${nextSystemBillNo} (pending)` : '')} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
+              <input type="text" value={billId != null ? `#${billId}` : `#${nextSystemBillNo} (pending)`} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
           </div>
 

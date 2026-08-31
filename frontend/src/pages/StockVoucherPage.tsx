@@ -147,8 +147,8 @@ export default function StockVoucherPage() {
 
   // Tracks whether the two lists nextSvNoPreview (below) reads from have loaded at least once —
   // both start as `[]`, which looks identical to "genuinely empty" and "not fetched yet", so
-  // without this the preview would show "#1" the instant numberRevealed goes true regardless of
-  // the real next number, only correcting once the fetch resolved a beat later.
+  // without this the preview would flash "#1" on first paint regardless of the real next number,
+  // only correcting once the fetch resolved a beat later. Shows "…" until then instead.
   const [unpostedSvsLoaded, setUnpostedSvsLoaded] = useState(false);
   const refreshUnposted = useCallback(async () => {
     const res = await api.stockVouchers.listUnposted();
@@ -204,15 +204,18 @@ export default function StockVoucherPage() {
   const [activeTab, setActiveTab] = useState<'entry' | 'records'>('entry');
 
   // ── entry form ──
-  const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
-  const [svId, setSvId] = useState<number | null>(null);
-  const [status, setStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
+  //
+  // mode/svId/status are persisted alongside the field values, NOT plain useState — see
+  // SaleBillPage's own comment for the full reasoning. Short version: leaving them out lost track
+  // of WHICH record was on screen after a page switch (no System No.), and the earlier "persist
+  // the id and re-fetch on mount" attempt was worse still — it overwrote the user's unsaved edits
+  // with the last-saved copy and reopened in 'view' mode, which disables Save.
+  const [mode, setMode] = usePersistentField<'new' | 'edit' | 'view'>('stock-voucher', 'mode', 'new');
+  const [svId, setSvId] = usePersistentField<number | null>('stock-voucher', 'svId', null);
+  const [status, setStatus] = usePersistentField<'CONFIRMED' | 'DRAFT'>('stock-voucher', 'status', 'DRAFT');
   // Refetches whenever the open voucher changes (New/loading a different one) — this voucher's own
   // id is excluded, since its lines are accounted for separately, client-side, from `lines` itself.
   useEffect(() => { refreshUnpostedReservations(svId); }, [svId, refreshUnpostedReservations]);
-  // No. stays blank until New is explicitly clicked (per the user, 2026-08-31) — not shown just
-  // because the page happens to be sitting in its default blank/new state on first load.
-  const [numberRevealed, setNumberRevealed] = useState(false);
   // Master/Detail edit-scope radio, per the user 2026-08-31: with a voucher already unlocked via
   // the toolbar's Edit, this further splits WHICH half becomes editable — the header (Master) or
   // the entry strip/grid (Detail), never both at once. Only bites once mode is actually 'edit';
@@ -252,7 +255,6 @@ export default function StockVoucherPage() {
 
   const handleNew = () => {
     setMode('new'); setSvId(null); setStatus('DRAFT');
-    setNumberRevealed(true);
     setDate(getTodayDate()); setStoreId(''); setRemarks('');
     // Fixed to STOCK TRANSFER, never blank — the auto-populate effect above also covers this once
     // businessAccounts finishes loading, but setting it here too means it's already right the
@@ -1288,7 +1290,7 @@ export default function StockVoucherPage() {
             <CompactField label="No." gridArea="no">
               <input
                 type="text"
-                value={svId != null ? `#${svId}` : !numberRevealed ? '' : (navVouchersLoaded && unpostedSvsLoaded) ? `#${nextSvNoPreview}` : '…'}
+                value={svId != null ? `#${svId}` : (navVouchersLoaded && unpostedSvsLoaded) ? `#${nextSvNoPreview}` : '…'}
                 disabled
                 className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200 font-mono text-center"
               />

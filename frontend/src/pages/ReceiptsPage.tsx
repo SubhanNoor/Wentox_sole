@@ -87,7 +87,11 @@ export default function ReceiptsPage() {
   }, [refreshAllVouchers]);
 
   // ── Real-receipt form (mirrors PurchasePage.tsx's mode structure) ──
-  const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
+  // Persisted with the rest of the draft (2026-08-31): if the strip was mid-correction of an
+  // existing line when the page was left, coming back with mode reset to 'new' would commit that
+  // correction as a SECOND line instead of updating the original (handleDone routes on
+  // mode/receiptId/entryIsDraft together), and a page restored into 'view' hides Done entirely.
+  const [mode, setMode] = usePersistentField<'new' | 'edit' | 'view'>('receipts', 'mode', 'new');
   // Master/Detail edit-scope radio (left-side widget, below) — which half of the voucher becomes
   // editable while an existing (unposted) line is pulled back into the strip via handleEditLine:
   // Master unlocks only the voucher header (Date/Remarks), Detail unlocks only the entry strip and
@@ -113,13 +117,14 @@ export default function ReceiptsPage() {
   // Edit button's Master-scope focus target — mirrors ExpensesPage's own firstFieldRef, since
   // this page never had one before there was an Edit button to land it from.
   const firstFieldRef = useRef<HTMLInputElement>(null);
-  const [receiptId, setReceiptId] = useState<number | null>(null);
-  const [receiptStatus, setReceiptStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
+  // Persisted with mode above — together these say WHICH line the strip is correcting, and all of
+  // them have to survive a page switch or the correction is committed as a new line instead.
+  const [receiptId, setReceiptId] = usePersistentField<number | null>('receipts', 'receiptId', null);
+  const [receiptStatus, setReceiptStatus] = usePersistentField<'CONFIRMED' | 'DRAFT'>('receipts', 'receiptStatus', 'DRAFT');
   // In-progress entry-row fields persist across switching pages AND an app restart
-  // (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied to
-  // mode/receiptId/receiptStatus/entryIsDraft/docKind/voucher — an already-saved receipt or
-  // voucher loaded for view/edit is safely re-openable by id at any time, so caching it risks
-  // showing a stale copy; only unsaved "new" work is ever at risk of being lost.
+  // (usePersistentField — see src/hooks/usePersistentField.ts). `voucher` itself is the one thing
+  // deliberately NOT persisted: its committed lines are server state (each is saved the moment it
+  // is committed), so it is re-fetched by id on mount instead — see openVoucherId below.
   const clearReceiptsDraft = useClearPageDraft('receipts');
   const [date, setDate] = usePersistentField('receipts', 'date', today());
   const [baId, setBaId] = usePersistentField('receipts', 'baId', '');
@@ -149,7 +154,7 @@ export default function ReceiptsPage() {
   const [docKind, setDocKind] = useState<'RECEIPT' | 'SETTLEMENT'>('RECEIPT');
   // Which table `receiptId` points into. An unposted receipt now lives in dbo.draft_receipts and a
   // posted one in dbo.receipts, so the id alone is ambiguous — this says which id space it is in.
-  const [entryIsDraft, setEntryIsDraft] = useState(false);
+  const [entryIsDraft, setEntryIsDraft] = usePersistentField('receipts', 'entryIsDraft', false);
 
   // RJ-02: previewed account while arrow-keying through the dropdown, for the live balance tooltip.
   const [previewBaId, setPreviewBaId] = useState<number | null>(null);
@@ -196,6 +201,17 @@ export default function ReceiptsPage() {
   const [voucherRemarks, setVoucherRemarks] = usePersistentField('receipts', 'voucherRemarks', '');
   const [voucherBusy, setVoucherBusy] = useState(false);
   const [voucherResult, setVoucherResult] = useState<VoucherActionResult<'receipt_id', ReceiptVoucherRow> | null>(null);
+
+  // `voucher` itself is plain useState (re-fetched from the server, never something to hand-persist
+  // — see refreshVoucher's own comment), so it was empty again every time this page remounted after
+  // switching away and back — the entry strip's own fields (Date/Remarks/baId/amount/...) restored
+  // fine via usePersistentField, but the "Entries in this Voucher" table went blank because nothing
+  // remembered WHICH voucher was open, even though every line already committed was still safely
+  // saved server-side. Reported by the user (2026-08-31) as "added an entry, then it vanished" —
+  // only ever mirrors voucher.voucher_id, so it survives the remount and the effect below re-fetches
+  // the real voucher from it.
+  const [openVoucherId, setOpenVoucherId] = usePersistentField<number | null>('receipts', 'openVoucherId', null);
+  useEffect(() => { setOpenVoucherId(voucher?.voucher_id ?? null); }, [voucher, setOpenVoucherId]);
 
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
@@ -654,6 +670,13 @@ export default function ReceiptsPage() {
     else fail('Failed to reload voucher: ' + res.error.message);
   };
 
+  // Restores the open voucher once, on mount, from openVoucherId (see its own comment above) — the
+  // permanent fix for entries disappearing after switching pages and back.
+  useEffect(() => {
+    if (openVoucherId != null) refreshVoucher(openVoucherId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // RJ-03: post every line of the voucher in one action.
   //
   // Each line posts in its own transaction on the backend, so this can come back partly done —
@@ -713,14 +736,9 @@ export default function ReceiptsPage() {
   // across the whole receipt_vouchers table regardless of status (`MAX(voucher_no)+1`, allocated
   // inside receiptVouchers.create() on the backend), unlike Purchase's split real-id/draft-id
   // sequences, so this preview needs no draft/posted distinction.
-    // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
-  // It stays blank until the user actually starts a record with the New button (2026-08-30, per
-  // the user: landing on a voucher page should not already show a number). Deliberately set from
-  // the button's own onClick rather than inside the New handler: that handler is also called
-  // internally on mount, after Post, and after a delete, so keying off it would light the preview
-  // up without the user having asked for a new record.
-  const [startedNew, setStartedNew] = useState(false);
-
+  // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
+  // Always shown, from the moment the page opens — an earlier round gated it behind pressing New,
+  // which the user reversed (2026-08-31): the number should just be there.
 const nextVoucherNo = useMemo(
     () => Math.max(0, ...allVouchers.map(v => v.voucher_no)) + 1,
     [allVouchers]
@@ -1117,7 +1135,7 @@ const nextVoucherNo = useMemo(
                   </button>
                 )}
                 <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); startNewVoucher(); }} title="New Voucher" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={startNewVoucher} title="New Voucher" className="toolbar-btn">
                   <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
                   <span>New</span>
                 </button>
@@ -1405,7 +1423,7 @@ const nextVoucherNo = useMemo(
                     <label className="block text-[11px] font-semibold uppercase tracking-wider mb-0.5" style={{ color: 'var(--secondary-text)' }}>C.Book No</label>
                     <input
                       type="text"
-                      value={voucher ? String(voucher.voucher_no) : (startedNew ? `${nextVoucherNo}` : '')}
+                      value={voucher ? String(voucher.voucher_no) : String(nextVoucherNo)}
                       disabled
                       readOnly
                       className="soleria-input soleria-input-compact bg-slate-100 text-slate-600 font-mono text-center"

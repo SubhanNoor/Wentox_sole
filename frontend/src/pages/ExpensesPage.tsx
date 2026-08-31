@@ -82,7 +82,11 @@ export default function ExpensesPage() {
   }, [refreshAllVouchers, refreshCheques]);
 
   // ── Real-expense form (mirrors ReceiptsPage.tsx's mode structure) ──
-  const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
+  // Persisted with the rest of the draft (2026-08-31): if the strip was mid-correction of an
+  // existing line when the page was left, coming back with mode reset to 'new' would commit that
+  // correction as a SECOND line instead of updating the original (commitEntryLine routes on
+  // mode/expenseId/entryIsDraft together), and a page restored into 'view' hides Done entirely.
+  const [mode, setMode] = usePersistentField<'new' | 'edit' | 'view'>('expenses', 'mode', 'new');
   // Master/Detail edit-scope radio (left-side widget, below), mirroring ReceiptsPage's own —
   // which half becomes editable while an existing (unposted) line is pulled back into the strip
   // via handleEditLine: Master unlocks only the voucher header (Date/Remarks), Detail unlocks
@@ -101,15 +105,16 @@ export default function ExpensesPage() {
   // Next/Last + Unpost).
   const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('unposted');
   const newButtonRef = useRef<HTMLButtonElement>(null);
-  const [expenseId, setExpenseId] = useState<number | null>(null);
+  // Persisted with mode above — together these three say WHICH line the strip is correcting, and
+  // all three have to survive a page switch or the correction is committed as a new line instead.
+  const [expenseId, setExpenseId] = usePersistentField<number | null>('expenses', 'expenseId', null);
   // Which table `expenseId` points into. An unposted expense now lives in dbo.draft_expenses and a
   // posted one in dbo.expenses, so the id alone is ambiguous — this says which id space it is in.
-  const [entryIsDraft, setEntryIsDraft] = useState(false);
+  const [entryIsDraft, setEntryIsDraft] = usePersistentField('expenses', 'entryIsDraft', false);
   // In-progress entry-row fields persist across switching pages AND an app restart
-  // (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied to
-  // mode/expenseId/entryIsDraft/voucher — an already-saved expense or voucher loaded for
-  // view/edit is safely re-openable by id at any time, so caching it risks showing a stale copy;
-  // only unsaved "new" work is ever at risk of being lost.
+  // (usePersistentField — see src/hooks/usePersistentField.ts). `voucher` itself is the one thing
+  // deliberately NOT persisted: its committed lines are server state (each is saved the moment it
+  // is committed), so it is re-fetched by id on mount instead — see openVoucherId below.
   const clearExpensesDraft = useClearPageDraft('expenses');
   const [date, setDate] = usePersistentField('expenses', 'date', today());
   const [baId, setBaId] = usePersistentField('expenses', 'baId', '');
@@ -157,6 +162,17 @@ export default function ExpensesPage() {
   const [voucherBusy, setVoucherBusy] = useState(false);
   const [voucherResult, setVoucherResult] = useState<VoucherActionResult<'expense_id', ExpenseVoucherRow> | null>(null);
 
+  // `voucher` itself is plain useState (re-fetched from the server, never something to hand-persist
+  // — see refreshVoucher's own comment), so it was empty again every time this page remounted after
+  // switching away and back — the entry strip's own fields (Date/Remarks/baId/amount/...) restored
+  // fine via usePersistentField, but the "Entries in this Voucher" table went blank because nothing
+  // remembered WHICH voucher was open, even though every line already committed was still safely
+  // saved server-side. Reported by the user (2026-08-31) as "added an entry, then it vanished" —
+  // only ever mirrors voucher.voucher_id, so it survives the remount and the effect below re-fetches
+  // the real voucher from it.
+  const [openVoucherId, setOpenVoucherId] = usePersistentField<number | null>('expenses', 'openVoucherId', null);
+  useEffect(() => { setOpenVoucherId(voucher?.voucher_id ?? null); }, [voucher, setOpenVoucherId]);
+
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -200,6 +216,13 @@ export default function ExpensesPage() {
     if (res.ok) setVoucher(res.data);
     else fail('Failed to reload voucher: ' + res.error.message);
   };
+
+  // Restores the open voucher once, on mount, from openVoucherId (see its own comment above) — the
+  // permanent fix for entries disappearing after switching pages and back.
+  useEffect(() => {
+    if (openVoucherId != null) refreshVoucher(openVoucherId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // CHEQUE_ISSUED stays bank-only: an issued cheque is drawn on a real bank's cheque book, so a
   // non-bank account has no meaning there (the backend enforces the same rule).
@@ -752,13 +775,8 @@ export default function ExpensesPage() {
   // across the whole expense_vouchers table regardless of status (MAX+1, allocated inside
   // expenseVouchers.create() on the backend).
   // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
-  // It stays blank until the user actually starts a record with the New button (2026-08-30, per
-  // the user: landing on a voucher page should not already show a number). Deliberately set from
-  // the button's own onClick rather than inside the New handler: that handler is also called
-  // internally on mount, after Post, and after a delete, so keying off it would light the preview
-  // up without the user having asked for a new record.
-  const [startedNew, setStartedNew] = useState(false);
-
+  // Always shown, from the moment the page opens — an earlier round gated it behind pressing New,
+  // which the user reversed (2026-08-31): the number should just be there.
   const nextVoucherNo = useMemo(
     () => Math.max(0, ...allVouchers.map(v => v.voucher_no)) + 1,
     [allVouchers]
@@ -972,7 +990,7 @@ export default function ExpensesPage() {
                   </button>
                 )}
                 <button
-                  data-new-action="true" ref={newButtonRef} type="button" onClick={() => { setStartedNew(true); startNewVoucher(); }} title="New Voucher" className="toolbar-btn">
+                  data-new-action="true" ref={newButtonRef} type="button" onClick={startNewVoucher} title="New Voucher" className="toolbar-btn">
                   <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
                   <span>New</span>
                 </button>
@@ -1148,7 +1166,7 @@ export default function ExpensesPage() {
                     <label className="block text-xs font-bold text-slate-900 mb-1">System Voucher No. (C.Book No)</label>
                     <input
                       type="text"
-                      value={voucher ? `#${voucher.voucher_no}` : (startedNew ? `#${nextVoucherNo} (pending)` : '')}
+                      value={voucher ? `#${voucher.voucher_no}` : `#${nextVoucherNo} (pending)`}
                       disabled
                       readOnly
                       className="soleria-input py-1.5 text-xs bg-slate-100 text-slate-500 font-mono"
