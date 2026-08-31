@@ -1255,7 +1255,12 @@ export const RESERVED_ACCOUNT_CODES: readonly string[] = [
   '400007', // JOURNAL_VOUCHER
   '200003', // OPENING_BALANCE_EQUITY
   '400008', // DISCOUNTS_CLAIMS_COMMISSIONS
+  '400009', // STOCK_TRANSFER
 ];
+
+// Stock Voucher's fixed On Account/Main A/C (per the user, 2026-08-31): always the seeded STOCK
+// TRANSFER business account, never user-picked. Mirrors backend/src/constants/reservedAccounts.js.
+export const STOCK_TRANSFER_ACCOUNT_CODE = '400009';
 
 export type ExpensePaymentMode = 'CASH' | 'ONLINE' | 'CHEQUE_ENDORSED' | 'CHEQUE_ISSUED';
 

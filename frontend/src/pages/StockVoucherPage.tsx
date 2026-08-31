@@ -26,8 +26,9 @@ import PasswordPromptModal from '@/components/PasswordPromptModal';
  *
  * No valuation, no reference numbers, no ledger posting (per the user, 2026-08-30 follow-up — a
  * prior round briefly added Rate/D%/Value/Bill No./IGP No./Bilty No./Delivery and a ledger pair;
- * all removed again as unwanted scope). On Account is a pure reference field — no default, and
- * Main A/C always mirrors whatever it's set to, never independently editable.
+ * all removed again as unwanted scope). On Account and Main A/C are both fixed to the seeded
+ * STOCK TRANSFER business account, always the same value, never user-editable (per the user,
+ * 2026-08-31 — reverses an earlier 2026-08-30 "no default, user-picked" decision).
  */
 
 function newLineUid() {
@@ -91,6 +92,24 @@ export default function StockVoucherPage() {
   const [vouchers, setVouchers] = useState<StockVoucherRow[]>([]);
   const [lookupError, setLookupError] = useState('');
 
+  // Current stock, fetched once for the whole page (not per-article) — feeds both the Article/
+  // Color picker modals' per-option "Stock: X ctn / Y prs" sublabel and the entry strip's own
+  // Stock in Hand readout, same source and shape as SaleBillPage's own getStockInfo. Reported by
+  // the user (2026-08-31): the picker modals showed no stock at all.
+  const [stockRows, setStockRows] = useState<StockRow[]>([]);
+  const getStockInfo = useCallback((articleId: number | null, variantId: number | null) => {
+    if (!articleId) return null;
+    if (variantId != null) {
+      const s = stockRows.find(r => r.variant_id === variantId);
+      return { cartons: s ? s.cartons : 0, pairs: s ? s.total_pairs : 0 };
+    }
+    const matching = stockRows.filter(r => r.article_id === articleId);
+    return {
+      cartons: matching.reduce((sum, r) => sum + r.cartons, 0),
+      pairs: matching.reduce((sum, r) => sum + r.total_pairs, 0),
+    };
+  }, [stockRows]);
+
   // Stock Voucher Ledger — search + status filter, both applied server-side.
   const [svSearch, setSvSearch] = useState('');
   const [svStatusFilter, setSvStatusFilter] = useState<'all' | 'CONFIRMED' | 'DRAFT'>('all');
@@ -110,9 +129,16 @@ export default function StockVoucherPage() {
   const [postAllResult, setPostAllResult] = useState<PostAllResult<'stock_voucher_id'> | null>(null);
   const [postingSvId, setPostingSvId] = useState<number | null>(null);
 
+  // Tracks whether the two lists nextSvNoPreview (below) reads from have loaded at least once —
+  // both start as `[]`, which looks identical to "genuinely empty" and "not fetched yet", so
+  // without this the preview would show "#1" the instant numberRevealed goes true regardless of
+  // the real next number, only correcting once the fetch resolved a beat later.
+  const [unpostedSvsLoaded, setUnpostedSvsLoaded] = useState(false);
   const refreshUnposted = useCallback(async () => {
     const res = await api.stockVouchers.listUnposted();
     if (res.ok) setUnpostedSvs(res.data);
+    setUnpostedSvsLoaded(true);
+    return res.ok ? res.data : null;
   }, []);
 
   const fetchVariants = useCallback(async (articleId: number) => {
@@ -127,10 +153,13 @@ export default function StockVoucherPage() {
 
   useEffect(() => {
     (async () => {
-      const [p, st, ba] = await Promise.all([api.listProducts(), api.listStores(), api.listBusinessAccounts()]);
+      const [p, st, ba, stock] = await Promise.all([
+        api.listProducts(), api.listStores(), api.listBusinessAccounts(), api.reports.stock(),
+      ]);
       if (p.ok) setProducts(p.data); else setLookupError('Failed to load products: ' + p.error.message);
       if (st.ok) setStores(st.data); else setLookupError('Failed to load stores: ' + st.error.message);
       if (ba.ok) setBusinessAccounts(ba.data); else setLookupError('Failed to load accounts: ' + ba.error.message);
+      if (stock.ok) setStockRows(stock.data); else setLookupError('Failed to load stock: ' + stock.error.message);
     })();
     refreshUnposted();
   }, [refreshUnposted]);
@@ -161,6 +190,9 @@ export default function StockVoucherPage() {
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
   const [svId, setSvId] = useState<number | null>(null);
   const [status, setStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
+  // No. stays blank until New is explicitly clicked (per the user, 2026-08-31) — not shown just
+  // because the page happens to be sitting in its default blank/new state on first load.
+  const [numberRevealed, setNumberRevealed] = useState(false);
   // Master/Detail edit-scope radio, per the user 2026-08-31: with a voucher already unlocked via
   // the toolbar's Edit, this further splits WHICH half becomes editable — the header (Master) or
   // the entry strip/grid (Detail), never both at once. Only bites once mode is actually 'edit';
@@ -178,8 +210,8 @@ export default function StockVoucherPage() {
   const [remarks, setRemarks] = usePersistentField('stock-voucher', 'remarks', '');
   const [lines, setLines] = usePersistentField<UiLine[]>('stock-voucher', 'lines', []);
 
-  // On Account — pure reference field, per the user (2026-08-30): no default selection, and
-  // Main A/C is never a separate value, it always mirrors whatever this is set to.
+  // On Account — pure reference field, fixed to STOCK TRANSFER (see stockTransferAccount below,
+  // per the user 2026-08-31). Main A/C is never a separate value, it always mirrors this exactly.
   const [accountBaId, setAccountBaId] = usePersistentField('stock-voucher', 'accountBaId', '');
 
   const [errorMsg, setErrorMsg] = useState('');
@@ -200,8 +232,12 @@ export default function StockVoucherPage() {
 
   const handleNew = () => {
     setMode('new'); setSvId(null); setStatus('DRAFT');
+    setNumberRevealed(true);
     setDate(getTodayDate()); setStoreId(''); setRemarks('');
-    setAccountBaId('');
+    // Fixed to STOCK TRANSFER, never blank — the auto-populate effect above also covers this once
+    // businessAccounts finishes loading, but setting it here too means it's already right the
+    // instant New renders if the accounts were already loaded from an earlier fetch this session.
+    setAccountBaId(stockTransferAccount ? String(stockTransferAccount.ba_id) : '');
     setLines([]);
     setEntry(emptyEntry());
     setEditingIndex(null);
@@ -246,45 +282,29 @@ export default function StockVoucherPage() {
     }
   }
 
-  // On Account field — same typable-trigger + centered SearchModal popup as Store, per the user
-  // (2026-08-30). No default — blank until the user actually picks something.
-  const accountOptions = useMemo(
-    // Business accounts show their PARENT chart account inline, appended to the same field with an em-dash rather than in a field of its own (2026-08-30, per the user). Matches how ReceiptsPage's own account picker already reads. `ac_name` is joined in by businessAccounts.repository.js's list().
-    () => businessAccounts.map(a => ({
-      value: String(a.ba_id),
-      label: `${a.name} (${a.code})${a.ac_name ? ` — ${a.ac_name}` : ''}`,
-    })),
+  // On Account / Main A/C — fixed to the seeded STOCK TRANSFER business account, never user-picked
+  // (per the user, 2026-08-31 — reverses the 2026-08-30 "no default, user-editable" decision).
+  // Both fields always show and mean the exact same account; neither is ever independently
+  // changeable, so there's no picker/SearchModal here any more, just an auto-populated lock.
+  const stockTransferAccount = useMemo(
+    // The business account's OWN code is its parent chart code + '0001' (db/seeds/run.js
+    // #ensureNamedBusinessAccount, e.g. '4000090001'), not the chart code itself — match on
+    // ac_code (the parent chart account's code, joined in by businessAccounts.repository.js)
+    // instead, same as the reserved-account resolution pattern used server-side.
+    () => businessAccounts.find(a => a.ac_code === api.STOCK_TRANSFER_ACCOUNT_CODE),
     [businessAccounts]
   );
-  const selectedAccount = useMemo(
-    () => businessAccounts.find(a => String(a.ba_id) === accountBaId),
-    [businessAccounts, accountBaId]
-  );
-  const accountTriggerRef = useRef<HTMLInputElement>(null);
-  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
-  const [accountSearchText, setAccountSearchText] = useState('');
-  const [accountModalSeed, setAccountModalSeed] = useState('');
+  const selectedAccount = stockTransferAccount;
+  // Keeps accountBaId (what actually gets saved/sent as on_account_ba_id) pointed at whatever
+  // ba_id the STOCK TRANSFER account resolves to, the moment businessAccounts finishes loading —
+  // covers both a brand-new voucher and one already loaded from usePersistentField's own restore
+  // (which may have an id from before this account existed, or none at all).
   useEffect(() => {
-    setAccountSearchText(selectedAccount ? `${selectedAccount.name} (${selectedAccount.code})` : '');
-  }, [selectedAccount]);
-  const openAccountModal = () => {
-    if (isViewMode || masterLocked) return;
-    setAccountModalSeed('');
-    setIsAccountModalOpen(true);
-  };
-  function handleAccountTriggerKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      e.stopPropagation();
-      openAccountModal();
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      e.stopPropagation();
-      if (isViewMode || masterLocked) return;
-      setAccountModalSeed(accountSearchText);
-      setIsAccountModalOpen(true);
+    if (stockTransferAccount && accountBaId !== String(stockTransferAccount.ba_id)) {
+      setAccountBaId(String(stockTransferAccount.ba_id));
     }
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stockTransferAccount]);
 
   // ── Entry strip (ref-pic bound-record pattern, per the user 2026-08-26) — ONE editable Article
   // Code/Product Name/Color/Cartons/Pairs row, NOT one editable row per grid line. Cartons is
@@ -297,22 +317,16 @@ export default function StockVoucherPage() {
   const [entry, setEntry] = usePersistentField<EntryLine>('stock-voucher', 'entry', emptyEntry());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
-  // Stock in Hand — read-only readout in the entry strip (ref-pic parity), looked up from the
-  // Current Stock rollup (api.reports.stock) by variant_id whenever the picked color changes.
-  // Store-agnostic, same as the rest of this app's finished-goods stock (stock_movements carries
-  // no store_id) — not scoped to the voucher's own Store field.
-  const [stockInHand, setStockInHand] = useState<number | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    if (entry.articleId == null || entry.variantId == null) { setStockInHand(null); return; }
-    (async () => {
-      const res = await api.reports.stock({ article_id: entry.articleId! });
-      if (cancelled || !res.ok) return;
-      const row = res.data.find((r: StockRow) => r.variant_id === entry.variantId);
-      setStockInHand(row ? Number(row.total_pairs) : 0);
-    })();
-    return () => { cancelled = true; };
-  }, [entry.articleId, entry.variantId]);
+  // Stock in Hand — read-only readout in the entry strip (ref-pic parity), derived from the same
+  // page-wide `stockRows`/getStockInfo as the Article/Color modals' own sublabels (2026-08-31),
+  // rather than a separate per-selection fetch. Store-agnostic, same as the rest of this app's
+  // finished-goods stock (stock_movements carries no store_id) — not scoped to the voucher's own
+  // Store field. Shows as soon as an ARTICLE is picked — the total across every one of its colors
+  // — then narrows to that one color's own count once a color is also picked.
+  const stockInHand = useMemo(
+    () => getStockInfo(entry.articleId, entry.variantId)?.pairs ?? null,
+    [entry.articleId, entry.variantId, getStockInfo]
+  );
 
   const entryArticleTriggerRef = useRef<HTMLInputElement>(null);
   const [isEntryArticleModalOpen, setIsEntryArticleModalOpen] = useState(false);
@@ -776,9 +790,11 @@ export default function StockVoucherPage() {
   const [navVouchers, setNavVouchers] = useState<StockVoucherRow[]>([]);
   const newButtonRef = useRef<HTMLButtonElement>(null);
 
+  const [navVouchersLoaded, setNavVouchersLoaded] = useState(false);
   const refreshNav = useCallback(async () => {
     const res = await api.stockVouchers.list({});
     if (res.ok) setNavVouchers(res.data);
+    setNavVouchersLoaded(true);
     return res.ok ? res.data : null;
   }, []);
 
@@ -1209,9 +1225,9 @@ export default function StockVoucherPage() {
             <h3 className="font-lora font-bold text-lg tracking-wide text-slate-800">STOCK VOUCHER</h3>
           </div>
 
-          {/* Header — ONE bound-record card. No./Date/To Store on top; On Account (picker, no
-              default) and Main A/C (read-only, always mirrors On Account exactly — never a
-              separate value, per the user 2026-08-30) each their own row; Remarks last. */}
+          {/* Header — ONE bound-record card. No./Date/To Store on top; On Account and Main A/C
+              (both fixed to STOCK TRANSFER, always the same value, never editable — per the user
+              2026-08-31) each their own row; Remarks last. */}
           <div
             className="shrink-0 grid gap-x-3 gap-y-1.5 mb-2 p-3 rounded-lg border"
             style={{
@@ -1228,7 +1244,7 @@ export default function StockVoucherPage() {
             <CompactField label="No." gridArea="no">
               <input
                 type="text"
-                value={svId != null ? `#${svId}` : `#${nextSvNoPreview}`}
+                value={svId != null ? `#${svId}` : !numberRevealed ? '' : (navVouchersLoaded && unpostedSvsLoaded) ? `#${nextSvNoPreview}` : '…'}
                 disabled
                 className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200 font-mono text-center"
               />
@@ -1277,50 +1293,22 @@ export default function StockVoucherPage() {
               />
             </div>
 
-            <div className="relative min-w-0" style={{ gridArea: 'onacct' }}>
-              <CompactField label="On Account">
-                <input
-                  ref={accountTriggerRef}
-                  type="text"
-                  disabled={isViewMode || masterLocked}
-                  value={accountSearchText}
-                  onChange={e => setAccountSearchText(e.target.value)}
-                  onKeyDown={handleAccountTriggerKeyDown}
-                  placeholder="Type an account name, or Enter to search..."
-                  className="soleria-input soleria-input-compact pr-8"
-                />
-              </CompactField>
-              <button
-                type="button"
-                disabled={isViewMode || masterLocked}
-                onClick={openAccountModal}
-                title="Browse all accounts"
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <ChevronDown size={14} />
-              </button>
-              <SearchModal
-                isOpen={isAccountModalOpen}
-                title="Select Account"
-                options={accountOptions}
-                value={accountBaId}
-                onSelect={(val) => {
-                  setAccountBaId(val);
-                  setIsAccountModalOpen(false);
-                  requestAnimationFrame(() => focusNextField(accountTriggerRef.current));
-                }}
-                onClose={() => setIsAccountModalOpen(false)}
-                searchPlaceholder="Search accounts..."
-                initialSearch={accountModalSeed}
+            <CompactField label="On Account" gridArea="onacct">
+              <input
+                type="text"
+                value={stockTransferAccount ? `${stockTransferAccount.name} (${stockTransferAccount.code})` : '—'}
+                disabled
+                title="Always STOCK TRANSFER — fixed, not changeable"
+                className="soleria-input soleria-input-compact bg-gray-100 text-gray-500"
               />
-            </div>
+            </CompactField>
 
             <CompactField label="Main A/C" gridArea="mainacct">
               <input
                 type="text"
                 value={selectedAccount ? `${selectedAccount.name} (${selectedAccount.code})` : '—'}
                 disabled
-                title="Always the same account selected On Account — not separately changeable"
+                title="Always the same account as On Account — fixed, not changeable"
                 className="soleria-input soleria-input-compact bg-gray-100 text-gray-500"
               />
             </CompactField>
@@ -1371,7 +1359,14 @@ export default function StockVoucherPage() {
                 <SearchModal
                   isOpen={isEntryArticleModalOpen}
                   title="Select Article"
-                  options={products.map(p => ({ value: String(p.article_id), label: `${p.code} — ${p.name}` }))}
+                  options={products.map(p => {
+                    const stock = getStockInfo(p.article_id, null);
+                    return {
+                      value: String(p.article_id),
+                      label: `${p.code} — ${p.name}`,
+                      sublabel: stock ? `Stock: ${stock.cartons} ctn / ${stock.pairs} prs` : undefined,
+                    };
+                  })}
                   value={entry.articleId != null ? String(entry.articleId) : ''}
                   initialSearch={entryArticleModalSeed}
                   onSelect={handleEntryArticleSelect}
@@ -1447,7 +1442,14 @@ export default function StockVoucherPage() {
                       isOpen={isColorModalOpen}
                       title="Select Color"
                       options={[
-                        ...(entry.articleId != null ? variantsByArticle[entry.articleId] || [] : []).map(v => ({ value: String(v.variant_id), label: v.color })),
+                        ...(entry.articleId != null ? variantsByArticle[entry.articleId] || [] : []).map(v => {
+                          const stock = getStockInfo(entry.articleId, v.variant_id);
+                          return {
+                            value: String(v.variant_id),
+                            label: v.color,
+                            sublabel: stock ? `Stock: ${stock.cartons} ctn / ${stock.pairs} prs` : undefined,
+                          };
+                        }),
                         { value: NEW_COLOR_SENTINEL, label: '+ Add New Color...' },
                       ]}
                       value={entry.variantId != null ? String(entry.variantId) : ''}
@@ -1487,7 +1489,7 @@ export default function StockVoucherPage() {
                 <label className="block text-xs font-medium text-slate-600 mb-1 whitespace-nowrap">Stock in Hand</label>
                 <input
                   type="text"
-                  value={entry.variantId == null ? '—' : stockInHand == null ? '…' : stockInHand.toLocaleString()}
+                  value={entry.articleId == null ? '—' : stockInHand == null ? '…' : stockInHand.toLocaleString()}
                   disabled
                   className="soleria-input bg-gray-100 text-gray-500 font-mono text-center"
                   style={{ fontSize: '13px' }}
