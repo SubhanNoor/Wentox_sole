@@ -88,6 +88,13 @@ export default function ReceiptsPage() {
 
   // ── Real-receipt form (mirrors PurchasePage.tsx's mode structure) ──
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
+  // Master/Detail edit-scope radio (left-side widget, below) — which half of the voucher becomes
+  // editable while an existing (unposted) line is pulled back into the strip via handleEditLine:
+  // Master unlocks only the voucher header (Date/Remarks), Detail unlocks only the entry strip and
+  // the entries table's Edit/Delete. Only bites once mode is actually 'edit' — a brand-new voucher's
+  // first line is unaffected, same convention as PurchasePage/StockVoucherPage's own editScope.
+  // Reset to 'master' on New/loading a voucher so a stale scope never carries over, per the user 2026-08-31.
+  const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
   // First/Previous/Next/Last + Posted/Unposted dropdown. `navFilter` is a REAL data filter and the
   // buttons page through whole VOUCHERS: 'posted' walks fully-posted ones, 'unposted' walks those
   // still awaiting posting (UNPOSTED or PARTIAL).
@@ -103,6 +110,9 @@ export default function ReceiptsPage() {
   // Next/Last + Unpost).
   const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('unposted');
   const newButtonRef = useRef<HTMLButtonElement>(null);
+  // Edit button's Master-scope focus target — mirrors ExpensesPage's own firstFieldRef, since
+  // this page never had one before there was an Edit button to land it from.
+  const firstFieldRef = useRef<HTMLInputElement>(null);
   const [receiptId, setReceiptId] = useState<number | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
   // In-progress entry-row fields persist across switching pages AND an app restart
@@ -268,6 +278,18 @@ export default function ReceiptsPage() {
 
   const isViewMode = mode === 'view';
   const isPosted = receiptStatus === 'CONFIRMED';
+  // Derived from editScope — applied to the header fields and to the entry strip/entries-table
+  // interactivity below (2026-08-31). Header fields (Date/Remarks) used to be locked forever once
+  // a voucher existed at all (`!!voucher`, regardless of mode/scope) — a genuine bug, since it left
+  // no way to ever unlock them again. Fixed alongside adding the toolbar Edit button (2026-08-31):
+  // now locked only while viewing, or while mode is 'edit' with Detail scope picked.
+  const masterFieldsLocked = isViewMode || (mode === 'edit' && editScope !== 'master');
+  const detailFieldsLocked = mode === 'edit' && editScope !== 'detail';
+  // True only in the narrow window the Edit button (Master scope) opens — display of Date/Remarks
+  // switches from the loaded voucher's own fields to the local editable ones only here, so typing
+  // is actually visible while unlocked; handleDone routes to receiptVouchers.update() instead of
+  // the entry-line save while this is true.
+  const isHeaderEditing = mode === 'edit' && editScope === 'master';
 
   // A receipt can name ANY business account, not just a customer's (migration 014) — the same
   // freedom the Expenses/Naam side has always had.
@@ -333,7 +355,7 @@ export default function ReceiptsPage() {
   }, [baId, accountOptions]);
 
   const openAccountModal = () => {
-    if (isViewMode) return;
+    if (isViewMode || detailFieldsLocked) return;
     setAccountModalSeed('');
     setIsAccountModalOpen(true);
   };
@@ -372,7 +394,7 @@ export default function ReceiptsPage() {
   const [bankModalSeed, setBankModalSeed] = useState('');
 
   const openBankModal = () => {
-    if (isViewMode) return;
+    if (isViewMode || detailFieldsLocked) return;
     setBankModalSeed('');
     setIsBankModalOpen(true);
   };
@@ -423,6 +445,7 @@ export default function ReceiptsPage() {
 
   const handleNew = () => {
     setMode('new');
+    setEditScope('master'); // a blank voucher starts scoped to Master, same as any freshly loaded one
     setReceiptId(null);
     setReceiptStatus('DRAFT');
     setDate(today());
@@ -546,6 +569,25 @@ export default function ReceiptsPage() {
   const handleDone = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isEndorsed) { await handleSaveSettlement(); return; }
+
+    // Editing the voucher header (Edit + Master scope) is a different save entirely from
+    // committing an entry line — routes to receiptVouchers.update() instead of draftReceipts
+    // create/update. Fixes the gap from when the Edit button/Master-Detail split was added
+    // (2026-08-31): unlocking Date/Remarks alone never persisted anything.
+    if (isHeaderEditing) {
+      if (!voucher) return;
+      if (!date) { setErrorMsg('Please pick a date.'); return; }
+      const res = await api.receiptVouchers.update(voucher.voucher_id, {
+        voucher_date: date,
+        remarks: voucherRemarks.trim() || undefined,
+      });
+      if (!res.ok) { fail('Failed to update voucher: ' + res.error.message); return; }
+      await refreshVoucher(voucher.voucher_id);
+      refreshAllVouchers();
+      clearEntryRow();
+      flash('Voucher header updated.');
+      return;
+    }
 
     // Done on an UNTOUCHED entry row means "I'm finished with this voucher", not "commit this
     // row" — reported by the user (2026-08-31) after adding two entries and being told to
@@ -778,6 +820,7 @@ const nextVoucherNo = useMemo(
       return;
     }
     setMode('edit');
+    setEditScope('master'); // opening a different line for correction must not carry over a stale edit scope
     setDocKind('RECEIPT');
     // An unposted line lives in draft_receipts, so the id the entry row carries while editing is a
     // draft_id — handleDone routes on entryIsDraft to know which table to write back to.
@@ -999,7 +1042,46 @@ const nextVoucherNo = useMemo(
         {activeTab === 'overall' && <OverallReceiptsTab onVoucherUnposted={handleVoucherUnpostedElsewhere} />}
 
         {activeTab === 'entry' && (
-          <div className="max-w-5xl mx-auto relative animate-fadeIn">
+          <div className="max-w-6xl mx-auto flex items-start gap-3 animate-fadeIn">
+
+            {/* Master/Detail edit-scope widget — small vertical block on the LEFT SIDE of the
+                page, outside the toolbar row (per the user, 2026-08-31). Whichever radio is
+                selected decides what becomes editable while an existing draft line is pulled
+                back into the strip: Master unlocks only the header (Date/Remarks), Detail
+                unlocks only the entry strip and the entries table's Edit/Delete — see
+                masterFieldsLocked/detailFieldsLocked above. Both radios stay enabled always;
+                they only have any effect once mode is 'edit'. */}
+            <div
+              className="shrink-0 sticky top-4 p-3 bg-white border rounded-xl text-sm"
+              style={{ width: 84, borderColor: 'var(--border-color)' }}
+              data-no-print
+            >
+              <div className="font-semibold text-slate-700 text-xs uppercase tracking-wider mb-2">
+                Edit Scope
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="receipt-edit-scope"
+                    checked={editScope === 'master'}
+                    onChange={() => setEditScope('master')}
+                  />
+                  Master
+                </label>
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="receipt-edit-scope"
+                    checked={editScope === 'detail'}
+                    onChange={() => setEditScope('detail')}
+                  />
+                  Detail
+                </label>
+              </div>
+            </div>
+
+            <div className="flex-1 min-w-0 max-w-5xl relative">
 
             {/* The left-hand "Pending Posting" panel that used to live here (a floating list
                 of every not-yet-posted voucher, with its own Post All / per-voucher Post and
@@ -1029,7 +1111,7 @@ const nextVoucherNo = useMemo(
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
               <div className="flex flex-wrap items-center gap-0.5">
                 {!isViewMode && (
-                  <button type="submit" form="receipt-entry-form" title={mode === 'edit' ? 'Update Entry' : 'Done'} className="toolbar-btn">
+                  <button type="submit" form="receipt-entry-form" title={isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done'} className="toolbar-btn">
                     <Save size={20} strokeWidth={2.5} className="text-blue-600" />
                     <span>{mode === 'edit' ? 'Update' : 'Done'}</span>
                   </button>
@@ -1050,6 +1132,33 @@ const nextVoucherNo = useMemo(
                 >
                   <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
                   <span>Delete</span>
+                </button>
+                {/* Edit — the only way to unlock the voucher header (Date/Remarks) again once a
+                    voucher exists; per-row Edit on a line still exists separately for detail
+                    lines. Lands focus on the first field of whichever scope is picked. Per the
+                    user, 2026-08-31. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('edit');
+                    if (editScope === 'master' && voucher) {
+                      // Seed the local editable copies from the voucher's own values so the
+                      // fields show the right starting point the moment they unlock — the value
+                      // binding below switches to these while isHeaderEditing.
+                      setDate(voucher.voucher_date);
+                      setVoucherRemarks(voucher.remarks ?? '');
+                    }
+                    requestAnimationFrame(() => {
+                      if (editScope === 'detail') firstEntryFieldRef.current?.focus();
+                      else firstFieldRef.current?.focus();
+                    });
+                  }}
+                  disabled={!voucher || voucher.status === 'POSTED'}
+                  title="Edit — unlock the voucher header or entry strip, per the Edit Scope selected"
+                  className="toolbar-btn"
+                >
+                  <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
+                  <span>Edit</span>
                 </button>
 
                 <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
@@ -1279,9 +1388,10 @@ const nextVoucherNo = useMemo(
                   <div style={{ gridArea: 'date' }}>
                     <label className="block text-[11px] font-semibold uppercase tracking-wider mb-0.5" style={{ color: 'var(--secondary-text)' }}>Date</label>
                     <input
+                      ref={firstFieldRef}
                       type="date"
-                      value={voucher ? voucher.voucher_date : date}
-                      disabled={!!voucher}
+                      value={voucher && !isHeaderEditing ? voucher.voucher_date : date}
+                      disabled={masterFieldsLocked}
                       onChange={e => setDate(e.target.value)}
                       className="soleria-input soleria-input-compact font-semibold"
                     />
@@ -1308,8 +1418,8 @@ const nextVoucherNo = useMemo(
                     <label className="block text-[11px] font-semibold uppercase tracking-wider mb-0.5" style={{ color: 'var(--secondary-text)' }}>Remarks</label>
                     <input
                       type="text"
-                      value={voucher ? (voucher.remarks ?? '') : voucherRemarks}
-                      disabled={!!voucher}
+                      value={voucher && !isHeaderEditing ? (voucher.remarks ?? '') : voucherRemarks}
+                      disabled={masterFieldsLocked}
                       onChange={e => setVoucherRemarks(e.target.value)}
                       placeholder="Applies to the whole voucher"
                       className="soleria-input soleria-input-compact"
@@ -1347,7 +1457,7 @@ const nextVoucherNo = useMemo(
                         ref={accountTriggerRef}
                         type="text"
                         data-field-nav="true"
-                        disabled={isViewMode}
+                        disabled={isViewMode || detailFieldsLocked}
                         value={accountSearchText}
                         onChange={e => setAccountSearchText(e.target.value)}
                         onKeyDown={handleAccountTriggerKeyDown}
@@ -1357,7 +1467,7 @@ const nextVoucherNo = useMemo(
                       />
                       <button
                         type="button"
-                        disabled={isViewMode}
+                        disabled={isViewMode || detailFieldsLocked}
                         onClick={openAccountModal}
                         title="Browse all accounts"
                         className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1397,7 +1507,7 @@ const nextVoucherNo = useMemo(
                     <input
                       type="text"
                       value={remarks}
-                      disabled={isViewMode}
+                      disabled={isViewMode || detailFieldsLocked}
                       onChange={e => setRemarks(e.target.value)}
                       placeholder="Enter narration..."
                       className="soleria-input soleria-input-compact"
@@ -1414,7 +1524,7 @@ const nextVoucherNo = useMemo(
                   <div style={{ gridArea: 'mode' }}>
                     <select
                       value={paymentMode}
-                      disabled={isViewMode}
+                      disabled={isViewMode || detailFieldsLocked}
                       onChange={e => selectPaymentMode(e.target.value as typeof PAYMENT_MODES[number])}
                       onKeyDown={handlePaymentModeKeyDown}
                       className="soleria-input soleria-input-compact cursor-pointer font-semibold"
@@ -1432,7 +1542,7 @@ const nextVoucherNo = useMemo(
                       <input
                         type="text"
                         value={chequeNo}
-                        disabled={isViewMode}
+                        disabled={isViewMode || detailFieldsLocked}
                         onChange={e => setChequeNo(e.target.value)}
                         placeholder="Cheque No."
                         title="Cheque No."
@@ -1445,7 +1555,7 @@ const nextVoucherNo = useMemo(
                       <input
                         type="date"
                         value={chequeDate}
-                        disabled={isViewMode}
+                        disabled={isViewMode || detailFieldsLocked}
                         onChange={e => setChequeDate(e.target.value)}
                         title="Date on Cheque"
                         className="soleria-input soleria-input-compact"
@@ -1458,7 +1568,7 @@ const nextVoucherNo = useMemo(
                       type="number"
                       min={0}
                       value={amount || ''}
-                      disabled={isViewMode}
+                      disabled={isViewMode || detailFieldsLocked}
                       onChange={e => setAmount(Math.max(0, parseInt(e.target.value) || 0))}
                       placeholder="Amount"
                       title="Amount Received (PKR)"
@@ -1487,7 +1597,7 @@ const nextVoucherNo = useMemo(
                               ref={bankTriggerRef}
                               type="text"
                               data-field-nav="true"
-                              disabled={isViewMode}
+                              disabled={isViewMode || detailFieldsLocked}
                               value={bankSearchText}
                               onChange={e => setBankSearchText(e.target.value)}
                               onKeyDown={handleBankTriggerKeyDown}
@@ -1496,7 +1606,7 @@ const nextVoucherNo = useMemo(
                             />
                             <button
                               type="button"
-                              disabled={isViewMode}
+                              disabled={isViewMode || detailFieldsLocked}
                               onClick={openBankModal}
                               title="Browse all accounts"
                               className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1524,7 +1634,7 @@ const nextVoucherNo = useMemo(
                       <input
                         type="text"
                         value={details}
-                        disabled={isViewMode}
+                        disabled={isViewMode || detailFieldsLocked}
                         onChange={e => setDetails(e.target.value)}
                         placeholder="e.g. Alfa ref 980124"
                         title="Online Reference Code / Details"
@@ -1560,7 +1670,7 @@ const nextVoucherNo = useMemo(
                           <input
                             type="date"
                             value={chequeReceivedDate}
-                            disabled={isViewMode}
+                            disabled={isViewMode || detailFieldsLocked}
                             onChange={e => setChequeReceivedDate(e.target.value)}
                             placeholder={date}
                             title="Cheque Received Date — defaults to the Date above if left blank"
@@ -1575,7 +1685,7 @@ const nextVoucherNo = useMemo(
                           <input
                             type="text"
                             value={details}
-                            disabled={isViewMode}
+                            disabled={isViewMode || detailFieldsLocked}
                             onChange={e => setDetails(e.target.value)}
                             placeholder="e.g. MCB Gulberg"
                             title="Drawn On — the customer's own bank. The cheque itself goes into Cheques in Hand until deposited."
@@ -1593,7 +1703,7 @@ const nextVoucherNo = useMemo(
                           type="number"
                           min={0}
                           value={commission || ''}
-                          disabled={isViewMode}
+                          disabled={isViewMode || detailFieldsLocked}
                           onChange={e => setCommission(Math.max(0, parseInt(e.target.value) || 0))}
                           placeholder="Optional"
                           className="soleria-input soleria-input-compact font-semibold font-mono text-right"
@@ -1611,7 +1721,7 @@ const nextVoucherNo = useMemo(
                     <input
                       type="checkbox"
                       checked={isEndorsed}
-                      disabled={isViewMode || (mode === 'edit' && docKind === 'RECEIPT')}
+                      disabled={isViewMode || detailFieldsLocked || (mode === 'edit' && docKind === 'RECEIPT')}
                       onChange={e => { setIsEndorsed(e.target.checked); if (!e.target.checked) setEndorseToBaId(''); }}
                       onKeyDown={handleEndorseCheckboxKeyDown}
                       onFocus={() => setIsEndorseFocused(true)}
@@ -1649,7 +1759,7 @@ const nextVoucherNo = useMemo(
                           onChange={setEndorseToBaId}
                           onHighlightChange={val => setPreviewEndorseBaId(val ? Number(val) : null)}
                           placeholder="Search account to pay..."
-                          disabled={isViewMode}
+                          disabled={isViewMode || detailFieldsLocked}
                         />
                       </div>
                       <AccountBalanceTooltip baId={previewEndorseBaId ?? (endorseToBaId ? Number(endorseToBaId) : null)} refreshKey={balanceRefreshKey} />
@@ -1723,21 +1833,26 @@ const nextVoucherNo = useMemo(
                                     buttons would only produce an error. */}
                                 {line.status === 'DRAFT' && (
                                   <>
+                                    {/* Detail-scope interaction — locked while mid-correction of a
+                                        DIFFERENT line with Master selected (2026-08-31), same
+                                        mirror-image gate as the entry strip fields below. */}
                                     <button
                                       type="button"
-                                      onClick={() => handleEditLine(line)}
-                                      title="Pull this entry back into the form to correct it"
-                                      className="text-slate-500 hover:text-slate-800 transition-colors"
+                                      onClick={() => { if (!detailFieldsLocked) handleEditLine(line); }}
+                                      disabled={detailFieldsLocked}
+                                      title={detailFieldsLocked ? 'Select Detail to edit voucher entries' : 'Pull this entry back into the form to correct it'}
+                                      className="text-slate-500 hover:text-slate-800 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                                     >
                                       <Edit size={14} />
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => setDeleteTarget(line.draft_id != null
+                                      onClick={() => { if (detailFieldsLocked) return; setDeleteTarget(line.draft_id != null
                                         ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
-                                        : { kind: 'receipt', id: line.receipt_id as number, amount: Number(line.amount) })}
-                                      title="Delete this entry (asks for your password)"
-                                      className="text-rose-500 hover:text-rose-700 transition-colors"
+                                        : { kind: 'receipt', id: line.receipt_id as number, amount: Number(line.amount) }); }}
+                                      disabled={detailFieldsLocked}
+                                      title={detailFieldsLocked ? 'Select Detail to delete voucher entries' : 'Delete this entry (asks for your password)'}
+                                      className="text-rose-500 hover:text-rose-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                                     >
                                       <Trash2 size={14} />
                                     </button>
@@ -1805,6 +1920,7 @@ const nextVoucherNo = useMemo(
                     </div>
                   )}
               </div>
+            </div>
             </div>
           </div>
         )}

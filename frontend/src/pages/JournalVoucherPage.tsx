@@ -131,6 +131,11 @@ export default function JournalVoucherPage() {
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
   const [jvId, setJvId] = useState<number | null>(null);
   const [status, setStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
+  // Master/Detail edit-scope radio, per the user 2026-08-31: with a JV already unlocked via the
+  // toolbar's Edit, this further splits WHICH half becomes editable — the header (Master) or the
+  // entry strip/grid (Detail), never both at once. Only bites once mode is actually 'edit';
+  // pre-picking it doesn't change anything until Edit is clicked.
+  const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
   // A New Journal Voucher's own in-progress fields persist across switching pages AND an app
   // restart (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied
   // to mode/jvId/status — an already-saved JV loaded for view/edit is safely re-openable by id at
@@ -148,6 +153,9 @@ export default function JournalVoucherPage() {
 
   const isViewMode = mode === 'view';
   const isPosted = status === 'CONFIRMED';
+  // Derived from editScope — applied to every master/detail field's `disabled` below (2026-08-31).
+  const masterLocked = mode === 'edit' && editScope !== 'master';
+  const detailLocked = mode === 'edit' && editScope !== 'detail';
 
   const accountOptions = useMemo(
     // Business accounts show their PARENT chart account inline, appended to the same field with an em-dash rather than in a field of its own (2026-08-30, per the user). Matches how ReceiptsPage's own account picker already reads. `ac_name` is joined in by businessAccounts.repository.js's list().
@@ -165,6 +173,7 @@ export default function JournalVoucherPage() {
     setEntry(emptyEntry());
     setEditingIndex(null);
     setErrorMsg('');
+    setEditScope('master');
     clearJournalVoucherDraft();
     // Explicit focus, not just a mode-change effect: clicking New while already on a blank/new JV
     // (mode is already 'new') wouldn't otherwise re-trigger any such effect, so focus would stay
@@ -188,7 +197,7 @@ export default function JournalVoucherPage() {
   const [entryAccountModalSeed, setEntryAccountModalSeed] = useState('');
 
   const openEntryAccountModal = () => {
-    if (isViewMode) return;
+    if (isViewMode || detailLocked) return;
     setEntryAccountModalSeed('');
     setIsEntryAccountModalOpen(true);
   };
@@ -204,7 +213,7 @@ export default function JournalVoucherPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (isViewMode) return;
+      if (isViewMode || detailLocked) return;
       setEntryAccountModalSeed(entry.baSearchText);
       setIsEntryAccountModalOpen(true);
     }
@@ -255,6 +264,9 @@ export default function JournalVoucherPage() {
   };
 
   const handleRowClick = (idx: number) => {
+    // Detail locked (scope is Master while already editing) — grid rows stay inert, per the
+    // Master/Detail edit-scope split (2026-08-31). New/view-mode behavior is untouched.
+    if (mode === 'edit' && editScope !== 'detail') return;
     if (isViewMode) setMode('edit');
     loadLineIntoEntry(idx);
   };
@@ -394,6 +406,7 @@ export default function JournalVoucherPage() {
     setEntry(emptyEntry());
     setEditingIndex(null);
     setErrorMsg('');
+    setEditScope('master');
     setMode('view');
   };
 
@@ -606,16 +619,42 @@ const nextJvNoPreview = useMemo(
     <AppLayout pageTitle="Journal Voucher" headerAction={tabBar}>
       <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
 
-        {/* Pending Posting — pinned outside the card's own left edge, matching PurchasePage's
-            P-03/SaleBillPage's SB-06 sidebar exactly: enter a run of JVs first, post them all in
-            one action at the end. Only shown from `2xl` up, same as Purchase/SaleBill — below
-            that there usually isn't 280px of free margin for it to land in. */}
-        {(unpostedJvs.length > 0 || postAllResult) && (
-          <aside
-            className="hidden 2xl:block absolute top-0 w-64 space-y-3"
-            style={{ right: 'calc(100% + 24px)' }}
-            data-no-print
-          >
+        {/* Left sidebar column — Master/Detail edit-scope (always visible, per the user 2026-08-31,
+            so a scope can be pre-picked before Edit is even clicked) stacked above the Pending
+            Posting panel below, same positioning technique (PurchasePage's P-03/SaleBillPage's
+            SB-06 sidebar) that panel already used on its own. Only shown from `2xl` up, same as
+            Purchase/SaleBill — below that there usually isn't 280px of free margin for it to land in. */}
+        <aside
+          className="hidden 2xl:block absolute top-0 w-64 space-y-3"
+          style={{ right: 'calc(100% + 24px)' }}
+          data-no-print
+        >
+          <div className="p-3 bg-white border rounded-xl text-sm" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="font-semibold text-slate-700 text-xs uppercase tracking-wider mb-2">Edit Scope</div>
+            <div className="flex flex-col gap-1.5">
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+                <input
+                  type="radio"
+                  name="jv-edit-scope"
+                  checked={editScope === 'master'}
+                  onChange={() => setEditScope('master')}
+                />
+                Master
+              </label>
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+                <input
+                  type="radio"
+                  name="jv-edit-scope"
+                  checked={editScope === 'detail'}
+                  onChange={() => setEditScope('detail')}
+                />
+                Detail
+              </label>
+            </div>
+          </div>
+
+          {(unpostedJvs.length > 0 || postAllResult) && (
+            <>
             <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
               <div className="flex items-center justify-between gap-2 mb-1">
                 <span className="font-semibold text-slate-700">Pending Posting</span>
@@ -706,8 +745,9 @@ const nextJvNoPreview = useMemo(
                 ))}
               </ul>
             )}
-          </aside>
-        )}
+            </>
+          )}
+        </aside>
 
         <PasswordPromptModal
           isOpen={isPasswordModalOpen}
@@ -788,7 +828,16 @@ const nextJvNoPreview = useMemo(
               <span>Delete</span>
             </button>
             <button
-              type="button" onClick={() => setMode('edit')} disabled={!isViewMode || jvId == null || isPosted}
+              type="button"
+              // Edit — lands focus on the first field of whichever scope is picked (per the user, 2026-08-31).
+              onClick={() => {
+                setMode('edit');
+                requestAnimationFrame(() => {
+                  if (editScope === 'detail') entryAccountTriggerRef.current?.focus();
+                  else firstFieldRef.current?.focus();
+                });
+              }}
+              disabled={!isViewMode || jvId == null || isPosted}
               title="Edit"
               className="toolbar-btn"
             >
@@ -907,7 +956,7 @@ const nextJvNoPreview = useMemo(
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
               <input
-                ref={firstFieldRef} type="date" value={date} disabled={isViewMode}
+                ref={firstFieldRef} type="date" value={date} disabled={isViewMode || masterLocked}
                 onChange={e => setDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }}
               />
             </div>
@@ -926,7 +975,7 @@ const nextJvNoPreview = useMemo(
                 Reason <span className="text-red-500 font-bold">*</span>
               </label>
               <input
-                type="text" value={reason} disabled={isViewMode} onChange={e => setReason(e.target.value)}
+                type="text" value={reason} disabled={isViewMode || masterLocked} onChange={e => setReason(e.target.value)}
                 placeholder="e.g. Eid compensation" className="soleria-input" style={{ fontSize: '13px' }}
               />
             </div>
@@ -945,6 +994,7 @@ const nextJvNoPreview = useMemo(
                 <input
                   ref={entryAccountTriggerRef}
                   type="text"
+                  disabled={detailLocked}
                   value={entry.baSearchText}
                   onChange={e => setEntry(prev => ({ ...prev, baSearchText: e.target.value }))}
                   onKeyDown={handleEntryAccountKeyDown}
@@ -954,9 +1004,10 @@ const nextJvNoPreview = useMemo(
                 />
                 <button
                   type="button"
+                  disabled={detailLocked}
                   onClick={openEntryAccountModal}
                   title="Browse all accounts"
-                  className="absolute right-2 bottom-2 p-0.5 text-slate-400 hover:text-slate-600"
+                  className="absolute right-2 bottom-2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <ChevronDown size={14} />
                 </button>
@@ -990,6 +1041,7 @@ const nextJvNoPreview = useMemo(
                 <label className="block text-xs font-medium text-slate-600 mb-1">Amount <span className="text-red-500 font-bold">*</span></label>
                 <input
                   type="number"
+                  disabled={detailLocked}
                   value={entry.amount || ''}
                   onChange={e => setEntry(prev => ({ ...prev, amount: parseFloat(e.target.value) || 0 }))}
                   placeholder="+credit / -debit"
@@ -1002,6 +1054,7 @@ const nextJvNoPreview = useMemo(
               <label className="block text-xs font-medium text-slate-600 mb-1">Narration</label>
               <input
                 type="text"
+                disabled={detailLocked}
                 value={entry.narration}
                 onChange={e => setEntry(prev => ({ ...prev, narration: e.target.value }))}
                 onKeyDown={handleEntryLastFieldKeyDown}
@@ -1019,7 +1072,7 @@ const nextJvNoPreview = useMemo(
               </div>
             )}
             <div className="mt-2">
-              <button type="button" onClick={handleCommitLine} className="px-3 py-1 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d]">
+              <button type="button" onClick={handleCommitLine} disabled={detailLocked} className="px-3 py-1 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] disabled:opacity-40 disabled:cursor-not-allowed">
                 {editingIndex != null ? 'Update Line' : 'Add Line'}
               </button>
             </div>

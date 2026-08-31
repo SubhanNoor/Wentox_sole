@@ -161,6 +161,11 @@ export default function StockVoucherPage() {
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
   const [svId, setSvId] = useState<number | null>(null);
   const [status, setStatus] = useState<'CONFIRMED' | 'DRAFT'>('DRAFT');
+  // Master/Detail edit-scope radio, per the user 2026-08-31: with a voucher already unlocked via
+  // the toolbar's Edit, this further splits WHICH half becomes editable — the header (Master) or
+  // the entry strip/grid (Detail), never both at once. Only bites once mode is actually 'edit';
+  // pre-picking it doesn't change anything until Edit is clicked.
+  const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
   // A New Stock Voucher's own in-progress fields persist across switching pages AND an app
   // restart (usePersistentField — see src/hooks/usePersistentField.ts), so typing one up and
   // getting pulled away mid-entry never loses it. Deliberately NOT applied to mode/svId/status —
@@ -184,6 +189,9 @@ export default function StockVoucherPage() {
 
   const isViewMode = mode === 'view';
   const isPosted = status === 'CONFIRMED';
+  // Derived from editScope — applied to every master/detail field's `disabled` below (2026-08-31).
+  const masterLocked = mode === 'edit' && editScope !== 'master';
+  const detailLocked = mode === 'edit' && editScope !== 'detail';
 
   const storeOptions = useMemo(
     () => stores.map(s => ({ value: String(s.store_id), label: s.name })),
@@ -198,6 +206,7 @@ export default function StockVoucherPage() {
     setEntry(emptyEntry());
     setEditingIndex(null);
     setErrorMsg('');
+    setEditScope('master');
     clearStockVoucherDraft();
     // Explicit focus, not just a mode-change effect: clicking New while already on a blank/new
     // voucher (mode is already 'new') wouldn't otherwise re-trigger any such effect, so focus
@@ -216,7 +225,7 @@ export default function StockVoucherPage() {
     setStoreSearchText(opt?.label ?? '');
   }, [storeId, storeOptions]);
   const openStoreModal = () => {
-    if (isViewMode) return;
+    if (isViewMode || masterLocked) return;
     setStoreModalSeed('');
     setIsStoreModalOpen(true);
   };
@@ -231,7 +240,7 @@ export default function StockVoucherPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (isViewMode) return;
+      if (isViewMode || masterLocked) return;
       setStoreModalSeed(storeSearchText);
       setIsStoreModalOpen(true);
     }
@@ -259,7 +268,7 @@ export default function StockVoucherPage() {
     setAccountSearchText(selectedAccount ? `${selectedAccount.name} (${selectedAccount.code})` : '');
   }, [selectedAccount]);
   const openAccountModal = () => {
-    if (isViewMode) return;
+    if (isViewMode || masterLocked) return;
     setAccountModalSeed('');
     setIsAccountModalOpen(true);
   };
@@ -271,7 +280,7 @@ export default function StockVoucherPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (isViewMode) return;
+      if (isViewMode || masterLocked) return;
       setAccountModalSeed(accountSearchText);
       setIsAccountModalOpen(true);
     }
@@ -349,7 +358,7 @@ export default function StockVoucherPage() {
     setColorSearchText(variant?.color ?? '');
   }, [entry.variantId, entry.articleId, variantsByArticle]);
   const openColorModal = () => {
-    if (isViewMode || entry.articleId == null) return;
+    if (isViewMode || detailLocked || entry.articleId == null) return;
     setColorModalSeed('');
     setIsColorModalOpen(true);
   };
@@ -361,14 +370,14 @@ export default function StockVoucherPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (isViewMode || entry.articleId == null) return;
+      if (isViewMode || detailLocked || entry.articleId == null) return;
       setColorModalSeed(colorSearchText);
       setIsColorModalOpen(true);
     }
   }
 
   const openEntryArticleModal = () => {
-    if (isViewMode) return;
+    if (isViewMode || detailLocked) return;
     setEntryArticleModalSeed('');
     setIsEntryArticleModalOpen(true);
   };
@@ -380,7 +389,7 @@ export default function StockVoucherPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (isViewMode) return;
+      if (isViewMode || detailLocked) return;
       setEntryArticleModalSeed(entry.articleSearchText);
       setIsEntryArticleModalOpen(true);
     }
@@ -534,6 +543,9 @@ export default function StockVoucherPage() {
   };
 
   const handleRowClick = (idx: number) => {
+    // Detail locked (scope is Master while already editing) — grid rows stay inert, per the
+    // Master/Detail edit-scope split (2026-08-31). New/view-mode behavior is untouched.
+    if (mode === 'edit' && editScope !== 'detail') return;
     if (isViewMode) setMode('edit');
     loadLineIntoEntry(idx);
   };
@@ -677,6 +689,7 @@ export default function StockVoucherPage() {
     setEntry(emptyEntry());
     setEditingIndex(null);
     setErrorMsg('');
+    setEditScope('master');
     setMode('view');
   };
 
@@ -882,14 +895,40 @@ export default function StockVoucherPage() {
     <AppLayout pageTitle="Stock Voucher" headerAction={tabBar}>
       <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
 
-        {/* Pending Posting — pinned outside the card's own left edge, matching
-            JournalVoucherPage/SaleBillPage's sidebar exactly. */}
-        {(unpostedSvs.length > 0 || postAllResult) && (
-          <aside
-            className="hidden 2xl:block absolute top-0 w-64 space-y-3"
-            style={{ right: 'calc(100% + 24px)' }}
-            data-no-print
-          >
+        {/* Left sidebar column — Master/Detail edit-scope (always visible, per the user 2026-08-31,
+            so a scope can be pre-picked before Edit is even clicked) stacked above the Pending
+            Posting panel, same positioning technique as that panel used on its own before. */}
+        <aside
+          className="hidden 2xl:block absolute top-0 w-64 space-y-3"
+          style={{ right: 'calc(100% + 24px)' }}
+          data-no-print
+        >
+          <div className="p-3 bg-white border rounded-xl text-sm" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="font-semibold text-slate-700 text-xs uppercase tracking-wider mb-2">Edit Scope</div>
+            <div className="flex flex-col gap-1.5">
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+                <input
+                  type="radio"
+                  name="sv-edit-scope"
+                  checked={editScope === 'master'}
+                  onChange={() => setEditScope('master')}
+                />
+                Master
+              </label>
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+                <input
+                  type="radio"
+                  name="sv-edit-scope"
+                  checked={editScope === 'detail'}
+                  onChange={() => setEditScope('detail')}
+                />
+                Detail
+              </label>
+            </div>
+          </div>
+
+          {(unpostedSvs.length > 0 || postAllResult) && (
+            <>
             <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
               <div className="flex items-center justify-between gap-2 mb-1">
                 <span className="font-semibold text-slate-700">Pending Posting</span>
@@ -975,8 +1014,9 @@ export default function StockVoucherPage() {
                 ))}
               </ul>
             )}
-          </aside>
-        )}
+            </>
+          )}
+        </aside>
 
         <PasswordPromptModal
           isOpen={isPasswordModalOpen}
@@ -1063,7 +1103,16 @@ export default function StockVoucherPage() {
               <span>Delete</span>
             </button>
             <button
-              type="button" onClick={() => setMode('edit')} disabled={!isViewMode || svId == null || isPosted}
+              type="button"
+              // Edit — lands focus on the first field of whichever scope is picked (per the user, 2026-08-31).
+              onClick={() => {
+                setMode('edit');
+                requestAnimationFrame(() => {
+                  if (editScope === 'detail') entryArticleTriggerRef.current?.focus();
+                  else firstFieldRef.current?.focus();
+                });
+              }}
+              disabled={!isViewMode || svId == null || isPosted}
               title="Edit"
               className="toolbar-btn"
             >
@@ -1186,7 +1235,7 @@ export default function StockVoucherPage() {
             </CompactField>
             <CompactField label="Date" required gridArea="date">
               <input
-                ref={firstFieldRef} type="date" value={date} disabled={isViewMode}
+                ref={firstFieldRef} type="date" value={date} disabled={isViewMode || masterLocked}
                 onChange={e => setDate(e.target.value)} className="soleria-input soleria-input-compact"
               />
             </CompactField>
@@ -1195,7 +1244,7 @@ export default function StockVoucherPage() {
                 <input
                   ref={storeTriggerRef}
                   type="text"
-                  disabled={isViewMode}
+                  disabled={isViewMode || masterLocked}
                   value={storeSearchText}
                   onChange={e => setStoreSearchText(e.target.value)}
                   onKeyDown={handleStoreTriggerKeyDown}
@@ -1205,7 +1254,7 @@ export default function StockVoucherPage() {
               </CompactField>
               <button
                 type="button"
-                disabled={isViewMode}
+                disabled={isViewMode || masterLocked}
                 onClick={openStoreModal}
                 title="Browse all stores"
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1233,7 +1282,7 @@ export default function StockVoucherPage() {
                 <input
                   ref={accountTriggerRef}
                   type="text"
-                  disabled={isViewMode}
+                  disabled={isViewMode || masterLocked}
                   value={accountSearchText}
                   onChange={e => setAccountSearchText(e.target.value)}
                   onKeyDown={handleAccountTriggerKeyDown}
@@ -1243,7 +1292,7 @@ export default function StockVoucherPage() {
               </CompactField>
               <button
                 type="button"
-                disabled={isViewMode}
+                disabled={isViewMode || masterLocked}
                 onClick={openAccountModal}
                 title="Browse all accounts"
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1278,7 +1327,7 @@ export default function StockVoucherPage() {
 
             <CompactField label="Remarks" gridArea="remarks">
               <input
-                type="text" value={remarks} disabled={isViewMode} onChange={e => setRemarks(e.target.value)}
+                type="text" value={remarks} disabled={isViewMode || masterLocked} onChange={e => setRemarks(e.target.value)}
                 placeholder="e.g. Physical count adjustment — optional"
                 className="soleria-input soleria-input-compact"
               />
@@ -1302,6 +1351,7 @@ export default function StockVoucherPage() {
                 <input
                   ref={entryArticleTriggerRef}
                   type="text"
+                  disabled={detailLocked}
                   value={entry.articleSearchText}
                   onChange={e => setEntry(prev => ({ ...prev, articleSearchText: e.target.value }))}
                   onKeyDown={handleEntryArticleKeyDown}
@@ -1311,9 +1361,10 @@ export default function StockVoucherPage() {
                 />
                 <button
                   type="button"
+                  disabled={detailLocked}
                   onClick={openEntryArticleModal}
                   title="Browse all articles"
-                  className="absolute right-2 bottom-2 p-0.5 text-slate-400 hover:text-slate-600"
+                  className="absolute right-2 bottom-2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <ChevronDown size={14} />
                 </button>
@@ -1375,7 +1426,7 @@ export default function StockVoucherPage() {
                     <input
                       ref={colorTriggerRef}
                       type="text"
-                      disabled={isViewMode || entry.articleId == null}
+                      disabled={isViewMode || detailLocked || entry.articleId == null}
                       value={colorSearchText}
                       onChange={e => setColorSearchText(e.target.value)}
                       onKeyDown={handleColorTriggerKeyDown}
@@ -1385,7 +1436,7 @@ export default function StockVoucherPage() {
                     />
                     <button
                       type="button"
-                      disabled={isViewMode || entry.articleId == null}
+                      disabled={isViewMode || detailLocked || entry.articleId == null}
                       onClick={openColorModal}
                       title="Browse colors"
                       className="absolute right-2 bottom-2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1419,6 +1470,7 @@ export default function StockVoucherPage() {
                 <input
                   ref={cartonsInputRef}
                   type="number"
+                  disabled={detailLocked}
                   value={entry.cartons || ''}
                   min={0}
                   onChange={e => updateEntryCartons(parseInt(e.target.value) || 0)}
@@ -1451,7 +1503,7 @@ export default function StockVoucherPage() {
               </div>
             )}
             <div className="mt-2">
-              <button type="button" onClick={handleCommitLine} className="px-3 py-1 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d]">
+              <button type="button" onClick={handleCommitLine} disabled={detailLocked} className="px-3 py-1 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] disabled:opacity-40 disabled:cursor-not-allowed">
                 {editingIndex != null ? 'Update Line' : 'Add Line'}
               </button>
             </div>

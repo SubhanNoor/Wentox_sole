@@ -83,6 +83,13 @@ export default function ExpensesPage() {
 
   // ── Real-expense form (mirrors ReceiptsPage.tsx's mode structure) ──
   const [mode, setMode] = useState<'new' | 'edit' | 'view'>('new');
+  // Master/Detail edit-scope radio (left-side widget, below), mirroring ReceiptsPage's own —
+  // which half becomes editable while an existing (unposted) line is pulled back into the strip
+  // via handleEditLine: Master unlocks only the voucher header (Date/Remarks), Detail unlocks
+  // only the entry strip and the entries table's Edit/Delete. Only bites once mode is actually
+  // 'edit'; reset to 'master' on New/loading a voucher so a stale scope never carries over, per
+  // the user 2026-08-31.
+  const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
   // First/Previous/Next/Last + Posted/Unposted dropdown, mirroring Receipts. `navFilter` is a REAL
   // data filter and the buttons page through whole VOUCHERS: 'posted' walks fully-posted ones,
   // 'unposted' walks those still awaiting posting (UNPOSTED or PARTIAL). Changed 2026-08-27 on the
@@ -159,6 +166,18 @@ export default function ExpensesPage() {
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
 
   const isViewMode = mode === 'view';
+  // Derived from editScope — applied to the header fields and to the entry strip/entries-table
+  // interactivity below (2026-08-31). Header fields (Date/Remarks) used to be locked forever once
+  // a voucher existed at all (`!!voucher`, regardless of mode/scope) — a genuine bug, since it left
+  // no way to ever unlock them again. Fixed alongside adding the toolbar Edit button (2026-08-31):
+  // now locked only while viewing, or while mode is 'edit' with Detail scope picked.
+  const masterFieldsLocked = isViewMode || (mode === 'edit' && editScope !== 'master');
+  const detailFieldsLocked = mode === 'edit' && editScope !== 'detail';
+  // True only in the narrow window the Edit button (Master scope) opens — display of Date/Remarks
+  // switches from the loaded voucher's own fields to the local editable ones only here, so typing
+  // is actually visible while unlocked; committed via commitHeaderEdit() (expenseVouchers.update()),
+  // the toolbar's Update button routes there instead of commitEntryLine() while this is true.
+  const isHeaderEditing = mode === 'edit' && editScope === 'master';
   const voucherLines = voucher?.lines ?? [];
 
   // PN-01: ref target for the post-Done cursor return — the first field of the entry row. The form
@@ -257,7 +276,7 @@ export default function ExpensesPage() {
   }, [baId, accountOptions]);
 
   const openAccountModal = () => {
-    if (isViewMode) return;
+    if (isViewMode || detailFieldsLocked) return;
     setAccountModalSeed('');
     setIsAccountModalOpen(true);
   };
@@ -329,7 +348,7 @@ export default function ExpensesPage() {
   }, [bankId, chequeId, paymentMode, bankOptions, endorsableCheques]);
 
   const openSourceAccountModal = () => {
-    if (isViewMode) return;
+    if (isViewMode || detailFieldsLocked) return;
     setSourceAccountModalSeed('');
     setIsSourceAccountModalOpen(true);
   };
@@ -373,7 +392,7 @@ export default function ExpensesPage() {
   // Pressing 'c' / 'C' cycles through Cash -> Cheque -> Cheque Endorsement -> Cash
   // Pressing 'o' / 'O' selects Online
   function handlePaymentModeKeyDown(e: React.KeyboardEvent<HTMLSelectElement>) {
-    if (isViewMode) return;
+    if (isViewMode || detailFieldsLocked) return;
     const key = e.key.toLowerCase();
 
     if (key === 'c') {
@@ -397,6 +416,7 @@ export default function ExpensesPage() {
 
   const handleNew = () => {
     setMode('new');
+    setEditScope('master'); // a blank voucher starts scoped to Master, same as any freshly loaded one
     setExpenseId(null);
     setEntryIsDraft(false);
     setDate(today());
@@ -469,6 +489,24 @@ export default function ExpensesPage() {
     setErrorMsg('');
     clearExpensesDraft();
     focusFirstEntryField();
+  };
+
+  // Saves the voucher header (Date/Remarks) edited via Edit + Master scope — the gap flagged
+  // when that button was added (2026-08-31): unlocking the fields alone doesn't persist anything,
+  // expenseVouchers.update() was never actually called from here. Mirrors commitEntryLine's own
+  // return-a-boolean/set-errorMsg-on-failure shape so the Update button can treat both the same way.
+  const commitHeaderEdit = async (): Promise<boolean> => {
+    if (!voucher) return false;
+    if (!date) { fail('Please pick a date.'); return false; }
+    const res = await api.expenseVouchers.update(voucher.voucher_id, {
+      voucher_date: date,
+      remarks: voucherRemarks.trim() || undefined,
+    });
+    if (!res.ok) { fail('Failed to update voucher: ' + res.error.message); return false; }
+    await refreshVoucher(voucher.voucher_id);
+    refreshAllVouchers();
+    flash('Voucher header updated.');
+    return true;
   };
 
   // Commits the entry strip as one line of the open voucher, opening the voucher on first use
@@ -599,6 +637,7 @@ export default function ExpensesPage() {
       return;
     }
     setMode('edit');
+    setEditScope('master'); // opening a different line for correction must not carry over a stale edit scope
     // An unposted line lives in draft_expenses, so the id the entry row carries while editing is a
     // draft_id — handleDone routes on entryIsDraft to know which table to write back to.
     setEntryIsDraft(true);
@@ -845,7 +884,46 @@ export default function ExpensesPage() {
         {activeTab === 'overall' && <OverallExpensesTab onVoucherUnposted={handleVoucherUnpostedElsewhere} />}
 
         {activeTab === 'entry' && (
-          <div className="max-w-5xl mx-auto relative animate-fadeIn">
+          <div className="max-w-6xl mx-auto flex items-start gap-3 animate-fadeIn">
+
+            {/* Master/Detail edit-scope widget — small vertical block on the LEFT SIDE of the
+                page, outside the toolbar row (per the user, 2026-08-31), mirroring Receipts' own.
+                Whichever radio is selected decides what becomes editable while an existing draft
+                line is pulled back into the strip: Master unlocks only the header (Date/Remarks),
+                Detail unlocks only the entry strip and the entries table's Edit/Delete — see
+                masterFieldsLocked/detailFieldsLocked above. Both radios stay enabled always; they
+                only have any effect once mode is 'edit'. */}
+            <div
+              className="shrink-0 sticky top-4 p-3 bg-white border rounded-xl text-sm"
+              style={{ width: 84, borderColor: 'var(--border-color)' }}
+              data-no-print
+            >
+              <div className="font-semibold text-slate-700 text-xs uppercase tracking-wider mb-2">
+                Edit Scope
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="expense-edit-scope"
+                    checked={editScope === 'master'}
+                    onChange={() => setEditScope('master')}
+                  />
+                  Master
+                </label>
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="expense-edit-scope"
+                    checked={editScope === 'detail'}
+                    onChange={() => setEditScope('detail')}
+                  />
+                  Detail
+                </label>
+              </div>
+            </div>
+
+            <div className="flex-1 min-w-0 max-w-5xl relative">
 
             {/* The left-hand "Pending Posting" panel that used to live here was removed
                 226-08-27 at the user's request, same as Receipts: Payments should read like Sale
@@ -870,20 +948,23 @@ export default function ExpensesPage() {
                 own onSubmit) and Done diverge on purpose, see their own comments above. */}
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
               <div className="flex flex-wrap items-center gap-0.5">
-                {/* Update (editing a line) just commits that one correction and stays on the open
-                    voucher, same as Enter — only Done (a fresh line) finishes the whole voucher and
-                    starts a new one (per the user, 2026-08-30 follow-up). */}
+                {/* Update (editing a line, or the header via Edit + Master scope) just commits
+                    that one correction and stays on the open voucher, same as Enter — only Done
+                    (a fresh line) finishes the whole voucher and starts a new one (per the user,
+                    2026-08-30/2026-08-31 follow-ups). */}
                 {!isViewMode && (
                   <button
                     type="button"
                     onClick={async () => {
-                      if (mode === 'edit') {
+                      if (isHeaderEditing) {
+                        if (await commitHeaderEdit()) clearEntryRow();
+                      } else if (mode === 'edit') {
                         if (await commitEntryLine()) clearEntryRow();
                       } else {
                         await handleDoneButton();
                       }
                     }}
-                    title={mode === 'edit' ? 'Update Entry' : 'Done — finish this voucher and start a new one'}
+                    title={isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done — finish this voucher and start a new one'}
                     className="toolbar-btn"
                   >
                     <Save size={20} strokeWidth={2.5} className="text-blue-600" />
@@ -906,6 +987,31 @@ export default function ExpensesPage() {
                 >
                   <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
                   <span>Delete</span>
+                </button>
+                {/* Edit — the only way to unlock the voucher header (Date/Remarks) again once a
+                    voucher exists; per-row Edit on a line still exists separately for detail
+                    lines. Lands focus on the first field of whichever scope is picked. Per the
+                    user, 2026-08-31. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('edit');
+                    if (editScope === 'master' && voucher) {
+                      // Seed the local editable copies from the voucher's own values so the
+                      // fields show the right starting point the moment they unlock — the value
+                      // binding below switches to these while isHeaderEditing.
+                      setDate(voucher.voucher_date);
+                      setVoucherRemarks(voucher.remarks ?? '');
+                    }
+                    if (editScope === 'detail') focusFirstEntryField();
+                    else requestAnimationFrame(() => firstFieldRef.current?.focus());
+                  }}
+                  disabled={!voucher || voucher.status === 'POSTED'}
+                  title="Edit — unlock the voucher header or entry strip, per the Edit Scope selected"
+                  className="toolbar-btn"
+                >
+                  <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
+                  <span>Edit</span>
                 </button>
 
                 <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
@@ -1031,8 +1137,8 @@ export default function ExpensesPage() {
                     <input
                       ref={firstFieldRef}
                       type="date"
-                      value={voucher ? voucher.voucher_date : date}
-                      disabled={!!voucher}
+                      value={voucher && !isHeaderEditing ? voucher.voucher_date : date}
+                      disabled={masterFieldsLocked}
                       onChange={e => setDate(e.target.value)}
                       className="soleria-input py-1.5 text-xs font-semibold"
                     />
@@ -1053,8 +1159,8 @@ export default function ExpensesPage() {
                     <label className="block text-xs font-bold text-slate-900 mb-1">Remarks</label>
                     <input
                       type="text"
-                      value={voucher ? (voucher.remarks ?? '') : voucherRemarks}
-                      disabled={!!voucher}
+                      value={voucher && !isHeaderEditing ? (voucher.remarks ?? '') : voucherRemarks}
+                      disabled={masterFieldsLocked}
                       onChange={e => setVoucherRemarks(e.target.value)}
                       placeholder="Applies to the whole voucher (each payment has its own narration below)"
                       className="soleria-input py-1.5 text-xs"
@@ -1073,7 +1179,7 @@ export default function ExpensesPage() {
                         ref={accountTriggerRef}
                         type="text"
                         data-field-nav="true"
-                        disabled={isViewMode}
+                        disabled={isViewMode || detailFieldsLocked}
                         value={accountSearchText}
                         onChange={e => setAccountSearchText(e.target.value)}
                         onKeyDown={handleAccountTriggerKeyDown}
@@ -1082,7 +1188,7 @@ export default function ExpensesPage() {
                       />
                       <button
                         type="button"
-                        disabled={isViewMode}
+                        disabled={isViewMode || detailFieldsLocked}
                         onClick={openAccountModal}
                         title="Browse all accounts"
                         className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
@@ -1108,7 +1214,7 @@ export default function ExpensesPage() {
                     <input
                       type="text"
                       value={remarks}
-                      disabled={isViewMode}
+                      disabled={isViewMode || detailFieldsLocked}
                       onChange={e => setRemarks(e.target.value)}
                       placeholder="Enter narration..."
                       className="soleria-input py-1 text-xs"
@@ -1123,7 +1229,7 @@ export default function ExpensesPage() {
                     <select
                       value={paymentMode}
                       data-field-nav="true"
-                      disabled={isViewMode}
+                      disabled={isViewMode || detailFieldsLocked}
                       onChange={e => selectPaymentMode(e.target.value as ExpensePaymentMode)}
                       onKeyDown={handlePaymentModeKeyDown}
                       className="soleria-input py-1 text-xs font-semibold cursor-pointer"
@@ -1143,7 +1249,7 @@ export default function ExpensesPage() {
                     <input
                       type="text"
                       value={issuedChequeNo}
-                      disabled={isViewMode || (paymentMode !== 'CHEQUE_ISSUED' && paymentMode !== 'CHEQUE_ENDORSED')}
+                      disabled={isViewMode || detailFieldsLocked || (paymentMode !== 'CHEQUE_ISSUED' && paymentMode !== 'CHEQUE_ENDORSED')}
                       onChange={e => setIssuedChequeNo(e.target.value)}
                       placeholder="e.g. 109283"
                       className="soleria-input py-1 text-xs font-mono disabled:bg-slate-100/60 disabled:text-slate-400"
@@ -1157,7 +1263,7 @@ export default function ExpensesPage() {
                     <input
                       type="date"
                       value={issuedChequeDate}
-                      disabled={isViewMode || (paymentMode !== 'CHEQUE_ISSUED' && paymentMode !== 'CHEQUE_ENDORSED')}
+                      disabled={isViewMode || detailFieldsLocked || (paymentMode !== 'CHEQUE_ISSUED' && paymentMode !== 'CHEQUE_ENDORSED')}
                       onChange={e => setIssuedChequeDate(e.target.value)}
                       className="soleria-input py-1 text-xs disabled:bg-slate-100/60 disabled:text-slate-400"
                     />
@@ -1176,7 +1282,7 @@ export default function ExpensesPage() {
                       type="number"
                       min={0}
                       value={amount || ''}
-                      disabled={isViewMode}
+                      disabled={isViewMode || detailFieldsLocked}
                       onChange={e => setAmount(Math.max(0, parseInt(e.target.value) || 0))}
                       placeholder="Enter amount in Rs..."
                       className="soleria-input py-1 text-xs font-semibold font-mono"
@@ -1200,7 +1306,7 @@ export default function ExpensesPage() {
                           ref={sourceAccountTriggerRef}
                           type="text"
                           data-field-nav="true"
-                          disabled={isViewMode}
+                          disabled={isViewMode || detailFieldsLocked}
                           value={sourceAccountSearchText}
                           onChange={e => setSourceAccountSearchText(e.target.value)}
                           onKeyDown={handleSourceAccountTriggerKeyDown}
@@ -1213,7 +1319,7 @@ export default function ExpensesPage() {
                         />
                         <button
                           type="button"
-                          disabled={isViewMode}
+                          disabled={isViewMode || detailFieldsLocked}
                           onClick={openSourceAccountModal}
                           title="Browse all accounts/cheques"
                           className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
@@ -1230,7 +1336,7 @@ export default function ExpensesPage() {
                       <input
                         type="text"
                         value={details}
-                        disabled={isViewMode}
+                        disabled={isViewMode || detailFieldsLocked}
                         onChange={e => setDetails(e.target.value)}
                         placeholder={paymentMode === 'ONLINE' ? 'e.g. Alfa ref 980124' : 'Optional notes...'}
                         className="soleria-input py-1 text-xs"
@@ -1328,21 +1434,26 @@ export default function ExpensesPage() {
                             <div className="flex items-center justify-center gap-1.5">
                               {line.status === 'DRAFT' && (
                                 <>
+                                  {/* Detail-scope interaction — locked while mid-correction of a
+                                      DIFFERENT line with Master selected (2026-08-31), same
+                                      mirror-image gate as the entry strip fields above. */}
                                   <button
                                     type="button"
-                                    onClick={() => handleEditLine(line)}
-                                    title="Pull this entry back into the form to correct it"
-                                    className="text-slate-500 hover:text-slate-800 transition-colors"
+                                    onClick={() => { if (!detailFieldsLocked) handleEditLine(line); }}
+                                    disabled={detailFieldsLocked}
+                                    title={detailFieldsLocked ? 'Select Detail to edit voucher entries' : 'Pull this entry back into the form to correct it'}
+                                    className="text-slate-500 hover:text-slate-800 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                                   >
                                     <Edit size={14} />
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => setDeleteTarget(line.draft_id != null
+                                    onClick={() => { if (detailFieldsLocked) return; setDeleteTarget(line.draft_id != null
                                       ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
-                                      : { kind: 'expense', id: line.expense_id as number, amount: Number(line.amount) })}
-                                    title="Delete this entry (asks for your password)"
-                                    className="text-rose-500 hover:text-rose-700 transition-colors"
+                                      : { kind: 'expense', id: line.expense_id as number, amount: Number(line.amount) }); }}
+                                    disabled={detailFieldsLocked}
+                                    title={detailFieldsLocked ? 'Select Detail to delete voucher entries' : 'Delete this entry (asks for your password)'}
+                                    className="text-rose-500 hover:text-rose-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                                   >
                                     <Trash2 size={14} />
                                   </button>
@@ -1407,6 +1518,7 @@ export default function ExpensesPage() {
                   </div>
                 )}
               </div>
+            </div>
             </div>
           </div>
         )}

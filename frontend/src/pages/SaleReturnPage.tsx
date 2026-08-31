@@ -105,6 +105,11 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   // Mode: 'view' | 'edit' | 'new'
   const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');
+  // Master/Detail edit-scope radio (left-side widget, per the user 2026-08-31): which half of the
+  // form Edit actually unlocks. Only meaningful once Edit has already been clicked while unposted
+  // — it narrows what THAT click reaches, it doesn't reopen the existing isPosted gate on Edit
+  // itself. Always resettable/pickable even in view mode, so it can be pre-chosen before Edit.
+  const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
 
   // Password Modal Protection State
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
@@ -720,6 +725,7 @@ const nextSystemReturnNo = useMemo(
   // Toolbar Actions
   const handleNew = () => {
     setMode('new');
+    setEditScope('master');
     setReturnId(null);
     setCurrentReturnIsPosted(false);
     setDate(getTodayDate());
@@ -904,8 +910,13 @@ const nextSystemReturnNo = useMemo(
   // mode==='edit') already asks for one before the update actually goes through, so gating entry
   // into edit mode too meant asking twice for one edit (reported by the user for both this
   // button and handleEditSpecificReturn above).
+  // Edit — lands focus on the first field of whichever scope is picked (per the user, 2026-08-31).
   const handleEditCurrentReturn = () => {
     setMode('edit');
+    requestAnimationFrame(() => {
+      if (editScope === 'detail') focusFirstField(entryProductCellRef.current);
+      else firstFieldRef.current?.focus();
+    });
   };
 
   const pendingDeleteReturnId = useRef<number | null>(null);
@@ -976,6 +987,8 @@ const nextSystemReturnNo = useMemo(
       const res = await api.draftSaleReturns.get(draft.draft_id);
       if (res.ok) draft = res.data;
     }
+    // Opening a different record must not carry over a stale scope from the last edit.
+    setEditScope('master');
     setReturnId(draft.draft_id);
     setCurrentReturnIsPosted(false);
     setDate(toDateInputValue(draft.return_date));
@@ -1225,6 +1238,10 @@ const nextSystemReturnNo = useMemo(
   };
 
   const handleRowClick = (idx: number) => {
+    // Master/Detail edit-scope split (per the user, 2026-08-31): a row click is how the detail
+    // grid re-opens a committed line for editing — a no-op while scope is Master, so master-only
+    // edits can't sneak article changes in through the grid. Doesn't affect 'new'/view browsing.
+    if (mode === 'edit' && editScope !== 'detail') return;
     if (isViewMode && currentReturnIsPosted) {
       pendingRowEditIndex.current = idx;
       setIsPasswordModalOpen(true);
@@ -1288,6 +1305,12 @@ const nextSystemReturnNo = useMemo(
   // no bulk customer-history fetch endpoint exists yet.
 
   const isViewMode = mode === 'view';
+  // Master/Detail edit-scope split (per the user, 2026-08-31): once Edit is already reachable
+  // (isViewMode false, mode 'edit'), the radio narrows WHICH half actually unlocks — this does not
+  // weaken the existing isPosted gate on the Edit button itself, it only adds a further split on
+  // top of it. A brand-new return (mode 'new') is unaffected — everything stays editable there.
+  const masterFieldsLocked = mode === 'edit' && editScope !== 'master';
+  const detailFieldsLocked = mode === 'edit' && editScope !== 'detail';
 
   const handleCreateSubCustomer = async () => {
     if (!newSubCustomerName.trim()) { setErrorMsg('Sub-customer name is required.'); return; }
@@ -1554,19 +1577,51 @@ const nextSystemReturnNo = useMemo(
     <AppLayout pageTitle="Sale Return" headerAction={tabBar}>
       <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
 
-        {/* Saved Drafts — moved off the main flow, same treatment as SaleBillPage's Pending
-            Posting: a flat vertical list, positioned `absolute` and anchored via
-            `right: calc(100% + gap)` to this wrapper's own left edge (not the viewport or a
-            guessed margin), so it can never affect the card's width/position. Shown only from
-            `2xl` up, since below that there generally isn't enough real margin for it to land in
-            without spilling past the window edge. Clicking a row loads that draft into the form;
-            the small Post/Delete buttons act on that row directly. */}
-        {(drafts.length > 0 || postAllDraftsResult) && (
-          <aside
-            className="hidden 2xl:block absolute top-0 w-64 space-y-3"
-            style={{ right: 'calc(100% + 24px)' }}
-            data-no-print
-          >
+        {/* Left-side column — anchored `absolute` via `right: calc(100% + gap)` to this wrapper's
+            own left edge (not the viewport or a guessed margin), so it can never affect the
+            card's width/position. Shown only from `2xl` up, since below that there generally
+            isn't enough real margin for it to land in without spilling past the window edge.
+            Always rendered (unlike the Saved Drafts panel below it) so the Edit Scope radio is
+            always reachable. */}
+        <aside
+          className="hidden 2xl:block absolute top-0 w-64 space-y-3"
+          style={{ right: 'calc(100% + 24px)' }}
+          data-no-print
+        >
+          {/* Master/Detail edit-scope radio (per the user, 2026-08-31): which half of the form
+              Edit actually unlocks — Master unlocks only the header fields, Detail unlocks only
+              the entry strip + grid. Doesn't touch the toolbar's own Edit button or its isPosted
+              gate, only narrows what a click on it reaches (see editScope/masterFieldsLocked/
+              detailFieldsLocked above). Always enabled so a scope can be picked before Edit. */}
+          <div className="p-3 bg-white border rounded-xl text-sm" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="font-semibold text-slate-700 text-xs uppercase tracking-wider mb-2">Edit Scope</div>
+            <div className="flex flex-col gap-1.5">
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+                <input
+                  type="radio"
+                  name="sale-return-edit-scope"
+                  checked={editScope === 'master'}
+                  onChange={() => setEditScope('master')}
+                />
+                Master
+              </label>
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+                <input
+                  type="radio"
+                  name="sale-return-edit-scope"
+                  checked={editScope === 'detail'}
+                  onChange={() => setEditScope('detail')}
+                />
+                Detail
+              </label>
+            </div>
+          </div>
+
+          {/* Saved Drafts — same treatment as SaleBillPage's Pending Posting: a flat vertical
+              list. Clicking a row loads that draft into the form; the small Post/Delete buttons
+              act on that row directly. */}
+          {(drafts.length > 0 || postAllDraftsResult) && (
+          <>
             <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
               <div className="flex items-center justify-between gap-2 mb-1">
                 <span className="font-semibold text-slate-700">Pending Posting</span>
@@ -1658,8 +1713,9 @@ const nextSystemReturnNo = useMemo(
               })}
             </ul>
             )}
-          </aside>
-        )}
+          </>
+          )}
+        </aside>
 
         {/* Tab contents (records & find) */}
         <div>
@@ -1923,7 +1979,7 @@ const nextSystemReturnNo = useMemo(
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
               <input type="date" ref={firstFieldRef}
-            value={date} disabled={isViewMode} onChange={e => setDate(e.target.value)} className="soleria-input soleria-input-compact" />
+            value={date} disabled={isViewMode || masterFieldsLocked} onChange={e => setDate(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
 
             {/* Entry Mode — right after Date (per the user, 2026-08-26), same position as
@@ -1943,7 +1999,7 @@ const nextSystemReturnNo = useMemo(
                 <input
                   ref={findBillTriggerRef}
                   type="text"
-                  disabled={isViewMode}
+                  disabled={isViewMode || masterFieldsLocked}
                   value={findBillSearchText}
                   onChange={e => setFindBillSearchText(e.target.value)}
                   onKeyDown={handleFindBillTriggerKeyDown}
@@ -1953,7 +2009,7 @@ const nextSystemReturnNo = useMemo(
                 />
                 <button
                   type="button"
-                  disabled={isViewMode}
+                  disabled={isViewMode || masterFieldsLocked}
                   onClick={openFindBillModal}
                   title="Browse all posted Sale Bills"
                   className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1994,7 +2050,7 @@ const nextSystemReturnNo = useMemo(
                 <input
                   ref={storeTriggerRef}
                   type="text"
-                  disabled={isViewMode || isCopiedFromBill}
+                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
                   title={isCopiedFromBill ? 'Set by the bill you picked above — Clear Link to change it' : undefined}
                   value={storeSearchText}
                   onChange={e => setStoreSearchText(e.target.value)}
@@ -2005,7 +2061,7 @@ const nextSystemReturnNo = useMemo(
                 />
                 <button
                   type="button"
-                  disabled={isViewMode || isCopiedFromBill}
+                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
                   onClick={openStoreModal}
                   title="Browse all stores"
                   className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -2035,7 +2091,7 @@ const nextSystemReturnNo = useMemo(
               <input
                 type="text"
                 value={billNo}
-                disabled={isViewMode}
+                disabled={isViewMode || masterFieldsLocked}
                 title={isCopiedFromBill ? 'Linked to this bill — type a different one to switch, or clear it to go fully manual' : undefined}
                 onChange={e => setBillNo(e.target.value)}
                 onKeyDown={e => {
@@ -2071,7 +2127,7 @@ const nextSystemReturnNo = useMemo(
                   onChange={val => { setCustomerId(val); setSubCustomerId(''); }}
                   placeholder="Select customer..."
                   searchPlaceholder="Search customers..."
-                  disabled={isViewMode || isCopiedFromBill}
+                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
                 />
                 {selectedCustomer && selectedCustomer.ba_id == null && (
                   <p className="text-[10px] text-amber-600 mt-0.5 font-semibold">
@@ -2093,7 +2149,7 @@ const nextSystemReturnNo = useMemo(
                 <input
                   ref={subCustTriggerRef}
                   type="text"
-                  disabled={isViewMode || isCopiedFromBill}
+                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
                   value={subCustSearchText}
                   onChange={e => setSubCustSearchText(e.target.value)}
                   onKeyDown={handleSubCustTriggerKeyDown}
@@ -2103,7 +2159,7 @@ const nextSystemReturnNo = useMemo(
                 />
                 <button
                   type="button"
-                  disabled={isViewMode || isCopiedFromBill}
+                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
                   onClick={openSubCustModal}
                   title="Browse all sub-customers"
                   className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -2150,7 +2206,7 @@ const nextSystemReturnNo = useMemo(
                 <input
                   ref={addaTriggerRef}
                   type="text"
-                  disabled={isViewMode || isCopiedFromBill}
+                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
                   value={addaSearchText}
                   onChange={e => setAddaSearchText(e.target.value)}
                   onKeyDown={handleAddaTriggerKeyDown}
@@ -2160,7 +2216,7 @@ const nextSystemReturnNo = useMemo(
                 />
                 <button
                   type="button"
-                  disabled={isViewMode || isCopiedFromBill}
+                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
                   onClick={openAddaModal}
                   title="Browse all Addas"
                   className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -2187,13 +2243,13 @@ const nextSystemReturnNo = useMemo(
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 GP No. <span className="text-slate-400 font-normal normal-case">— optional</span>
               </label>
-              <input type="text" value={gpNo} disabled={isViewMode || isCopiedFromBill} onChange={e => setGpNo(e.target.value)} className="soleria-input soleria-input-compact" />
+              <input type="text" value={gpNo} disabled={isViewMode || isCopiedFromBill || masterFieldsLocked} onChange={e => setGpNo(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
             <div className="flex items-center gap-1.5">
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Bilty No. <span className="text-slate-400 font-normal normal-case">— optional</span>
               </label>
-              <input type="text" value={biltyNo} disabled={isViewMode || isCopiedFromBill} onChange={e => setBiltyNo(e.target.value)} className="soleria-input soleria-input-compact" />
+              <input type="text" value={biltyNo} disabled={isViewMode || isCopiedFromBill || masterFieldsLocked} onChange={e => setBiltyNo(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
           </div>
 
@@ -2214,6 +2270,7 @@ const nextSystemReturnNo = useMemo(
                   <input
                     ref={productTriggerRef}
                     type="text"
+                    disabled={detailFieldsLocked}
                     value={productSearchText}
                     onChange={e => setProductSearchText(e.target.value)}
                     onKeyDown={e => {
@@ -2254,7 +2311,7 @@ const nextSystemReturnNo = useMemo(
                     onChange={handleEntryVariantChange}
                     placeholder="Color..."
                     searchPlaceholder="Search colors..."
-                    disabled={entry.articleId == null}
+                    disabled={entry.articleId == null || detailFieldsLocked}
                   />
                 </div>
               </div>
@@ -2270,6 +2327,7 @@ const nextSystemReturnNo = useMemo(
                   type="number"
                   value={entry.cartons || ''}
                   min={1}
+                  disabled={detailFieldsLocked}
                   onChange={e => updateEntryNumericField('cartons', parseInt(e.target.value) || 0)}
                   className={`soleria-input soleria-input-compact text-center font-mono ${entryBillError ? 'border-2 border-red-500 bg-rose-50 text-red-700 font-bold' : ''}`}
                 />
@@ -2287,7 +2345,7 @@ const nextSystemReturnNo = useMemo(
                 <input
                   type="number"
                   value={entry.rate || ''}
-                  disabled={isCopiedFromBill}
+                  disabled={isCopiedFromBill || detailFieldsLocked}
                   title={isCopiedFromBill ? 'Locked to the original bill\'s own rate for this article/color' : undefined}
                   min={0}
                   onChange={e => updateEntryNumericField('rate', parseInt(e.target.value) || 0)}
@@ -2302,6 +2360,7 @@ const nextSystemReturnNo = useMemo(
                   value={entry.discountPercent || ''}
                   min={0}
                   max={100}
+                  disabled={detailFieldsLocked}
                   onChange={e => updateEntryNumericField('discountPercent', parseFloat(e.target.value) || 0)}
                   className="soleria-input soleria-input-compact text-center font-mono"
                 />
@@ -2312,6 +2371,7 @@ const nextSystemReturnNo = useMemo(
                   type="number"
                   value={entry.discountValue || ''}
                   min={0}
+                  disabled={detailFieldsLocked}
                   onChange={e => updateEntryNumericField('discountValue', parseFloat(e.target.value) || 0)}
                   onKeyDown={handleEntryLastFieldKeyDown}
                   className="soleria-input soleria-input-compact text-right font-mono"
@@ -2340,7 +2400,7 @@ const nextSystemReturnNo = useMemo(
               </div>
             )}
             <div className="mt-1.5 flex items-center gap-2">
-              <button type="button" onClick={handleCommitEntryRow} className="px-3 py-1 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d]">
+              <button type="button" onClick={handleCommitEntryRow} disabled={detailFieldsLocked} className="px-3 py-1 text-xs font-semibold rounded-lg bg-[#111c2a] text-[#B08D57] hover:bg-[#1a293d] disabled:opacity-40 disabled:cursor-not-allowed">
                 {editingIndex != null ? 'Update Row' : 'Add Row'}
               </button>
             </div>
@@ -2403,7 +2463,7 @@ const nextSystemReturnNo = useMemo(
               <input
                 type="text"
                 value={remarks}
-                disabled={isViewMode}
+                disabled={isViewMode || masterFieldsLocked}
                 onChange={e => setRemarks(e.target.value)}
                 placeholder="Enter return reasons or remarks..."
                 className="soleria-input"
@@ -2425,7 +2485,7 @@ const nextSystemReturnNo = useMemo(
                 <input
                   type="number"
                   value={invoiceDiscount || ''}
-                  disabled={isViewMode}
+                  disabled={isViewMode || masterFieldsLocked}
                   onChange={e => setInvoiceDiscount(Math.max(0, parseInt(e.target.value) || 0))}
                   className="soleria-input soleria-input-compact text-right font-mono"
                   style={{ width: '110px' }}

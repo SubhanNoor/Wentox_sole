@@ -103,6 +103,11 @@ export default function PurchasePage() {
 
   // Mode: 'view' | 'edit' | 'new'
   const [mode, setMode] = useState<'view' | 'edit' | 'new'>('new');
+  // Master/Detail edit-scope radio (left-side widget, below) — which half of the form Edit
+  // actually unlocks. Per the user, 2026-08-31: Edit used to unlock the whole document at once;
+  // now Master unlocks only the header fields, Detail only the entry strip + grid. Reset to
+  // 'master' on New/loading a record so a stale scope never carries over from the last edit.
+  const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
 
   const [purchaseId, setPurchaseId] = useState<number | null>(null);
   const [currentIsPosted, setCurrentIsPosted] = useState(false);
@@ -324,6 +329,9 @@ const nextSystemBillNo = useMemo(
   // stays in the grid (not pulled out) until the edit is committed, so it never looks "missing".
   const handleEditRow = (item: UiItem) => {
     if (isViewMode) return;
+    // Detail scope only — clicking a row to re-edit it is a detail-section interaction, so it
+    // must stay inert while Master is the selected edit scope (per the user, 2026-08-31).
+    if (detailFieldsLocked) return;
     setCurrentRow({ materialName: item.materialName, unit: item.unit, quantity: item.quantity, pricePerUnit: item.pricePerUnit });
     setEditingUid(item.uid);
     setIsCustomUnit(!UNIT_PRESETS.includes(item.unit));
@@ -391,6 +399,11 @@ const nextSystemBillNo = useMemo(
   }, [vendorId, date, items, billNoDuplicate]);
 
   const isViewMode = mode === 'view';
+  // Edit-scope split (per the user, 2026-08-31): while actually editing, Master unlocks only the
+  // header fields and Detail only the entry strip + grid — each stays locked whenever the OTHER
+  // scope is selected. Both are false outside edit mode (view/new behave exactly as before).
+  const masterFieldsLocked = mode === 'edit' && editScope !== 'master';
+  const detailFieldsLocked = mode === 'edit' && editScope !== 'detail';
 
   // P-02: "was the purchase now on screen created in this run?" — the difference between finishing
   // one you were entering (clear and move to the next) and posting one you deliberately opened
@@ -413,6 +426,7 @@ const nextSystemBillNo = useMemo(
     setEditingUid(null);
     setIsCustomUnit(false);
     setErrorMsg('');
+    setEditScope('master'); // a blank form starts scoped to Master, same as any freshly loaded record
     clearPurchaseDraft();
   };
 
@@ -576,6 +590,7 @@ const nextSystemBillNo = useMemo(
     setEditingUid(null);
     setIsCustomUnit(false);
     setErrorMsg('');
+    setEditScope('master'); // opening a different record must not carry over a stale edit scope
     setMode('view');
   };
 
@@ -685,6 +700,7 @@ const nextSystemBillNo = useMemo(
     setEditingUid(null);
     setIsCustomUnit(false);
     setErrorMsg('');
+    setEditScope('master'); // opening a different draft must not carry over a stale edit scope
     setMode(opts.mode ?? 'edit');
   };
 
@@ -879,12 +895,41 @@ const nextSystemBillNo = useMemo(
             tab, which pushed the whole form down; this way it's always visible (any tab) without
             taking layout space at all. Only shown from `2xl` up, same as Sale Bill — below that
             there usually isn't 280px of free margin for it to land in. */}
-        {(unpostedPurchases.length > 0 || postAllResult) && (
+        {activeTab === 'entry' && (
           <aside
             className="hidden 2xl:block absolute top-0 w-64 space-y-3"
             style={{ right: 'calc(100% + 24px)' }}
             data-no-print
           >
+            {/* Master/Detail edit-scope radios — per the user, 2026-08-31: which half of the
+                document the toolbar's Edit button unlocks. Always enabled (not gated on
+                isViewMode/mode) so a scope can be pre-picked before Edit is even clicked. Same
+                left-side positioning technique as the Pending Posting panel below it. */}
+            <div className="p-3 bg-white border rounded-xl text-sm" style={{ borderColor: 'var(--border-color)' }}>
+              <div className="font-semibold text-slate-700 text-xs uppercase tracking-wider mb-2">Edit Scope</div>
+              <div className="flex flex-col gap-1.5">
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="purchase-edit-scope"
+                    checked={editScope === 'master'}
+                    onChange={() => setEditScope('master')}
+                  />
+                  Master
+                </label>
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="purchase-edit-scope"
+                    checked={editScope === 'detail'}
+                    onChange={() => setEditScope('detail')}
+                  />
+                  Detail
+                </label>
+              </div>
+            </div>
+
+            {(unpostedPurchases.length > 0 || postAllResult) && (
             <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
               <div className="flex items-center justify-between gap-2 mb-1">
                 <span className="font-semibold text-slate-700">Pending Posting</span>
@@ -934,6 +979,7 @@ const nextSystemBillNo = useMemo(
                 </div>
               )}
             </div>
+            )}
 
             {/* Flat list — every unposted purchase, oldest first (same order the backend returns).
                 Each row opens straight into the form for editing, with inline Post/Delete actions
@@ -1020,7 +1066,14 @@ const nextSystemBillNo = useMemo(
             </button>
             <button
               type="button"
-              onClick={() => setMode('edit')}
+              // Edit — lands focus on the first field of whichever scope is picked (per the user, 2026-08-31).
+              onClick={() => {
+                setMode('edit');
+                requestAnimationFrame(() => {
+                  if (editScope === 'detail') materialNameRef.current?.focus();
+                  else firstFieldRef.current?.focus();
+                });
+              }}
               disabled={!isViewMode || currentIsPosted}
               title="Edit"
               className="toolbar-btn"
@@ -1156,7 +1209,7 @@ const nextSystemBillNo = useMemo(
                 ref={firstFieldRef}
                 type="date"
                 value={date}
-                disabled={isViewMode}
+                disabled={isViewMode || masterFieldsLocked}
                 onChange={e => setDate(e.target.value)}
                 className="soleria-input"
                 style={{ fontSize: '13px' }}
@@ -1186,7 +1239,7 @@ const nextSystemBillNo = useMemo(
               <input
                 type="text"
                 value={billNo}
-                disabled={isViewMode}
+                disabled={isViewMode || masterFieldsLocked}
                 onChange={e => setBillNo(e.target.value)}
                 placeholder="Vendor's own invoice #..."
                 className={`soleria-input ${billNoDuplicate ? 'border-rose-400 focus:border-rose-500' : ''}`}
@@ -1228,7 +1281,7 @@ const nextSystemBillNo = useMemo(
                   ref={vendorTriggerRef}
                   type="text"
                   data-field-nav="true"
-                  disabled={isViewMode}
+                  disabled={isViewMode || masterFieldsLocked}
                   value={vendorSearchText}
                   onChange={e => setVendorSearchText(e.target.value)}
                   onKeyDown={handleVendorTriggerKeyDown}
@@ -1238,7 +1291,7 @@ const nextSystemBillNo = useMemo(
                 />
                 <button
                   type="button"
-                  disabled={isViewMode}
+                  disabled={isViewMode || masterFieldsLocked}
                   onClick={openVendorModal}
                   title="Browse all vendors"
                   className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1267,7 +1320,7 @@ const nextSystemBillNo = useMemo(
               <input
                 type="text"
                 value={remarks}
-                disabled={isViewMode}
+                disabled={isViewMode || masterFieldsLocked}
                 onChange={e => setRemarks(e.target.value)}
                 placeholder="Optional notes..."
                 className="soleria-input"
@@ -1289,6 +1342,7 @@ const nextSystemBillNo = useMemo(
                   <input
                     type="text"
                     ref={materialNameRef}
+                    disabled={detailFieldsLocked}
                     value={currentRow.materialName}
                     onChange={e => updateCurrentField('materialName', e.target.value)}
                     placeholder="e.g. PU Sheet Roll"
@@ -1303,6 +1357,7 @@ const nextSystemBillNo = useMemo(
                   {isCustomUnit ? (
                     <input
                       type="text"
+                      disabled={detailFieldsLocked}
                       value={currentRow.unit}
                       onChange={e => updateCurrentField('unit', e.target.value)}
                       placeholder="Type unit..."
@@ -1318,6 +1373,7 @@ const nextSystemBillNo = useMemo(
                     />
                   ) : (
                     <select
+                      disabled={detailFieldsLocked}
                       value={UNIT_PRESETS.includes(currentRow.unit) ? currentRow.unit : '__other__'}
                       onChange={e => {
                         if (e.target.value === '__other__') {
@@ -1346,6 +1402,7 @@ const nextSystemBillNo = useMemo(
                   <input
                     type="number"
                     min={0}
+                    disabled={detailFieldsLocked}
                     value={currentRow.quantity || ''}
                     onChange={e => updateCurrentField('quantity', Number(e.target.value))}
                     className="soleria-input text-center font-semibold"
@@ -1359,6 +1416,7 @@ const nextSystemBillNo = useMemo(
                   <input
                     type="number"
                     min={0}
+                    disabled={detailFieldsLocked}
                     value={currentRow.pricePerUnit || ''}
                     onChange={e => updateCurrentField('pricePerUnit', Number(e.target.value))}
                     onKeyDown={handleRateKeyDown}
@@ -1376,6 +1434,7 @@ const nextSystemBillNo = useMemo(
                   <button
                     type="button"
                     onClick={commitCurrentRow}
+                    disabled={detailFieldsLocked}
                     title={editingUid ? 'Update this article' : 'Add this article'}
                     className="btn-outline p-2 shrink-0"
                   >
@@ -1423,10 +1482,10 @@ const nextSystemBillNo = useMemo(
                   <tr
                     key={item.uid}
                     onClick={() => handleEditRow(item)}
-                    title={!isViewMode ? 'Click to select this article — Delete (toolbar) removes it' : undefined}
+                    title={!isViewMode && !detailFieldsLocked ? 'Click to select this article — Delete (toolbar) removes it' : undefined}
                     className={`border-b transition-colors ${
                       item.uid === editingUid ? 'bg-blue-50' : 'hover:bg-slate-50/55'
-                    } ${!isViewMode ? 'cursor-pointer' : ''}`}
+                    } ${!isViewMode && !detailFieldsLocked ? 'cursor-pointer' : ''}`}
                     style={{ borderColor: 'var(--border-table)' }}
                   >
                     <td className="p-3 pl-4 font-semibold text-slate-800">{item.materialName}</td>
