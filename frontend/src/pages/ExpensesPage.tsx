@@ -863,7 +863,21 @@ export default function ExpensesPage() {
   // Deletes the voucher currently on screen (password-gated). Was a per-row button in the removed
   // Pending Posting panel; a toolbar action now, so it targets the open voucher. Backend rejects
   // deleting a PARTIAL voucher, hence the UNPOSTED-only gate on the button.
+  // True while a committed line is pulled into the entry strip — i.e. a row is selected.
+  const selectedLineId = mode === 'edit' && entryIsDraft ? expenseId : null;
+
+  // Toolbar Delete targets the SELECTED ENTRY when a row is selected, the whole voucher otherwise —
+  // the rule Purchase/Sale Bill/Stock Voucher already follow, brought here so the toolbar means the
+  // same thing on every voucher page (per the user, 2026-09-01). Both paths keep the password
+  // prompt, which is also what names which of the two is about to happen.
   const handleDeleteVoucherClick = () => {
+    if (selectedLineId != null) {
+      const line = voucherLines.find(l => l.draft_id === selectedLineId);
+      if (line) {
+        setDeleteTarget({ kind: 'draft', id: selectedLineId, amount: Number(line.amount) });
+        return;
+      }
+    }
     if (!voucher) return;
     setDeleteTarget({ kind: 'voucher', id: voucher.voucher_id, amount: Number(voucher.total_amount) });
   };
@@ -1027,8 +1041,10 @@ export default function ExpensesPage() {
                 <button
                   type="button"
                   onClick={handleDeleteVoucherClick}
-                  disabled={!voucher || voucher.status !== 'UNPOSTED'}
-                  title="Delete this voucher (asks for your password)"
+                  disabled={selectedLineId != null ? false : (!voucher || voucher.status !== 'UNPOSTED')}
+                  title={selectedLineId != null
+                    ? 'Delete the selected entry (asks for your password)'
+                    : 'Delete this voucher (asks for your password)'}
                   className="toolbar-btn"
                 >
                   <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
@@ -1455,8 +1471,24 @@ export default function ExpensesPage() {
                             No payments added yet — fill the fields above and press Enter.
                           </td>
                         </tr>
-                      ) : voucherLines.map(line => (
-                        <tr key={line.expense_id} className="border-b hover:bg-slate-50/60 transition-colors" style={{ borderColor: 'var(--border-table)' }}>
+                      ) : voucherLines.map(line => {
+                        // "Selected" is the line currently pulled into the entry strip — no second
+                        // piece of state to drift out of step with the form.
+                        const isSelected = mode === 'edit' && entryIsDraft
+                          && line.draft_id != null && expenseId === line.draft_id;
+                        const selectable = line.status !== 'CONFIRMED' && line.draft_id != null && !detailFieldsLocked;
+                        return (
+                        <tr
+                          key={line.expense_id}
+                          // Row click selects the line and pulls it into the form, so the toolbar
+                          // acts on it — matching Purchase/Sale Bill/Stock Voucher (2026-09-01).
+                          onClick={() => { if (selectable) handleEditLine(line); }}
+                          title={selectable
+                            ? 'Click to select this entry — Edit and Delete in the toolbar act on it'
+                            : (line.status === 'CONFIRMED' ? 'Unpost this voucher before editing that entry' : undefined)}
+                          className={`border-b transition-colors ${isSelected ? 'bg-blue-50' : 'hover:bg-slate-50/60'} ${selectable ? 'cursor-pointer' : ''}`}
+                          style={{ borderColor: 'var(--border-table)' }}
+                        >
                           <td className="p-2.5 pl-3 font-mono text-xs text-slate-600">{line.account_code || '—'}</td>
                           <td className="p-2.5 font-semibold text-slate-800">{line.account_name || accountName(line.ba_id)}</td>
                           <td className="p-2.5 text-slate-600 text-xs">{line.remarks || '—'}</td>
@@ -1485,7 +1517,8 @@ export default function ExpensesPage() {
                                       mirror-image gate as the entry strip fields above. */}
                                   <button
                                     type="button"
-                                    onClick={() => { if (!detailFieldsLocked) handleEditLine(line); }}
+                                    // stopPropagation: the row itself selects on click now.
+                                    onClick={e => { e.stopPropagation(); if (!detailFieldsLocked) handleEditLine(line); }}
                                     disabled={detailFieldsLocked}
                                     title={detailFieldsLocked ? 'Select Detail to edit voucher entries' : 'Pull this entry back into the form to correct it'}
                                     className="text-slate-500 hover:text-slate-800 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
@@ -1494,7 +1527,7 @@ export default function ExpensesPage() {
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => { if (detailFieldsLocked) return; setDeleteTarget(line.draft_id != null
+                                    onClick={e => { e.stopPropagation(); if (detailFieldsLocked) return; setDeleteTarget(line.draft_id != null
                                       ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
                                       : { kind: 'expense', id: line.expense_id as number, amount: Number(line.amount) }); }}
                                     disabled={detailFieldsLocked}
@@ -1508,7 +1541,8 @@ export default function ExpensesPage() {
                             </div>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

@@ -554,7 +554,7 @@ async function chartAccountsWithActivity() {
 // the row, since a broken draft is exactly what someone reading this report needs to see.
 async function cashBookUnpostedSides({ date_from, date_to }, { cashAcId, chequesAcId }) {
   const result = await query(
-    `SELECT 'RECEIPT' AS kind, dr.draft_id AS source_id, dr.receipt_date AS entry_date, dr.amount,
+    `SELECT 'RECEIPT' AS kind, dr.draft_id AS source_id, dr.receipt_date AS entry_date, dr.created_at, dr.amount,
             dr.payment_mode, dr.remarks, dr.cheque_no,
             payer.name AS party_name, payer.code AS party_code,
             COALESCE(oba.name, bba.name, ca.name)  AS money_name,
@@ -569,8 +569,13 @@ async function cashBookUnpostedSides({ date_from, date_to }, { cashAcId, cheques
             ON ca.ac_id = CASE dr.payment_mode WHEN 'CASH' THEN @cashAcId WHEN 'CHEQUE' THEN @chequesAcId END
      WHERE dr.receipt_date >= @dateFrom AND dr.receipt_date <= @dateTo
      UNION ALL
-     SELECT 'EXPENSE', de.draft_id, de.expense_date, de.amount,
-            de.payment_mode, de.remarks, de.issued_cheque_no,
+     SELECT 'EXPENSE', de.draft_id, de.expense_date, de.created_at, de.amount,
+            de.payment_mode, de.remarks,
+            -- Two different cheques can sit on an expense and they live in different places: one
+            -- WE wrote (issued_cheque_no, a plain column) and one we RECEIVED and endorsed on
+            -- (cheque_id -> dbo.cheques). Reading only the first left every CHEQUE_ENDORSED draft
+            -- with an empty Cheque No column.
+            COALESCE(de.issued_cheque_no, dch.cheque_no),
             payee.name, payee.code,
             COALESCE(oba.name, bba.name, ca.name),
             COALESCE(oba.code, bba.code, ca.code),
@@ -580,6 +585,7 @@ async function cashBookUnpostedSides({ date_from, date_to }, { cashAcId, cheques
      LEFT JOIN dbo.business_accounts oba   ON oba.ba_id   = de.online_ba_id
      LEFT JOIN dbo.bank_accounts     bk    ON bk.bank_id  = de.bank_id
      LEFT JOIN dbo.business_accounts bba   ON bba.ba_id   = bk.ba_id
+     LEFT JOIN dbo.cheques dch ON dch.cheque_id = de.cheque_id
      LEFT JOIN dbo.chart_of_accounts ca
             ON ca.ac_id = CASE de.payment_mode
                             WHEN 'CASH' THEN @cashAcId
@@ -697,6 +703,9 @@ async function cashBookTransactionSides({ date_from, date_to }, { cashAcId, bank
        GROUP BY le.source_type, le.source_id
      )
      SELECT le.entry_id, le.source_type, le.source_id, le.entry_date,
+            -- When this posting was WRITTEN, as opposed to the date it is dated. The Cash Book
+            -- orders newest-entered first, and those two differ whenever anything is backdated.
+            le.created_at,
             le.debit, le.credit, le.narration,
             COALESCE(ba.name, ca.name) AS side_name,
             COALESCE(ba.code, ca.code) AS side_code,
@@ -704,7 +713,28 @@ async function cashBookTransactionSides({ date_from, date_to }, { cashAcId, bank
             CASE WHEN le.ac_id IN (@cashAcId, @bankAcId, @chequesAcId)
                    OR ba.ac_id IN (@cashAcId, @bankAcId, @chequesAcId)
                  THEN 1 ELSE 0 END AS is_money_side,
-            CASE WHEN le.ac_id = @cashAcId OR ba.ac_id = @cashAcId THEN 1 ELSE 0 END AS is_cash_side
+            CASE WHEN le.ac_id = @cashAcId OR ba.ac_id = @cashAcId THEN 1 ELSE 0 END AS is_cash_side,
+            -- Cheque number and the REAL payment mode, resolved back to the source document. The
+            -- ledger stores neither: it records amounts and accounts, not how the money travelled.
+            -- Correlated subqueries rather than joins, because each source_type reaches the cheque
+            -- by a different route and a join chain per type would multiply the row set.
+            CASE le.source_type
+              WHEN 'RECEIPT' THEN (SELECT ch.cheque_no FROM dbo.receipts rc
+                                     JOIN dbo.cheques ch ON ch.cheque_id = rc.cheque_id
+                                    WHERE rc.receipt_id = le.source_id)
+              WHEN 'EXPENSE' THEN (SELECT COALESCE(ex.issued_cheque_no, ch2.cheque_no) FROM dbo.expenses ex
+                                     LEFT JOIN dbo.cheques ch2 ON ch2.cheque_id = ex.cheque_id
+                                    WHERE ex.expense_id = le.source_id)
+              WHEN 'CHEQUE_ALLOCATION' THEN (SELECT ch3.cheque_no FROM dbo.cheque_allocations ca
+                                               JOIN dbo.receipts rc2 ON rc2.receipt_id = ca.receipt_id
+                                               JOIN dbo.cheques ch3 ON ch3.cheque_id = rc2.cheque_id
+                                              WHERE ca.allocation_id = le.source_id)
+            END AS doc_cheque_no,
+            CASE le.source_type
+              WHEN 'RECEIPT' THEN (SELECT rc.payment_mode FROM dbo.receipts rc WHERE rc.receipt_id = le.source_id)
+              WHEN 'EXPENSE' THEN (SELECT ex.payment_mode FROM dbo.expenses ex WHERE ex.expense_id = le.source_id)
+              WHEN 'CHEQUE_ALLOCATION' THEN 'CHEQUE'
+            END AS doc_payment_mode
      FROM money_lines m
      JOIN dbo.ledger_entries le
        ON le.source_type = m.source_type AND le.source_id = m.source_id

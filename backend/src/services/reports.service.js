@@ -410,12 +410,25 @@ async function accountBalance({ ba_id, as_of }, session) {
   return { ba_id, as_of: as_of || null, balance };
 }
 
-// TYPE for a both-sides grid row. The ledger itself carries no payment mode, so it is inferred
-// from the money account the transaction touched: cash lines are CASH, anything reaching a bank or
-// the cheque drawer is CHEQUE/ONLINE. Both lines of a transaction share the value, since
-// touches_cash is decided once per transaction.
+// TYPE for a both-sides grid row: the document's OWN payment mode where one exists, so the column
+// reads CASH / CHEQUE / ONLINE rather than the name of the column pair.
+//
+// Two reasons it is not just touches_cash. "CHEQ./ONLINE" describes which PAIR of columns the
+// amount lands in, not how the money moved — printing it in a column headed "Type" said nothing a
+// reader couldn't already see, and it could not distinguish a cheque from an online transfer. It
+// was also long enough to overflow the Type column and run into Cheque No on the printed report
+// (reported by the user, 2026-09-01).
+//
+// CHEQUE_ISSUED/CHEQUE_ENDORSED both print as CHEQUE: the distinction matters to the posting
+// engine, not to someone reading a day book — the same rule the original report used. Anything
+// with no document behind it (an opening entry, a journal voucher) falls back to the pair.
 function cashBookSideMode(r) {
-  return r.touches_cash === 1 ? 'CASH' : 'CHEQ./ONLINE';
+  const raw = r.doc_payment_mode;
+  if (raw) return raw.startsWith('CHEQUE') ? 'CHEQUE' : raw;
+  // No payment mode to show — a commission is a trade discount and a deposit is a manual
+  // adjustment, neither of which travelled by cash, cheque or transfer. Naming the document kind
+  // says more here than repeating the column pair, and is shorter.
+  return String(r.source_type || '').replace(/_/g, ' ');
 }
 
 // UC-37 Cash Book of the Day — CASH IN HAND's own ledger for a date or month, plus the same
@@ -585,7 +598,7 @@ async function cashBook(filters = {}) {
     });
   }
 
-  const rows = ordered.map((r) => {
+  let rows = ordered.map((r) => {
     const isFirstOfTxn = r.__isFirst;
     const debit = Number(r.debit);
     const credit = Number(r.credit);
@@ -604,7 +617,9 @@ async function cashBook(filters = {}) {
       side: isDebit ? 'TO' : 'FROM',
       remarks: r.narration || '',
       mode: cashBookSideMode(r),
-      cheque_no: null,
+      // Was hardcoded null when this mapping was rewritten, which silently dropped every cheque
+      // number from the report — the column was there and always empty (reported 2026-09-01).
+      cheque_no: r.doc_cheque_no || null,
       // DISPLAY: every row carries its own figure, so a debit on one line always faces a credit on
       // the adjacent one (the user, 2026-08-31). FROM prints under Receipts, TO under Payments,
       // within whichever pair the posting belongs to.
@@ -627,6 +642,8 @@ async function cashBook(filters = {}) {
       txn_seq: r.__txnSeq,
       is_first_of_txn: isFirstOfTxn,
       is_posted: true,
+      // Internal only — the single key the whole report is ordered by, see the sort below.
+      __enteredAt: r.created_at ? new Date(r.created_at).getTime() : 0,
     };
   });
 
@@ -654,7 +671,9 @@ async function cashBook(filters = {}) {
     const base = {
       date: toISODate(u.entry_date),
       remarks: u.remarks || `${isIn ? 'Receipt' : 'Expense'} — not yet posted`,
-      mode: isCashPair ? 'CASH' : 'CHEQ./ONLINE',
+      // The draft's own mode, same as the posted side — CHEQUE_ISSUED/CHEQUE_ENDORSED both read
+      // CHEQUE, since that distinction matters to the posting engine and not to a day book.
+      mode: u.payment_mode ? (u.payment_mode.startsWith('CHEQUE') ? 'CHEQUE' : u.payment_mode) : (isCashPair ? 'CASH' : 'CHEQ./ONLINE'),
       cheque_no: u.cheque_no || null,
       // Never true: an unposted document has moved nothing in or out of the drawer, which is why
       // it cannot reach the Opening/Received/Paid/In Hand figures below.
@@ -664,6 +683,7 @@ async function cashBook(filters = {}) {
       source_id: u.source_id,
       txn_seq: unpostedSeq,
       is_posted: false,
+      __enteredAt: u.created_at ? new Date(u.created_at).getTime() : 0,
     };
     rows.push({
       ...base,
@@ -691,10 +711,40 @@ async function cashBook(filters = {}) {
     });
   }
 
-  // Chronological, so an unposted entry sits on its own day among the posted ones rather than in a
-  // block at the end. Array.prototype.sort is stable (ES2019), so a posting and a draft on the same
-  // date keep the order they were appended in — posted first.
-  rows.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  // NEWEST ENTERED FIRST, on ONE timeline — posted and unposted ranked together, whichever was
+  // recorded last sitting at the top (per the user, 2026-09-01: "no matter if its posted or
+  // unposted the sorting order should be last in first shown").
+  //
+  // Ordered by created_at — when the row was actually WRITTEN — not by the document's own date.
+  // Those differ whenever anything is backdated, and it is the moment of entry the user is
+  // tracking. Ordering by date instead ranked a receipt entered seconds ago below a week-old one
+  // that happened to carry a later date; grouping posted before unposted (the previous shape) also
+  // pushed a brand-new receipt down the page, which is what put one at S#9.
+  //
+  // Reversed by ENTRY, not by row: sorting the flat list would put every TO line above its own
+  // FROM line and break the pair the layout is built around. Rows are gathered back into their
+  // entries, the entries are ranked, and each pair is re-emitted FROM-then-TO.
+  const byEntry = new Map();
+  for (const r of rows) {
+    if (!byEntry.has(r.txn_seq)) byEntry.set(r.txn_seq, []);
+    byEntry.get(r.txn_seq).push(r);
+  }
+  const entries = [...byEntry.values()].sort((a, b) => {
+    const diff = (b[0].__enteredAt || 0) - (a[0].__enteredAt || 0);
+    if (diff !== 0) return diff;
+    // Same instant (a bulk post writes its rows in one go), or no timestamp at all on some older
+    // row — fall back to the document date, then to the build order, so ties stay deterministic
+    // rather than shuffling between reloads.
+    return new Date(b[0].date).getTime() - new Date(a[0].date).getTime();
+  });
+
+  // Renumbered 1..N down the page. S# is a reading position on this report, not an identity — it
+  // would otherwise count down from N and look like the list had been truncated.
+  rows = entries.flatMap((entry, i) => entry.map((r, j) => {
+    const { __enteredAt, ...rest } = r; // internal ordering key, not part of the API shape
+    void __enteredAt;
+    return { ...rest, txn_seq: i + 1, is_first_of_txn: j === 0 };
+  }));
 
   // Every row, so each column adds up to the total printed beneath it. Both legs of a posting are
   // listed, so each pair also ties Receipts against Payments — the double-entry check the user
@@ -723,6 +773,9 @@ async function cashBook(filters = {}) {
     amount: Number(r.amount),
     remarks: r.remarks || '',
   }));
+  // Newest first as well, to match the grid above — a report that reads one way in its main table
+  // and the other way in the panels beneath it is just confusing.
+  bankTransfers.reverse();
   const chequeDeposits = chequeDepositsRaw.map((r) => ({
     date: toISODate(r.entry_date),
     cheque_no: r.cheque_no || null,
@@ -730,6 +783,8 @@ async function cashBook(filters = {}) {
     bank_name: r.bank_name || null,
     amount: Number(r.amount),
   }));
+
+  chequeDeposits.reverse();
 
   return {
     opening_cash: opening,

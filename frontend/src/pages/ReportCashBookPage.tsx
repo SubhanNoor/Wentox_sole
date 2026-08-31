@@ -139,15 +139,18 @@ export function ReportCashBookContent() {
           <thead>
             <tr>
               <th style={th('center', '4%')}>S#</th>
-              <th style={th('left', showDate ? '18%' : '20%')}>Account Name</th>
-              <th style={th('left', showDate ? '14%' : '16%')}>Remarks</th>
+              {/* Widths total exactly 100% in both modes. They used to come to 108%, which the
+                  browser silently renormalised — meaning the printed column widths were never the
+                  ones written here, and widening Type could not be reasoned about. */}
+              <th style={th('left', showDate ? '16%' : '18%')}>Account Name</th>
+              <th style={th('left', showDate ? '12%' : '14%')}>Remarks</th>
               {showDate && <th style={th('left', '9%')}>Date</th>}
-              <th style={th('left', '7%')}>Type</th>
-              <th style={th('left', '9%')}>Cheque No</th>
-              <th style={th('right', '11.75%')}>Receipts<br />Cheq./Online</th>
-              <th style={th('right', '11.75%')}>Payments<br />Cheq./Online</th>
-              <th style={th('right', '11.75%')}>Receipts<br />Cash</th>
-              <th style={th('right', '11.75%')}>Payments<br />Cash</th>
+              <th style={th('left', '10%')}>Type</th>
+              <th style={th('left', '10%')}>Cheque No</th>
+              <th style={th('right', showDate ? '9.75%' : '11%')}>Receipts<br />Cheq./Online</th>
+              <th style={th('right', showDate ? '9.75%' : '11%')}>Payments<br />Cheq./Online</th>
+              <th style={th('right', showDate ? '9.75%' : '11%')}>Receipts<br />Cash</th>
+              <th style={th('right', showDate ? '9.75%' : '11%')}>Payments<br />Cash</th>
             </tr>
           </thead>
           <tbody>
@@ -167,7 +170,10 @@ export function ReportCashBookContent() {
                 </td>
                 <td style={td('left')}>{row.remarks || '—'}</td>
                 {showDate && <td style={{ ...td('left'), fontFamily: 'monospace' }}>{formatDate(row.date)}</td>}
-                <td style={td('left')}>{row.mode}</td>
+                {/* Clipped, not spilling: a long value used to run out of this cell and print on
+                    top of Cheque No (reported 2026-09-01). Belt and braces alongside the shorter
+                    labels — a future payment mode should not be able to break the layout. */}
+                <td style={{ ...td('left'), whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 0 }}>{row.mode}</td>
                 <td style={{ ...td('left'), fontFamily: 'monospace' }}>{row.cheque_no || '—'}</td>
                 <td style={{ ...td('right'), fontFamily: 'monospace', color: '#047857' }}>{row.receipt_bank > 0 ? formatCurrency(row.receipt_bank) : '-'}</td>
                 <td style={{ ...td('right'), fontFamily: 'monospace', color: '#e11d48' }}>{row.payment_bank > 0 ? formatCurrency(-row.payment_bank) : '-'}</td>
