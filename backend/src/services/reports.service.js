@@ -583,17 +583,33 @@ async function cashBook(filters = {}) {
       const ourLeg = batch.find((r) => r.is_money_side === 1);
       isIn = ourLeg ? Number(ourLeg.debit) > 0 : true;
     }
-    const carrierSide = isIn ? 'FROM' : 'TO';
+    // CASH prints ONE line, naming the counterparty; the cash leg itself is never shown. That is
+    // the client's own format (photographed cash books, 31-Jul and 31-Aug 2026) and the reason
+    // their two cash columns are allowed to differ: the difference IS the day's net drawer
+    // movement, not an imbalance. In the user's words, "we make the cash adjacent payment
+    // ourself, so there is no issue about cash credit/debit total".
+    //
+    // CHEQUE/ONLINE keeps both legs, because there the pair is the whole point — a cheque leaves
+    // one account and lands in another, and those two columns always balance on the client's sheet.
+    //
+    // A self-contained cash posting (both legs on cash — a receipt whose paying account IS cash)
+    // has no counterparty to name, so it keeps both legs; dropping one would lose the row entirely.
+    const dropCashLeg = isCashBatch && !selfContained;
+    const emit = dropCashLeg
+      ? [...credits, ...debits].filter((r) => r.is_cash_side !== 1)
+      : [...credits, ...debits];
 
-    [...credits, ...debits].forEach((r, i) => {
+    emit.forEach((r, i) => {
       const side = Number(r.debit) > 0 ? 'TO' : 'FROM';
       ordered.push({
         ...r,
         __txnSeq: txnSeq,
         __isFirst: i === 0,
-        // Self-contained: every leg speaks for itself, so each is its own direction and carrier.
+        // With the cash leg gone, the surviving counterparty row carries the posting's own
+        // direction — money in prints under Receipts Cash, money out under Payments Cash,
+        // regardless of which side of the ledger that counterparty happens to sit on.
         __isIn: selfContained ? side === 'TO' : isIn,
-        __carries: selfContained ? true : side === carrierSide,
+        __forceSide: dropCashLeg ? (isIn ? 'FROM' : 'TO') : null,
       });
     });
   }
@@ -613,27 +629,23 @@ async function cashBook(filters = {}) {
       // it now names THIS side of the entry rather than always the far one.
       account_name: r.side_name || '—',
       account_code: r.side_code || null,
-      // FROM/TO is what makes a pair readable at a glance without re-deriving it from the columns.
-      side: isDebit ? 'TO' : 'FROM',
+      // FROM/TO is what makes a cheque/online pair readable at a glance. A lone cash line is
+      // forced to the side matching its direction, so a cash payment reads TO (money out) even
+      // though the payee sits on the debit side of the ledger.
+      side: r.__forceSide || (isDebit ? 'TO' : 'FROM'),
       remarks: r.narration || '',
       mode: cashBookSideMode(r),
       // Was hardcoded null when this mapping was rewritten, which silently dropped every cheque
       // number from the report — the column was there and always empty (reported 2026-09-01).
       cheque_no: r.doc_cheque_no || null,
-      // DISPLAY: every row carries its own figure, so a debit on one line always faces a credit on
-      // the adjacent one (the user, 2026-08-31). FROM prints under Receipts, TO under Payments,
-      // within whichever pair the posting belongs to.
+      // CHEQUE/ONLINE: FROM prints under Receipts (where it came from), TO under Payments (where
+      // it went) — the balancing pair from the client's sheet, which always ties.
+      // CASH: the single surviving line prints under Receipts if money came in, Payments if it
+      // went out. No contra, so these two columns are not expected to be equal.
       receipt_bank: !isCashPair && isFrom ? amount : 0,
       payment_bank: !isCashPair && !isFrom ? amount : 0,
-      receipt_cash: isCashPair && isFrom ? amount : 0,
-      payment_cash: isCashPair && !isFrom ? amount : 0,
-      // Marks the leg that IS the transaction rather than its mirror — the receipt itself, not the
-      // contra. Kept for callers that need "how much actually moved" (and for the drawer cross-
-      // check below); it deliberately does NOT gate the column totals any more. A totals row that
-      // doesn't add up its own column is indefensible however sound the reasoning behind it, and
-      // that is what gating produced: a Payments Cheq./Online column showing four red figures
-      // under a total of Rs 0 (the user, 2026-08-31 — "total still don't match").
-      counts_in_total: r.__carries,
+      receipt_cash: isCashPair && (r.__forceSide ? r.__isIn : isFrom) ? amount : 0,
+      payment_cash: isCashPair && !(r.__forceSide ? r.__isIn : isFrom) ? amount : 0,
       // Our own money account vs the counterparty — drives the cash summary, never the columns.
       affects_cash: r.is_cash_side === 1,
       is_money_side: r.is_money_side === 1,
@@ -675,9 +687,11 @@ async function cashBook(filters = {}) {
       // CHEQUE, since that distinction matters to the posting engine and not to a day book.
       mode: u.payment_mode ? (u.payment_mode.startsWith('CHEQUE') ? 'CHEQUE' : u.payment_mode) : (isCashPair ? 'CASH' : 'CHEQ./ONLINE'),
       cheque_no: u.cheque_no || null,
-      // Never true: an unposted document has moved nothing in or out of the drawer, which is why
-      // it cannot reach the Opening/Received/Paid/In Hand figures below.
-      affects_cash: false,
+      // Whether this posting touches the cash drawer. The client counts unposted cash in Cash
+      // Received / Cash Paid ("in summary below unposted cash receipt/payments are also shown"),
+      // so a draft is NOT excluded from those figures — only from `opening_cash`, which is a
+      // posted-ledger balance from before the period.
+      affects_cash: isCashPair,
       is_money_side: false,
       source_type: u.kind,
       source_id: u.source_id,
@@ -685,30 +699,47 @@ async function cashBook(filters = {}) {
       is_posted: false,
       __enteredAt: u.created_at ? new Date(u.created_at).getTime() : 0,
     };
-    rows.push({
-      ...base,
-      account_name: from.name,
-      account_code: from.code,
-      side: 'FROM',
-      is_first_of_txn: true,
-      receipt_bank: !isCashPair ? amount : 0,
-      payment_bank: 0,
-      receipt_cash: isCashPair ? amount : 0,
-      payment_cash: 0,
-      counts_in_total: isIn,
-    });
-    rows.push({
-      ...base,
-      account_name: to.name,
-      account_code: to.code,
-      side: 'TO',
-      is_first_of_txn: false,
-      receipt_bank: 0,
-      payment_bank: !isCashPair ? amount : 0,
-      receipt_cash: 0,
-      payment_cash: isCashPair ? amount : 0,
-      counts_in_total: !isIn,
-    });
+    if (isCashPair) {
+      // ONE line for cash, naming the counterparty — the cash leg is never printed, matching the
+      // client's own book. `party` is that counterparty whichever way the money went, so no leg
+      // has to be identified after the fact (the posted path reads is_cash_side for this; on a
+      // draft that flag would be useless, since both legs are synthesised here).
+      rows.push({
+        ...base,
+        account_name: party.name,
+        account_code: party.code,
+        side: isIn ? 'FROM' : 'TO',
+        is_first_of_txn: true,
+        receipt_bank: 0,
+        payment_bank: 0,
+        receipt_cash: isIn ? amount : 0,
+        payment_cash: isIn ? 0 : amount,
+      });
+    } else {
+      // CHEQUE/ONLINE keeps the pair: out of one account, into another, and the two columns tie.
+      rows.push({
+        ...base,
+        account_name: from.name,
+        account_code: from.code,
+        side: 'FROM',
+        is_first_of_txn: true,
+        receipt_bank: amount,
+        payment_bank: 0,
+        receipt_cash: 0,
+        payment_cash: 0,
+      });
+      rows.push({
+        ...base,
+        account_name: to.name,
+        account_code: to.code,
+        side: 'TO',
+        is_first_of_txn: false,
+        receipt_bank: 0,
+        payment_bank: amount,
+        receipt_cash: 0,
+        payment_cash: 0,
+      });
+    }
   }
 
   // NEWEST ENTERED FIRST, on ONE timeline — posted and unposted ranked together, whichever was
@@ -746,22 +777,21 @@ async function cashBook(filters = {}) {
     return { ...rest, txn_seq: i + 1, is_first_of_txn: j === 0 };
   }));
 
-  // Every row, so each column adds up to the total printed beneath it. Both legs of a posting are
-  // listed, so each pair also ties Receipts against Payments — the double-entry check the user
-  // asked for originally. These totals are therefore TWICE the drawer's Cash Received / Cash Paid,
-  // which count only the cash leg; the two answer different questions and the footer says so.
+  // Plain column sums. Nothing is a non-counting contra any more: cash prints one line per
+  // posting, and a cheque/online pair is two REAL sides of one movement, both of which belong in
+  // their column. The gating that used to live here existed only to compensate for a cash contra
+  // row the client's own book never had.
   const sum = (key) => rows.reduce((acc, r) => acc + r[key], 0);
 
-  // Opening/Received/Paid/In Hand describe the DRAWER, so they read the cash account's own ledger
-  // lines (ledgerRaw), NOT the grid. The grid now carries both sides of every transaction, so
-  // summing its cash columns would add the counterparty's leg too and roughly double these.
-  const cashReceived = ledgerRaw.reduce((acc, r) => acc + Number(r.debit), 0);
-  const cashPaid = ledgerRaw.reduce((acc, r) => acc + Number(r.credit), 0);
-
-  // How much of each column is money that has NOT moved yet. Printed under the totals so the
-  // posted-only figure stays derivable — otherwise listing drafts would quietly inflate a total
-  // that the drawer summary is expected to be reconcilable against.
-  const unpostedSum = (key) => rows.reduce((acc, r) => acc + (r.is_posted ? 0 : r[key]), 0);
+  // Cash Received / Cash Paid ARE the cash columns — the client's sheet has them equal to the
+  // penny (136,039 and 142,835 on 31-Aug-2026), and that includes unposted entries, per the user:
+  // "in summary below unposted cash receipt/payments are also shown". Reading the posted ledger
+  // here instead is what made the summary disagree with the grid above it.
+  //
+  // The two are NOT expected to match each other — 136,039 in against 142,835 out on that sheet.
+  // The difference is the day's net drawer movement, which is exactly what Cash In Hand reports.
+  const cashReceived = sum('receipt_cash');
+  const cashPaid = sum('payment_cash');
 
   // CB-01/CB-03: bank-to-bank transfers and cheque deposits, listed for visibility only — neither
   // is a cash movement, so neither feeds any total above (same "informational, not counted"
@@ -800,12 +830,6 @@ async function cashBook(filters = {}) {
       // summary box above, where they are meant to differ (the gap is the day's net movement).
       receipt_cash: sum('receipt_cash'),
       payment_cash: sum('payment_cash'),
-    },
-    unposted_totals: {
-      receipt_bank: unpostedSum('receipt_bank'),
-      payment_bank: unpostedSum('payment_bank'),
-      receipt_cash: unpostedSum('receipt_cash'),
-      payment_cash: unpostedSum('payment_cash'),
     },
     rows,
     bank_transfers: bankTransfers,

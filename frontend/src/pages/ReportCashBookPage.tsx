@@ -38,7 +38,6 @@ export function ReportCashBookContent() {
   const [result, setResult] = useState<CashBookResult>({
     opening_cash: 0, cash_received: 0, total_cash: 0, cash_paid: 0, cash_in_hand: 0,
     totals: { receipt_bank: 0, payment_bank: 0, receipt_cash: 0, payment_cash: 0 },
-    unposted_totals: { receipt_bank: 0, payment_bank: 0, receipt_cash: 0, payment_cash: 0 },
     rows: [], bank_transfers: [], cheque_deposits: [],
   });
   const [loading, setLoading] = useState(false);
@@ -55,13 +54,15 @@ export function ReportCashBookContent() {
 
   // Both legs of every posting are listed and counted, so each pair must tie Receipts against
   // Payments. Shown rather than assumed: if it ever doesn't, a document posted only one side.
-  // Defaulted, never read through directly: an older main process (Electron does not hot-reload
-  // it) returns a payload without this field, and reading through it blanked the whole page behind
-  // the error boundary — "Cannot read properties of undefined (reading 'receipt_bank')".
-  const unpostedTotals = result.unposted_totals ?? { receipt_bank: 0, payment_bank: 0, receipt_cash: 0, payment_cash: 0 };
   const hasUnposted = result.rows.some(r => !r.is_posted);
-  const cashTies = result.totals.receipt_cash === result.totals.payment_cash;
+
+  // Two invariants from the client's own cash book, checked rather than assumed:
+  //   - the cheque/online pair ALWAYS balances (a cheque leaves one account and lands in another)
+  //   - Cash Received / Cash Paid ARE the cash columns, unposted included
+  // The two cash columns are NOT expected to equal each other; the gap is the day's net movement.
   const bankTies = result.totals.receipt_bank === result.totals.payment_bank;
+  const summaryTies = result.cash_received === result.totals.receipt_cash
+    && result.cash_paid === result.totals.payment_cash;
 
 
   const load = useCallback(async () => {
@@ -110,12 +111,20 @@ export function ReportCashBookContent() {
   };
 
   const renderPrintableDocument = () => {
+    // Tight single-line rows, matching the client's own printed book — 26 entries to a page there.
+    // The height was coming from wrapping, not padding: a long remark ("Endorsement reversal of
+    // allocation #1005 — Unposted expense #14") ran to three lines and dragged its whole row with
+    // it. So every cell is nowrap + ellipsis, and the padding comes down to match.
     const th = (align: 'left' | 'center' | 'right', width: string) => ({
-      border: '1px solid #000000', padding: '6px', fontSize: '10px', backgroundColor: '#f2f2f2',
+      border: '1px solid #000000', padding: '3px 5px', fontSize: '9.5px', backgroundColor: '#f2f2f2',
       fontWeight: 'bold' as const, textAlign: align, width,
     });
     const td = (align: 'left' | 'center' | 'right') => ({
-      border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: align,
+      border: '1px solid #000000', padding: '1px 5px', fontSize: '9.5px', textAlign: align,
+      lineHeight: 1.35,
+      // Clip rather than wrap. maxWidth:0 is what makes ellipsis work inside a table cell whose
+      // width comes from the column percentages — without it the cell just grows to fit.
+      whiteSpace: 'nowrap' as const, overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 0,
     });
 
     return (
@@ -339,16 +348,20 @@ export function ReportCashBookContent() {
             <table className="w-full text-left border-collapse text-sm" style={{ minWidth: 1000 }}>
               <thead>
                 <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="p-3 pl-4 text-center w-12">S#</th>
-                  <th className="p-3">Account Name</th>
-                  <th className="p-3">Remarks</th>
-                  {showDate && <th className="p-3">Date</th>}
-                  <th className="p-3">Type</th>
-                  <th className="p-3">Cheque No</th>
-                  <th className="p-3 text-right">Receipts<br />Cheq./Online</th>
-                  <th className="p-3 text-right">Payments<br />Cheq./Online</th>
-                  <th className="p-3 text-right">Receipts<br />Cash</th>
-                  <th className="p-3 text-right">Payments<br />Cash</th>
+                  {/* Explicit widths, as the print view already had. Without them the browser
+                      sizes these columns from content, and the `max-w-0` the truncation needs
+                      collapsed Account Name to "Decent Polyur…". Account Name gets the most room
+                      because it is the column the report is read by. Totals 100% in both modes. */}
+                  <th className="p-2 pl-3 text-center" style={{ width: '4%' }}>S#</th>
+                  <th className="p-2" style={{ width: showDate ? '22%' : '24%' }}>Account Name</th>
+                  <th className="p-2" style={{ width: showDate ? '14%' : '16%' }}>Remarks</th>
+                  {showDate && <th className="p-2" style={{ width: '8%' }}>Date</th>}
+                  <th className="p-2" style={{ width: '8%' }}>Type</th>
+                  <th className="p-2" style={{ width: '9%' }}>Cheque No</th>
+                  <th className="p-2 text-right" style={{ width: showDate ? '8.75%' : '9.75%' }}>Receipts<br />Cheq./Online</th>
+                  <th className="p-2 text-right" style={{ width: showDate ? '8.75%' : '9.75%' }}>Payments<br />Cheq./Online</th>
+                  <th className="p-2 text-right" style={{ width: showDate ? '8.75%' : '9.75%' }}>Receipts<br />Cash</th>
+                  <th className="p-2 text-right" style={{ width: showDate ? '8.75%' : '9.75%' }}>Payments<br />Cash</th>
                 </tr>
               </thead>
               <tbody>
@@ -367,35 +380,38 @@ export function ReportCashBookContent() {
                       className={`hover:bg-slate-50/50 ${row.is_first_of_txn ? 'border-t' : ''}`}
                       style={{ borderColor: 'var(--border-table)' }}
                     >
-                      <td className="p-3 pl-4 text-center text-xs font-mono text-slate-400">
+                      <td className="p-1.5 pl-3 text-center text-xs font-mono text-slate-400">
                         {row.is_first_of_txn ? row.txn_seq : ''}
                       </td>
-                      <td className={`p-3 ${row.side === 'TO' ? 'pl-7' : ''}`}>
-                        <span className={`inline-block w-11 shrink-0 text-[9px] font-bold uppercase tracking-wider ${row.side === 'FROM' ? 'text-rose-500' : 'text-emerald-600'}`}>
+                      {/* Compacted to the client's own row height: p-1.5, one line per cell, and
+                          long text clipped rather than wrapped. The height was coming from
+                          wrapping — a long reversal narration ran to three lines and took the row
+                          with it — not from the padding. `truncate` needs the max-w to bite. */}
+                      <td className={`p-1.5 truncate max-w-0 ${row.side === 'TO' ? 'pl-6' : ''}`}>
+                        <span className={`inline-block w-9 shrink-0 text-[9px] font-bold uppercase tracking-wider ${row.side === 'FROM' ? 'text-rose-500' : 'text-emerald-600'}`}>
                           {row.side === 'FROM' ? 'From' : '\u21b3 To'}
                         </span>
                         <span className={row.is_posted ? 'font-semibold text-slate-800' : 'font-semibold text-slate-500 italic'}>{row.account_name}</span>
                         {/* Only on the first line of an unposted entry, so the pair reads as one
-                            thing rather than repeating the badge. Money that has not moved has to
-                            be distinguishable at a glance from money that has. */}
+                            thing rather than repeating the badge. */}
                         {!row.is_posted && row.is_first_of_txn && (
-                          <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-amber-100 text-amber-800 align-middle">
+                          <span className="ml-1.5 px-1 rounded text-[8px] font-bold uppercase bg-amber-100 text-amber-800 align-middle">
                             Unposted
                           </span>
                         )}
                       </td>
-                      <td className="p-3 text-xs text-slate-500">{row.remarks || '-'}</td>
-                      {showDate && <td className="p-3 text-xs font-mono text-slate-600">{formatDate(row.date)}</td>}
-                      <td className="p-3">
-                        <span className={`inline-block text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${row.affects_cash ? 'bg-slate-100 text-slate-700' : 'bg-sky-50 text-sky-700'}`}>
+                      <td className="p-1.5 text-xs text-slate-500 truncate max-w-0" title={row.remarks || undefined}>{row.remarks || '-'}</td>
+                      {showDate && <td className="p-1.5 text-xs font-mono text-slate-600 whitespace-nowrap">{formatDate(row.date)}</td>}
+                      <td className="p-1.5 whitespace-nowrap">
+                        <span className={`inline-block text-[9px] px-1.5 rounded-full font-bold uppercase ${row.affects_cash ? 'bg-slate-100 text-slate-700' : 'bg-sky-50 text-sky-700'}`}>
                           {row.mode}
                         </span>
                       </td>
-                      <td className="p-3 text-xs font-mono text-slate-500">{row.cheque_no || '-'}</td>
-                      <td className="p-3 text-right text-emerald-700">{row.receipt_bank > 0 ? formatCurrency(row.receipt_bank) : '-'}</td>
-                      <td className="p-3 text-right text-rose-700">{row.payment_bank > 0 ? formatCurrency(-row.payment_bank) : '-'}</td>
-                      <td className="p-3 text-right font-bold text-emerald-700">{row.receipt_cash > 0 ? formatCurrency(row.receipt_cash) : '-'}</td>
-                      <td className="p-3 text-right font-bold text-rose-700">{row.payment_cash > 0 ? formatCurrency(-row.payment_cash) : '-'}</td>
+                      <td className="p-1.5 text-xs font-mono text-slate-500 whitespace-nowrap">{row.cheque_no || '-'}</td>
+                      <td className="p-1.5 text-right text-emerald-700 whitespace-nowrap">{row.receipt_bank > 0 ? formatCurrency(row.receipt_bank) : '-'}</td>
+                      <td className="p-1.5 text-right text-rose-700 whitespace-nowrap">{row.payment_bank > 0 ? formatCurrency(-row.payment_bank) : '-'}</td>
+                      <td className="p-1.5 text-right font-bold text-emerald-700 whitespace-nowrap">{row.receipt_cash > 0 ? formatCurrency(row.receipt_cash) : '-'}</td>
+                      <td className="p-1.5 text-right font-bold text-rose-700 whitespace-nowrap">{row.payment_cash > 0 ? formatCurrency(-row.payment_cash) : '-'}</td>
                     </tr>
                   ))
                 )}
@@ -409,40 +425,25 @@ export function ReportCashBookContent() {
                   <td className="p-4 text-right text-emerald-800">{formatCurrency(result.totals.receipt_cash)}</td>
                   <td className="p-4 text-right text-rose-800">{formatCurrency(outgoing(result.totals.payment_cash))}</td>
                 </tr>
-                {/* Each pair must tie, since both legs are listed. If one ever doesn't, a document
-                    posted a single side and this says so rather than printing a wrong total. */}
+                {/* Two invariants from the client's own book, shown rather than assumed: the
+                    cheque/online pair always balances, and the cash columns ARE the summary
+                    figures. If either breaks, a posting went in on the wrong side. */}
                 <tr className="text-[11px] font-semibold" style={{ borderColor: 'var(--border-color)' }}>
                   <td colSpan={showDate ? 6 : 5} className="px-4 pb-1 text-right text-slate-400 uppercase tracking-wider">Balanced</td>
                   <td colSpan={2} className={`px-4 pb-1 text-center ${bankTies ? 'text-emerald-600' : 'text-rose-600'}`}>
                     {bankTies ? '\u2713 Cheq./Online ties' : `\u26a0 out by ${formatCurrency(result.totals.receipt_bank - result.totals.payment_bank)}`}
                   </td>
-                  <td colSpan={2} className={`px-4 pb-1 text-center ${cashTies ? 'text-emerald-600' : 'text-rose-600'}`}>
-                    {cashTies ? '\u2713 Cash ties' : `\u26a0 out by ${formatCurrency(result.totals.receipt_cash - result.totals.payment_cash)}`}
+                  <td colSpan={2} className={`px-4 pb-1 text-center ${summaryTies ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    {summaryTies ? '\u2713 matches the summary' : '\u26a0 differs from the summary'}
                   </td>
                 </tr>
-                {/* Splits out the part of each column that hasn't been posted, so the posted-only
-                    figure stays readable — otherwise listing drafts would silently inflate a total
-                    the drawer summary below is read against. Hidden when everything is posted. */}
-                {hasUnposted && (
-                  <tr className="text-[11px] font-semibold text-amber-700">
-                    <td colSpan={showDate ? 6 : 5} className="px-4 pb-1 text-right uppercase tracking-wider">of which unposted</td>
-                    <td className="px-4 pb-1 text-right">{unpostedTotals.receipt_bank ? formatCurrency(unpostedTotals.receipt_bank) : '-'}</td>
-                    <td className="px-4 pb-1 text-right">{unpostedTotals.payment_bank ? formatCurrency(outgoing(unpostedTotals.payment_bank)) : '-'}</td>
-                    <td className="px-4 pb-1 text-right">{unpostedTotals.receipt_cash ? formatCurrency(unpostedTotals.receipt_cash) : '-'}</td>
-                    <td className="px-4 pb-1 text-right">{unpostedTotals.payment_cash ? formatCurrency(outgoing(unpostedTotals.payment_cash)) : '-'}</td>
-                  </tr>
-                )}
-
-                {/* Why these totals differ from the summary box inches below them. Deliberately
-                    states no ratio: the columns sum both legs of every entry, the drawer sums
-                    debits and credits on the cash account alone, and those two measures have no
-                    fixed relationship (a "twice the drawer" rule held on one day here purely
-                    because that day had one entry each way). */}
+                {/* The cash columns are not meant to be equal — the gap IS the day's net drawer
+                    movement, which Cash In Hand reports below. Said plainly so it doesn't read as
+                    an error, which is exactly how it read before. */}
                 <tr className="text-[10px]">
                   <td colSpan={showDate ? 10 : 9} className="px-4 pb-3 text-right text-slate-400">
-                    Columns count both sides of every entry{hasUnposted ? ', posted and unposted alike' : ''}.
-                    {' '}Cash Received / Cash Paid below count only what actually entered or left the
-                    {' '}cash drawer{hasUnposted ? ' — so nothing unposted reaches them' : ''}, so the two differ by design.
+                    Cash In and Cash Out need not match \u2014 the difference is the day\u2019s net movement.
+                    {hasUnposted ? ' Unposted entries are included, as on the client\u2019s own book.' : ''}
                   </td>
                 </tr>
               </tfoot>

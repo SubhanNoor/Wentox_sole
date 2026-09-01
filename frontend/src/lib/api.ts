@@ -1784,16 +1784,13 @@ export interface CashBookRow {
   payment_cash: number;
   affects_cash: boolean;
   is_money_side: boolean;
+  /** false for a document not yet posted. Shown and counted like any other — the client's book
+   *  includes unposted cash in Cash Received / Cash Paid — the badge just says which is which. */
+  is_posted: boolean;
   source_type: string;
   source_id: number;
   /** 1-based transaction number within the report. Several rows share one — a document is not
    *  always a two-line pair (a bounced-then-reallocated cheque posts four lines under one id). */
-  /** True on the ONE row per posting that the column totals count. Both rows show a figure so a
-   *  debit always faces a credit, but counting both would double every column against the drawer. */
-  counts_in_total: boolean;
-  /** false for a document that has not been posted: shown for visibility, but it has moved no
-   *  money, so it never reaches Opening / Cash Received / Cash Paid / Cash In Hand. */
-  is_posted: boolean;
   txn_seq: number;
   /** First row of its transaction — drives the grouping border and where the number prints. */
   is_first_of_txn: boolean;
@@ -1822,18 +1819,6 @@ export interface CashBookResult {
   cash_paid: number;
   cash_in_hand: number;
   totals: {
-    receipt_bank: number;
-    payment_bank: number;
-    receipt_cash: number;
-    payment_cash: number;
-  };
-  /** How much of each column is unposted. Lets the posted-only figure stay derivable, so listing
-   *  drafts doesn't quietly inflate a total the drawer summary is read against.
-   *
-   *  OPTIONAL on purpose: the renderer hot-reloads but Electron's main process does not, so a
-   *  freshly-built UI routinely talks to a backend from before this field existed. Typed optional
-   *  forces every read site to cope instead of destructuring straight into a crash. */
-  unposted_totals?: {
     receipt_bank: number;
     payment_bank: number;
     receipt_cash: number;
