@@ -1,6 +1,7 @@
 // Shared pairs/discount/totals math and line validation for sale_bills and draft_sale_bills —
 // identical rules on both tables (schema §5.6/§5.6.1), factored out so they're defined once.
 const ApiError = require('../errors/ApiError');
+const { assertValidCartons, pairsFor, hasAtMostOneDecimal } = require('../utils/cartons');
 
 function round2(n) {
   return Math.round(n * 100) / 100;
@@ -9,9 +10,13 @@ function round2(n) {
 // Computes one line's pairs/value/discount from its effective packing (from
 // saleBills.repository.getVariantPackings / draftSaleBills.repository.getVariantPackings).
 function buildLine(item, effectivePacking) {
-  const cartons = item.cartons;
+  const cartons = Number(item.cartons);
   const discountPercent = item.discount_percent || 0;
-  const pairs = cartons * effectivePacking;
+  // Enforced here rather than in validateItems because this is the first point that knows the
+  // line's effective packing, and the rule is about the product of the two: cartons became
+  // decimal in migration 030, but pairs stay whole (see utils/cartons.js).
+  assertValidCartons(cartons, effectivePacking, `variant ${item.variant_id}`);
+  const pairs = pairsFor(cartons, effectivePacking);
   const value = round2(item.rate * pairs);
   const discountValue = round2((value * discountPercent) / 100);
   const netValue = round2(value - discountValue);
@@ -48,6 +53,13 @@ function validateItems(items) {
   for (const item of items) {
     if (!item.cartons || item.cartons <= 0) {
       throw ApiError.badRequest('Each item must have cartons > 0');
+    }
+    // Packing-independent half of the rule; the whole-pairs half lives in buildLine, which is
+    // where the packing is known. Caught here so a bad figure is rejected before any lookup.
+    if (!hasAtMostOneDecimal(Number(item.cartons))) {
+      throw ApiError.badRequest(
+        `Cartons can have at most one decimal place — ${item.cartons} would be rounded when saved`,
+      );
     }
   }
 }

@@ -425,7 +425,7 @@ export default function BankSetupPage() {
         {/* ── Deactivate confirmation ── */}
         {deactivatingBank && (
           <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp max-h-[90vh] overflow-y-auto">
               <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
                 <AlertTriangle size={18} className="text-rose-600" /> Deactivate Bank Account
               </h3>
@@ -455,7 +455,7 @@ export default function BankSetupPage() {
         {/* ── Reactivate-instead-of-create prompt ── */}
         {reactivatePrompt && (
           <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp max-h-[90vh] overflow-y-auto">
               <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
                 <AlertTriangle size={18} className="text-amber-600" /> Inactive Account Found
               </h3>

@@ -34,7 +34,7 @@ async function insertMovement(movement) {
       movementType: { type: sql.VarChar(15), value: movement.movement_type },
       qtyPairs: { type: sql.Int, value: movement.qty_pairs },
       movementDate: { type: sql.Date, value: movement.movement_date },
-      inputQty: { type: sql.Int, value: movement.input_qty ?? null },
+      inputQty: { type: sql.Decimal(12, 1), value: movement.input_qty ?? null },
       inputUnit: { type: sql.VarChar(10), value: movement.input_unit ?? null },
       packing: { type: sql.Int, value: movement.packing ?? null },
       createdBy: { type: sql.Int, value: movement.created_by ?? null },

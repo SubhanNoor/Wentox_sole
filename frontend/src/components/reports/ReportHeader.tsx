@@ -1,7 +1,7 @@
 import React from 'react';
 import type { CompanyInfo, ReportMetaField } from '@/lib/reportConfig';
 import wentoxLogo from '@/assets/wentox_logo.png';
-import { formatDate } from '@/lib/utils';
+import { formatDate, formatDateTime } from '@/lib/utils';
 
 interface ReportHeaderProps {
   title: string;
@@ -53,7 +53,7 @@ export const ReportHeader: React.FC<ReportHeaderProps> = ({
             </div>
           )}
           <div className="text-[10px] text-slate-400 mt-0.5 font-mono print:text-[9px]">
-            Generated: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            Generated: {formatDateTime(new Date(), '-', { seconds: false })}
           </div>
         </div>
       </div>

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
+import EditScopeRadios from '@/components/EditScopeRadios';
 
 /**
  * Stock Voucher — a manual "add stock" document (legacy Journal Entry-style bound-record screen,
@@ -958,38 +959,21 @@ export default function StockVoucherPage() {
     <AppLayout pageTitle="Stock Voucher" headerAction={tabBar}>
       <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
 
-        {/* Left sidebar column — Master/Detail edit-scope (always visible, per the user 2026-08-31,
-            so a scope can be pre-picked before Edit is even clicked) stacked above the Pending
-            Posting panel, same positioning technique as that panel used on its own before. */}
+        {/* Master/Detail edit-scope — which half of the document the toolbar's Edit button
+            unlocks (per the user, 2026-08-31). Two bare radios parked in the margin just left
+            of the toolbar's New button, outside the card: absolute, so the centre card never
+            moves, and behind no width gate, so no zoom level can hide them (per the user,
+            2026-09-03). */}
+        <EditScopeRadios name="sv-edit-scope" value={editScope} onChange={setEditScope} />
+
+        {/* Left sidebar column — Pending Posting, same positioning technique as the sibling
+            voucher pages. The Master/Detail radios are NOT here: they sit in the margin
+            beside the toolbar (EditScopeRadios), behind no media query. */}
         <aside
           className="hidden 2xl:block absolute top-0 w-64 space-y-3"
           style={{ right: 'calc(100% + 24px)' }}
           data-no-print
         >
-          <div className="p-3 bg-white border rounded-xl text-sm" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="font-semibold text-slate-700 text-xs uppercase tracking-wider mb-2">Edit Scope</div>
-            <div className="flex flex-col gap-1.5">
-              <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
-                <input
-                  type="radio"
-                  name="sv-edit-scope"
-                  checked={editScope === 'master'}
-                  onChange={() => setEditScope('master')}
-                />
-                Master
-              </label>
-              <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
-                <input
-                  type="radio"
-                  name="sv-edit-scope"
-                  checked={editScope === 'detail'}
-                  onChange={() => setEditScope('detail')}
-                />
-                Detail
-              </label>
-            </div>
-          </div>
-
           {(unpostedSvs.length > 0 || postAllResult) && (
             <>
             <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">

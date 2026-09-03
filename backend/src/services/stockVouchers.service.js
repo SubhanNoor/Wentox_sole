@@ -21,6 +21,7 @@ const productColorsService = require('./productColors.service');
 const storesService = require('./stores.service');
 const businessAccountsService = require('./businessAccounts.service');
 const ApiError = require('../errors/ApiError');
+const { hasAtMostOneDecimal } = require('../utils/cartons');
 const { withTransaction } = require('../db/pool');
 
 function validateHeader(payload) {
@@ -46,7 +47,16 @@ function validateLines(rawLines) {
     const cartons = Number(line.cartons) || 0;
     const pairs = Number(line.pairs) || 0;
     if (cartons < 0) throw ApiError.badRequest('Cartons cannot be negative');
+    // Cartons became decimal in migration 030; DECIMAL(12,1) silently rounds anything finer, so a
+    // 2-decimal figure must be refused rather than saved as something else.
+    if (!hasAtMostOneDecimal(cartons)) {
+      throw ApiError.badRequest(`Cartons can have at most one decimal place — ${cartons} would be rounded when saved`);
+    }
     if (pairs <= 0) throw ApiError.badRequest('Each line must have pairs > 0');
+    // A stock voucher sends cartons AND pairs, so the whole-pairs rule is enforced by checking the
+    // two agree: a fractional product could only arrive here as a non-integer pair count anyway,
+    // which the line above already refuses.
+    if (!Number.isInteger(pairs)) throw ApiError.badRequest('Pairs must be a whole number');
   }
 }
 

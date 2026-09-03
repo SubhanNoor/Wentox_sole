@@ -126,7 +126,7 @@ async function insertItems(transaction, wageRunId, items) {
       wageRunId: { type: sql.Int, value: wageRunId },
       articleId: { type: sql.Int, value: item.article_id },
       rate: { type: sql.Decimal(12, 2), value: item.rate },
-      cartons: { type: sql.Int, value: item.cartons },
+      cartons: { type: sql.Decimal(12, 1), value: item.cartons },
       packing: { type: sql.Int, value: item.packing },
       lineNo: { type: sql.Int, value: index + 1 },
     });

@@ -18,7 +18,8 @@ import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
 import AccountBalanceTooltip from '@/components/AccountBalanceTooltip';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
-import { toDateInputValue } from '@/lib/utils';
+import { toDateInputValue, formatDate } from '@/lib/utils';
+import EditScopeRadios from '@/components/EditScopeRadios';
 
 // Cheque disposal (deposit/endorse/bounce/return) moved to the consolidated Cheque page's
 // Disposal tab — see ChequePage.tsx. This page keeps only receipt entry/records.
@@ -1085,42 +1086,16 @@ const nextVoucherNo = useMemo(
         {activeTab === 'entry' && (
           <div className="max-w-6xl mx-auto flex items-start gap-3 animate-fadeIn">
 
-            {/* Master/Detail edit-scope widget — small vertical block on the LEFT SIDE of the
-                page, outside the toolbar row (per the user, 2026-08-31). Whichever radio is
+            {/* Master/Detail edit-scope — two bare radios on the LEFT SIDE of the page, outside
+                the toolbar row (per the user, 2026-08-31; the card box around them was dropped
+                2026-09-03, they keep that column's old width so the centre card doesn't move).
+                Whichever radio is
                 selected decides what becomes editable while an existing draft line is pulled
                 back into the strip: Master unlocks only the header (Date/Remarks), Detail
                 unlocks only the entry strip and the entries table's Edit/Delete — see
                 masterFieldsLocked/detailFieldsLocked above. Both radios stay enabled always;
                 they only have any effect once mode is 'edit'. */}
-            <div
-              className="shrink-0 sticky top-4 p-3 bg-white border rounded-xl text-sm"
-              style={{ width: 84, borderColor: 'var(--border-color)' }}
-              data-no-print
-            >
-              <div className="font-semibold text-slate-700 text-xs uppercase tracking-wider mb-2">
-                Edit Scope
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="receipt-edit-scope"
-                    checked={editScope === 'master'}
-                    onChange={() => setEditScope('master')}
-                  />
-                  Master
-                </label>
-                <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="receipt-edit-scope"
-                    checked={editScope === 'detail'}
-                    onChange={() => setEditScope('detail')}
-                  />
-                  Detail
-                </label>
-              </div>
-            </div>
+            <EditScopeRadios name="receipt-edit-scope" value={editScope} onChange={setEditScope} variant="inline" />
 
             <div className="flex-1 min-w-0 max-w-5xl relative">
 
@@ -2009,7 +1984,7 @@ const nextVoucherNo = useMemo(
       {/* Find Voucher — jump to any voucher by C.Book No, date or remarks. */}
       {isFindOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
+          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp max-h-[90vh] overflow-y-auto">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-4">Find Voucher</h3>
             <input
               type="text"
@@ -2027,7 +2002,7 @@ const nextVoucherNo = useMemo(
                   className="px-3 py-2 text-xs cursor-pointer hover:bg-amber-50/60 flex items-center justify-between gap-2"
                 >
                   <span className="font-mono font-semibold text-slate-700">#{v.voucher_no}</span>
-                  <span className="text-slate-400 truncate">{v.voucher_date} · {formatCurrency(Number(v.total_amount))}</span>
+                  <span className="text-slate-400 truncate">{formatDate(v.voucher_date)} · {formatCurrency(Number(v.total_amount))}</span>
                   <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${v.status === 'POSTED' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
                     {v.status === 'POSTED' ? 'posted' : 'unposted'}
                   </span>

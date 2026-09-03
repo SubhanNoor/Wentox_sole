@@ -5,6 +5,7 @@ const employeesService = require('./employees.service');
 const productsService = require('./products.service');
 const chartAccountsRepository = require('../repositories/chartAccounts.repository');
 const ApiError = require('../errors/ApiError');
+const { hasAtMostOneDecimal } = require('../utils/cartons');
 const { withTransaction } = require('../db/pool');
 const CODES = require('../constants/reservedAccounts');
 const STAGES = require('../constants/stages');
@@ -20,6 +21,11 @@ function validateItemsShape(items) {
   for (const item of items) {
     if (!item.article_id) throw ApiError.badRequest('article_id is required on every line');
     if (!item.cartons || item.cartons <= 0) throw ApiError.badRequest('cartons must be > 0 on every line');
+    // No whole-pairs rule here: a wage line pays rate * cartons and moves no stock, so a part
+    // carton simply pays a part rate. Only the storage precision applies.
+    if (!hasAtMostOneDecimal(Number(item.cartons))) {
+      throw ApiError.badRequest(`cartons can have at most one decimal place — ${item.cartons} would be rounded when saved`);
+    }
   }
 }
 

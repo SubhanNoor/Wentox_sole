@@ -253,7 +253,7 @@ export function ChequeReturnsContent() {
       {/* ── Return confirmation (endorsed) ── */}
       {returningAlloc && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp max-h-[90vh] overflow-y-auto">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
               <AlertTriangle size={18} className="text-slate-600" /> Return This Endorsement
             </h3>
@@ -308,7 +308,7 @@ export function ChequeReturnsContent() {
       {/* ── Bounce/Return confirmation (issued) ── */}
       {issuedAction && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp max-h-[90vh] overflow-y-auto">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
               <AlertTriangle size={18} className={issuedAction.mode === 'BOUNCED' ? 'text-rose-600' : 'text-slate-600'} />
               {issuedAction.mode === 'BOUNCED' ? 'Mark This Issued Cheque Bounced' : 'Mark This Issued Cheque Returned'}

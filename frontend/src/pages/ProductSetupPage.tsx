@@ -10,6 +10,8 @@ import {
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight,
 } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
+import ConfirmModal from '@/components/ConfirmModal';
+import PageToasts from '@/components/PageToasts';
 import ProductArticleForm, { emptyArticleValues } from '@/components/ProductArticleForm';
 import type { ArticleFormValues } from '@/components/ProductArticleForm';
 import * as api from '@/lib/api';
@@ -95,7 +97,8 @@ export default function ProductSetupPage() {
   // (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied to
   // selectedProductId/selectedProductCode/selectedBatchNo/mode — an already-saved product loaded
   // for view/edit is safely re-openable by id at any time, so caching it risks showing a stale
-  // copy instead; only unsaved "new" work (the category/form fields and the staged batch below)
+  // copy instead; only the in-progress "new" form (category + fields; the list below is now real
+  // records, saved on Enter)
   // is ever at risk of being lost for good.
   const clearProductSetupDraft = useClearPageDraft('product-setup-register');
   // Master field (per the user: "the master is category, detail is all the product thing").
@@ -157,13 +160,17 @@ export default function ProductSetupPage() {
   // Enter adds the current article to this LOCAL list — nothing is written to the database yet.
   // Only the toolbar's Done writes the whole list to the database in one call and moves to a
   // fresh blank screen. All staged articles share the single Category master field above, so
-  // changing category once any are staged is guarded (see handleCategoryChange).
+  // Not a pending batch any more — every article is written on Enter. This is kept purely as
+  // "what I entered during this sitting", which is what tints those rows green in the list below
+  // and what Done reports on.
   const [stagedArticles, setStagedArticles] = usePersistentField<ArticleFormValues[]>('product-setup-register', 'stagedArticles', []);
-  // Set when a staged (not-yet-saved) row was clicked to load it back into the form — Enter/Done
-  // then update that entry in place instead of appending a new one, and the toolbar's Delete
-  // removes it from the list (no API call — nothing was saved yet).
-  const [editingStagedIndex, setEditingStagedIndex] = useState<number | null>(null);
-  const [pendingCategoryChange, setPendingCategoryChange] = useState<string | null>(null);
+
+  // Entering an article now writes it to the database straight away, so the client asked for a
+  // confirmation step before it does (2026-09-03: "add it with a confirmation safe dialogue box
+  // appears and i press enter it goes"). Enter opens this; Enter again saves — the modal's
+  // confirm button is autoFocused, so the second Enter needs no reach for the mouse either.
+  const [pendingSave, setPendingSave] = useState<{ name: string; color: string } | null>(null);
+  const [saving, setSaving] = useState(false);
 
   // Fills whatever vertical space is left in the viewport below it, same technique as Stock
   // Voucher's own entry card — so the staging list is visible without scrolling the page itself,
@@ -180,57 +187,54 @@ export default function ProductSetupPage() {
     recompute();
     window.addEventListener('resize', recompute);
     return () => window.removeEventListener('resize', recompute);
-  }, [mode, stagedArticles.length, isViewMode]);
+  }, [mode, isViewMode, categoryId]);
 
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3000); };
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 4000); };
 
-  // Toolbar: New — blank form, ready to type, focus Category first (the Master field).
+  // Toolbar: New — blank article, ready to type.
+  //
+  // The selected category is deliberately KEPT. The list below the form shows that category's
+  // articles, and the working pattern is "pick the category, look at what's there, press New, type
+  // the next one" (per the user, 2026-09-03) — clearing it would collapse the very list they just
+  // opened, and articles are almost always entered in runs under one category anyway. Focus goes
+  // to the article name; the category field is one Shift+Tab away when it does need changing, and
+  // New with no category selected still starts there.
   const handleNew = () => {
     setSelectedProductId(null);
     setSelectedProductCode('');
     setSelectedBatchNo(null);
-    setCategoryId('');
     setFormValues(emptyArticleValues());
     setExistingColors([]);
     setMode('new');
     setErrorMsg('');
     setStagedArticles([]);
-    setEditingStagedIndex(null);
     clearProductSetupDraft();
-    requestAnimationFrame(() => categoryTriggerRef.current?.focus());
+    requestAnimationFrame(() => {
+      if (categoryId) nameInputRef.current?.focus();
+      else categoryTriggerRef.current?.focus();
+    });
   };
 
-  // Category can't change out from under staged-but-not-yet-saved articles (the batch Done writes
-  // ALL of them under whichever category is selected) — same guard the old multi-article workflow
-  // used, just triggered from the modal picker now instead of a plain dropdown.
+  // Changing category is free: every article was written to the database the moment it was
+  // entered, so there is nothing pending to lose. This used to raise an "articles staged (not yet
+  // saved) — changing the category will clear them" confirmation, which stopped being true when
+  // entry started saving on Enter and was simply a false alarm by the time the user hit it
+  // (2026-09-03). Only the this-sitting marker resets — those articles belong to the category
+  // being left, and the list below is about to show a different one.
   const handleCategoryChange = (val: string) => {
     if (val === categoryId) return;
-    if (stagedArticles.length > 0) {
-      setPendingCategoryChange(val);
-      return;
-    }
     setCategoryId(val);
-  };
-  const confirmCategoryChange = () => {
-    if (pendingCategoryChange === null) return;
-    setCategoryId(pendingCategoryChange);
     setStagedArticles([]);
-    setEditingStagedIndex(null);
-    setFormValues(emptyArticleValues());
-    setPendingCategoryChange(null);
+    // Whatever is half-typed in the form stays put — re-picking a mistyped category and carrying
+    // on is the common case, and the article isn't bound to a category until it is saved.
   };
 
   // Directory row click / First/Prev/Next/Last — loads a product read-only ("view") and jumps to
   // the Register Product tab, where the bound-record form lives.
   const handleSelectProduct = (prod: ProductRow) => {
-    // Don't silently drop staged-but-not-yet-saved articles by jumping to browse a saved record.
-    if (stagedArticles.length > 0) {
-      fail('Finish (Done) or clear (New) the staged articles before opening a saved product.');
-      return;
-    }
     setSelectedProductId(prod.article_id);
     setSelectedProductCode(prod.code);
     setSelectedBatchNo(prod.batch_no);
@@ -286,43 +290,110 @@ export default function ProductSetupPage() {
     return { ...formValues, name: typedName };
   }
 
-  // Enter on the last detail field — stages the current article into the LOCAL list below (per
-  // the user, 2026-08-30: nothing is written to the database until Done). Editing an
-  // already-staged row (loaded via a click) updates it in place instead of appending a new one.
-  const handleStageCurrent = () => {
+  // Enter on the last detail field — SAVES the article to the database there and then (per the
+  // user, 2026-09-02: "if we enter a product then it will be saved in db/record without pressing
+  // done/post"). It used to stage into a local list and write nothing until Done, so closing the
+  // app with articles typed lost all of them.
+  //
+  // The list below the form is therefore a list of REAL records now, not a pending batch. Each row
+  // carries its articleId, so re-opening one and pressing Enter updates that record instead of
+  // creating a second one.
+  //
+  // Saved one at a time rather than accumulating a batch: the point is that each article is safe
+  // the moment it is entered, and a per-article call is also what lets a duplicate or a validation
+  // failure name the article it belongs to instead of failing the whole batch at the end.
+  const handleStageCurrent = async () => {
     const entry = buildStagedEntry();
     if (!entry) return;
-    setStagedArticles(prev => {
-      if (editingStagedIndex != null) {
-        return prev.map((a, i) => (i === editingStagedIndex ? entry : a));
+
+    let savedId: number | undefined;
+
+    {
+      const res = await api.products.createBatch({
+        category_id: Number(categoryId),
+        articles: [{
+          name: entry.name,
+          vendor_id: systemVendor?.vendor_id ?? 0,
+          packing: entry.packing,
+          sale_price: entry.salePrice,
+          ...costsToApiPayload(entry.costs),
+        }],
+      });
+      if (!res.ok) {
+        const details = res.error.details as { article_id?: number; name?: string; errors?: ProductBatchFieldError[] } | undefined;
+        if (res.error.code === 'BATCH_VALIDATION_FAILED' && details?.errors) {
+          return fail('Please fix: ' + details.errors.map(e => e.message).join('; '));
+        }
+        // An inactive article of the same name already exists — offer to bring it back rather than
+        // refusing. The form keeps what was typed so the prompt can be answered either way.
+        if (res.error.code === 'INACTIVE_DUPLICATE' && details?.article_id != null && details?.name) {
+          setReactivatePrompt({ article_id: details.article_id, name: details.name });
+          return;
+        }
+        // The article already exists and is active. Entering the same name again is how the
+        // operator adds ANOTHER COLOUR to it — the same article comes in several colours — so
+        // treat it as that rather than refusing, provided a colour was actually typed.
+        // resolveOrCreate matches an existing colour instead of duplicating it, so re-entering a
+        // colour that is already there is harmless.
+        if (res.error.code === 'DUPLICATE_NAME' && details?.article_id != null) {
+          if (!entry.color.trim()) {
+            return fail(`"${entry.name}" already exists. Add a colour to register another colour of it, `
+              + 'or open it from the Directory to change its details.');
+          }
+          const colorRes = await api.productColors.resolveOrCreate({
+            article_id: details.article_id, color: entry.color.trim(), packing: entry.packing,
+          });
+          if (!colorRes.ok) return fail(colorRes.error.message);
+          setStagedArticles(prev => [...prev, { ...entry, articleId: details.article_id }]);
+          setFormValues(emptyArticleValues());
+          setErrorMsg('');
+          flash(`"${entry.color.trim()}" added to the existing article "${entry.name}".`);
+          loadAll();
+          requestAnimationFrame(() => nameInputRef.current?.focus());
+          return;
+        }
+        return fail(res.error.message);
       }
-      return [...prev, entry];
-    });
-    setEditingStagedIndex(null);
+      savedId = res.data[0]?.article_id;
+    }
+
+    // Colour is optional and lives on its own table; resolveOrCreate matches an existing colour
+    // rather than duplicating it.
+    if (savedId != null && entry.color.trim()) {
+      await api.productColors.resolveOrCreate({
+        article_id: savedId, color: entry.color.trim(), packing: entry.packing,
+      });
+    }
+
+    setStagedArticles(prev => [...prev, { ...entry, articleId: savedId }]);
     setFormValues(emptyArticleValues());
     setErrorMsg('');
+    flash(`"${entry.name}" saved.`);
+    loadAll(); // the Directory should show it immediately — it is a real record now
     requestAnimationFrame(() => nameInputRef.current?.focus());
-    // category stays selected — one batch, many articles
+    // category stays selected — the operator is usually entering several under one category
   };
 
   function handleLastFieldEnter(e: React.KeyboardEvent) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
     e.stopPropagation();
-    if (mode === 'new') handleStageCurrent();
+    if (mode !== 'new') return;
+    // Validate BEFORE asking: a confirmation box for an entry that cannot be saved is just an
+    // extra keypress in front of the same error. buildStagedEntry surfaces the reason itself.
+    const entry = buildStagedEntry();
+    if (!entry) return;
+    setPendingSave({ name: entry.name, color: entry.color.trim() });
   }
 
-  // Staged row click — loads it back into the form for editing (or deleting) via the toolbar.
-  const handleSelectStaged = (i: number) => {
-    setMode('new');
-    setSelectedProductId(null);
-    setSelectedProductCode('');
-    setSelectedBatchNo(null);
-    setFormValues(stagedArticles[i]);
-    setExistingColors([]);
-    setEditingStagedIndex(i);
-    setErrorMsg('');
-    requestAnimationFrame(() => nameInputRef.current?.focus());
+  const confirmPendingSave = async () => {
+    setSaving(true);
+    try {
+      await handleStageCurrent();
+    } finally {
+      setSaving(false);
+      setPendingSave(null);
+    }
   };
 
   // Toolbar: Done — New mode writes the WHOLE staged list to the database in one call (staging
@@ -356,52 +427,21 @@ export default function ProductSetupPage() {
       return;
     }
 
-    // mode === 'new' — commit the staged batch, auto-staging whatever's currently in the form too.
-    let toCommit = stagedArticles;
-    const hasUnstagedContent = formValues.name.trim() || formValues.packing > 0 || formValues.salePrice > 0
+    // mode === 'new' — everything in the list below is ALREADY in the database (saved on Enter,
+    // see handleStageCurrent). Done therefore commits only what is still sitting unsaved in the
+    // form, then clears for the next product. It must not re-submit the list, or every article
+    // would be created a second time.
+    const hasUnsavedContent = formValues.name.trim() || formValues.packing > 0 || formValues.salePrice > 0
       || Object.values(formValues.costs).some(v => v > 0);
-    if (hasUnstagedContent) {
-      const entry = buildStagedEntry();
-      if (!entry) return; // buildStagedEntry already flashed the specific error
-      toCommit = editingStagedIndex != null
-        ? stagedArticles.map((a, i) => (i === editingStagedIndex ? entry : a))
-        : [...stagedArticles, entry];
-    }
-    if (toCommit.length === 0) return fail('Add at least one article (press Enter after typing it) before pressing Done.');
-    if (!categoryId) return fail('Category is required. Please select a category.');
-
-    const res = await api.products.createBatch({
-      category_id: Number(categoryId),
-      articles: toCommit.map(a => ({
-        name: a.name.trim(),
-        vendor_id: systemVendor?.vendor_id ?? 0,
-        packing: a.packing,
-        sale_price: a.salePrice,
-        ...costsToApiPayload(a.costs),
-      })),
-    });
-
-    if (!res.ok) {
-      const details = res.error.details as { article_id?: number; name?: string; errors?: ProductBatchFieldError[] } | undefined;
-      if (res.error.code === 'BATCH_VALIDATION_FAILED' && details?.errors) {
-        return fail('Please fix: ' + details.errors.map(e => e.message).join('; '));
-      }
-      if (res.error.code === 'INACTIVE_DUPLICATE' && details?.article_id != null && details?.name) {
-        setReactivatePrompt({ article_id: details.article_id, name: details.name });
-        return;
-      }
-      return fail(res.error.message);
+    if (hasUnsavedContent) {
+      await handleStageCurrent(); // saves it, or shows why it can't be saved
+      // If it failed, the form still holds it and the banner says why — don't clear over the top.
+      if (formValues.name.trim()) return;
+    } else if (stagedArticles.length === 0) {
+      return fail('Enter a product first — it saves as soon as you press Enter.');
     }
 
-    // Resolve each article's color, matched by order — createBatch() returns rows in the same
-    // order the articles were submitted in.
-    await Promise.all(res.data.map((row, i) => {
-      const color = toCommit[i]?.color.trim();
-      if (!color) return Promise.resolve();
-      return api.productColors.resolveOrCreate({ article_id: row.article_id, color, packing: row.packing });
-    }));
-
-    flash(`${res.data.length} product article${res.data.length > 1 ? 's' : ''} registered successfully.`);
+    flash('Finished. Ready for the next product.');
     loadAll();
     handleNew(); // full reset — "move to the new screen"
   };
@@ -417,32 +457,56 @@ export default function ProductSetupPage() {
     // colliding one and press Done again.
   };
 
-  // Toolbar: Delete — in New mode with a staged row loaded, removes it from the LOCAL list (no API
-  // call, nothing was saved yet); otherwise acts on a saved record (view/edit), same dual-purpose-
-  // by-context convention as Stock Voucher/Journal Voucher's own Delete.
+  // Toolbar: Delete — dual-purpose by context, same convention as Stock Voucher/Journal Voucher.
+  //
+  // A row in the New-mode list is a REAL record now (saved on Enter), so deleting one has to go to
+  // the database. Dropping it from the local list alone — which is what this did while the list
+  // was a pending batch — would leave the article behind in the Directory while appearing to
+  // remove it.
   const [deletingProduct, setDeletingProduct] = useState<{ article_id: number; name: string } | null>(null);
   const handleDeleteAction = () => {
-    if (mode === 'new') {
-      if (editingStagedIndex == null) return;
-      setStagedArticles(prev => prev.filter((_, i) => i !== editingStagedIndex));
-      setEditingStagedIndex(null);
-      setFormValues(emptyArticleValues());
-      setErrorMsg('');
-      requestAnimationFrame(() => nameInputRef.current?.focus());
-      return;
-    }
     if (selectedProductId == null) return;
     setDeletingProduct({ article_id: selectedProductId, name: formValues.name });
   };
   const confirmDelete = async () => {
     if (!deletingProduct) return;
     const res = await api.products.remove(deletingProduct.article_id);
+    const deletedId = deletingProduct.article_id;
     setDeletingProduct(null);
     if (!res.ok) return fail('Failed to delete: ' + res.error.message);
     flash('Product deleted successfully.');
-    handleNew();
+    // Drop just that row from the session list rather than calling handleNew(), which clears the
+    // whole list — the other articles entered in this sitting are still real records and the
+    // operator should keep seeing them.
+    setStagedArticles(prev => prev.filter(a => a.articleId !== deletedId));
+    setSelectedProductId(null);
+    setFormValues(emptyArticleValues());
+    setMode('new');
     loadAll();
+    requestAnimationFrame(() => nameInputRef.current?.focus());
   };
+
+  // Everything already registered under the category the operator has selected. The client's own
+  // Product Detail Info screen lists these in the space below the form the moment a category is
+  // picked (2026-09-03: "when i select a category it shows me all the product under that category
+  // in space below"), so entering a run of articles never needs a trip to another tab to see what
+  // is already there.
+  const categoryProducts = useMemo(() => {
+    if (!categoryId) return [];
+    return productList
+      .filter(p => p.is_active && String(p.category_id) === String(categoryId))
+      .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
+  }, [productList, categoryId]);
+
+  // article_ids entered during this sitting — flagged in the list so a long-established category
+  // still makes clear which rows are the operator's own work just now.
+  const savedThisSitting = useMemo(
+    () => new Set(stagedArticles.map(a => a.articleId).filter((id): id is number => id != null)),
+    [stagedArticles]
+  );
+
+  const totalCostOf = (prod: ProductRow) =>
+    COST_FIELDS.reduce((sum, f) => sum + (Number(prod[COST_FIELD_TO_API[f.key]]) || 0), 0);
 
   const filteredProducts = useMemo(() => {
     const active = productList.filter(p => p.is_active);
@@ -523,19 +587,22 @@ export default function ProductSetupPage() {
     <AppLayout pageTitle="Product Setup" headerAction={tabBar}>
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
 
-        {successMsg && (
-          <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4">{successMsg}</div>
-        )}
-        {errorMsg && (
-          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
-        )}
+        {/* Feedback goes to the right-hand gutter rather than above the toolbar — an inline
+            banner here pushed the whole card (and the toolbar buttons) down mid-click, which is
+            the same problem PageToasts was introduced to fix on the voucher pages. */}
+        <PageToasts
+          success={successMsg}
+          error={errorMsg}
+          onDismissSuccess={() => setSuccessMsg('')}
+          onDismissError={() => setErrorMsg('')}
+        />
 
         {pageTab === 'register' && (
         <>
         {/* Toolbar — icon-over-label buttons, same set/style as Journal Voucher/Stock Voucher's
             own: New/Delete/Edit/Done, First/Previous/Next/Last, Find. No Post/Unpost — a product
             master record has no draft/posted concept to toggle. */}
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-4 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }}>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3 p-2 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }}>
           <div className="flex flex-wrap items-center gap-0.5">
             <button
               data-new-action="true" type="button" onClick={handleNew} title="New" className="toolbar-btn">
@@ -544,8 +611,8 @@ export default function ProductSetupPage() {
             </button>
             <button
               type="button" onClick={handleDeleteAction}
-              disabled={mode === 'new' ? editingStagedIndex == null : selectedProductId == null}
-              title={mode === 'new' && editingStagedIndex != null ? 'Remove this staged article' : 'Delete'}
+              disabled={selectedProductId == null}
+              title="Delete" 
               className="toolbar-btn"
             >
               <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
@@ -595,21 +662,20 @@ export default function ProductSetupPage() {
           <span className="font-lora font-bold text-xs text-slate-900">
             {mode === 'edit' ? `Editing ${selectedProductCode}`
               : mode === 'view' ? selectedProductCode
-              : editingStagedIndex != null ? `Editing staged article ${editingStagedIndex + 1}`
-              : stagedArticles.length > 0 ? `New Product — ${stagedArticles.length} staged`
+              : stagedArticles.length > 0 ? `New Product — ${stagedArticles.length} saved`
               : 'New Product'}
           </span>
         </div>
 
-        <form id="product-detail-form" onSubmit={handleDone} className="card-white p-6 bg-white border flex flex-col gap-4">
+        <form id="product-detail-form" onSubmit={handleDone} className="card-white p-2 bg-white border flex flex-col gap-2">
           {/* Master — Category, per the user: "the master is category, detail is all the product
               thing". Typable trigger + centered SearchModal popup, same as every other lookup in
               the app (per the user, 2026-08-30: "category must be modal pop up"). */}
-          <div className="p-4 rounded-xl border-2 flex flex-col sm:flex-row sm:items-end gap-4" style={{ borderColor: 'var(--brand-gold)', background: 'linear-gradient(180deg, #fbf7f0 0%, #ffffff 100%)' }}>
+          <div className="px-2 py-1.5 rounded-lg border-2 flex items-center gap-2" style={{ borderColor: 'var(--brand-gold)', background: 'linear-gradient(180deg, #fbf7f0 0%, #ffffff 100%)' }}>
+            <label className="shrink-0 text-[10px] font-bold text-slate-700 uppercase tracking-wider">
+              Select Category <span className="text-red-500 font-bold">*</span>
+            </label>
             <div className="flex-1 relative">
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Select Category <span className="text-red-500 font-bold">*</span>
-              </label>
               <input
                 ref={categoryTriggerRef}
                 type="text"
@@ -618,14 +684,14 @@ export default function ProductSetupPage() {
                 onChange={e => setCategorySearchText(e.target.value)}
                 onKeyDown={handleCategoryTriggerKeyDown}
                 placeholder="Type a category name, or press Enter to search..."
-                className="soleria-input pr-8"
+                className="soleria-input soleria-input-compact pr-8"
               />
               <button
                 type="button"
                 disabled={isViewMode}
                 onClick={openCategoryModal}
                 title="Browse all categories"
-                className="absolute right-2 bottom-2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <ChevronDown size={14} />
               </button>
@@ -662,21 +728,21 @@ export default function ProductSetupPage() {
             leadingSlot={
               <div className="flex gap-2">
                 <div className="flex-1">
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Code</label>
+                  <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">Code</label>
                   <input
                     type="text"
                     value={selectedProductCode || (mode === 'new' ? `${nextCodePreview} (pending)` : '(auto)')}
                     disabled
-                    className="soleria-input font-semibold bg-slate-100 text-slate-500 cursor-not-allowed"
+                    className="soleria-input soleria-input-compact font-semibold bg-slate-100 text-slate-500 cursor-not-allowed"
                   />
                 </div>
                 <div className="flex-1">
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Batch No.</label>
+                  <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">Batch No.</label>
                   <input
                     type="text"
                     value={selectedBatchNo ?? (mode === 'new' ? `${nextBatchNoPreview} (pending)` : '(auto)')}
                     disabled
-                    className="soleria-input font-semibold bg-slate-100 text-slate-500 cursor-not-allowed"
+                    className="soleria-input soleria-input-compact font-semibold bg-slate-100 text-slate-500 cursor-not-allowed"
                   />
                 </div>
               </div>
@@ -684,37 +750,57 @@ export default function ProductSetupPage() {
           />
         </form>
 
-        {/* Staged articles — added by Enter, NOT yet in the database (per the user, 2026-08-30).
-            Click a row to load it back into the form above for editing/removal via the toolbar's
-            Edit/Delete buttons. Styled as a grid the same way as Stock Voucher's own
-            committed-lines table. */}
-        {stagedArticles.length > 0 && (
-          <div className="card-white p-6 bg-white border mt-4">
-            <h3 className="font-lora font-semibold text-sm text-slate-800 mb-3">
-              Staged for this batch ({stagedArticles.length}) — not saved until Done
-            </h3>
-            <div ref={stagedBoxRef} className="rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)', maxHeight: stagedBoxMaxHeight }}>
-              <table className="w-full text-left border-collapse text-sm">
+        {/* Every article already registered under the selected category, in the space below the
+            form — the client's own Product Detail Info screen works this way (2026-09-03). Rows
+            are deliberately tight: the reference screen shows 10-15 articles at once, so this one
+            does too. Click a row to load it into the form above. */}
+        {categoryId && (
+          <div className="card-white bg-white border mt-3 p-3">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <h3 className="font-lora font-semibold text-xs text-slate-800">
+                {categorySearchText || 'Category'} — {categoryProducts.length} article{categoryProducts.length === 1 ? '' : 's'}
+              </h3>
+              <span className="text-[10px] text-slate-500 font-medium">Click a row to open it</span>
+            </div>
+            <div
+              ref={stagedBoxRef}
+              className="rounded-lg border bg-white overflow-y-auto"
+              style={{ borderColor: 'var(--border-color)', maxHeight: stagedBoxMaxHeight }}
+            >
+              <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                    <th className="sticky top-0 z-10 bg-slate-50 p-2 pl-4">Article Description</th>
-                    <th className="sticky top-0 z-10 bg-slate-50 p-2">Color</th>
-                    <th className="sticky top-0 z-10 bg-slate-50 p-2 text-center" style={{ width: '110px' }}>Packing</th>
-                    <th className="sticky top-0 z-10 bg-slate-50 p-2 text-right" style={{ width: '120px' }}>Sale Price</th>
+                  <tr className="bg-slate-50 border-b text-[10px] font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                    <th className="sticky top-0 z-10 bg-slate-50 py-1 px-2 pl-3" style={{ width: '96px' }}>Code</th>
+                    <th className="sticky top-0 z-10 bg-slate-50 py-1 px-2">Name</th>
+                    <th className="sticky top-0 z-10 bg-slate-50 py-1 px-2 text-center" style={{ width: '72px' }}>Batch</th>
+                    <th className="sticky top-0 z-10 bg-slate-50 py-1 px-2 text-center" style={{ width: '80px' }}>Packing</th>
+                    <th className="sticky top-0 z-10 bg-slate-50 py-1 px-2 text-right" style={{ width: '110px' }}>Cost</th>
+                    <th className="sticky top-0 z-10 bg-slate-50 py-1 px-2 text-right" style={{ width: '110px' }}>Sale Price</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {stagedArticles.map((a, i) => (
+                  {categoryProducts.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-6 text-center text-xs text-slate-400">
+                        No articles registered under this category yet.
+                      </td>
+                    </tr>
+                  ) : categoryProducts.map(prod => (
                     <tr
-                      key={i}
-                      onClick={() => handleSelectStaged(i)}
-                      className={`border-b cursor-pointer hover:bg-slate-50/55 transition-colors ${i === editingStagedIndex ? 'bg-blue-50' : ''}`}
+                      key={prod.article_id}
+                      onClick={() => handleSelectProduct(prod)}
+                      className={`border-b cursor-pointer hover:bg-slate-50/70 transition-colors ${
+                        prod.article_id === selectedProductId ? 'bg-blue-50'
+                          : savedThisSitting.has(prod.article_id) ? 'bg-emerald-50/60' : ''
+                      }`}
                       style={{ borderColor: 'var(--border-table)' }}
                     >
-                      <td className="py-1 px-2 pl-4 text-xs text-slate-800 font-semibold">{a.name}</td>
-                      <td className="py-1 px-2 text-xs text-slate-600">{a.color || '—'}</td>
-                      <td className="py-1 px-2 text-center font-mono text-sm text-slate-700">{a.packing}</td>
-                      <td className="py-1 px-2 text-right font-mono text-sm text-slate-700">{formatCurrency(a.salePrice)}</td>
+                      <td className="py-0.5 px-2 pl-3 text-[11px] font-semibold text-slate-700">{prod.code}</td>
+                      <td className="py-0.5 px-2 text-[11px] font-semibold text-slate-900">{prod.name}</td>
+                      <td className="py-0.5 px-2 text-center font-mono text-[11px] text-slate-600">{prod.batch_no}</td>
+                      <td className="py-0.5 px-2 text-center font-mono text-[11px] text-slate-700">{prod.packing}</td>
+                      <td className="py-0.5 px-2 text-right font-mono text-[11px] text-slate-600">{formatCurrency(totalCostOf(prod))}</td>
+                      <td className="py-0.5 px-2 text-right font-mono text-[11px] font-bold text-amber-800">{formatCurrency(prod.sale_price)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -729,11 +815,13 @@ export default function ProductSetupPage() {
           /* Product Detail Info — just the current products, per the user (2026-08-30): "product
              detail only show me the current products that I have". Click a row to open it on the
              Register Product tab (view, then Edit to change it). */
-          <div className="card-white p-6 bg-white border">
-            <div className="border-b pb-3 mb-4 flex flex-wrap items-center justify-between gap-4">
+          <div className="card-white p-3 bg-white border">
+            <div className="border-b pb-2 mb-2 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="font-lora font-semibold text-lg text-slate-800">Registered Products</h3>
-                <p className="text-xs text-slate-500 font-medium">Click a row to open it on Register Product.</p>
+                <h3 className="font-lora font-semibold text-sm text-slate-800">
+                  Registered Products <span className="text-slate-400 font-normal">({filteredProducts.length})</span>
+                </h3>
+                <p className="text-[10px] text-slate-500 font-medium">Click a row to open it on Register Product.</p>
               </div>
               <div className="relative min-w-[280px]">
                 <input
@@ -749,6 +837,7 @@ export default function ProductSetupPage() {
             </div>
 
             <DataListTable<ProductRow>
+              dense
               rows={filteredProducts}
               rowKey={prod => prod.article_id}
               onRowClick={prod => handleSelectProduct(prod)}
@@ -799,31 +888,30 @@ export default function ProductSetupPage() {
           </div>
         )}
 
-        {/* Confirm category change when staged-but-not-yet-saved articles exist */}
-        {pendingCategoryChange !== null && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setPendingCategoryChange(null)}
-            onKeyDown={e => { if (e.key === 'Escape') { (() => setPendingCategoryChange(null))(); } }}
-            tabIndex={-1}>
-            <div className="bg-white rounded-2xl border-2 border-amber-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
-              <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Staged Articles</h3>
-              <p className="text-xs text-slate-600 mb-4">
-                You have articles staged (not yet saved) under the current category. Changing the
-                category will clear them. Continue?
-              </p>
-              <div className="flex items-center justify-end gap-2">
-                <button onClick={() => setPendingCategoryChange(null)} className="btn-outline px-4 py-2 text-xs font-semibold cursor-pointer">Cancel</button>
-                <button onClick={confirmCategoryChange} className="px-4 py-2 text-xs font-semibold cursor-pointer rounded-lg bg-rose-600 text-white hover:bg-rose-700">Change Category</button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Confirm before writing a new article. Enter opens it from the last cost field and
+            Enter again commits, so a run of articles is still pure keyboard. */}
+        <ConfirmModal
+          isOpen={pendingSave !== null}
+          title="Save this article?"
+          confirmLabel="Save"
+          busy={saving}
+          body={
+            <>
+              Register <strong>{pendingSave?.name}</strong>
+              {pendingSave?.color ? <> in <strong>{pendingSave.color}</strong></> : null} under{' '}
+              <strong>{categorySearchText || 'the selected category'}</strong>? Press Enter to confirm.
+            </>
+          }
+          onConfirm={confirmPendingSave}
+          onCancel={() => setPendingSave(null)}
+        />
 
         {/* Reactivate-inactive-duplicate prompt */}
         {reactivatePrompt && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setReactivatePrompt(null)}
             onKeyDown={e => { if (e.key === 'Escape') { (() => setReactivatePrompt(null))(); } }}
             tabIndex={-1}>
-            <div className="bg-white rounded-2xl border-2 border-amber-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+            <div className="bg-white rounded-2xl border-2 border-amber-400 shadow-xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
               <h3 className="font-lora font-bold text-base text-slate-900 mb-2 flex items-center gap-2">
                 <RotateCcw size={18} className="text-amber-500" /> Inactive Product Found
               </h3>
@@ -844,7 +932,7 @@ export default function ProductSetupPage() {
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setDeletingProduct(null)}
             onKeyDown={e => { if (e.key === 'Escape') { (() => setDeletingProduct(null))(); } }}
             tabIndex={-1}>
-            <div className="bg-white rounded-2xl border-2 border-rose-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+            <div className="bg-white rounded-2xl border-2 border-rose-400 shadow-xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
               <h3 className="font-lora font-bold text-base text-slate-900 mb-2">Delete Product</h3>
               <p className="text-xs text-slate-600 mb-4">
                 Delete <strong>{deletingProduct.name}</strong>? This deactivates the record — past

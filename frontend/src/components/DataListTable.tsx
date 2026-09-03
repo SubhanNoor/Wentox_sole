@@ -60,6 +60,14 @@ export interface DataListTableProps<T> {
    * <tr>…</tr> so it controls the colSpans its own layout needs.
    */
   footer?: ReactNode;
+
+  /**
+   * Tighter row height, for directories that are meant to be scanned rather than read — the
+   * client's own Product Detail Info screen fits 10-15 articles on screen at once, and `p-3`
+   * rows fit about six (per the user, 2026-09-03). Opt-in, so every other directory keeps the
+   * roomier spacing it was designed with.
+   */
+  dense?: boolean;
 }
 
 const alignClass = {
@@ -84,7 +92,12 @@ export default function DataListTable<T>({
   isExpanded,
   onToggleExpand,
   footer,
+  dense = false,
 }: DataListTableProps<T>) {
+  // One place decides the row rhythm, so the header and the body can never drift apart.
+  const cellPad = dense ? 'py-1 px-2' : 'p-3';
+  const firstCellPad = dense ? 'py-1 px-2 pl-3' : 'p-3 pl-4';
+
   const expandable = Boolean(renderExpanded);
   const colSpan = columns.length + (actions ? 1 : 0) + (expandable ? 1 : 0);
 
@@ -108,18 +121,18 @@ export default function DataListTable<T>({
             className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500"
             style={{ borderColor: 'var(--border-color)' }}
           >
-            {expandable && <th className="p-3 pl-4" style={{ width: '30px' }} />}
+            {expandable && <th className={firstCellPad} style={{ width: '30px' }} />}
             {columns.map((col, i) => (
               <th
                 key={col.key}
-                className={`${i === 0 && !expandable ? 'p-3 pl-4' : 'p-3'} ${alignClass[col.align ?? 'left']}`}
+                className={`${i === 0 && !expandable ? firstCellPad : cellPad} ${alignClass[col.align ?? 'left']}`}
                 style={col.width ? { width: col.width } : undefined}
               >
                 {col.header}
               </th>
             ))}
             {actions && (
-              <th className="p-3 text-center" style={{ width: actionsWidth }}>
+              <th className={`${cellPad} text-center`} style={{ width: actionsWidth }}>
                 {actionsHeader}
               </th>
             )}
@@ -163,7 +176,7 @@ export default function DataListTable<T>({
                     style={{ borderColor: 'var(--border-table)' }}
                   >
                     {expandable && (
-                      <td className="p-3 pl-4 text-slate-400">
+                      <td className={`${firstCellPad} text-slate-400`}>
                         {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                       </td>
                     )}
@@ -171,14 +184,14 @@ export default function DataListTable<T>({
                     {columns.map((col, i) => (
                       <td
                         key={col.key}
-                        className={`${i === 0 && !expandable ? 'p-3 pl-4' : 'p-3'} ${alignClass[col.align ?? 'left']} ${col.cellClassName ?? ''}`}
+                        className={`${i === 0 && !expandable ? firstCellPad : cellPad} ${alignClass[col.align ?? 'left']} ${col.cellClassName ?? ''}`}
                       >
                         {col.render(row)}
                       </td>
                     ))}
 
                     {actions && (
-                      <td className="p-3 text-center">
+                      <td className={`${cellPad} text-center`}>
                         {/* Keeps action clicks from also firing the row click. */}
                         <div
                           className="flex items-center justify-center gap-1.5"

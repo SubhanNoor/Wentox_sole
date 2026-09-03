@@ -4,7 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { ChevronDown, ChevronRight, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
 import { groupByRegion, groupByCity, groupByRegionThenCity } from '@/lib/geoGrouping';
 import * as api from '@/lib/api';
 import type { SaleReportRow as ApiSaleReportRow } from '@/lib/api';
@@ -289,7 +289,7 @@ export function SaleReportContent() {
 
         <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDateTime(new Date())}</div>
         </div>
       </div>
     );

@@ -3,7 +3,7 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Search, ChevronDown, ChevronRight, LayoutList, X, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { StockRow, VendorStockRow, ProductLedgerResult, StockMovementRow, StockMovementType, CategoryRow, VendorRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
@@ -528,7 +528,7 @@ export default function ReportStockPage() {
 
         <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDateTime(new Date())}</div>
         </div>
       </div>
     );
@@ -1301,7 +1301,7 @@ export default function ReportStockPage() {
 
           <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
             <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-            <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+            <div>Printed: {formatDateTime(new Date())}</div>
           </div>
         </div>
         )}
@@ -1375,7 +1375,7 @@ export default function ReportStockPage() {
 
           <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
             <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-            <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+            <div>Printed: {formatDateTime(new Date())}</div>
           </div>
         </div>
         )}
@@ -1467,7 +1467,7 @@ export default function ReportStockPage() {
           only real backend operation, the demo's Add direction had no backend equivalent). */}
       {materialAdjModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 border border-slate-200" style={{ borderColor: 'var(--border-color)' }}>
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 border border-slate-200 max-h-[90vh] overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <div className="flex items-center justify-between pb-4 border-b">
               <h3 className="text-lg font-bold text-slate-800 font-lora">Deduct Material Stock</h3>
               <button

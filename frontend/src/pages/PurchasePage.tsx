@@ -17,6 +17,7 @@ import {
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import EditScopeRadios from '@/components/EditScopeRadios';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
 
@@ -890,6 +891,15 @@ const nextSystemBillNo = useMemo(
     <AppLayout pageTitle="Purchase Entry" headerAction={tabBar}>
       <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
 
+        {/* Master/Detail edit-scope — which half of the document the toolbar's Edit button
+            unlocks (per the user, 2026-08-31). Two bare radios parked in the margin just left
+            of the toolbar's New button, outside the card: absolute, so the centre card never
+            moves, and behind no width gate, so no zoom level can hide them (per the user,
+            2026-09-03). */}
+        {activeTab === 'entry' && (
+          <EditScopeRadios name="purchase-edit-scope" value={editScope} onChange={setEditScope} />
+        )}
+
         {/* P-03: Pending Posting — pinned outside the card's own left edge rather than inside the
             page's flow, matching SaleBillPage's SB-06 sidebar exactly (`absolute`, anchored via
             `right: calc(100% + gap)` to this wrapper's left edge, so it can never affect the
@@ -903,34 +913,6 @@ const nextSystemBillNo = useMemo(
             style={{ right: 'calc(100% + 24px)' }}
             data-no-print
           >
-            {/* Master/Detail edit-scope radios — per the user, 2026-08-31: which half of the
-                document the toolbar's Edit button unlocks. Always enabled (not gated on
-                isViewMode/mode) so a scope can be pre-picked before Edit is even clicked. Same
-                left-side positioning technique as the Pending Posting panel below it. */}
-            <div className="p-3 bg-white border rounded-xl text-sm" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="font-semibold text-slate-700 text-xs uppercase tracking-wider mb-2">Edit Scope</div>
-              <div className="flex flex-col gap-1.5">
-                <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="purchase-edit-scope"
-                    checked={editScope === 'master'}
-                    onChange={() => setEditScope('master')}
-                  />
-                  Master
-                </label>
-                <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="purchase-edit-scope"
-                    checked={editScope === 'detail'}
-                    onChange={() => setEditScope('detail')}
-                  />
-                  Detail
-                </label>
-              </div>
-            </div>
-
             {(unpostedPurchases.length > 0 || postAllResult) && (
             <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
               <div className="flex items-center justify-between gap-2 mb-1">

@@ -428,7 +428,7 @@ export default function EmployeeSetupPage() {
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}
             onKeyDown={e => { if (e.key === 'Escape') { (handleCloseModal)(); } }}
             tabIndex={-1}>
-            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
                 <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
                   <Settings size={18} className="text-[#B08D57]" />
@@ -602,7 +602,7 @@ export default function EmployeeSetupPage() {
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={() => setReactivatePrompt(null)}
             onKeyDown={e => { if (e.key === 'Escape') { (() => setReactivatePrompt(null))(); } }}
             tabIndex={-1}>
-            <div className="bg-white rounded-2xl border-2 border-amber-400 shadow-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+            <div className="bg-white rounded-2xl border-2 border-amber-400 shadow-xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
               <h3 className="font-lora font-bold text-base text-slate-900 mb-2 flex items-center gap-2">
                 <RotateCcw size={18} className="text-amber-500" /> Inactive Employee Found
               </h3>

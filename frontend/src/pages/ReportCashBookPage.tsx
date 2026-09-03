@@ -4,7 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Search, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { formatDate } from '@/lib/utils';
+import { formatDate, formatDateTime } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { CashBookResult } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
@@ -43,7 +43,10 @@ export function ReportCashBookContent() {
   const [loading, setLoading] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
-  const periodLabel = filterBy === 'date' ? specificDate : `${MONTHS[filterMonth]} ${filterYear}`;
+  // formatDate, not the raw value: specificDate is the ISO string the <input type="date"> holds,
+  // so the printed header read "Period: 2026-08-31" while every other date on the page is
+  // dd/mm/yyyy.
+  const periodLabel = filterBy === 'date' ? formatDate(specificDate) : `${MONTHS[filterMonth]} ${filterYear}`;
 
   // Computed from the server's own totals, not the filtered view: a search box narrowing the rows
   // must not make a balanced book look broken.
@@ -236,7 +239,7 @@ export function ReportCashBookContent() {
 
         <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDateTime(new Date())}</div>
         </div>
       </div>
     );

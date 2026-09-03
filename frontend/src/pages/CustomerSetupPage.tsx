@@ -5,7 +5,7 @@ import OpeningBalanceFields from '@/components/OpeningBalanceFields';
 import { Plus, Search, MapPin, Edit2, ArrowLeft, Settings, X, UserCheck, Eye } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
 import DuplicateNamePromptModal from '@/components/DuplicateNamePromptModal';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
@@ -206,7 +206,7 @@ export default function CustomerSetupPage() {
     const headers = ['Date', 'Type', 'Ref No', 'Narration', 'Debit (PKR)', 'Credit (PKR)', 'Balance (PKR)'];
     const rows = [
       [fromDate ? `Before ${formatDate(fromDate)}` : '---', 'Opening Balance', '-', 'Opening Balance brought forward', '0', '0', ledger?.opening_balance || 0],
-      ...filteredLedgerRows.map(r => [r.date, r.type, r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, r.narration || '', r.debit, r.credit, r.balance]),
+      ...filteredLedgerRows.map(r => [formatDate(r.date), r.type, r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, r.narration || '', r.debit, r.credit, r.balance]),
       ['Total', '', '', '', ledger?.total_debit || 0, ledger?.total_credit || 0, ledger?.closing_balance || 0]
     ];
     exportRowsToExcel(`customer-ledger-${selectedCustomer.name.toLowerCase().replace(/\s+/g, '-')}`, headers, rows);
@@ -326,7 +326,7 @@ export default function CustomerSetupPage() {
 
         <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
           <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+          <div>Printed: {formatDateTime(new Date())}</div>
         </div>
       </div>
     );
@@ -577,7 +577,7 @@ export default function CustomerSetupPage() {
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}
             onKeyDown={e => { if (e.key === 'Escape') { (handleCloseModal)(); } }}
             tabIndex={-1}>
-            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
                 <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
                   <Settings size={18} className="text-[#B08D57]" />

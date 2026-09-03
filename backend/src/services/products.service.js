@@ -127,7 +127,12 @@ async function createBatch(payload) {
     const existing = await repository.findByNameAndVendor(name, mfgVendorId);
     if (existing) {
       if (existing.is_active) {
-        throw ApiError.conflict('A product with this name already exists for this vendor', 'DUPLICATE_NAME', { index });
+        // article_id/name included so the caller can act on the collision rather than only report
+        // it — Product Setup uses it to add a new COLOUR to the existing article, which is the
+        // normal reason the same name is entered twice (INACTIVE_DUPLICATE below already did this).
+        throw ApiError.conflict('A product with this name already exists for this vendor', 'DUPLICATE_NAME', {
+          index, article_id: existing.article_id, name: existing.name,
+        });
       }
       throw ApiError.conflict(
         'An inactive product with this name already exists for this vendor',

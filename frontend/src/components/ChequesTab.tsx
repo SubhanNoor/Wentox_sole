@@ -1,7 +1,7 @@
 import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import { todayISO } from '@/lib/cheques';
-import { formatDate } from '@/lib/utils';
+import { formatDate, formatDateTime } from '@/lib/utils';
 import { Search, AlertTriangle, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -363,7 +363,7 @@ export default function ChequesTab() {
 
       <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
         <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-        <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        <div>Printed: {formatDateTime(new Date())}</div>
       </div>
     </div>
   );
@@ -572,7 +572,7 @@ export default function ChequesTab() {
       {/* ── Dispose dialog ── */}
       {disposingRow && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
+          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp max-h-[90vh] overflow-y-auto">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-1">Issue Cheque</h3>
             <p className="text-xs text-slate-500 mb-4">
               {disposingRow.cheque.cheque_no} &middot; {disposingRow.customerName} &middot; {formatCurrency(disposingRow.cheque.receipt_amount ?? 0)}
@@ -711,7 +711,7 @@ export default function ChequesTab() {
       {/* ── Bounce confirmation ── */}
       {bouncingCheque && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp max-h-[90vh] overflow-y-auto">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
               <AlertTriangle size={18} className="text-rose-600" /> Mark Cheque Bounced
             </h3>
@@ -756,7 +756,7 @@ export default function ChequesTab() {
       {/* ── Return-to-sender confirmation ── */}
       {returningCheque && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp">
+          <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp max-h-[90vh] overflow-y-auto">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
               <AlertTriangle size={18} className="text-slate-600" /> Return Cheque to Sender
             </h3>

@@ -25,6 +25,7 @@ import type {
   RegionRow, CityRow, SaleBillRow, SaleBillCreateInput, SaleBillItemInput, StockRow,
   DraftSaleBillRow, ConfirmAllResult, BusinessAccountRow
 } from '@/lib/api';
+import EditScopeRadios from '@/components/EditScopeRadios';
 
 interface UiItem {
   uid: string;
@@ -1630,45 +1631,15 @@ const nextSystemBillNo = useMemo(
 
         <form onSubmit={e => e.preventDefault()} className={activeTab === 'bill' ? 'block' : 'hidden'}>
 
-        {/* Master/Detail edit-scope radio — a small vertical widget on the LEFT side of the page,
-            deliberately outside the toolbar row (the toolbar's own Edit button is unchanged; this
-            just decides what THAT click actually unlocks — see editScope/masterFieldsLocked/
-            detailFieldsLocked above). Positioned the same way every sibling voucher page anchors
-            its own left-side panel (e.g. SaleReturnPage's "Pending Posting" aside): `absolute`,
-            anchored via `right: calc(100% + gap)` to this wrapper's own left edge so it can never
-            affect the card's width, shown only from `2xl` up where there's real margin for it.
-            Always enabled (not gated on isViewMode/mode) so a scope can be picked before Edit is
-            even clicked. Per the user, 2026-08-31.
-        */}
-        <aside
-          className="hidden 2xl:block absolute top-0 w-64 space-y-3"
-          style={{ right: 'calc(100% + 24px)' }}
-          data-no-print
-        >
-          <div className="p-3 bg-white border rounded-xl text-sm" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="font-semibold text-slate-700 text-xs uppercase tracking-wider mb-2">Edit Scope</div>
-            <div className="flex flex-col gap-1.5">
-              <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
-                <input
-                  type="radio"
-                  name="sale-bill-edit-scope"
-                  checked={editScope === 'master'}
-                  onChange={() => setEditScope('master')}
-                />
-                Master
-              </label>
-              <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
-                <input
-                  type="radio"
-                  name="sale-bill-edit-scope"
-                  checked={editScope === 'detail'}
-                  onChange={() => setEditScope('detail')}
-                />
-                Detail
-              </label>
-            </div>
-          </div>
-        </aside>
+        {/* Master/Detail edit-scope — which half of the bill the toolbar's Edit button actually
+            unlocks (see editScope/masterFieldsLocked/detailFieldsLocked above); the toolbar's own
+            Edit button is unchanged, this just narrows what that click reaches. Two bare radios
+            parked in the margin just left of the toolbar's New button, outside the card:
+            absolute, so the 1200px card never moves or shrinks, and behind no width gate — the
+            old gutter panel was gated on `2xl` and vanished entirely at 90% zoom (per the user,
+            2026-09-03). Always enabled so a
+            scope can be picked before Edit is even clicked (per the user, 2026-08-31). */}
+        <EditScopeRadios name="sale-bill-edit-scope" value={editScope} onChange={setEditScope} />
 
         {/* Banner Messages */}
         {/* Floated into the right-hand gutter, not rendered inline: a message used to push the

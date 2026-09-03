@@ -184,7 +184,7 @@ async function insertLines(transaction, stockVoucherId, lines) {
       stockVoucherId: { type: sql.Int, value: stockVoucherId },
       lineNo: { type: sql.Int, value: index + 1 },
       variantId: { type: sql.Int, value: line.variant_id },
-      cartons: { type: sql.Int, value: line.cartons },
+      cartons: { type: sql.Decimal(12, 1), value: line.cartons },
       pairs: { type: sql.Int, value: line.pairs },
       rate: { type: sql.Decimal(18, 4), value: line.rate },
       discountPct: { type: sql.Decimal(9, 4), value: line.discount_pct },

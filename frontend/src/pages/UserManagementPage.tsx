@@ -309,7 +309,7 @@ export default function UserManagementPage() {
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs" onClick={closeResetPassword}
             onKeyDown={e => { if (e.key === 'Escape') { (closeResetPassword)(); } }}
             tabIndex={-1}>
-            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-sm overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-sm max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
                 <h3 className="font-lora font-bold text-lg text-slate-900 flex items-center gap-2">
                   <KeyRound size={18} className="text-[#B08D57]" /> Reset Password

@@ -46,8 +46,12 @@ export default function ConfirmModal({
         if (e.key === 'Enter' && !busy) { e.preventDefault(); e.stopPropagation(); onConfirm(); }
       }}
     >
+      {/* Deliberately NOT `.card-white`: that class carries a global `max-width: 100%` declared
+          after Tailwind's utilities in index.css, so it beat `max-w-md` and the dialog stretched
+          the full width of the viewport (per the user, 2026-09-03). Its background/border/radius
+          are set here anyway, so the class only ever contributed the bug. */}
       <div
-        className="card-white w-full max-w-md rounded-xl border shadow-xl animate-in zoom-in-95 duration-200"
+        className="w-full max-w-md rounded-xl border shadow-xl overflow-hidden animate-in zoom-in-95 duration-200"
         style={{ borderColor: 'var(--border-color)', background: '#ffffff' }}
       >
         <div className="flex items-start gap-3 p-5 pb-3">

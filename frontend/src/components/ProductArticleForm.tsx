@@ -6,6 +6,10 @@ import SearchableSelect from '@/components/SearchableSelect';
 import type { VendorRow } from '@/lib/api';
 
 export interface ArticleFormValues {
+  /** Set once the article exists in the database. Absent while it is still only a form. Product
+   *  Setup saves on Enter now, so a row in the list below the form is already a real record and
+   *  this is what lets a later edit update it rather than create a second one. */
+  articleId?: number;
   name: string;
   color: string;
   vendorId: string;
@@ -84,16 +88,16 @@ export default function ProductArticleForm({
     onChange({ costs: { ...values.costs, [key]: value } });
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-2">
       {/* Basic Details */}
-      <div className="p-3 bg-slate-50 rounded-xl border flex flex-col gap-3" style={{ borderColor: 'var(--border-color)' }}>
-        <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-1.5">
-          <Settings size={15} className="text-[#B08D57]" /> Basic Product Details
+      <div className="p-2 bg-slate-50 rounded-lg border flex flex-col gap-1.5" style={{ borderColor: 'var(--border-color)' }}>
+        <div className="text-[10px] font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-1">
+          <Settings size={13} className="text-[#B08D57]" /> Basic Product Details
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-x-2 gap-y-1.5">
           {leadingSlot}
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Product Article Name</label>
+            <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">Product Article Name</label>
             <input
               ref={nameInputRef}
               type="text"
@@ -101,13 +105,13 @@ export default function ProductArticleForm({
               value={values.name}
               onChange={e => onChange({ name: e.target.value })}
               placeholder="e.g. F-751 Leather Sole"
-              className={`soleria-input font-semibold ${errors?.name ? 'border-rose-400' : ''}`}
+              className={`soleria-input soleria-input-compact font-semibold ${errors?.name ? 'border-rose-400' : ''}`}
             />
             {errors?.name && <p className="text-[10px] text-rose-600 mt-0.5 font-semibold">{errors.name}</p>}
           </div>
           {categorySlot}
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">
+            <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">
               {existingColors ? 'Colors' : 'Color'}
             </label>
             {existingColors && (
@@ -144,7 +148,7 @@ export default function ProductArticleForm({
                   if (e.key === 'Enter') { e.preventDefault(); onAddColor(); }
                 }) : undefined}
                 placeholder={existingColors ? 'Type a new color, then + Add...' : 'e.g. Black, White, Tan'}
-                className="soleria-input font-semibold flex-1"
+                className="soleria-input soleria-input-compact font-semibold flex-1"
               />
               {existingColors && onAddColor && (
                 <button
@@ -159,9 +163,9 @@ export default function ProductArticleForm({
             </div>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Vendor Partner</label>
+            <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">Vendor Partner</label>
             {vendorLocked ? (
-              <div className="soleria-input bg-slate-100 text-slate-500 font-semibold flex items-center">
+              <div className="soleria-input soleria-input-compact bg-slate-100 text-slate-500 font-semibold flex items-center">
                 {vendorLockedLabel || '—'}
                 <span className="ml-2 text-[10px] text-slate-400 normal-case font-normal">(fixed after creation)</span>
               </div>
@@ -182,41 +186,43 @@ export default function ProductArticleForm({
             )}
           </div>
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Packing (Pairs/Carton)</label>
+            <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">Packing (Pairs/Carton)</label>
             <input
               type="number"
               disabled={disabled}
               value={values.packing === 0 ? '' : values.packing}
               placeholder="0"
               onChange={e => onChange({ packing: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
-              className={`soleria-input font-semibold ${errors?.packing ? 'border-rose-400' : ''}`}
+              className={`soleria-input soleria-input-compact font-semibold ${errors?.packing ? 'border-rose-400' : ''}`}
             />
             {errors?.packing && <p className="text-[10px] text-rose-600 mt-0.5 font-semibold">{errors.packing}</p>}
           </div>
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Sale Price (Rs)</label>
+            <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">Sale Price (Rs)</label>
             <input
               type="number"
               disabled={disabled}
               value={values.salePrice === 0 ? '' : values.salePrice}
               placeholder="0"
               onChange={e => onChange({ salePrice: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
-              className="soleria-input font-semibold text-slate-800"
+              className="soleria-input soleria-input-compact font-semibold text-slate-800"
             />
-            <p className="text-[10px] text-slate-400 mt-0.5">Used as the default rate when this article is sold</p>
+            
           </div>
         </div>
       </div>
 
       {/* Manufacturing Breakdown */}
-      <div className="p-3 bg-slate-50 rounded-xl border flex flex-col gap-2" style={{ borderColor: 'var(--border-color)' }}>
-        <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-1.5">
-          <Hammer size={15} className="text-[#B08D57]" /> Production / Manufacturing Cost Breakdown (PKR)
+      <div className="p-2 bg-slate-50 rounded-lg border flex flex-col gap-1.5" style={{ borderColor: 'var(--border-color)' }}>
+        <div className="text-[10px] font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5 border-b pb-1">
+          <Hammer size={13} className="text-[#B08D57]" /> Production / Manufacturing Cost Breakdown (PKR)
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        {/* Six across on a wide screen, so the 12 stages take two rows rather than three and the
+            article list below stays on screen (per the user, 2026-09-03). */}
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-x-2 gap-y-1.5">
           {COST_FIELDS.map((field, idx) => (
             <div key={field.key}>
-              <label className="block text-xs text-slate-600 mb-0.5">{field.label}</label>
+              <label className="block text-[10px] text-slate-500 uppercase tracking-wide mb-0.5">{field.label}</label>
               <input
                 type="number"
                 disabled={disabled}
@@ -224,7 +230,7 @@ export default function ProductArticleForm({
                 placeholder="0"
                 onChange={e => setCost(field.key, e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
                 onKeyDown={idx === COST_FIELDS.length - 1 ? onLastFieldKeyDown : undefined}
-                className="soleria-input text-xs font-semibold"
+                className="soleria-input soleria-input-compact text-xs font-semibold"
               />
             </div>
           ))}

@@ -489,7 +489,7 @@ export default function SalaryRunPage() {
           rows too (editRun refuses those), since viewing doesn't touch the record. */}
       {viewingRun && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-2xl mx-4 animate-scaleUp">
+          <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-2xl mx-4 animate-scaleUp max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between mb-1">
               <div>
                 <h3 className="font-lora font-bold text-lg text-slate-800">{monthLabel(viewingRun.period_month)}</h3>

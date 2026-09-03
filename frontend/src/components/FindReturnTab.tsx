@@ -4,7 +4,7 @@ import * as api from '@/lib/api';
 import type { SaleReturnRow, SaleReturnItemRow, CustomerRow, SubCustomerRow, ProductRow } from '@/lib/api';
 import { Search, Printer, Calendar, FileText, User, Edit2, Package, Layers, RotateCcw, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate, formatDate } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
@@ -249,7 +249,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
 
       <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
         <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-        <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        <div>Printed: {formatDateTime(new Date())}</div>
       </div>
     </div>
   );

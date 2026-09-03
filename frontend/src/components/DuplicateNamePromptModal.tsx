@@ -54,7 +54,7 @@ export default function DuplicateNamePromptModal({
       onKeyDown={e => { if (e.key === 'Escape') onCancel(); }}
       tabIndex={-1}
     >
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full max-h-[90vh] overflow-y-auto">
         <div className="bg-[#111c2a] p-5 text-white flex items-center justify-between border-b border-[#B08D57]/40">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-xl bg-[#B08D57]/20 border border-[#B08D57]/40 text-[#B08D57]">

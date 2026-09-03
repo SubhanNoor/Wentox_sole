@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Search, Users, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { formatDate, getTodayDate, getThreeMonthsAgoDate } from '@/lib/utils';
+import { formatDate, getTodayDate, getThreeMonthsAgoDate, formatDateTime } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { SaleBillRow, CustomerRow } from '@/lib/api';
@@ -160,7 +160,7 @@ export default function SearchCustomerPage() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000', fontSize: '9px', fontFamily: 'monospace', color: '#333' }}>
         <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-        <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        <div>Printed: {formatDateTime(new Date())}</div>
       </div>
     </div>
   );

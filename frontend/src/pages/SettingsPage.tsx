@@ -3,6 +3,7 @@ import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
 import { Save, Lock, User, RefreshCw, Download, CheckCircle2, AlertTriangle, ShieldCheck, Cpu, Sparkles, Server, DatabaseBackup, HardDrive, FolderOpen, Trash2 } from 'lucide-react';
+import { formatDateTime } from '@/lib/utils';
 
 type SettingsTab = 'credentials' | 'backup' | 'updates' | 'danger';
 type UpdateStatus = 'idle' | 'checking' | 'no-internet' | 'error' | 'up-to-date' | 'update-available' | 'downloading' | 'installed';
@@ -160,7 +161,7 @@ export default function SettingsPage() {
     }
     const statusRes = await window.api.backup.status();
     if (statusRes.ok && statusRes.data?.lastSyncAt) {
-      setBackupLastSync(new Date(statusRes.data.lastSyncAt).toLocaleString());
+      setBackupLastSync(formatDateTime(statusRes.data.lastSyncAt));
     }
     setBackupMessage('Backup updated — it now matches the live database.');
   };
@@ -183,10 +184,10 @@ export default function SettingsPage() {
     if (!window.api?.backup) return;
     const res = await window.api.backup.status();
     if (!res.ok || !res.data) return;
-    setBackupLastSync(res.data.lastSyncAt ? new Date(res.data.lastSyncAt).toLocaleString() : null);
+    setBackupLastSync(res.data.lastSyncAt ? formatDateTime(res.data.lastSyncAt) : null);
     setExternalFolder(res.data.externalFolder);
     setExternalConnected(res.data.externalDriveConnected);
-    setExternalLastAt(res.data.lastExternalAt ? new Date(res.data.lastExternalAt).toLocaleString() : null);
+    setExternalLastAt(res.data.lastExternalAt ? formatDateTime(res.data.lastExternalAt) : null);
     setExternalSize(res.data.lastExternalSizeBytes);
   };
 

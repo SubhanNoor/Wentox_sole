@@ -6,6 +6,7 @@ const productsService = require('./products.service');
 const vendorsService = require('./vendors.service');
 const materialsRepository = require('../repositories/materials.repository');
 const ApiError = require('../errors/ApiError');
+const { assertValidCartons, pairsFor } = require('../utils/cartons');
 
 // Resolves a variant either directly (variant_id) or by article_id+color (creating the color the
 // first time it's logged, per UC-28 — see productColors.repository.js's own comment on this).
@@ -27,7 +28,14 @@ async function logProduction(payload, userId) {
 
   const variant = await resolveVariant(payload);
   const packing = variant.packing ?? (await productsService.getById(variant.article_id)).packing;
-  const qtyPairs = payload.input_unit === 'CARTONS' ? payload.input_qty * packing : payload.input_qty;
+  let qtyPairs;
+  if (payload.input_unit === 'CARTONS') {
+    // Same rule as a sale line: the carton figure may be decimal, the pairs it comes to may not.
+    assertValidCartons(payload.input_qty, packing, 'this movement');
+    qtyPairs = pairsFor(payload.input_qty, packing);
+  } else {
+    qtyPairs = payload.input_qty;
+  }
 
   const movementId = await repository.insertMovement({
     variant_id: variant.variant_id,
