@@ -3,7 +3,7 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Search, ChevronDown, ChevronRight, LayoutList, X, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime, formatCartons } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { StockRow, VendorStockRow, ProductLedgerResult, StockMovementRow, StockMovementType, CategoryRow, VendorRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
@@ -296,7 +296,7 @@ export default function ReportStockPage() {
       exportRowsToExcel('product-ledger', headers, rows);
     } else {
       const headers = ['Date', 'Product Code', 'Article Name', 'Color', 'Category', 'Packing', 'Qty Added', 'Unit', 'Total Pairs'];
-      const rows = filteredLogs.map(log => [log.movement_date, log.article_code, log.article_name, log.color, log.category_name, log.packing ?? '', log.input_qty ?? '', log.input_unit ?? '', log.qty_pairs]);
+      const rows = filteredLogs.map(log => [log.movement_date, log.article_code, log.article_name, log.color, log.category_name, log.packing ?? '', log.input_qty == null ? '' : formatCartons(log.input_qty), log.input_unit ?? '', log.qty_pairs]);
       exportRowsToExcel(`production-${activeStockTab}`, headers, rows);
     }
   };
@@ -489,7 +489,7 @@ export default function ReportStockPage() {
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{log.color}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{log.category_name}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{log.packing}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{log.input_qty}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCartons(log.input_qty)}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textTransform: 'capitalize' }}>{log.input_unit?.toLowerCase()}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{log.qty_pairs.toLocaleString()}</td>
                   </tr>
@@ -498,7 +498,7 @@ export default function ReportStockPage() {
               <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
                 <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>PRODUCTION TOTAL</td>
                 <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>
-                  {totalProductionCartons > 0 && `${totalProductionCartons} ctn`}
+                  {totalProductionCartons > 0 && `${formatCartons(totalProductionCartons)} ctn`}
                   {totalProductionCartons > 0 && totalProductionPairsDirect > 0 && ' + '}
                   {totalProductionPairsDirect > 0 && `${totalProductionPairsDirect} prs`}
                   {totalProductionCartons === 0 && totalProductionPairsDirect === 0 && '-'}
@@ -1071,7 +1071,7 @@ export default function ReportStockPage() {
                           </td>
                           <td className="p-3 text-slate-500">{log.category_name}</td>
                           <td className="p-3 text-center text-slate-600 font-medium">{log.packing}</td>
-                          <td className="p-3 text-right text-slate-700 font-bold">{log.input_qty}</td>
+                          <td className="p-3 text-right text-slate-700 font-bold">{formatCartons(log.input_qty)}</td>
                           <td className="p-3 text-right text-slate-500 capitalize">{log.input_unit?.toLowerCase()}</td>
                           <td className="p-3 text-right text-slate-900 font-bold">{log.qty_pairs.toLocaleString()}</td>
                         </tr>
@@ -1082,7 +1082,7 @@ export default function ReportStockPage() {
                     <tr className="bg-slate-50 font-bold border-t-2 border-b text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
                       <td colSpan={7} className="p-4 text-left font-lora">PRODUCTION TOTAL</td>
                       <td className="p-4 text-right text-slate-800 font-bold">
-                        {totalProductionCartons > 0 && `${totalProductionCartons} ctn`}
+                        {totalProductionCartons > 0 && `${formatCartons(totalProductionCartons)} ctn`}
                         {totalProductionCartons > 0 && totalProductionPairsDirect > 0 && ' + '}
                         {totalProductionPairsDirect > 0 && `${totalProductionPairsDirect} prs`}
                         {totalProductionCartons === 0 && totalProductionPairsDirect === 0 && '-'}
@@ -1266,7 +1266,7 @@ export default function ReportStockPage() {
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{log.color}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{log.category_name}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{log.packing}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{log.input_qty}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{formatCartons(log.input_qty)}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textTransform: 'capitalize' }}>{log.input_unit?.toLowerCase()}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold' }}>{log.qty_pairs.toLocaleString()}</td>
                   </tr>
@@ -1274,7 +1274,7 @@ export default function ReportStockPage() {
                 <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2', fontSize: '12px' }}>
                   <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', textTransform: 'uppercase' }}>Report Total:</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right' }}>
-                    {totalProductionCartons > 0 && `${totalProductionCartons} ctn`}
+                    {totalProductionCartons > 0 && `${formatCartons(totalProductionCartons)} ctn`}
                     {totalProductionCartons > 0 && totalProductionPairsDirect > 0 && ' + '}
                     {totalProductionPairsDirect > 0 && `${totalProductionPairsDirect} prs`}
                     {totalProductionCartons === 0 && totalProductionPairsDirect === 0 && '-'}

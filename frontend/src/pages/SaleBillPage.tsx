@@ -11,7 +11,7 @@ import {
   PackageCheck, ChevronDown
 } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
-import { formatDate, getTodayDate, toDateInputValue } from '@/lib/utils';
+import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem } from '@/lib/utils';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
@@ -26,6 +26,7 @@ import type {
   DraftSaleBillRow, ConfirmAllResult, BusinessAccountRow
 } from '@/lib/api';
 import EditScopeRadios from '@/components/EditScopeRadios';
+import CartonsInput from '@/components/CartonsInput';
 
 interface UiItem {
   uid: string;
@@ -834,6 +835,8 @@ const nextSystemBillNo = useMemo(
       const it = items[i];
       if (!it.variantId) { setErrorMsg(`Article/color is required at row ${i + 1}.`); return null; }
       if (it.cartons <= 0) { setErrorMsg(`Cartons must be greater than 0 at row ${i + 1}.`); return null; }
+      const rowCartonsIssue = cartonsProblem(it.cartons, it.packing);
+      if (rowCartonsIssue) { setErrorMsg(`Row ${i + 1}: ${rowCartonsIssue}`); return null; }
       if (it.rate <= 0) { setErrorMsg(`Rate must be greater than 0 at row ${i + 1}.`); return null; }
     }
 
@@ -1213,9 +1216,14 @@ const nextSystemBillNo = useMemo(
       return;
     }
     if (entry.cartons <= 0) { setErrorMsg('Cartons must be greater than 0.'); return; }
+    // Mirrors the server's rule (backend/src/utils/cartons.js): cartons is DECIMAL(12,1), so a
+    // finer figure would be rounded on save, and pairs stay whole because a pair is indivisible.
+    // Said here so the operator finds out while the strip is still open, not on save.
+    const cartonsIssue = cartonsProblem(entry.cartons, entry.packing);
+    if (cartonsIssue) { setErrorMsg(cartonsIssue); return; }
     if (entry.rate <= 0) { setErrorMsg('Rate must be greater than 0.'); return; }
     if (entryStockCheck) {
-      setErrorMsg(`Cannot add row: ${entryStockCheck.totalReq} cartons requested exceeds ${entryStockCheck.available} in stock.`);
+      setErrorMsg(`Cannot add row: ${formatCartons(entryStockCheck.totalReq)} cartons requested exceeds ${formatCartons(entryStockCheck.available)} in stock.`);
       return;
     }
     setErrorMsg('');
@@ -1511,7 +1519,7 @@ const nextSystemBillNo = useMemo(
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{item.label || 'N/A'}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.packing}</td>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.cartons}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{formatCartons(item.cartons)}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.pairs}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{item.rate.toLocaleString()}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{discountText}</td>
@@ -1524,7 +1532,7 @@ const nextSystemBillNo = useMemo(
             <tr style={{ fontWeight: 'bold', backgroundColor: '#fafafa' }}>
               <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>Total Sum:</td>
               <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>-</td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{totalCartons}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{formatCartons(totalCartons)}</td>
               <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{totalPairs}</td>
               <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>Gross Value:</td>
               <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{itemsTotalValue.toLocaleString()}</td>
@@ -1866,7 +1874,7 @@ const nextSystemBillNo = useMemo(
               type="button"
               onClick={() => {
                 const headers = ['Article', 'Packing', 'Cartons', 'Pairs', 'Rate', 'D%', 'D. Value', 'Total Value'];
-                const rows = items.map(it => [it.label, it.packing, it.cartons, it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
+                const rows = items.map(it => [it.label, it.packing, formatCartons(it.cartons), it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
                 exportRowsToExcel(`sale-bill-${billNo || billId}`, headers, rows);
               }}
               disabled={mode !== 'view' || billId == null}
@@ -2327,7 +2335,7 @@ const nextSystemBillNo = useMemo(
                       return {
                         value: String(p.article_id),
                         label: `${p.code} — ${p.name}`,
-                        sublabel: agg ? `Stock: ${agg.cartons} ctn / ${agg.pairs} prs` : undefined
+                        sublabel: agg ? `Stock: ${formatCartons(agg.cartons)} ctn / ${agg.pairs} prs` : undefined
                       };
                     })}
                     value={entry.articleId != null ? String(entry.articleId) : ''}
@@ -2365,19 +2373,21 @@ const nextSystemBillNo = useMemo(
                 </div>
                 <div className="flex flex-col gap-0.5">
                   <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Stock In Hand</label>
-                  <input type="text" value={entryStockInHand ? `${entryStockInHand.cartons} Ctn / ${entryStockInHand.pairs} Prs` : '-'} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 text-center" />
+                  <input type="text" value={entryStockInHand ? `${formatCartons(entryStockInHand.cartons)} Ctn / ${entryStockInHand.pairs} Prs` : '-'} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 text-center" />
                 </div>
               </div>
             </div>
             <div className="grid grid-cols-3 md:grid-cols-6 gap-2 items-end">
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Cartons <span className="text-red-500 font-bold">*</span></label>
-                <input
-                  type="number"
-                  value={entry.cartons || ''}
-                  min={1}
+                {/* Part cartons are real stock (per the user, 2026-09-02): one decimal place, so
+                    0.5 / 1.5 / 10.5 are all enterable. parseFloat, not parseInt — parseInt('0.5')
+                    is 0, which silently ate the decimal the operator typed. */}
+                <CartonsInput
+                  value={entry.cartons}
+                  min={0.1}
                   disabled={detailFieldsLocked}
-                  onChange={e => updateEntryNumericField('cartons', parseInt(e.target.value) || 0)}
+                  onChange={v => updateEntryNumericField('cartons', v)}
                   className={`soleria-input soleria-input-compact text-center font-mono ${entryStockCheck ? 'border-2 border-red-500 bg-rose-50 text-red-700 font-bold' : ''}`}
                 />
               </div>
@@ -2428,7 +2438,7 @@ const nextSystemBillNo = useMemo(
             {entryStockCheck && (
               <div className="mt-1.5 text-[11px] font-bold text-red-600 flex items-center gap-1">
                 <AlertTriangle size={12} className="shrink-0" />
-                <span>Exceeds Stock! {entryStockCheck.totalReq} cartons requested, only {entryStockCheck.available} in hand — row will not be added.</span>
+                <span>Exceeds Stock! {formatCartons(entryStockCheck.totalReq)} cartons requested, only {formatCartons(entryStockCheck.available)} in hand — row will not be added.</span>
               </div>
             )}
             {/* Editing banner, per pages_design.md §4 — the row stays visible (highlighted) in
@@ -2478,7 +2488,7 @@ const nextSystemBillNo = useMemo(
                   >
                     <td className="p-1 pl-3 font-semibold text-slate-800 text-[13px]">{item.label || 'N/A'}</td>
                     <td className="p-1 text-center font-mono text-sm text-slate-600">{item.packing || '-'}</td>
-                    <td className="p-1 text-center font-mono text-sm text-slate-700">{item.cartons}</td>
+                    <td className="p-1 text-center font-mono text-sm text-slate-700">{formatCartons(item.cartons)}</td>
                     <td className="p-1 text-center font-mono text-sm font-semibold text-slate-700">{item.pairs || '-'}</td>
                     <td className="p-1 text-right font-mono text-sm text-slate-700">{item.rate.toLocaleString()}</td>
                     <td className="p-1 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(item.value)}</td>
@@ -2516,7 +2526,7 @@ const nextSystemBillNo = useMemo(
             <div className="flex flex-wrap items-end gap-3">
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cartons</label>
-                <input type="text" value={totalCartons} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-center font-mono font-semibold" style={{ width: '90px' }} />
+                <input type="text" value={formatCartons(totalCartons)} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-center font-mono font-semibold" style={{ width: '90px' }} />
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Pairs</label>

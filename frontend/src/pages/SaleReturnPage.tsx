@@ -11,7 +11,7 @@ import {
   PackageCheck, ChevronDown
 } from 'lucide-react';
 import { exportToPDF, exportRowsToExcel } from '@/lib/export';
-import { formatDate, getTodayDate, toDateInputValue } from '@/lib/utils';
+import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem } from '@/lib/utils';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
@@ -26,6 +26,7 @@ import type {
   DraftSaleReturnRow, ConfirmAllResult, SaleBillRow, SaleBillItemRow
 } from '@/lib/api';
 import EditScopeRadios from '@/components/EditScopeRadios';
+import CartonsInput from '@/components/CartonsInput';
 
 interface UiItem {
   uid: string;
@@ -598,7 +599,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       .reduce((s, it) => s + it.cartons, 0);
     const remaining = sourceItem.cartons - alreadyUsed;
     if (cartons > remaining) {
-      return `Only ${remaining} carton(s) left to return (sold ${sourceItem.cartons}, already used ${alreadyUsed}).`;
+      return `Only ${formatCartons(remaining)} carton(s) left to return (sold ${formatCartons(sourceItem.cartons)}, already used ${formatCartons(alreadyUsed)}).`;
     }
     return null;
   }
@@ -769,6 +770,8 @@ const nextSystemReturnNo = useMemo(
       const it = items[i];
       if (!it.variantId) { setErrorMsg(`Article/color is required at row ${i + 1}.`); return null; }
       if (it.cartons <= 0) { setErrorMsg(`Cartons must be greater than 0 at row ${i + 1}.`); return null; }
+      const rowCartonsIssue = cartonsProblem(it.cartons, it.packing);
+      if (rowCartonsIssue) { setErrorMsg(`Row ${i + 1}: ${rowCartonsIssue}`); return null; }
       if (it.rate <= 0) { setErrorMsg(`Rate must be greater than 0 at row ${i + 1}.`); return null; }
       // Linked to an original bill (manual-matched or explicitly picked) — every row must
       // actually be returnable against it: same article/color, same rate, within what's left.
@@ -973,7 +976,6 @@ const nextSystemReturnNo = useMemo(
 
   // Pending Posting sidebar (every draft — no password to open/edit, same convention drafts
   // always had; only editing an already-POSTED return is password-gated).
-  const [draftActionBusyId, setDraftActionBusyId] = useState<number | null>(null);
   const [postAllDraftsBusy, setPostAllDraftsBusy] = useState(false);
   const [postAllDraftsResult, setPostAllDraftsResult] = useState<ConfirmAllResult | null>(null);
 
@@ -1034,34 +1036,8 @@ const nextSystemReturnNo = useMemo(
     setErrorMsg('');
   };
 
-  const handleOpenDraftRow = (d: DraftSaleReturnRow) => {
-    loadDraftIntoForm(d);
-  };
 
-  const handleConfirmDraftRow = async (draftId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setDraftActionBusyId(draftId);
-    const res = await api.draftSaleReturns.confirm(draftId);
-    setDraftActionBusyId(null);
-    if (!res.ok) {
-      setErrorMsg('Failed to confirm draft: ' + res.error.message);
-      return;
-    }
-    await loadReturnRow(res.data);
-    setMode('view');
-    setSuccessMsg('Draft confirmed & posted successfully.');
-    setTimeout(() => setSuccessMsg(''), 3000);
-    refreshDrafts();
-  };
 
-  // Password-gated (verified server-side) — deleting a saved-unposted return is destructive with
-  // no reverse-never-erase trail, same guard level as editing an already-posted return.
-  const handleDeleteDraftRow = (draftId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    pendingDeleteReturnId.current = draftId;
-    setPasswordActionType('delete_unposted_return');
-    setIsPasswordModalOpen(true);
-  };
 
   // Post All — every draft awaiting posting, in one action, via the real backend batch endpoint
   // (draftSaleReturns.confirmAll — mirrors draftSaleBills.confirmAll).
@@ -1189,6 +1165,10 @@ const nextSystemReturnNo = useMemo(
       return;
     }
     if (entry.cartons <= 0) { setErrorMsg('Cartons must be greater than 0.'); return; }
+    // Mirrors the server's rule (backend/src/utils/cartons.js): cartons is DECIMAL(12,1), so a
+    // finer figure would be rounded on save, and pairs stay whole because a pair is indivisible.
+    const cartonsIssue = cartonsProblem(entry.cartons, entry.packing);
+    if (cartonsIssue) { setErrorMsg(cartonsIssue); return; }
     if (entry.rate <= 0) { setErrorMsg('Rate must be greater than 0.'); return; }
     if (entryBillError) {
       setErrorMsg(`Cannot add row: ${entryBillError}`);
@@ -1471,7 +1451,7 @@ const nextSystemReturnNo = useMemo(
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{item.label || 'N/A'}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.packing}</td>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.cartons}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{formatCartons(item.cartons)}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.pairs}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{item.rate.toLocaleString()}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{discountText}</td>
@@ -1484,7 +1464,7 @@ const nextSystemReturnNo = useMemo(
             <tr style={{ fontWeight: 'bold', backgroundColor: '#fafafa' }}>
               <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>Total Sum:</td>
               <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>-</td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{totalCartons}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{formatCartons(totalCartons)}</td>
               <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{totalPairs}</td>
               <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>Gross Total Credit:</td>
               <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{itemsTotalValue.toLocaleString()}</td>
@@ -1587,117 +1567,6 @@ const nextSystemReturnNo = useMemo(
             moves, and behind no width gate, so no zoom level can hide them (per the user,
             2026-09-03). */}
         <EditScopeRadios name="sale-return-edit-scope" value={editScope} onChange={setEditScope} />
-
-        {/* Left-side column — anchored `absolute` via `right: calc(100% + gap)` to this wrapper's
-            own left edge (not the viewport or a guessed margin), so it can never affect the
-            card's width/position. Shown only from `2xl` up, since below that there generally
-            isn't enough real margin for it to land in without spilling past the window edge.
-            The Master/Detail radios no longer live here — they sit in the margin
-            beside the toolbar (EditScopeRadios), behind no media query. */}
-        <aside
-          className="hidden 2xl:block absolute top-0 w-64 space-y-3"
-          style={{ right: 'calc(100% + 24px)' }}
-          data-no-print
-        >
-          {/* Saved Drafts — same treatment as SaleBillPage's Pending Posting: a flat vertical
-              list. Clicking a row loads that draft into the form; the small Post/Delete buttons
-              act on that row directly. */}
-          {(drafts.length > 0 || postAllDraftsResult) && (
-          <>
-            <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <span className="font-semibold text-slate-700">Pending Posting</span>
-                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
-                  {drafts.length}
-                </span>
-              </div>
-              <div className="text-xs text-slate-500 mb-3">
-                Every saved-unposted return — click to load, finish, then post.
-              </div>
-              {drafts.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handlePostAllDrafts}
-                  disabled={postAllDraftsBusy}
-                  className="w-full px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                >
-                  {postAllDraftsBusy ? 'Posting…' : `Post All (${drafts.length})`}
-                </button>
-              )}
-
-              {/* Stays on screen until dismissed — a run can post most drafts, and the ones that
-                  failed are the whole point of the message. */}
-              {postAllDraftsResult && (
-                <div className="mt-3 pt-3 border-t border-amber-200">
-                  <p className="text-xs font-semibold text-slate-700">
-                    {postAllDraftsResult.posted.length} of {postAllDraftsResult.attempted} posted
-                    {postAllDraftsResult.failed.length > 0 && ` · ${postAllDraftsResult.failed.length} failed`}
-                  </p>
-                  {postAllDraftsResult.failed.length > 0 && (
-                    <ul className="mt-1.5 space-y-1">
-                      {postAllDraftsResult.failed.map(f => (
-                        <li key={f.draft_id} className="text-xs text-rose-700">
-                          <span className="font-mono font-semibold">{f.bill_no || `#${f.draft_id}`}</span>
-                          {' — '}{f.message}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setPostAllDraftsResult(null)}
-                    className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {drafts.length > 0 && (
-            <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
-              {drafts.map(d => {
-                const custName = customers.find(c => c.customer_id === d.customer_id)?.name || 'Unnamed Customer';
-                const busy = draftActionBusyId === d.draft_id;
-                return (
-                  <li
-                    key={d.draft_id}
-                    onClick={() => handleOpenDraftRow(d)}
-                    className="px-3 py-2.5 text-xs flex items-center justify-between gap-2 cursor-pointer hover:bg-amber-50/60 transition-colors border-b border-slate-100 last:border-b-0"
-                  >
-                    <div className="min-w-0">
-                      <div className="font-mono font-semibold text-slate-700">{d.bill_no || 'No Number'}</div>
-                      <div className="text-slate-400 truncate">{custName}</div>
-                      <div className="text-slate-400">{formatDate(d.return_date)}</div>
-                    </div>
-                    <div className="flex flex-row items-center gap-1 flex-shrink-0">
-                      <button
-                        type="button"
-                        title="Post this draft"
-                        onClick={(e) => handleConfirmDraftRow(d.draft_id, e)}
-                        disabled={busy}
-                        className="p-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                      >
-                        <CheckCircle2 size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        title="Delete this draft (password required)"
-                        onClick={(e) => handleDeleteDraftRow(d.draft_id, e)}
-                        disabled={busy}
-                        className="p-1.5 rounded-md bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-            )}
-          </>
-          )}
-        </aside>
 
         {/* Tab contents (records & find) */}
         <div>
@@ -1884,7 +1753,7 @@ const nextSystemReturnNo = useMemo(
               type="button"
               onClick={() => {
                 const headers = ['Article', 'Packing', 'Cartons', 'Pairs', 'Rate', 'D%', 'D. Value', 'Total Value'];
-                const rows = items.map(it => [it.label, it.packing, it.cartons, it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
+                const rows = items.map(it => [it.label, it.packing, formatCartons(it.cartons), it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
                 exportRowsToExcel(`sale-return-${billNo || returnId}`, headers, rows);
               }}
               disabled={mode !== 'view' || returnId == null}
@@ -1895,6 +1764,26 @@ const nextSystemReturnNo = useMemo(
               <span>Excel</span>
             </button>
           </div>
+
+          {/* Post All's outcome. Was shown inside the left-hand Saved Drafts panel; that panel is
+              gone (per the user, 2026-09-03), so it lands here under the toolbar. A run can post 8
+              of 10, and the two that failed are the whole point — it stays until dismissed. */}
+          {postAllDraftsResult && (
+            <div className="w-full mt-2 pt-2 border-t text-xs" style={{ borderColor: 'var(--border-color)' }}>
+              <p className="font-semibold text-slate-700">
+                {postAllDraftsResult.posted.length} of {postAllDraftsResult.attempted} posted
+                {postAllDraftsResult.failed.length > 0 && ` · ${postAllDraftsResult.failed.length} failed`}
+                <button type="button" onClick={() => setPostAllDraftsResult(null)} className="ml-2 text-slate-500 hover:text-slate-700 font-semibold">Dismiss</button>
+              </p>
+              {postAllDraftsResult.failed.length > 0 && (
+                <ul className="mt-1 space-y-0.5">
+                  {postAllDraftsResult.failed.map((fail, i) => (
+                    <li key={i} className="text-rose-700">{fail.message}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           {mode === 'edit' && (
             <div className="text-sm font-semibold text-slate-500 font-inter">
@@ -2300,12 +2189,13 @@ const nextSystemReturnNo = useMemo(
             <div className="grid grid-cols-3 md:grid-cols-6 gap-2 items-end">
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Cartons <span className="text-red-500 font-bold">*</span></label>
-                <input
-                  type="number"
-                  value={entry.cartons || ''}
-                  min={1}
+                {/* One decimal place — part cartons come back on a return exactly as they go out
+                    (per the user, 2026-09-02). parseFloat, not parseInt: parseInt('0.5') is 0. */}
+                <CartonsInput
+                  value={entry.cartons}
+                  min={0.1}
                   disabled={detailFieldsLocked}
-                  onChange={e => updateEntryNumericField('cartons', parseInt(e.target.value) || 0)}
+                  onChange={v => updateEntryNumericField('cartons', v)}
                   className={`soleria-input soleria-input-compact text-center font-mono ${entryBillError ? 'border-2 border-red-500 bg-rose-50 text-red-700 font-bold' : ''}`}
                 />
               </div>
@@ -2411,7 +2301,7 @@ const nextSystemReturnNo = useMemo(
                   >
                     <td className="p-1 pl-3 font-semibold text-slate-800 text-[13px]">{item.label || 'N/A'}</td>
                     <td className="p-1 text-center font-mono text-sm text-slate-600">{item.packing || '-'}</td>
-                    <td className="p-1 text-center font-mono text-sm text-slate-700">{item.cartons}</td>
+                    <td className="p-1 text-center font-mono text-sm text-slate-700">{formatCartons(item.cartons)}</td>
                     <td className="p-1 text-center font-mono text-sm font-semibold text-slate-700">{item.pairs || '-'}</td>
                     <td className="p-1 text-right font-mono text-sm text-slate-700">{item.rate.toLocaleString()}</td>
                     <td className="p-1 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(item.value)}</td>
@@ -2451,7 +2341,7 @@ const nextSystemReturnNo = useMemo(
             <div className="flex flex-wrap items-end gap-3">
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cartons</label>
-                <input type="text" value={totalCartons} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-center font-mono font-semibold" style={{ width: '90px' }} />
+                <input type="text" value={formatCartons(totalCartons)} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-center font-mono font-semibold" style={{ width: '90px' }} />
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Pairs</label>

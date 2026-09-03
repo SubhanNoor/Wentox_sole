@@ -83,7 +83,6 @@ export default function PurchasePage() {
   const [unpostedPurchases, setUnpostedPurchases] = useState<DraftPurchaseRow[]>([]);
   const [postAllBusy, setPostAllBusy] = useState(false);
   const [postAllResult, setPostAllResult] = useState<ConfirmAllResult | null>(null);
-  const [postingDraftId, setPostingDraftId] = useState<number | null>(null);
 
   const refreshUnposted = useCallback(async () => {
     const res = await api.draftPurchases.list();
@@ -707,44 +706,13 @@ const nextSystemBillNo = useMemo(
     setMode(opts.mode ?? 'edit');
   };
 
-  const handleOpenUnposted = async (draftId: number) => {
-    const res = await api.draftPurchases.get(draftId);
-    if (!res.ok) {
-      setErrorMsg('Failed to load purchase: ' + res.error.message);
-      return;
-    }
-    await loadDraftIntoForm(res.data);
-    setActiveTab('entry');
-  };
 
-  const handlePostOneUnposted = async (draftId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setPostingDraftId(draftId);
-    const res = await api.draftPurchases.confirm(draftId);
-    setPostingDraftId(null);
-    if (!res.ok) {
-      setErrorMsg('Failed to post purchase: ' + res.error.message);
-      return;
-    }
-    setSuccessMsg(`Purchase ${res.data.bill_no || `#${res.data.purchase_id}`} posted.`);
-    setTimeout(() => setSuccessMsg(''), 3000);
-    await Promise.all([refreshUnposted(), refreshPurchases()]);
-    if (draftId === purchaseId && !currentIsPosted) {
-      setPurchaseId(res.data.purchase_id);
-      setCurrentIsPosted(true);
-    }
-  };
 
   // Password-gated (verified server-side) — deleting a saved-unposted purchase is destructive
   // with no reverse-never-erase trail, same guard level used on Sale Bill/Sale Return.
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const pendingDeleteDraftId = useRef<number | null>(null);
 
-  const handleDeleteUnposted = (draftId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    pendingDeleteDraftId.current = draftId;
-    setIsPasswordModalOpen(true);
-  };
 
   const handleDeletePasswordSuccess = async (password: string) => {
     setIsPasswordModalOpen(false);
@@ -900,114 +868,6 @@ const nextSystemBillNo = useMemo(
           <EditScopeRadios name="purchase-edit-scope" value={editScope} onChange={setEditScope} />
         )}
 
-        {/* P-03: Pending Posting — pinned outside the card's own left edge rather than inside the
-            page's flow, matching SaleBillPage's SB-06 sidebar exactly (`absolute`, anchored via
-            `right: calc(100% + gap)` to this wrapper's left edge, so it can never affect the
-            card's width/position). Was previously a full-width banner at the top of the entry
-            tab, which pushed the whole form down; this way it's always visible (any tab) without
-            taking layout space at all. Only shown from `2xl` up, same as Sale Bill — below that
-            there usually isn't 280px of free margin for it to land in. */}
-        {activeTab === 'entry' && (
-          <aside
-            className="hidden 2xl:block absolute top-0 w-64 space-y-3"
-            style={{ right: 'calc(100% + 24px)' }}
-            data-no-print
-          >
-            {(unpostedPurchases.length > 0 || postAllResult) && (
-            <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <span className="font-semibold text-slate-700">Pending Posting</span>
-                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
-                  {unpostedPurchases.length}
-                </span>
-              </div>
-              <div className="text-xs text-slate-500 mb-3">
-                {unpostedPurchases.length > 0 && `Total ${formatCurrency(unpostedPurchases.reduce((s, p) => s + Number(p.total_value), 0))}`}
-              </div>
-              {unpostedPurchases.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handlePostAll}
-                  disabled={postAllBusy}
-                  className="w-full px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                >
-                  {postAllBusy ? 'Posting…' : `Post All (${unpostedPurchases.length})`}
-                </button>
-              )}
-
-              {/* Stays until dismissed — a run can post 18 of 20, and the two that failed are the
-                  whole point of the message. Never auto-hidden on a timer. */}
-              {postAllResult && (
-                <div className="mt-3 pt-3 border-t border-amber-200">
-                  <p className="text-xs font-semibold text-slate-700">
-                    {postAllResult.posted.length} of {postAllResult.attempted} posted
-                    {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
-                  </p>
-                  {postAllResult.failed.length > 0 && (
-                    <ul className="mt-1.5 space-y-1">
-                      {postAllResult.failed.map(f => (
-                        <li key={f.draft_id} className="text-xs text-rose-700">
-                          <span className="font-mono font-semibold">{f.bill_no || `#${f.draft_id}`}</span>
-                          {' — '}{f.message}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setPostAllResult(null)}
-                    className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              )}
-            </div>
-            )}
-
-            {/* Flat list — every unposted purchase, oldest first (same order the backend returns).
-                Each row opens straight into the form for editing, with inline Post/Delete actions
-                so a single ready one doesn't need to be opened first just to post it. */}
-            {unpostedPurchases.length > 0 && (
-              <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
-                {unpostedPurchases.map(p => (
-                  <li
-                    key={p.draft_id}
-                    onClick={() => handleOpenUnposted(p.draft_id)}
-                    className="px-3 py-2.5 text-xs border-b border-slate-100 last:border-b-0 cursor-pointer hover:bg-amber-50/60 transition-colors"
-                  >
-                    <div className="min-w-0 flex items-start gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-mono font-semibold text-slate-700">{p.bill_no || `#${p.draft_id}`}</div>
-                        <div className="text-slate-400 truncate">{vendors.find(v => v.vendor_id === p.vendor_id)?.name || 'Unnamed Vendor'}</div>
-                        <div className="text-slate-400">{formatDate(p.purchase_date)} · {formatCurrency(Number(p.total_value))}</div>
-                      </div>
-                      <button
-                        type="button"
-                        title="Post this purchase"
-                        onClick={(e) => handlePostOneUnposted(p.draft_id, e)}
-                        disabled={postingDraftId === p.draft_id}
-                        className="flex-shrink-0 p-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                      >
-                        <CheckCircle2 size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        title="Delete this purchase (password required)"
-                        onClick={(e) => handleDeleteUnposted(p.draft_id, e)}
-                        disabled={postingDraftId === p.draft_id}
-                        className="flex-shrink-0 p-1 rounded bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </aside>
-        )}
-
         {/* Floated into the right-hand gutter, not rendered inline: a message used to push the
             toolbar and card down under the cursor mid-click (per the user, 2026-08-31). */}
         <PageToasts
@@ -1146,6 +1006,19 @@ const nextSystemBillNo = useMemo(
               <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>Post</span>
             </button>
+            {/* Post All — moved here when the left-hand Pending Posting panel was removed (per the
+                user, 2026-09-03: it overlapped the Master/Detail radios). Reaching one specific
+                draft is the Unposted dropdown plus First/Prev./Next/Last. */}
+            {unpostedPurchases.length > 0 && (
+              <button
+                type="button" onClick={handlePostAll} disabled={postAllBusy}
+                title={`Post All (${unpostedPurchases.length})`}
+                className="toolbar-btn"
+              >
+                <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
+                <span>{postAllBusy ? 'Posting…' : 'Post All'}</span>
+              </button>
+            )}
           </div>
 
           {/* Posted/Unposted — picks which list Previous/Next/First/Last page through. Unposted
@@ -1163,6 +1036,27 @@ const nextSystemBillNo = useMemo(
             <option value="unposted">Unposted ({unpostedPurchases.length})</option>
             <option value="posted">Posted ({sortedPurchases.length})</option>
           </select>
+
+          {/* Post All's outcome. Was shown inside the left-hand Pending Posting panel; that panel
+              is gone (per the user, 2026-09-03), so it lands here under the toolbar instead. A run
+              can post 8 of 10, and the two that failed are the whole point — it stays until
+              dismissed. */}
+          {postAllResult && (
+            <div className="w-full mt-2 pt-2 border-t text-xs" style={{ borderColor: 'var(--border-color)' }}>
+              <p className="font-semibold text-slate-700">
+                {postAllResult.posted.length} of {postAllResult.attempted} posted
+                {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
+                <button type="button" onClick={() => setPostAllResult(null)} className="ml-2 text-slate-500 hover:text-slate-700 font-semibold">Dismiss</button>
+              </p>
+              {postAllResult.failed.length > 0 && (
+                <ul className="mt-1 space-y-0.5">
+                  {postAllResult.failed.map((fail, i) => (
+                    <li key={i} className="text-rose-700">{fail.message}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
 
         {/* This <form> IS the invoice card — height pinned to the remaining viewport space (see

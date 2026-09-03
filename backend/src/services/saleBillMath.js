@@ -1,7 +1,7 @@
 // Shared pairs/discount/totals math and line validation for sale_bills and draft_sale_bills —
 // identical rules on both tables (schema §5.6/§5.6.1), factored out so they're defined once.
 const ApiError = require('../errors/ApiError');
-const { assertValidCartons, pairsFor, hasAtMostOneDecimal } = require('../utils/cartons');
+const { assertValidCartons, pairsFor, hasAtMostOneDecimal, round1 } = require('../utils/cartons');
 
 function round2(n) {
   return Math.round(n * 100) / 100;
@@ -35,7 +35,9 @@ function buildLine(item, effectivePacking) {
 
 // Rolls a set of built lines up into bill-header totals.
 function buildTotals(lines, invoiceDiscount) {
-  const totalCartons = lines.reduce((sum, l) => sum + l.cartons, 0);
+  // round1: summing floats drifts (0.1 + 0.2 is 0.30000000000000004), and this figure is both
+  // stored in a DECIMAL(12,1) column and echoed back to the screen.
+  const totalCartons = round1(lines.reduce((sum, l) => sum + l.cartons, 0));
   const totalPairs = lines.reduce((sum, l) => sum + l.pairs, 0);
   const grossValue = round2(lines.reduce((sum, l) => sum + l._grossValue, 0));
   const lineDiscounts = round2(lines.reduce((sum, l) => sum + l.discount_value, 0));

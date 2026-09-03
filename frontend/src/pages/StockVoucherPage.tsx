@@ -9,7 +9,7 @@ import type {
   ProductRow, ProductVariantRow, StoreRow, StockVoucherRow, StockVoucherLineInput,
   StockVoucherCreateInput, UnpostedStockVoucherRow, PostAllResult, StockRow, BusinessAccountRow,
 } from '@/lib/api';
-import { formatDate, getTodayDate, toDateInputValue } from '@/lib/utils';
+import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem } from '@/lib/utils';
 import {
   Edit, Search, Plus, Trash2, Boxes, ChevronDown, CheckCircle2, PackageCheck, Undo2,
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Printer
@@ -17,6 +17,7 @@ import {
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
 import EditScopeRadios from '@/components/EditScopeRadios';
+import CartonsInput from '@/components/CartonsInput';
 
 /**
  * Stock Voucher — a manual "add stock" document (legacy Journal Entry-style bound-record screen,
@@ -145,7 +146,6 @@ export default function StockVoucherPage() {
   const [unpostedSvs, setUnpostedSvs] = useState<UnpostedStockVoucherRow[]>([]);
   const [postAllBusy, setPostAllBusy] = useState(false);
   const [postAllResult, setPostAllResult] = useState<PostAllResult<'stock_voucher_id'> | null>(null);
-  const [postingSvId, setPostingSvId] = useState<number | null>(null);
 
   // Tracks whether the two lists nextSvNoPreview (below) reads from have loaded at least once —
   // both start as `[]`, which looks identical to "genuinely empty" and "not fetched yet", so
@@ -538,6 +538,10 @@ export default function StockVoucherPage() {
       return;
     }
     if (entry.cartons <= 0) { fail('Cartons must be greater than 0.'); return; }
+    // Mirrors the server's rule (backend/src/utils/cartons.js): cartons is DECIMAL(12,1), so a
+    // finer figure would be rounded on save, and pairs stay whole because a pair is indivisible.
+    const cartonsIssue = cartonsProblem(entry.cartons, entry.packing);
+    if (cartonsIssue) { fail(cartonsIssue); return; }
     if (entry.pairs <= 0) { fail('Pairs must be greater than 0 — check the article\'s packing.'); return; }
     setErrorMsg('');
     const product = products.find(p => p.article_id === entry.articleId);
@@ -581,9 +585,9 @@ export default function StockVoucherPage() {
     if (e.key !== 'Enter') return;
     e.preventDefault();
     e.stopPropagation();
-    // Cartons must be at least 1 before Enter commits — an empty/0 Cartons field used to still
-    // commit a line with 0 cartons (reported by the user).
-    if (entry.cartons <= 0) { fail('Cartons must be at least 1.'); return; }
+    // Cartons must be > 0 before Enter commits — an empty/0 Cartons field used to still commit
+    // a line with 0 cartons (reported by the user). A part carton such as 0.5 is fine.
+    if (entry.cartons <= 0) { fail('Cartons must be greater than 0.'); return; }
     handleCommitLine();
   }
 
@@ -755,34 +759,13 @@ export default function StockVoucherPage() {
 
   const loadRow = (row: StockVoucherRow) => { loadSv(row.stock_voucher_id); setActiveTab('entry'); };
 
-  // Pending Posting sidebar: opening a row loads that voucher straight into the form.
-  const handleOpenUnposted = (id: number) => { loadSv(id); setActiveTab('entry'); };
 
-  // Posts a single voucher straight from the sidebar without loading it into the form.
-  const handlePostOneUnposted = async (targetId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setPostingSvId(targetId);
-    const res = await api.stockVouchers.post(targetId);
-    setPostingSvId(null);
-    if (!res.ok) { fail('Failed to post: ' + res.error.message); return; }
-    flash(`Stock Voucher #${res.data.stock_voucher_id} posted.`);
-    refresh();
-    refreshUnposted();
-    refreshUnpostedReservations(svId);
-    refreshNav();
-    if (targetId === svId) setStatus(res.data.status);
-  };
 
   // Password-gated (verified server-side) — deleting a saved-unposted voucher is destructive with
   // no reverse-never-erase trail, same guard level used everywhere else.
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const pendingDeleteSvId = useRef<number | null>(null);
 
-  const handleDeleteUnposted = (targetId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    pendingDeleteSvId.current = targetId;
-    setIsPasswordModalOpen(true);
-  };
 
   const handleDeletePasswordSuccess = async (password: string) => {
     setIsPasswordModalOpen(false);
@@ -966,105 +949,6 @@ export default function StockVoucherPage() {
             2026-09-03). */}
         <EditScopeRadios name="sv-edit-scope" value={editScope} onChange={setEditScope} />
 
-        {/* Left sidebar column — Pending Posting, same positioning technique as the sibling
-            voucher pages. The Master/Detail radios are NOT here: they sit in the margin
-            beside the toolbar (EditScopeRadios), behind no media query. */}
-        <aside
-          className="hidden 2xl:block absolute top-0 w-64 space-y-3"
-          style={{ right: 'calc(100% + 24px)' }}
-          data-no-print
-        >
-          {(unpostedSvs.length > 0 || postAllResult) && (
-            <>
-            <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl text-sm">
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <span className="font-semibold text-slate-700">Pending Posting</span>
-                <span className="text-xs bg-amber-200/70 text-amber-900 px-2 py-0.5 rounded-full font-mono font-bold">
-                  {unpostedSvs.length}
-                </span>
-              </div>
-              <div className="text-xs text-slate-500 mb-3">
-                {unpostedSvs.length > 0 && `Total ${unpostedSvs.reduce((s, v) => s + Number(v.total_pairs), 0).toLocaleString()} pairs`}
-              </div>
-              {unpostedSvs.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handlePostAll}
-                  disabled={postAllBusy}
-                  className="w-full px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                >
-                  {postAllBusy ? 'Posting…' : `Post All (${unpostedSvs.length})`}
-                </button>
-              )}
-
-              {postAllResult && (
-                <div className="mt-3 pt-3 border-t border-amber-200">
-                  <p className="text-xs font-semibold text-slate-700">
-                    {postAllResult.posted.length} of {postAllResult.attempted} posted
-                    {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
-                  </p>
-                  {postAllResult.failed.length > 0 && (
-                    <ul className="mt-1.5 space-y-1">
-                      {postAllResult.failed.map(f => (
-                        <li key={f.stock_voucher_id} className="text-xs text-rose-700">
-                          <span className="font-mono font-semibold">#{f.stock_voucher_id}</span>
-                          {' — '}{f.message}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setPostAllResult(null)}
-                    className="mt-2 text-xs text-slate-500 hover:text-slate-700 font-semibold"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {unpostedSvs.length > 0 && (
-              <ul className="bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[70vh] overflow-y-auto">
-                {unpostedSvs.map(v => (
-                  <li
-                    key={v.stock_voucher_id}
-                    onClick={() => handleOpenUnposted(v.stock_voucher_id)}
-                    className="px-3 py-2.5 text-xs border-b border-slate-100 last:border-b-0 cursor-pointer hover:bg-amber-50/60 transition-colors"
-                  >
-                    <div className="min-w-0 flex items-start gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-mono font-semibold text-slate-700">#{v.stock_voucher_id}</div>
-                        <div className="text-slate-400 truncate">{v.remarks || '—'}</div>
-                        <div className="text-slate-400">{formatDate(v.voucher_date)} · {Number(v.total_pairs).toLocaleString()} pairs</div>
-                      </div>
-                      <button
-                        type="button"
-                        title="Post this Stock Voucher"
-                        onClick={(e) => handlePostOneUnposted(v.stock_voucher_id, e)}
-                        disabled={postingSvId === v.stock_voucher_id}
-                        className="flex-shrink-0 p-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                      >
-                        <CheckCircle2 size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        title="Delete this Stock Voucher (password required)"
-                        onClick={(e) => handleDeleteUnposted(v.stock_voucher_id, e)}
-                        disabled={postingSvId === v.stock_voucher_id}
-                        className="flex-shrink-0 p-1 rounded bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white transition-colors"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-            </>
-          )}
-        </aside>
-
         <PasswordPromptModal
           isOpen={isPasswordModalOpen}
           onClose={() => { setIsPasswordModalOpen(false); pendingDeleteSvId.current = null; }}
@@ -1231,6 +1115,20 @@ export default function StockVoucherPage() {
               <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>Post</span>
             </button>
+            {/* Post All — moved here when the left-hand Pending Posting panel was removed (per the
+                user, 2026-09-03: it overlapped the Master/Detail radios). Same treatment Receipts
+                and Sale Bill already had. Reaching one specific unposted voucher is the Unposted
+                dropdown plus First/Prev./Next/Last. */}
+            {unpostedSvs.length > 0 && (
+              <button
+                type="button" onClick={handlePostAll} disabled={postAllBusy}
+                title={`Post All (${unpostedSvs.length})`}
+                className="toolbar-btn"
+              >
+                <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
+                <span>{postAllBusy ? 'Posting…' : 'Post All'}</span>
+              </button>
+            )}
           </div>
 
           {/* Posted/Unposted — picks which list First/Prev./Next/Last page through. Same row as
@@ -1247,6 +1145,27 @@ export default function StockVoucherPage() {
             <option value="unposted">Unposted</option>
             <option value="posted">Posted</option>
           </select>
+
+          {/* Post All's outcome. Was shown inside the left-hand Pending Posting panel; that panel
+              is gone (per the user, 2026-09-03), so it lands here under the toolbar instead. A run
+              can post 8 of 10, and the two that failed are the whole point — it stays until
+              dismissed. */}
+          {postAllResult && (
+            <div className="w-full mt-2 pt-2 border-t text-xs" style={{ borderColor: 'var(--border-color)' }}>
+              <p className="font-semibold text-slate-700">
+                {postAllResult.posted.length} of {postAllResult.attempted} posted
+                {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
+                <button type="button" onClick={() => setPostAllResult(null)} className="ml-2 text-slate-500 hover:text-slate-700 font-semibold">Dismiss</button>
+              </p>
+              {postAllResult.failed.length > 0 && (
+                <ul className="mt-1 space-y-0.5">
+                  {postAllResult.failed.map((fail, i) => (
+                    <li key={i} className="text-rose-700">{fail.message}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
 
         <form
@@ -1397,7 +1316,7 @@ export default function StockVoucherPage() {
                     return {
                       value: String(p.article_id),
                       label: `${p.code} — ${p.name}`,
-                      sublabel: stock ? `Stock: ${stock.cartons} ctn / ${stock.pairs} prs` : undefined,
+                      sublabel: stock ? `Stock: ${formatCartons(stock.cartons)} ctn / ${stock.pairs} prs` : undefined,
                     };
                   })}
                   value={entry.articleId != null ? String(entry.articleId) : ''}
@@ -1480,7 +1399,7 @@ export default function StockVoucherPage() {
                           return {
                             value: String(v.variant_id),
                             label: v.color,
-                            sublabel: stock ? `Stock: ${stock.cartons} ctn / ${stock.pairs} prs` : undefined,
+                            sublabel: stock ? `Stock: ${formatCartons(stock.cartons)} ctn / ${stock.pairs} prs` : undefined,
                           };
                         }),
                         { value: NEW_COLOR_SENTINEL, label: '+ Add New Color...' },
@@ -1502,13 +1421,14 @@ export default function StockVoucherPage() {
               </div>
               <div className="min-w-0" style={{ gridArea: 'cartons' }}>
                 <label className="block text-xs font-medium text-slate-600 mb-1">Cartons <span className="text-red-500 font-bold">*</span></label>
-                <input
+                {/* One decimal place (per the user, 2026-09-02) — a part carton is real stock, and
+                    parseInt('0.5') was silently turning it into 0. */}
+                <CartonsInput
                   ref={cartonsInputRef}
-                  type="number"
                   disabled={detailLocked}
-                  value={entry.cartons || ''}
+                  value={entry.cartons}
                   min={0}
-                  onChange={e => updateEntryCartons(parseInt(e.target.value) || 0)}
+                  onChange={updateEntryCartons}
                   onKeyDown={handleCartonsKeyDown}
                   className="soleria-input font-mono text-center"
                   style={{ fontSize: '13px' }}
@@ -1570,7 +1490,7 @@ export default function StockVoucherPage() {
                     <td className="py-1 px-2 pl-4 font-mono text-xs text-slate-600">{line.articleCode || '—'}</td>
                     <td className="py-1 px-2 text-xs text-slate-800 font-semibold">{line.label || 'N/A'}</td>
                     <td className="py-1 px-2 text-xs text-slate-600">{line.categoryName || '—'}</td>
-                    <td className="py-1 px-2 text-center font-mono text-sm text-slate-700">{line.cartons}</td>
+                    <td className="py-1 px-2 text-center font-mono text-sm text-slate-700">{formatCartons(line.cartons)}</td>
                     <td className="py-1 px-2 text-right font-mono text-sm text-slate-700">{line.pairs.toLocaleString()}</td>
                   </tr>
                 ))}
@@ -1589,7 +1509,7 @@ export default function StockVoucherPage() {
           <div className="shrink-0 flex flex-wrap items-center justify-end gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
             <div className="flex flex-col gap-0.5">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cartons</label>
-              <input type="text" value={totals.totalCartons} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-center font-mono font-semibold" style={{ width: '110px' }} />
+              <input type="text" value={formatCartons(totals.totalCartons)} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-center font-mono font-semibold" style={{ width: '110px' }} />
             </div>
             <div className="flex flex-col gap-0.5">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Pairs</label>

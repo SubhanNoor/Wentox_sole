@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import { Search, Users, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { formatDate, getTodayDate, getThreeMonthsAgoDate, formatDateTime } from '@/lib/utils';
+import { formatDate, getTodayDate, getThreeMonthsAgoDate, formatDateTime, formatCartons } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
 import type { SaleBillRow, CustomerRow } from '@/lib/api';
@@ -92,7 +92,7 @@ export default function SearchCustomerPage() {
     if (!selectedCustomer) return;
     const headers = ['Date', 'Inv. No (Sys)', 'Manual No.', 'Cartons', 'Pairs', 'Bilty No.', 'Transport Adda', 'GP No.', 'Net Value'];
     const rows = filteredBills.map(b => [
-      formatDate(b.bill_date), b.bill_id, b.bill_no, b.total_cartons, b.total_pairs,
+      formatDate(b.bill_date), b.bill_id, b.bill_no, formatCartons(b.total_cartons), b.total_pairs,
       b.bilty_no || 'Missing', b.adda_name || 'Unassigned', b.gp_no || 'Missing', b.net_value
     ]);
     exportRowsToExcel(`search-customer-${selectedCustomer.name.toLowerCase().replace(/\s+/g, '-')}`, headers, rows);
@@ -136,7 +136,7 @@ export default function SearchCustomerPage() {
               <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace' }}>{formatDate(b.bill_date)}</td>
               <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', textAlign: 'center' }}>{b.bill_id}</td>
               <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', textAlign: 'center', fontWeight: 'bold' }}>{b.bill_no}</td>
-              <td style={{ border: '1px solid #000', padding: '4px 7px', textAlign: 'right' }}>{b.total_cartons}</td>
+              <td style={{ border: '1px solid #000', padding: '4px 7px', textAlign: 'right' }}>{formatCartons(b.total_cartons)}</td>
               <td style={{ border: '1px solid #000', padding: '4px 7px', textAlign: 'right' }}>{b.total_pairs}</td>
               <td style={{ border: '1px solid #000', padding: '4px 7px', color: isMissing(b.bilty_no) ? '#cc0000' : '#000' }}>{b.bilty_no || 'MISSING'}</td>
               <td style={{ border: '1px solid #000', padding: '4px 7px', color: !b.adda_id ? '#cc0000' : '#000' }}>{b.adda_name || 'UNASSIGNED'}</td>
@@ -315,7 +315,7 @@ export default function SearchCustomerPage() {
                           <td className="p-3 pl-4 font-mono">{formatDate(b.bill_date)}</td>
                           <td className="p-3 text-center font-mono">{b.bill_id}</td>
                           <td className="p-3 text-center font-mono font-semibold">{b.bill_no}</td>
-                          <td className="p-3 text-right font-mono">{b.total_cartons}</td>
+                          <td className="p-3 text-right font-mono">{formatCartons(b.total_cartons)}</td>
                           <td className="p-3 text-right font-mono">{b.total_pairs}</td>
                           <td className="p-3 font-mono">
                             {b.bilty_no ? (

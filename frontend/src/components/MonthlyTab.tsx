@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { SaleBillRow, CustomerRow, SubCustomerRow, AddaRow, CityRow } from '@/lib/api';
-import { formatDate } from '@/lib/utils';
+import { formatDate, formatCartons } from '@/lib/utils';
 import { Calendar, Search, ArrowLeft, FileText, Edit2, Printer, ChevronDown, Check, MapPin } from 'lucide-react';
 
 interface MonthlyTabProps {
@@ -199,7 +199,7 @@ export default function MonthlyTab({ onEditBill, onPrintBill }: MonthlyTabProps)
                         <span className="text-slate-400 italic text-xs">SAME (Direct)</span>
                       )}
                     </td>
-                    <td className="p-3.5 text-center font-mono font-semibold text-slate-700">{billCartons}</td>
+                    <td className="p-3.5 text-center font-mono font-semibold text-slate-700">{formatCartons(billCartons)}</td>
                     <td className="p-3.5 text-center font-mono font-semibold text-slate-700">{billPairs}</td>
                     <td className="p-3.5">
                       <div className="text-xs">
@@ -372,7 +372,7 @@ export default function MonthlyTab({ onEditBill, onPrintBill }: MonthlyTabProps)
                         {data.bills.length} {data.bills.length === 1 ? 'Bill' : 'Bills'}
                       </span>
                     </td>
-                    <td className="p-3 text-right font-mono text-slate-700">{data.totalCartons.toLocaleString()}</td>
+                    <td className="p-3 text-right font-mono text-slate-700">{formatCartons(data.totalCartons)}</td>
                     <td className="p-3 text-right font-mono text-slate-700">{data.totalPairs.toLocaleString()}</td>
                     <td className="p-3 text-right pr-6 font-mono font-bold text-emerald-700">{formatCurrency(data.totalValue)}</td>
                   </tr>

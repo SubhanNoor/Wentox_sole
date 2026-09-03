@@ -21,7 +21,7 @@ const productColorsService = require('./productColors.service');
 const storesService = require('./stores.service');
 const businessAccountsService = require('./businessAccounts.service');
 const ApiError = require('../errors/ApiError');
-const { hasAtMostOneDecimal } = require('../utils/cartons');
+const { hasAtMostOneDecimal, round1 } = require('../utils/cartons');
 const { withTransaction } = require('../db/pool');
 
 function validateHeader(payload) {
@@ -68,7 +68,9 @@ async function resolveLines(payload) {
   const lines = [];
   for (const line of payload.lines) {
     await productColorsService.getById(line.variant_id); // 404s if it doesn't exist
-    const cartons = Math.max(0, Math.trunc(Number(line.cartons) || 0));
+    // round1, NOT trunc: cartons is DECIMAL(12,1) since migration 030, and truncating here
+    // silently turned a 0.5-carton line into 0 after validateLines had already accepted it.
+    const cartons = Math.max(0, round1(Number(line.cartons) || 0));
     const pairs = Math.trunc(Number(line.pairs));
     lines.push({
       variant_id: line.variant_id,

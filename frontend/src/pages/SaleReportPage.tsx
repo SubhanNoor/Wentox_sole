@@ -4,7 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { ChevronDown, ChevronRight, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime, formatCartons } from '@/lib/utils';
 import { groupByRegion, groupByCity, groupByRegionThenCity } from '@/lib/geoGrouping';
 import * as api from '@/lib/api';
 import type { SaleReportRow as ApiSaleReportRow } from '@/lib/api';
@@ -161,25 +161,25 @@ export function SaleReportContent() {
     const headers = [COLUMN_LABELS[groupMode], 'Total Sales', 'Total Cartons', 'Commission', 'Sale Return', 'Net Sales', 'Payment'];
     let rows: (string | number)[][];
     if (groupMode === 'overall') {
-      rows = [[overallRow.label, overallRow.totalSales, overallRow.totalCartons, overallRow.commission, overallRow.saleReturn, overallRow.netSales, overallRow.payment]];
+      rows = [[overallRow.label, overallRow.totalSales, formatCartons(overallRow.totalCartons), overallRow.commission, overallRow.saleReturn, overallRow.netSales, overallRow.payment]];
     } else if (groupMode === 'customer') {
-      rows = customerRows.map(r => [r.label, r.totalSales, r.totalCartons, r.commission, r.saleReturn, r.netSales, r.payment]);
+      rows = customerRows.map(r => [r.label, r.totalSales, formatCartons(r.totalCartons), r.commission, r.saleReturn, r.netSales, r.payment]);
     } else if (groupMode === 'region') {
       rows = regionGroups.flatMap(g => [
-        [g.name, g.totalSales, g.totalCartons, g.commission, g.saleReturn, g.netSales, g.payment],
-        ...g.rows.map(c => [`  ${c.label}`, c.totalSales, c.totalCartons, c.commission, c.saleReturn, c.netSales, c.payment])
+        [g.name, g.totalSales, formatCartons(g.totalCartons), g.commission, g.saleReturn, g.netSales, g.payment],
+        ...g.rows.map(c => [`  ${c.label}`, c.totalSales, formatCartons(c.totalCartons), c.commission, c.saleReturn, c.netSales, c.payment])
       ]);
     } else if (groupMode === 'city') {
       rows = cityGroups.flatMap(g => [
-        [g.name, g.totalSales, g.totalCartons, g.commission, g.saleReturn, g.netSales, g.payment],
-        ...g.rows.map(c => [`  ${c.label}`, c.totalSales, c.totalCartons, c.commission, c.saleReturn, c.netSales, c.payment])
+        [g.name, g.totalSales, formatCartons(g.totalCartons), g.commission, g.saleReturn, g.netSales, g.payment],
+        ...g.rows.map(c => [`  ${c.label}`, c.totalSales, formatCartons(c.totalCartons), c.commission, c.saleReturn, c.netSales, c.payment])
       ]);
     } else {
       rows = regionCityGroups.flatMap(g => [
-        [g.name, g.totalSales, g.totalCartons, g.commission, g.saleReturn, g.netSales, g.payment],
+        [g.name, g.totalSales, formatCartons(g.totalCartons), g.commission, g.saleReturn, g.netSales, g.payment],
         ...g.cities.flatMap(c => [
-          [`  ${c.name}`, c.totalSales, c.totalCartons, c.commission, c.saleReturn, c.netSales, c.payment],
-          ...c.rows.map(cust => [`    ${cust.label}`, cust.totalSales, cust.totalCartons, cust.commission, cust.saleReturn, cust.netSales, cust.payment])
+          [`  ${c.name}`, c.totalSales, formatCartons(c.totalCartons), c.commission, c.saleReturn, c.netSales, c.payment],
+          ...c.rows.map(cust => [`    ${cust.label}`, cust.totalSales, formatCartons(cust.totalCartons), cust.commission, cust.saleReturn, cust.netSales, cust.payment])
         ])
       ]);
     }
@@ -253,7 +253,7 @@ export function SaleReportContent() {
               <tr key={r.key} style={{ fontWeight: r.bold ? 'bold' : 'normal', backgroundColor: r.bold ? '#f9f9f9' : '#ffffff' }}>
                 <td style={{ border: '1px solid #000000', padding: r.indent ? `4px 6px 4px ${6 + r.indent * 14}px` : '5px 6px', fontSize: r.indent ? '10.5px' : '11px' }}>{r.label}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(r.totalSales)}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{r.totalCartons}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCartons(r.totalCartons)}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(r.commission)}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(r.saleReturn)}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(r.netSales)}</td>
@@ -263,7 +263,7 @@ export function SaleReportContent() {
             <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
               <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>GRAND TOTAL</td>
               <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totals.totalSales)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totals.totalCartons}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCartons(totals.totalCartons)}</td>
               <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totals.commission)}</td>
               <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totals.saleReturn)}</td>
               <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(totals.netSales)}</td>
@@ -418,7 +418,7 @@ export function SaleReportContent() {
                   <tr className="border-b" style={{ borderColor: 'var(--border-table)' }}>
                     <td className="p-3 pl-4 font-semibold text-slate-800">{overallRow.label}</td>
                     <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(overallRow.totalSales)}</td>
-                    <td className="p-3 text-right font-bold text-slate-700">{overallRow.totalCartons}</td>
+                    <td className="p-3 text-right font-bold text-slate-700">{formatCartons(overallRow.totalCartons)}</td>
                     <td className="p-3 text-right font-bold text-amber-700">{overallRow.commission > 0 ? formatCurrency(overallRow.commission) : '-'}</td>
                     <td className="p-3 text-right font-bold text-blue-700">{overallRow.saleReturn > 0 ? formatCurrency(overallRow.saleReturn) : '-'}</td>
                     <td className="p-3 text-right font-bold" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(overallRow.netSales)}</td>
@@ -432,7 +432,7 @@ export function SaleReportContent() {
                       <tr key={row.key} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                         <td className="p-3 pl-4 font-semibold text-slate-800">{row.label}</td>
                         <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.totalSales)}</td>
-                        <td className="p-3 text-right font-bold text-slate-700">{row.totalCartons}</td>
+                        <td className="p-3 text-right font-bold text-slate-700">{formatCartons(row.totalCartons)}</td>
                         <td className="p-3 text-right font-bold text-amber-700">{row.commission > 0 ? formatCurrency(row.commission) : '-'}</td>
                         <td className="p-3 text-right font-bold text-blue-700">{row.saleReturn > 0 ? formatCurrency(row.saleReturn) : '-'}</td>
                         <td className="p-3 text-right font-bold" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(row.netSales)}</td>
@@ -473,7 +473,7 @@ export function SaleReportContent() {
                               <span className="text-xs font-normal text-slate-400">({g.rows.length} customers)</span>
                             </td>
                             <td className="p-3 text-right text-slate-800">{formatCurrency(g.totalSales)}</td>
-                            <td className="p-3 text-right text-slate-700">{g.totalCartons}</td>
+                            <td className="p-3 text-right text-slate-700">{formatCartons(g.totalCartons)}</td>
                             <td className="p-3 text-right text-amber-700">{g.commission > 0 ? formatCurrency(g.commission) : '-'}</td>
                             <td className="p-3 text-right text-blue-700">{g.saleReturn > 0 ? formatCurrency(g.saleReturn) : '-'}</td>
                             <td className="p-3 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(g.netSales)}</td>
@@ -483,7 +483,7 @@ export function SaleReportContent() {
                             <tr key={c.key} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
                               <td className="p-3 pl-10 text-slate-600">{c.label}</td>
                               <td className="p-3 text-right font-medium text-slate-700">{formatCurrency(c.totalSales)}</td>
-                              <td className="p-3 text-right font-medium text-slate-600">{c.totalCartons}</td>
+                              <td className="p-3 text-right font-medium text-slate-600">{formatCartons(c.totalCartons)}</td>
                               <td className="p-3 text-right font-medium text-amber-600">{c.commission > 0 ? formatCurrency(c.commission) : '-'}</td>
                               <td className="p-3 text-right font-medium text-blue-600">{c.saleReturn > 0 ? formatCurrency(c.saleReturn) : '-'}</td>
                               <td className="p-3 text-right font-medium text-slate-700">{formatCurrency(c.netSales)}</td>
@@ -513,7 +513,7 @@ export function SaleReportContent() {
                               <span className="text-xs font-normal text-slate-400">({region.cities.length} cities, {region.rows.length} customers)</span>
                             </td>
                             <td className="p-3 text-right text-slate-800">{formatCurrency(region.totalSales)}</td>
-                            <td className="p-3 text-right text-slate-700">{region.totalCartons}</td>
+                            <td className="p-3 text-right text-slate-700">{formatCartons(region.totalCartons)}</td>
                             <td className="p-3 text-right text-amber-700">{region.commission > 0 ? formatCurrency(region.commission) : '-'}</td>
                             <td className="p-3 text-right text-blue-700">{region.saleReturn > 0 ? formatCurrency(region.saleReturn) : '-'}</td>
                             <td className="p-3 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(region.netSales)}</td>
@@ -534,7 +534,7 @@ export function SaleReportContent() {
                                     <span className="text-xs font-normal text-slate-400">({city.rows.length} customers)</span>
                                   </td>
                                   <td className="p-3 text-right text-slate-800">{formatCurrency(city.totalSales)}</td>
-                                  <td className="p-3 text-right text-slate-700">{city.totalCartons}</td>
+                                  <td className="p-3 text-right text-slate-700">{formatCartons(city.totalCartons)}</td>
                                   <td className="p-3 text-right text-amber-700">{city.commission > 0 ? formatCurrency(city.commission) : '-'}</td>
                                   <td className="p-3 text-right text-blue-700">{city.saleReturn > 0 ? formatCurrency(city.saleReturn) : '-'}</td>
                                   <td className="p-3 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(city.netSales)}</td>
@@ -544,7 +544,7 @@ export function SaleReportContent() {
                                   <tr key={c.key} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
                                     <td className="p-3 pl-16 text-slate-600">{c.label}</td>
                                     <td className="p-3 text-right font-medium text-slate-700">{formatCurrency(c.totalSales)}</td>
-                                    <td className="p-3 text-right font-medium text-slate-600">{c.totalCartons}</td>
+                                    <td className="p-3 text-right font-medium text-slate-600">{formatCartons(c.totalCartons)}</td>
                                     <td className="p-3 text-right font-medium text-amber-600">{c.commission > 0 ? formatCurrency(c.commission) : '-'}</td>
                                     <td className="p-3 text-right font-medium text-blue-600">{c.saleReturn > 0 ? formatCurrency(c.saleReturn) : '-'}</td>
                                     <td className="p-3 text-right font-medium text-slate-700">{formatCurrency(c.netSales)}</td>

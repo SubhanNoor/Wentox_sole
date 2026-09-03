@@ -4,11 +4,12 @@ import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { EmployeeRow, ProductRow, StageRow, WageRunRow, ExpenseRow } from '@/lib/api';
 import { getRunBalanceBlock } from '@/lib/payroll';
-import { formatDate } from '@/lib/utils';
+import { formatDate, formatCartons } from '@/lib/utils';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Plus, Trash2, Save, HardHat, AlertTriangle, Edit2, Undo2, History, Clock, ChevronDown, Check, X } from 'lucide-react';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import CartonsInput from '@/components/CartonsInput';
 
 interface FormItem {
   key: string;
@@ -613,11 +614,13 @@ export default function WageRunPage() {
                               />
                             </td>
                             <td className="p-2">
-                              <input
+                              {/* One decimal place (per the user, 2026-09-02): a wage line is paid
+                                  per carton, so a part carton pays a part rate. */}
+                              <CartonsInput
                                 ref={el => { cartonsRefs.current[idx] = el; }}
-                                type="number" min={0}
-                                value={it.cartons || ''}
-                                onChange={e => updateItem(it.key, 'cartons', Number(e.target.value))}
+                                min={0}
+                                value={it.cartons}
+                                onChange={v => updateItem(it.key, 'cartons', v)}
                                 onKeyDown={e => handleCartonsKeyDown(e, idx)}
                                 disabled={it.articleId === ''}
                                 className="soleria-input py-1.5 text-right text-sm font-semibold"
@@ -823,7 +826,7 @@ export default function WageRunPage() {
                     <tr key={i.item_id} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
                       <td className="p-3 pl-4 font-semibold text-slate-900">{i.article_name || '—'}</td>
                       <td className="p-3 text-right text-slate-500 font-mono">{formatCurrency(i.rate)}</td>
-                      <td className="p-3 text-right text-slate-600 font-mono">{i.cartons}</td>
+                      <td className="p-3 text-right text-slate-600 font-mono">{formatCartons(i.cartons)}</td>
                       <td className="p-3 text-right font-semibold text-slate-800 font-mono">{formatCurrency(i.amount)}</td>
                     </tr>
                   ))}

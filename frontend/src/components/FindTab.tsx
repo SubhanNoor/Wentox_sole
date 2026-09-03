@@ -4,7 +4,7 @@ import * as api from '@/lib/api';
 import type { SaleBillRow, SaleBillItemRow, CustomerRow, SubCustomerRow, AddaRow, ProductRow } from '@/lib/api';
 import { Search, Printer, Calendar, FileText, User, Edit2, Package, Truck, Layers, RotateCcw, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime, formatCartons } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
@@ -146,7 +146,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
     const headers = ['Date', 'Sys ID', 'Bill No.', 'Customer', 'Cartons', 'Pairs', 'Invoice Value', 'Status'];
     const rows = filteredInvoices.map(bill => {
       const cust = customers.find(c => c.customer_id === bill.customer_id);
-      return [formatDate(bill.bill_date), bill.bill_id, bill.bill_no, cust?.name || '-', bill.total_cartons, bill.total_pairs, bill.net_value, bill.is_posted ? 'Posted' : 'Unposted'];
+      return [formatDate(bill.bill_date), bill.bill_id, bill.bill_no, cust?.name || '-', formatCartons(bill.total_cartons), bill.total_pairs, bill.net_value, bill.is_posted ? 'Posted' : 'Unposted'];
     });
     exportRowsToExcel('sale-bills-search', headers, rows);
   };
@@ -226,7 +226,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px' }}>{subCust ? subCust.name : '-'}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{bill.bilty_no || '-'}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px' }}>{adda ? adda.name : '-'}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{bill.total_cartons}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCartons(bill.total_cartons)}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace' }}>{bill.total_pairs}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(bill.net_value)}</td>
                 </tr>
@@ -236,7 +236,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
 
           <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
             <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL</td>
-            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totalCartons}</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCartons(totalCartons)}</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totalPairs.toLocaleString()}</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(totalValue)}</td>
           </tr>
@@ -427,7 +427,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
           <div className="group relative bg-white p-5 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex items-center justify-between">
             <div>
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider group-hover:text-[var(--brand-navy)] transition-colors">Total Filtered Cartons</span>
-              <h4 className="text-2xl font-bold font-mono text-slate-900 mt-1">{totalCartons} ctn</h4>
+              <h4 className="text-2xl font-bold font-mono text-slate-900 mt-1">{formatCartons(totalCartons)} ctn</h4>
             </div>
             <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center transition-transform group-hover:scale-110">
               <Package size={22} />
@@ -528,7 +528,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
                             ? <span className="text-slate-800 font-medium">{adda.name}</span>
                             : <span className="bg-amber-50 text-amber-700 border border-amber-100 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Unassigned</span>}
                         </td>
-                        <td className="p-3.5 text-right font-mono font-semibold text-slate-700">{bill.total_cartons}</td>
+                        <td className="p-3.5 text-right font-mono font-semibold text-slate-700">{formatCartons(bill.total_cartons)}</td>
                         <td className="p-3.5 text-right font-mono text-slate-700">{bill.total_pairs.toLocaleString()}</td>
                         <td className="p-3.5 text-right font-mono font-bold text-slate-900 pr-4">{formatCurrency(bill.net_value)}</td>
                         <td className="p-3.5 text-center pr-4" onClick={e => e.stopPropagation()}>

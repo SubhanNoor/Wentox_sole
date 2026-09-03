@@ -4,7 +4,7 @@ import * as api from '@/lib/api';
 import type { SaleReturnRow, SaleReturnItemRow, CustomerRow, SubCustomerRow, ProductRow } from '@/lib/api';
 import { Search, Printer, Calendar, FileText, User, Edit2, Package, Layers, RotateCcw, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
+import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime, formatCartons } from '@/lib/utils';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 
@@ -137,7 +137,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
     const headers = ['Date', 'Sys ID', 'Return No.', 'Customer', 'Cartons', 'Pairs', 'Total Value', 'Status'];
     const rows = filteredReturns.map(ret => {
       const cust = customers.find(c => c.customer_id === ret.customer_id);
-      return [formatDate(ret.return_date), ret.return_id, ret.bill_no, cust?.name || '-', ret.total_cartons, ret.total_pairs, ret.net_value, ret.is_posted ? 'Posted' : 'Unposted'];
+      return [formatDate(ret.return_date), ret.return_id, ret.bill_no, cust?.name || '-', formatCartons(ret.total_cartons), ret.total_pairs, ret.net_value, ret.is_posted ? 'Posted' : 'Unposted'];
     });
     exportRowsToExcel('sale-returns-search', headers, rows);
   };
@@ -214,7 +214,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px' }}>{subCust ? subCust.name : '-'}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{ret.bilty_no || '-'}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{ret.gp_no || '-'}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{ret.total_cartons}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCartons(ret.total_cartons)}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace' }}>{ret.total_pairs}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(ret.net_value)}</td>
                 </tr>
@@ -224,7 +224,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
 
           <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
             <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL</td>
-            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totalCartons}</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCartons(totalCartons)}</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totalPairs.toLocaleString()}</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(totalValue)}</td>
           </tr>
@@ -365,7 +365,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
           <div className="group relative bg-white p-5 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex items-center justify-between">
             <div>
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider group-hover:text-[var(--brand-navy)] transition-colors">Total Filtered Cartons</span>
-              <h4 className="text-2xl font-bold font-mono text-slate-900 mt-1">{totalCartons} ctn</h4>
+              <h4 className="text-2xl font-bold font-mono text-slate-900 mt-1">{formatCartons(totalCartons)} ctn</h4>
             </div>
             <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center transition-transform group-hover:scale-110">
               <Package size={22} />
@@ -461,7 +461,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
                             : <span className="bg-red-50 text-red-600 border border-red-100 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider">Missing</span>}
                         </td>
                         <td className="p-3.5 font-mono text-slate-700">{ret.gp_no || '-'}</td>
-                        <td className="p-3.5 text-right font-mono font-semibold text-slate-700">{ret.total_cartons}</td>
+                        <td className="p-3.5 text-right font-mono font-semibold text-slate-700">{formatCartons(ret.total_cartons)}</td>
                         <td className="p-3.5 text-right font-mono text-slate-700">{ret.total_pairs.toLocaleString()}</td>
                         <td className="p-3.5 text-right font-mono font-bold text-slate-900 pr-4">{formatCurrency(ret.net_value)}</td>
                         <td className="p-3.5 text-center pr-4" onClick={e => e.stopPropagation()}>
