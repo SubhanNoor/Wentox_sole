@@ -8,10 +8,11 @@ import * as api from '@/lib/api';
 import type { PaymentTrailResult } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 export function PaymentTrailContent() {
-  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
-  const [toDate, setToDate] = useState(getTodayDate());
+  const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
   const [result, setResult] = useState<PaymentTrailResult>({ buckets: [], grand_total: 0 });
   const [loading, setLoading] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -24,6 +25,17 @@ export function PaymentTrailContent() {
   }, [fromDate, toDate]);
 
   useEffect(() => { load(); }, [load]);
+
+  // "Show Print Preview" opens a new window landing on this same filtered report (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    api.openWindow('reports', 'payment-trail', { fromDate, toDate, autoPreview: '1' });
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once loaded.
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && result) setIsPreviewOpen(true);
+  }, [result]);
 
   const handleExportExcel = () => {
     const headers = ['Account Title', 'Amount'];
@@ -112,7 +124,7 @@ export function PaymentTrailContent() {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setIsPreviewOpen(true)}
+              onClick={handleShowPrintPreview}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
             >
               <Eye size={14} /> Show Print Preview

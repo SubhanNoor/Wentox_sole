@@ -1,13 +1,12 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { createPortal } from 'react-dom';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { EmployeeRow, ProductRow, StageRow, WageRunRow, ExpenseRow } from '@/lib/api';
 import { getRunBalanceBlock } from '@/lib/payroll';
 import { formatDate, formatCartons } from '@/lib/utils';
 import AppLayout from '@/components/AppLayout';
-import SearchableSelect from '@/components/SearchableSelect';
-import { Plus, Trash2, Save, HardHat, AlertTriangle, Edit2, Undo2, History, Clock, ChevronDown, Check, X } from 'lucide-react';
+import SearchModal from '@/components/SearchModal';
+import { Plus, Trash2, Save, HardHat, AlertTriangle, Edit2, Undo2, History, Clock, ChevronDown, X } from 'lucide-react';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import CartonsInput from '@/components/CartonsInput';
 
@@ -63,34 +62,35 @@ export default function WageRunPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
-  const [isStageOpen, setIsStageOpen] = useState(false);
-  const [stagePos, setStagePos] = useState<{ top: number; left: number; width: number } | null>(null);
-  const stageRef = useRef<HTMLDivElement>(null);
-  const workerContainerRef = useRef<HTMLDivElement>(null);
-  const stagePanelRef = useRef<HTMLDivElement>(null);
-
-  // The panel is portaled onto document.body (see SearchableSelect for why:
-  // .card-white sets overflow:hidden, which clips an absolutely-positioned
-  // dropdown instead of letting it float over the page).
-  const openStageDropdown = () => {
-    const el = stageRef.current;
-    if (el) {
-      const r = el.getBoundingClientRect();
-      setStagePos({ top: r.bottom + 4, left: r.left, width: r.width });
-    }
-    setIsStageOpen(v => !v);
-  };
+  // Entry card fills whatever vertical space is left in the viewport below it (mirrors
+  // PurchasePage/SaleBillPage/JournalVoucherPage's own compact layout) — the Articles table
+  // (flex-1 inside it) grows into that space, and the outer app window never scrolls (only the
+  // table does). Measured via getBoundingClientRect rather than a CSS calc() of fixed chrome
+  // heights, since the banners above this form change height dynamically.
+  const entryCardRef = useRef<HTMLFormElement>(null);
+  const [entryCardHeight, setEntryCardHeight] = useState<number | null>(null);
 
   useEffect(() => {
-    const h = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (stageRef.current?.contains(target)) return;
-      if (stagePanelRef.current?.contains(target)) return;
-      setIsStageOpen(false);
-    };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, []);
+    function recompute() {
+      const el = entryCardRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      // AppLayout's <main> (the only scroll container in the app) adds 32px of its own
+      // padding-bottom below whatever height we claim here.
+      setEntryCardHeight(Math.max(360, window.innerHeight - top - 32));
+    }
+    recompute();
+    window.addEventListener('resize', recompute);
+    return () => window.removeEventListener('resize', recompute);
+  }, [tab, errorMsg, successMsg]);
+
+  const [isWorkerModalOpen, setIsWorkerModalOpen] = useState(false);
+  const [isStageModalOpen, setIsStageModalOpen] = useState(false);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const workerContainerRef = useRef<HTMLDivElement>(null);
+  // Which row's Article SearchModal is open, if any — one shared piece of state rather than a
+  // per-row boolean, since only one row's modal can be open at a time anyway.
+  const [openArticleModalKey, setOpenArticleModalKey] = useState<string | null>(null);
 
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
@@ -138,7 +138,7 @@ export default function WageRunPage() {
   const stageObj = useMemo(() => stageList.find(s => s.stage_key === stage), [stageList, stage]);
 
   const productOptions = useMemo(
-    () => products.map(p => ({ value: String(p.article_id), label: `${p.code} — ${p.name}` })),
+    () => products.map(p => ({ value: String(p.article_id), label: p.name })),
     [products]
   );
 
@@ -448,15 +448,22 @@ export default function WageRunPage() {
                 scans for a <form> in the DOM, and this page had none, so the first field never
                 got focused on open. Save/Post stay type="button" (two distinct save modes, no
                 single native submit), so onSubmit only guards against the rare native
-                implicit-submit-on-Enter case. */}
+                implicit-submit-on-Enter case.
+                This <form> IS the entry card now — height pinned to the remaining viewport space
+                (entryCardHeight above) and laid out as a flex column, so the Articles table below
+                can flex-grow into whatever room that leaves, matching Purchase/SaleBill/Journal
+                Voucher's compact layout (per the user, 2026-09-03) instead of three separate
+                cards the whole page had to scroll past. Every other section keeps its natural
+                size (shrink-0) — only the table wrapper is flex-1. */}
             <form
+              ref={entryCardRef}
               onSubmit={e => e.preventDefault()}
-              className={`flex flex-col gap-5 transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}
+              className={`card-white p-6 bg-white border flex flex-col transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}
+              style={{ height: entryCardHeight ?? undefined }}
             >
 
-            {/* Header */}
-            <div className="card-white p-6 bg-white border" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Header fields */}
+            <div className="shrink-0 grid grid-cols-1 md:grid-cols-3 gap-4 pb-4 mb-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Settlement Date</label>
                   <input type="date"
@@ -469,14 +476,36 @@ export default function WageRunPage() {
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
                     Worker <span className="text-red-500 font-bold">*</span>
                   </label>
-                  <SearchableSelect
+                  {/* SearchModal, not a dropdown — same picker used everywhere else in the app
+                      (per the user, 2026-09-03), same as Stage/Article below. */}
+                  <button
+                    type="button"
+                    data-field-nav="true"
+                    onClick={() => setIsWorkerModalOpen(true)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setIsWorkerModalOpen(true);
+                      }
+                    }}
+                    className="flex items-center w-full pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium transition-all cursor-pointer shadow-2xs focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 text-left"
+                  >
+                    <span className={`truncate ${employeeId ? 'text-slate-800 font-semibold' : 'text-slate-400'}`}>
+                      {selectedWorker?.name || 'Select worker...'}
+                    </span>
+                  </button>
+                  <SearchModal
+                    isOpen={isWorkerModalOpen}
+                    title="Select Worker"
                     options={workerOptions}
                     value={employeeId}
-                    onChange={val => {
+                    onSelect={val => {
                       setEmployeeId(val); setStage(''); setItems([emptyItem()]);
+                      setIsWorkerModalOpen(false);
                       requestAnimationFrame(() => stageRef.current?.querySelector<HTMLButtonElement>('button')?.focus());
                     }}
-                    placeholder="Select worker..."
+                    onClose={() => setIsWorkerModalOpen(false)}
+                    searchPlaceholder="Search worker..."
                   />
                 </div>
                 <div>
@@ -489,62 +518,53 @@ export default function WageRunPage() {
                     <div className="soleria-input text-rose-600 text-sm flex items-center font-semibold">
                       Set this worker's trades first
                     </div>
-                  ) : (() => {
-                    const selLabel = availableStages.find(f => f.key === stage)?.label || 'Select stage...';
-                    return (
-                      <div className="relative" ref={stageRef}>
-                        <button
-                          type="button"
-                          onClick={openStageDropdown}
-                          className="flex items-center justify-between w-full pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer shadow-2xs focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30"
-                        >
-                          <span className={`truncate font-semibold ${stage ? 'text-slate-800' : 'text-slate-400'}`}>{selLabel}</span>
-                          <ChevronDown className={`ml-2 flex-shrink-0 text-slate-400 transition-transform duration-200 ${isStageOpen ? 'rotate-180 text-[var(--brand-gold)]' : ''}`} size={16} />
-                        </button>
-                        {isStageOpen && stagePos && createPortal(
-                          <div
-                            ref={stagePanelRef}
-                            style={{ position: 'fixed', top: stagePos.top, left: stagePos.left, width: stagePos.width, zIndex: 9999, boxShadow: '0 14px 34px rgba(27,42,65,0.14)' }}
-                            className="py-1.5 bg-white border border-slate-200/90 rounded-xl shadow-xl"
-                          >
-                            <button type="button" onClick={() => { setStage(''); setItems([emptyItem()]); setIsStageOpen(false); }}
-                              className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between cursor-pointer transition-colors ${!stage ? 'bg-[var(--brand-gold)] text-white font-semibold' : 'text-slate-600 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'}`}>
-                              <span>Select stage...</span>
-                              {!stage && <Check size={13} className="text-white" />}
-                            </button>
-                            <div className="my-1 border-t border-slate-100" />
-                            {availableStages.map(f => {
-                              const isSelected = stage === f.key;
-                              return (
-                                <button key={f.key} type="button"
-                                  onClick={() => {
-                                    setStage(f.key); setItems([emptyItem()]); setIsStageOpen(false);
-                                    requestAnimationFrame(() => focusArticle(0));
-                                  }}
-                                  className={`w-full text-left px-3.5 py-2 text-xs flex items-center justify-between cursor-pointer transition-colors ${isSelected ? 'bg-[var(--brand-gold)] text-white font-semibold' : 'text-slate-700 hover:bg-[#fbf7f0] hover:text-[var(--brand-navy)]'}`}>
-                                  <span>{f.label}</span>
-                                  {isSelected && <Check size={13} className="text-white flex-shrink-0" />}
-                                </button>
-                              );
-                            })}
-                          </div>,
-                          document.body
-                        )}
-                      </div>
-                    );
-                  })()}
+                  ) : (
+                    <div ref={stageRef}>
+                      {/* Was a bespoke createPortal dropdown with no keyboard handling at all —
+                          Enter/Arrow keys did nothing once it was open (reported directly by the
+                          user), and its highlight color was too light to see. Replaced with
+                          SearchModal, the same keyboard-correct, properly-contrasted picker used
+                          everywhere else in the app (see its own highlight-color history). */}
+                      <button
+                        type="button"
+                        onClick={() => setIsStageModalOpen(true)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === ' ') {
+                            e.preventDefault();
+                            setIsStageModalOpen(true);
+                          }
+                        }}
+                        className="flex items-center justify-between w-full pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium text-slate-700 transition-all cursor-pointer shadow-2xs focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30"
+                      >
+                        <span className={`truncate font-semibold ${stage ? 'text-slate-800' : 'text-slate-400'}`}>
+                          {availableStages.find(f => f.key === stage)?.label || 'Select stage...'}
+                        </span>
+                        <ChevronDown size={16} className="ml-2 flex-shrink-0 text-slate-400" />
+                      </button>
+                      <SearchModal
+                        isOpen={isStageModalOpen}
+                        title="Select Stage"
+                        options={availableStages.map(f => ({ value: f.key, label: f.label }))}
+                        value={stage}
+                        onSelect={val => {
+                          setStage(val); setItems([emptyItem()]); setIsStageModalOpen(false);
+                          requestAnimationFrame(() => focusArticle(0));
+                        }}
+                        onClose={() => setIsStageModalOpen(false)}
+                        searchPlaceholder="Search stage..."
+                      />
+                    </div>
+                  )}
                   {selectedWorker && availableStages.length > 0 && (
                     <p className="text-[10px] text-slate-400 mt-1">
                       Only {selectedWorker.name.split(' ')[0]}'s registered trades are listed.
                     </p>
                   )}
                 </div>
-              </div>
             </div>
 
-            {/* Lines */}
-            <div className="card-white p-6 bg-white border" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="flex items-center justify-between mb-4">
+            {/* Lines header */}
+            <div className="shrink-0 flex items-center justify-between mb-3">
                 <div>
                   <h3 className="font-lora font-semibold text-lg text-slate-800">Articles</h3>
                   <p className="text-xs text-slate-500">
@@ -560,22 +580,26 @@ export default function WageRunPage() {
                 >
                   <Plus size={14} /> Add Line
                 </button>
-              </div>
+            </div>
 
+            {/* Articles table — flex-1 so it grows to fill whatever space entryCardHeight (above)
+                leaves after every other section takes its natural size (same treatment as
+                Purchase/SaleBill/Journal Voucher's item tables). The header row is sticky within
+                the scroll box so column labels stay visible past the first screenful of rows. */}
+            <div className="flex-1 min-h-0 mb-4 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
               {!stage ? (
                 <div className="text-center p-8 text-slate-400 text-sm">
                   Pick a worker and a stage to start adding articles.
                 </div>
               ) : (
-                <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse text-sm">
                     <thead>
-                      <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                        <th className="p-3 pl-4" style={{ minWidth: 260 }}>Article</th>
-                        <th className="p-3 text-right" style={{ width: 110 }}>Rate / carton</th>
-                        <th className="p-3 text-right" style={{ width: 100 }}>Cartons</th>
-                        <th className="p-3 text-right" style={{ width: 130 }}>Amount</th>
-                        <th className="p-3 text-center" style={{ width: 50 }} />
+                      <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                        <th className="sticky top-0 z-10 bg-slate-50 p-3 pl-4" style={{ minWidth: 260 }}>Article</th>
+                        <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: 110 }}>Rate / carton</th>
+                        <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: 100 }}>Cartons</th>
+                        <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: 130 }}>Amount</th>
+                        <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: 50 }} />
                       </tr>
                     </thead>
                     <tbody>
@@ -584,12 +608,36 @@ export default function WageRunPage() {
                         return (
                           <tr key={it.key} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
                             <td className="p-2 pl-4">
+                              {/* A centered SearchModal popup, not a dropdown — matching every
+                                  other article/account picker in the app, per the user
+                                  2026-09-03. `data-field-nav` keeps this button in the same
+                                  Enter/Tab field-walk as the rest of the row (same attribute
+                                  SearchableSelect's own trigger carries). */}
                               <div ref={el => { articleContainerRefs.current[idx] = el; }}>
-                                <SearchableSelect
+                                <button
+                                  type="button"
+                                  data-field-nav="true"
+                                  onClick={() => setOpenArticleModalKey(it.key)}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                                      e.preventDefault();
+                                      setOpenArticleModalKey(it.key);
+                                    }
+                                  }}
+                                  className="flex items-center w-full pl-3.5 pr-3.5 py-2 bg-slate-50/60 hover:bg-white border border-slate-200 hover:border-[var(--brand-gold)] rounded-xl text-sm font-medium transition-all cursor-pointer shadow-2xs focus:outline-none focus:ring-2 focus:ring-[var(--brand-gold)]/30 text-left"
+                                >
+                                  <span className={`truncate ${it.articleId !== '' ? 'text-slate-800 font-semibold' : 'text-slate-400'}`}>
+                                    {it.articleName || 'Select article...'}
+                                  </span>
+                                </button>
+                                <SearchModal
+                                  isOpen={openArticleModalKey === it.key}
+                                  title="Select Article"
                                   options={productOptions}
                                   value={it.articleId === '' ? '' : String(it.articleId)}
-                                  onChange={val => pickProduct(it.key, val)}
-                                  placeholder="Select article..."
+                                  onSelect={val => { pickProduct(it.key, val); setOpenArticleModalKey(null); }}
+                                  onClose={() => setOpenArticleModalKey(null)}
+                                  searchPlaceholder="Search articles by code or name..."
                                 />
                               </div>
                               {zero && (
@@ -639,13 +687,12 @@ export default function WageRunPage() {
                       })}
                     </tbody>
                   </table>
-                </div>
               )}
             </div>
 
             {/* Balance block */}
             {employeeId && (
-              <div className="card-white p-6 bg-white border" style={{ borderColor: 'var(--border-color)' }}>
+              <div className="shrink-0 pt-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <Figure label="Grand Total" value={grandTotal} hint="Earned on this run" strong />
                   <Figure label="Baqaya" value={block.baqaya} hint={`Owed before ${formatDate(date)}`} />
@@ -851,13 +898,16 @@ export default function WageRunPage() {
 function Figure({ label, value, hint, strong, highlight }: {
   label: string; value: number; hint: string; strong?: boolean; highlight?: boolean;
 }) {
+  // A light amber-accented card, not a dark navy fill — same "readable bar" fix applied to the
+  // Reports Hub's Grand Total row (per the user, 2026-09-03: the same issue across every
+  // data-entry page's own total/balance bars, not just reports).
   return (
-    <div className={`p-3 rounded-lg border ${highlight ? 'bg-[#111c2a] border-[#111c2a]' : 'bg-slate-50 border-slate-200'}`}>
-      <div className={`text-[11px] font-bold uppercase tracking-wider ${highlight ? 'text-[#B08D57]' : 'text-slate-500'}`}>{label}</div>
-      <div className={`${strong ? 'text-lg' : 'text-base'} font-bold mt-0.5 ${highlight ? 'text-white' : 'text-slate-800'}`}>
+    <div className={`p-3 rounded-lg border ${highlight ? 'bg-amber-50 border-amber-300' : 'bg-slate-50 border-slate-200'}`}>
+      <div className={`text-[11px] font-bold uppercase tracking-wider ${highlight ? 'text-amber-800' : 'text-slate-500'}`}>{label}</div>
+      <div className={`${strong ? 'text-lg' : 'text-base'} font-bold mt-0.5 ${highlight ? 'text-slate-900' : 'text-slate-800'}`}>
         {formatCurrency(value)}
       </div>
-      <div className={`text-[10px] mt-0.5 ${highlight ? 'text-slate-400' : 'text-slate-400'}`}>{hint}</div>
+      <div className="text-[10px] mt-0.5 text-slate-400">{hint}</div>
     </div>
   );
 }

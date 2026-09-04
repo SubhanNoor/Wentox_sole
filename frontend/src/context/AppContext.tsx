@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useReducer } from 'react';
+import React, { createContext, useContext, useEffect, useReducer } from 'react';
 import type { ReactNode } from 'react';
+import * as api from '@/lib/api';
 import type {
   City, Region, Store, Adda, Vendor, Employee, ProductCategory, Product,
   GroupAccount, ChartOfAccount, BusinessAccount,
@@ -790,6 +791,11 @@ type Action =
   // Dispatched only after a real `api.login(...)` round-trip has already resolved
   // successfully (see LoginPage.tsx) — the reducer never touches credentials itself.
   | { type: 'LOGIN_SUCCESS'; payload: { username: string; role: UserRole } }
+  // Multi-window support: a freshly opened window found the app already logged in elsewhere
+  // (session is one shared value for the whole Electron process, not per-window — see
+  // api.currentSession()) and lands directly on `page`/`tab` instead of Home, since it was opened
+  // specifically to show that page (windows:open/AppLayout.tsx's "Open in New Window").
+  | { type: 'RESTORE_SESSION'; payload: { username: string; role: UserRole; page: string; tab: string | null } }
   | { type: 'LOGOUT' }
   // The signed-in user renamed their own account from Settings — updates the display name only,
   // no navigation (unlike LOGIN_SUCCESS, which always lands on Home).
@@ -951,6 +957,16 @@ function reducer(state: State, action: Action): State {
         currentUserRole: action.payload.role,
         currentUsername: action.payload.username,
         currentPage: 'home',
+        homeAlertsCardClosed: false
+      };
+    case 'RESTORE_SESSION':
+      return {
+        ...state,
+        isLoggedIn: true,
+        currentUserRole: action.payload.role,
+        currentUsername: action.payload.username,
+        currentPage: action.payload.page,
+        currentTab: action.payload.tab,
         homeAlertsCardClosed: false
       };
     case 'LOGOUT':
@@ -1282,6 +1298,30 @@ const AppContext = createContext<ContextType | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+
+  // Multi-window support: session is one shared in-memory value for the whole Electron process
+  // (backend/src/ipc/session.js), not per-window, so a freshly opened window (windows:open,
+  // AppLayout.tsx's "Open in New Window") checks once on mount whether the app is already logged
+  // in elsewhere and, if so, skips straight past its own Login screen to the `?page=`/`&tab=` it
+  // was opened for (falling back to Home if opened with no query, e.g. a first launch that
+  // somehow already had a session — shouldn't happen today, but harmless either way). A window
+  // with no existing session (the normal first-ever launch) just falls through to Login as before.
+  useEffect(() => {
+    (async () => {
+      const params = new URLSearchParams(window.location.search);
+      const page = params.get('page');
+      const tab = params.get('tab');
+      const res = await api.currentSession();
+      if (res.ok && res.data) {
+        dispatch({
+          type: 'RESTORE_SESSION',
+          payload: { username: res.data.username, role: res.data.role, page: page || 'home', tab },
+        });
+      }
+    })();
+    // One-time bootstrap check on mount, not a live subscription — intentionally no deps to watch.
+  }, []);
+
   return (
     <AppContext.Provider value={{ state, dispatch }}>
       {children}

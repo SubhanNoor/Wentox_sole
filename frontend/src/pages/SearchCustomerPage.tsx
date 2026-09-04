@@ -8,6 +8,7 @@ import * as api from '@/lib/api';
 import type { SaleBillRow, CustomerRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 type QuickFilter = 'all' | 'no-adda' | 'no-bilty' | 'no-gp' | 'complete';
 
@@ -23,18 +24,19 @@ const isMissing = (v: string | null | undefined) => !v || !v.trim();
 
 export default function SearchCustomerPage() {
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
-  const [customerId, setCustomerId] = useState('');
-  const [dateFrom, setDateFrom] = useState(getThreeMonthsAgoDate());
-  const [dateTo, setDateTo] = useState(getTodayDate());
-  const [quickFilter, setQuickFilter] = useState<QuickFilter>('all');
+  const [customerId, setCustomerId] = useState(() => getWindowParam('customerId') || '');
+  const [dateFrom, setDateFrom] = useState(() => getWindowParam('dateFrom') || getThreeMonthsAgoDate());
+  const [dateTo, setDateTo] = useState(() => getWindowParam('dateTo') || getTodayDate());
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>(() => (getWindowParam('quickFilter') as QuickFilter) || 'all');
   // BA-01: manual (client-typed) and system-generated (IDENTITY bill_id) bill numbers are
   // separate fields, filtered client-side against their own column — same pattern used on
   // the Search & Bilty Adda Updation page.
-  const [manualBillNoQuery, setManualBillNoQuery] = useState('');
-  const [systemBillNoQuery, setSystemBillNoQuery] = useState('');
+  const [manualBillNoQuery, setManualBillNoQuery] = useState(() => getWindowParam('manualBillNoQuery') || '');
+  const [systemBillNoQuery, setSystemBillNoQuery] = useState(() => getWindowParam('systemBillNoQuery') || '');
 
   const [bills, setBills] = useState<SaleBillRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
@@ -53,9 +55,24 @@ export default function SearchCustomerPage() {
     if (res.ok) setBills(res.data);
     else setErrorMsg('Failed to load bills: ' + res.error.message);
     setLoading(false);
+    setHasLoadedOnce(true);
   }, [customerId, dateFrom, dateTo]);
 
   useEffect(() => { loadBills(); }, [loadBills]);
+
+  // "Show Print Preview" opens a new window on this same customer's filtered bills (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    if (!customerId) return;
+    api.openWindow('search-customer', undefined, {
+      customerId, dateFrom, dateTo, quickFilter, manualBillNoQuery, systemBillNoQuery, autoPreview: '1',
+    });
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once loaded.
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && hasLoadedOnce) setIsPreviewOpen(true);
+  }, [hasLoadedOnce]);
 
   const filteredBills = useMemo(() => {
     let result = bills;
@@ -280,7 +297,7 @@ export default function SearchCustomerPage() {
                 )}
               </div>
               <button
-                onClick={() => setIsPreviewOpen(true)}
+                onClick={handleShowPrintPreview}
                 className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
               >
                 <Eye size={14} /> Show Print Preview

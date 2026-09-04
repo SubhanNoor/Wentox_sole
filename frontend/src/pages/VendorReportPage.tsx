@@ -2,18 +2,20 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Search, Eye } from 'lucide-react';
+import SearchableSelect from '@/components/SearchableSelect';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { VendorReportRow, VendorRow, LedgerRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 export function VendorReportContent() {
-  const [selectedVendorId, setSelectedVendorId] = useState<number | null>(null);
-  const [vendorSearch, setVendorSearch] = useState('');
-  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
-  const [toDate, setToDate] = useState(getTodayDate());
+  const [selectedVendorId, setSelectedVendorId] = useState<number | null>(() => { const p = getWindowParam('selectedVendorId'); return p != null ? Number(p) : null; });
+  const [vendorSearch, setVendorSearch] = useState(() => getWindowParam('vendorSearch') || '');
+  const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
 
   const [vendors, setVendors] = useState<VendorRow[]>([]);
   const [vendorGroupRows, setVendorGroupRows] = useState<VendorReportRow[]>([]);
@@ -81,6 +83,22 @@ export function VendorReportContent() {
   };
 
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  // "Show Print Preview" opens a new window on this same view (per the user, 2026-09-03), instead
+  // of an in-page overlay — carries the drill-down vendor too, so the new window lands straight on
+  // that vendor's ledger rather than the grouped summary.
+  const handleShowPrintPreview = () => {
+    const params: Record<string, string> = { vendorSearch, fromDate, toDate, autoPreview: '1' };
+    if (selectedVendorId != null) params.selectedVendorId = String(selectedVendorId);
+    api.openWindow('reports', 'vendor', params);
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once the
+  // relevant data (grouped rows, or the drilled-into vendor's ledger) has actually loaded.
+  useEffect(() => {
+    if (!isChildWindow() || getWindowParam('autoPreview') !== '1') return;
+    if (selectedVendorId != null ? ledger : vendorGroupRows.length > 0) setIsPreviewOpen(true);
+  }, [selectedVendorId, ledger, vendorGroupRows]);
 
   const renderPrintableDocument = () => {
     return (
@@ -150,8 +168,8 @@ export function VendorReportContent() {
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{formatDate(row.date)}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{row.type}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{row.ref}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>{row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(row.balance)}</td>
                 </tr>
               ))}
@@ -216,7 +234,7 @@ export function VendorReportContent() {
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setIsPreviewOpen(true)}
+                  onClick={handleShowPrintPreview}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
                 >
                   <Eye size={14} /> Show Print Preview
@@ -333,11 +351,29 @@ export function VendorReportContent() {
                   </div>
                 </div>
                 <button
-                  onClick={() => setIsPreviewOpen(true)}
+                  onClick={handleShowPrintPreview}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs self-end h-9 mt-4"
                 >
                   <Eye size={14} /> Show Print Preview
                 </button>
+              </div>
+            </div>
+
+            {/* Switch directly to another vendor's ledger without leaving this view (per the
+                user, 2026-09-04) — same "Switch Account" pattern as ReportKhaataPage.tsx's own
+                ledger detail view. */}
+            <div className="flex items-center gap-2 mb-6" data-no-print>
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider shrink-0 flex items-center gap-1">
+                <Search size={13} className="text-slate-400" /> Switch Vendor:
+              </span>
+              <div className="w-full max-w-sm">
+                <SearchableSelect
+                  options={vendors.map(v => ({ value: String(v.vendor_id), label: v.name }))}
+                  value={selectedVendorId != null ? String(selectedVendorId) : ''}
+                  onChange={(val: string) => setSelectedVendorId(Number(val))}
+                  placeholder="Search vendors..."
+                  searchPlaceholder="Type to search..."
+                />
               </div>
             </div>
 
@@ -380,8 +416,8 @@ export function VendorReportContent() {
                           <td className="p-3 pl-4 text-slate-700 font-semibold">{formatDate(row.date)}</td>
                           <td className="p-3 font-semibold text-slate-800">{row.type}</td>
                           <td className="p-3 text-center font-mono text-xs">{row.ref}</td>
-                          <td className="p-3 text-right font-bold text-rose-700">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-                          <td className="p-3 text-right font-bold text-rose-700">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
+                          <td className="p-3 text-right font-bold text-emerald-700">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
+                          <td className="p-3 text-right font-bold text-rose-700">{row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}</td>
                           <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(Math.abs(row.balance))}</td>
                         </tr>
                       ))

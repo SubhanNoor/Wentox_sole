@@ -24,6 +24,7 @@ export interface SaleBillItemRow {
   value: number;
   line_no: number;
   color?: string;
+  article_id?: number;
   article_code?: string;
   article_name?: string;
 }
@@ -105,6 +106,7 @@ export interface DraftSaleBillItemRow {
   value: number;
   line_no: number;
   color?: string;
+  article_id?: number;
   article_code?: string;
   article_name?: string;
 }
@@ -153,6 +155,7 @@ export interface SaleReturnItemRow {
   value: number;
   line_no: number;
   color?: string;
+  article_id?: number;
   article_code?: string;
   article_name?: string;
 }
@@ -217,6 +220,7 @@ export interface DraftSaleReturnItemRow {
   value: number;
   line_no: number;
   color?: string;
+  article_id?: number;
   article_code?: string;
   article_name?: string;
 }
@@ -1893,6 +1897,10 @@ declare global {
         listUsers: () => Promise<ApiResult<UserAccountRowFromApi[]>>;
         setUserActive: (payload: { id: number; is_active: boolean }) => Promise<ApiResult<{ ok: true }>>;
         resetPassword: (payload: { id: number; newPassword: string; password: string }) => Promise<ApiResult<{ ok: true }>>;
+        currentSession: () => Promise<ApiResult<{ userId: number; username: string; role: 'ADMIN' | 'USER' } | null>>;
+      };
+      windows: {
+        open: (payload: { page: string; tab?: string; params?: Record<string, string> }) => Promise<ApiResult<{ ok: true }>>;
       };
       systemReset: {
         run: (payload: { password: string }) => Promise<ApiResult<{ ok: true }>>;
@@ -2416,6 +2424,31 @@ export async function login(username: string, password: string): Promise<ApiResu
 export async function logout(): Promise<ApiResult<{ ok: true }>> {
   if (!window.api) return NO_BRIDGE;
   return window.api.auth.logout();
+}
+
+// Multi-window support: session is one shared in-memory value for the whole Electron process
+// (backend/src/ipc/session.js), not per-window, so a freshly opened window calls this on mount to
+// find out whether the app is already logged in elsewhere and skip its own Login screen. `null`
+// (not an error) means nothing is logged in yet — a normal answer, not a failure.
+export async function currentSession(): Promise<ApiResult<{ username: string; role: UserRole } | null>> {
+  if (!window.api) return NO_BRIDGE;
+  const result = await window.api.auth.currentSession();
+  if (!result.ok) return result;
+  if (!result.data) return { ok: true, data: null };
+  return { ok: true, data: { username: result.data.username, role: mapRole(result.data.role) } };
+}
+
+// Opens a second (or third...) app window landing directly on `page`/`tab` — same shape the Quick
+// Menu shortcuts already use (AppLayout.tsx's QuickShortcut). The new window inherits the shared
+// session (see currentSession above) rather than showing its own Login screen.
+//
+// `params` carries the caller's own filter/selection state through to the new window as extra URL
+// query keys (read back via `getWindowParam`, src/lib/windowParams.ts) — e.g. so a page's own
+// "Show Print Preview" button can open a new window landing on the exact same filtered report
+// (per the user, 2026-09-03) instead of one with every filter back at its default.
+export async function openWindow(page: string, tab?: string, params?: Record<string, string>): Promise<ApiResult<{ ok: true }>> {
+  if (!window.api) return NO_BRIDGE;
+  return window.api.windows.open({ page, tab, params });
 }
 
 export async function updateCredentials(payload: { currentPassword: string; username?: string; newPassword?: string }): Promise<ApiResult<{ username: string }>> {

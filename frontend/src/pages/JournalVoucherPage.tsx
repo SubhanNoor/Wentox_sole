@@ -1042,8 +1042,12 @@ const nextJvNoPreview = useMemo(
                 value={formatCurrency(totals.difference)}
                 disabled
                 className="soleria-input soleria-input-compact text-right font-mono font-bold"
+                // Balanced: light bar, not the dark navy fill — same fix as Reports Hub/Wage Run/
+                // Receipts/Expenses/Sale Bill/Sale Return (per the user, 2026-09-03). Out-of-
+                // balance keeps its own red warning state unchanged — white-on-saturated-red
+                // already reads clearly, that one was never the reported issue.
                 style={totals.difference === 0
-                  ? { width: '140px', color: 'var(--brand-gold)', background: '#111c2a', borderColor: '#334155' }
+                  ? { width: '140px', color: 'var(--brand-gold)', background: '#ffffff', borderColor: 'var(--border-color)' }
                   : { width: '140px', color: '#fff', background: '#be123c', borderColor: '#9f1239' }}
               />
             </div>

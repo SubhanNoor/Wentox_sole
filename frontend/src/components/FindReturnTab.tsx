@@ -7,6 +7,7 @@ import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime, formatCartons } from '@/lib/utils';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 interface FindReturnTabProps {
   onEditReturn: (ret: SaleReturnRow) => void;
@@ -19,6 +20,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
   const [subCustomers, setSubCustomers] = useState<SubCustomerRow[]>([]);
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -32,18 +34,18 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
   }, []);
 
   // ── Search Filter State ──────────────────────────────────────────────────────
-  const [fromDate, setFromDate]             = useState(getThreeMonthsAgoDate());
-  const [toDate, setToDate]                 = useState(getTodayDate());
-  const [customerQuery, setCustomerQuery]   = useState('');
-  const [subCustomerQuery, setSubCustomerQuery] = useState('');
+  const [fromDate, setFromDate]             = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
+  const [toDate, setToDate]                 = useState(() => getWindowParam('toDate') || getTodayDate());
+  const [customerQuery, setCustomerQuery]   = useState(() => getWindowParam('customerQuery') || '');
+  const [subCustomerQuery, setSubCustomerQuery] = useState(() => getWindowParam('subCustomerQuery') || '');
   // BA-01: manual (client-typed) and system-generated (IDENTITY return_id) bill numbers are
   // separate fields, both filtered client-side against their own column — same pattern used on
   // Search Customer, Search & Bilty Adda Updation, and Sale Bill's own Find & Update tab.
-  const [returnNoQuery, setReturnNoQuery]   = useState('');
-  const [systemReturnNoQuery, setSystemReturnNoQuery] = useState('');
-  const [biltyNoQuery, setBiltyNoQuery]     = useState('');
-  const [gpNoQuery, setGpNoQuery]           = useState('');
-  const [articleFilter, setArticleFilter]   = useState('');
+  const [returnNoQuery, setReturnNoQuery]   = useState(() => getWindowParam('returnNoQuery') || '');
+  const [systemReturnNoQuery, setSystemReturnNoQuery] = useState(() => getWindowParam('systemReturnNoQuery') || '');
+  const [biltyNoQuery, setBiltyNoQuery]     = useState(() => getWindowParam('biltyNoQuery') || '');
+  const [gpNoQuery, setGpNoQuery]           = useState(() => getWindowParam('gpNoQuery') || '');
+  const [articleFilter, setArticleFilter]   = useState(() => getWindowParam('articleFilter') || '');
 
   const [itemsCache, setItemsCache] = useState<Record<number, SaleReturnItemRow[]>>({});
   useEffect(() => {
@@ -67,8 +69,23 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
         date_to: toDate || undefined,
       });
       if (res.ok) setReturns(res.data);
+      setHasLoadedOnce(true);
     })();
   }, [fromDate, toDate]);
+
+  // "Show Print Preview" opens a new window on this same filtered directory (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    api.openWindow('sale-return', 'find', {
+      fromDate, toDate, customerQuery, subCustomerQuery, returnNoQuery, systemReturnNoQuery,
+      biltyNoQuery, gpNoQuery, articleFilter, autoPreview: '1',
+    });
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once loaded.
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && hasLoadedOnce) setIsPreviewOpen(true);
+  }, [hasLoadedOnce]);
 
   const filteredReturns = useMemo(() => {
     let result = [...returns];
@@ -113,7 +130,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
     if (articleFilter) {
       const product = products.find(p => p.article_id === Number(articleFilter));
       if (product) {
-        result = result.filter(r => (itemsCache[r.return_id] || []).some(item => item.article_code === product.code));
+        result = result.filter(r => (itemsCache[r.return_id] || []).some(item => item.article_id === product.article_id));
       }
     }
 
@@ -400,7 +417,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
             </span>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setIsPreviewOpen(true)}
+                onClick={handleShowPrintPreview}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
               >
                 <Eye size={14} /> Show Print Preview

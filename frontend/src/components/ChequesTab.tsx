@@ -9,6 +9,7 @@ import * as api from '@/lib/api';
 import type { ChequeRow, ChequeAllocationRow, ChequeStatus, ChequeDispositionType, VendorRow, BankAccountRow, BusinessAccountRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 const STATUS_STYLES: Record<ChequeStatus, string> = {
   PENDING: 'bg-amber-50 text-amber-800 border-amber-200',
@@ -33,9 +34,10 @@ export default function ChequesTab() {
   const [banks, setBanks] = useState<BankAccountRow[]>([]);
   const [businessAccounts, setBusinessAccounts] = useState<BusinessAccountRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | ChequeStatus>('open');
+  const [search, setSearch] = useState(() => getWindowParam('search') || '');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | ChequeStatus>(() => (getWindowParam('statusFilter') as 'all' | 'open' | ChequeStatus) || 'open');
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   // "Open" = still outstanding, i.e. not yet CLEARED and not BOUNCED/RETURNED. DEPOSITED belongs
@@ -102,7 +104,19 @@ export default function ChequesTab() {
       fail('Failed to load cheques: ' + res.error.message);
     }
     setLoading(false);
+    setHasLoadedOnce(true);
   }, []);
+
+  // "Show Print Preview" opens a new window on this same filtered directory (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    api.openWindow('cheque-return', 'disposal', { search, statusFilter, autoPreview: '1' });
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once loaded.
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && hasLoadedOnce) setIsPreviewOpen(true);
+  }, [hasLoadedOnce]);
 
   useEffect(() => {
     loadCheques();
@@ -418,7 +432,7 @@ export default function ChequesTab() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setIsPreviewOpen(true)}
+            onClick={handleShowPrintPreview}
             className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
           >
             <Eye size={15} /> Show Print Preview

@@ -9,6 +9,7 @@ import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from 
 import * as api from '@/lib/api';
 import type { BusinessLedgerSummaryRow, LedgerRow } from '@/lib/api';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import wentoxLogo from '@/assets/wentox_logo.png';
 
 interface KhaataRow {
@@ -45,7 +46,7 @@ interface ReportKhaataContentProps {
 export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentProps) {
   const isAllScope = scope === 'all';
 
-  const [accountBaId, setAccountBaId] = useState<number | null>(null);
+  const [accountBaId, setAccountBaId] = useState<number | null>(() => { const p = getWindowParam('accountBaId'); return p != null ? Number(p) : null; });
   const [isClosing, setIsClosing] = useState(false);
   const [accountSearch, setAccountSearch] = useState('');
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -57,8 +58,17 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
       setIsClosing(false);
     }, 200);
   };
-  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
-  const [toDate, setToDate] = useState(getTodayDate());
+  const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
+
+  // "Show Print Preview" opens a new window on this same account's ledger (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    if (accountBaId == null) return;
+    api.openWindow('reports', isAllScope ? 'business-ledger' : 'account-ledger', {
+      accountBaId: String(accountBaId), fromDate, toDate, autoPreview: '1',
+    });
+  };
 
   const [directory, setDirectory] = useState<BusinessLedgerSummaryRow[]>([]);
   const [ledger, setLedger] = useState<{ opening_balance: number; rows: LedgerRow[]; total_debit: number; total_credit: number; closing_balance: number } | null>(null);
@@ -96,6 +106,14 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
   }, [accountBaId, fromDate, toDate]);
 
   useEffect(() => { if (accountBaId) loadLedger(); }, [accountBaId, loadLedger]);
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once the
+  // account's ledger has actually loaded.
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && accountBaId != null && ledger) {
+      setIsPreviewOpen(true);
+    }
+  }, [accountBaId, ledger]);
 
   const filteredAccounts = useMemo(() => {
     if (!accountSearch.trim()) return directory;
@@ -182,16 +200,16 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                 ) : row.narration}
               </td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right' }}>{row.pairs > 0 ? row.pairs : '-'}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold' }}>{formatCurrency(Math.abs(row.balance))}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>{row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: balanceColor(row.balance) }}>{formatCurrency(Math.abs(row.balance))}</td>
             </tr>
           ))}
           <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
             <td colSpan={6} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>GRAND TOTAL</td>
-            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(ledger?.total_debit || 0)}</td>
-            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(ledger?.total_credit || 0)}</td>
-            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(Math.abs(runningKhaata[runningKhaata.length - 1]?.balance || 0))}</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{formatCurrency(ledger?.total_debit || 0)}</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>({formatCurrency(ledger?.total_credit || 0)})</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: balanceColor(runningKhaata[runningKhaata.length - 1]?.balance || 0) }}>{formatCurrency(Math.abs(runningKhaata[runningKhaata.length - 1]?.balance || 0))}</td>
           </tr>
         </tbody>
       </table>
@@ -433,7 +451,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
 
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setIsPreviewOpen(true)}
+                    onClick={handleShowPrintPreview}
                     className="flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
                   >
                     <Eye size={15} /> Show Print Preview
@@ -520,11 +538,11 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                               )}
                             </td>
                             <td className="p-3 text-center text-slate-600 font-medium">{row.pairs > 0 ? row.pairs : '-'}</td>
-                            <td className="p-3 text-right text-rose-700 font-bold">
+                            <td className="p-3 text-right text-emerald-700 font-bold">
                               {row.debit > 0 ? formatCurrency(row.debit) : '-'}
                             </td>
                             <td className="p-3 text-right text-rose-700 font-bold">
-                              {row.credit > 0 ? formatCurrency(row.credit) : '-'}
+                              {row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}
                             </td>
                             <td className="p-3 text-right font-bold font-mono" style={{ color: balanceColor(row.balance) }}>
                               {formatCurrency(displayBal)}
@@ -537,8 +555,8 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                   <tfoot>
                     <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
                       <td colSpan={6} className="p-4 text-left font-lora">TOTAL</td>
-                      <td className="p-4 text-right text-rose-800">{formatCurrency(ledger?.total_debit || 0)}</td>
-                      <td className="p-4 text-right text-rose-800">{formatCurrency(ledger?.total_credit || 0)}</td>
+                      <td className="p-4 text-right text-emerald-800">{formatCurrency(ledger?.total_debit || 0)}</td>
+                      <td className="p-4 text-right text-rose-800">({formatCurrency(ledger?.total_credit || 0)})</td>
                       <td className="p-4 text-right" style={{ color: balanceColor(runningKhaata[runningKhaata.length - 1]?.balance || 0) }}>
                         {formatCurrency(Math.abs(runningKhaata[runningKhaata.length - 1]?.balance || 0))}
                       </td>

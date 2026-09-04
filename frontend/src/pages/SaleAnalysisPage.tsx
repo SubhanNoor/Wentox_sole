@@ -10,6 +10,7 @@ import * as api from '@/lib/api';
 import type { SaleAnalysisRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -49,12 +50,12 @@ function sumMetrics(rows: Metrics[]): Metrics {
 }
 
 export function SaleAnalysisContent() {
-  const [groupMode, setGroupMode] = useState<GroupMode>('customer');
-  const [viewMode, setViewMode] = useState<'overall' | 'month' | 'range'>('overall');
-  const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
-  const [filterYear, setFilterYear] = useState(new Date().getFullYear());
-  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
-  const [toDate, setToDate] = useState(getTodayDate());
+  const [groupMode, setGroupMode] = useState<GroupMode>(() => (getWindowParam('groupMode') as GroupMode) || 'customer');
+  const [viewMode, setViewMode] = useState<'overall' | 'month' | 'range'>(() => (getWindowParam('viewMode') as 'overall' | 'month' | 'range') || 'overall');
+  const [filterMonth, setFilterMonth] = useState(() => { const p = getWindowParam('filterMonth'); return p != null ? Number(p) : new Date().getMonth(); });
+  const [filterYear, setFilterYear] = useState(() => { const p = getWindowParam('filterYear'); return p != null ? Number(p) : new Date().getFullYear(); });
+  const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
   const [expandedRegionId, setExpandedRegionId] = useState<number | null>(null);
   const [expandedCityId, setExpandedCityId] = useState<number | null>(null);
 
@@ -66,6 +67,7 @@ export function SaleAnalysisContent() {
 
   const [rows, setRows] = useState<SaleAnalysisRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   const { periodStart, periodEnd, periodLabel } = useMemo(() => {
     if (viewMode === 'month') {
@@ -89,9 +91,24 @@ export function SaleAnalysisContent() {
     const res = await api.reports.saleAnalysis({ date_from: periodStart, date_to: periodEnd });
     if (res.ok) setRows(res.data as SaleAnalysisRow[]);
     setLoading(false);
+    setHasLoadedOnce(true);
   }, [periodStart, periodEnd]);
 
   useEffect(() => { loadRows(); }, [loadRows]);
+
+  // "Show Print Preview" opens a new window on this same filtered/grouped report (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    api.openWindow('reports', 'sale-analysis', {
+      groupMode, viewMode, filterMonth: String(filterMonth), filterYear: String(filterYear),
+      fromDate, toDate, autoPreview: '1',
+    });
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once loaded.
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && hasLoadedOnce) setIsPreviewOpen(true);
+  }, [hasLoadedOnce]);
 
   // "Payment Received" combines the receipt amount and commission, same as the receipt-level
   // Dr customer BA / Cr COMMISSION_ALLOWED pair both reduce what the customer owes.
@@ -368,7 +385,7 @@ export function SaleAnalysisContent() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setIsPreviewOpen(true)}
+              onClick={handleShowPrintPreview}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
             >
               <Eye size={14} /> Show Print Preview

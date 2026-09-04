@@ -1929,7 +1929,12 @@ const nextVoucherNo = useMemo(
                         value={formatCurrency(Number(voucher?.total_amount ?? 0))}
                         disabled
                         className="soleria-input soleria-input-compact text-right font-mono font-bold"
-                        style={{ width: '140px', color: 'var(--brand-gold)', background: '#111c2a', borderColor: '#334155' }}
+                        // Light bar, not the dark navy fill — matching the same fix applied to
+                        // Reports Hub/Wage Run (per the user, 2026-09-03): the gold text is the
+                        // established accent for "the important total" elsewhere in the app
+                        // (Overall Trial Balance heading, other Grand Total rows), it just needs
+                        // a light background instead of dark navy to actually read clearly.
+                        style={{ width: '140px', color: 'var(--brand-gold)', background: '#ffffff', borderColor: 'var(--border-color)' }}
                       />
                     </div>
                   </div>

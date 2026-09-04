@@ -4922,3 +4922,457 @@ no logic** — every cheque / online / endorsement / bounce / voucher rule behav
 - **Files:** `backend/src/db/pool.js`, `backend/src/services/systemReset.service.js` (new),
   `backend/src/ipc/systemReset.ipc.js` (new), `backend/src/ipc/index.js`,
   `frontend/src/lib/ipcBridge.ts`, `frontend/src/lib/api.ts`, `frontend/src/pages/SettingsPage.tsx`
+
+## Multi-window support — open any page in a separate, independently-usable window
+- **User request:** clicking a nav item currently navigates the *same* window; the ask was to open
+  pages in a second (or third...) OS window so more than one page can be open and usable at once.
+  Assessed first (effort estimate, no code) — the user then asked to go ahead, with a reminder that
+  live cross-window sync is an explicitly deferred follow-up, not part of this change.
+- **Why this was tractable:** each Electron `BrowserWindow` is its own renderer process — a second
+  window loading the same bundle gets its own independent `AppProvider`/reducer for free, no
+  routing library needed. And `session.js` already holds login as one value shared by the *whole*
+  process (not per-window), so a second window doesn't need its own login.
+- **`backend/electron/windowManager.js`** (new): `createAppWindow(page, tab)` — the exact
+  dev/packaged/unpackaged-prod `BrowserWindow`/`loadURL`/`loadFile` logic `main.js`'s old
+  `createWindow()` had, now parameterized and shared so opening an *additional* window uses
+  identical logic to the first. `page`/`tab` become a `?page=&tab=` query string (`loadFile`'s own
+  `query` option for the packaged/unpackaged-prod cases; hand-built via `URL`/`searchParams` for
+  the dev-server case, since `loadFile`'s `query` option doesn't apply to `loadURL`).
+- **`backend/electron/main.js`**: `createWindow()` now just calls `createAppWindow()` — the
+  `BrowserWindow` construction/loading logic itself moved to `windowManager.js`. `path` import
+  dropped (no longer used here).
+- **New `backend/src/ipc/windows.ipc.js`** + registered in `src/ipc/index.js`: `windows:open`
+  (`requireSession()` first — only an already-logged-in operator can spawn more windows) calls
+  `createAppWindow(payload.page, payload.tab)`.
+- **`backend/src/ipc/auth.ipc.js`**: new `auth:currentSession` — no `requireSession()` guard
+  (mirrors `zoom:set`'s reasoning: this is exactly how something with no session yet finds out
+  there ISN'T one) — returns `session.current()` (`null` is a normal answer, not a failure).
+- **Frontend `lib/api.ts`**: `currentSession()` (mirrors `login()`'s role-mapping) and
+  `openWindow(page, tab?)`. New `windows` feature added to `ipcBridge.ts`'s `FEATURES` array —
+  missing that step (per this file's own layered-architecture note) would have made
+  `window.api.windows` `undefined` and failed with an opaque TypeError on first call.
+- **`AppContext.tsx`**: new `RESTORE_SESSION` action + reducer case (same shape as
+  `LOGIN_SUCCESS` but lands on `action.payload.page`/`.tab` instead of always Home) and a
+  mount-once effect in `AppProvider` that reads `?page=`/`&tab=` off `window.location.search`,
+  calls `currentSession()`, and dispatches `RESTORE_SESSION` if one exists — skipping straight
+  past the freshly-opened window's own Login screen. A window with no existing session (the
+  normal first-ever launch) falls through to Login exactly as before; nothing changed there.
+- **UI triggers** — two, both discoverable without needing to be told about the other:
+  - Ctrl/Cmd+Click a Quick Menu shortcut or a `MenuBar` dropdown item opens it in a new window
+    instead of navigating in place (same convention as a browser tab). `MenuBar.tsx` gained a new
+    `onOpenWindow` prop alongside its existing `onNavigate`, wired from `AppLayout.tsx`.
+  - A small `ExternalLink` icon, hover-revealed (`group`/`group-hover:opacity-100`) on each Quick
+    Menu shortcut chip in `AppLayout.tsx`, for anyone who wouldn't think to Ctrl/Cmd+Click.
+- **Explicitly deferred, per the user:** live sync across windows. Two windows are two independent
+  copies of app state — posting something in one won't auto-refresh an already-open list in the
+  other. No push/broadcast mechanism (`ipcRenderer` events main → all renderers) exists yet; this
+  is flagged as a known follow-up, not solved here.
+- `npx tsc -b` and `npm run lint` (frontend) both pass on every touched file — the only lint hits
+  are pre-existing `react-refresh/only-export-components` errors already present in
+  `AppContext.tsx` before this change (confirmed via `git stash`), unrelated to this work.
+  `node --check` passes on every touched/new backend file (`main.js`'s own `app`/`BrowserWindow`
+  top-level calls make it unrunnable outside a real Electron process, same as before this change —
+  not a regression).
+- **Not yet live-verified** — no way to launch the actual Electron app from this sandbox; needs a
+  manual pass: Ctrl+Click a shortcut/menu item (or its new external-link icon) and confirm a second
+  window opens already logged in, landing on the right page, with the first window still usable.
+- **Files:** `backend/electron/windowManager.js` (new), `backend/electron/main.js`,
+  `backend/src/ipc/windows.ipc.js` (new), `backend/src/ipc/index.js`, `backend/src/ipc/auth.ipc.js`,
+  `frontend/src/lib/api.ts`, `frontend/src/lib/ipcBridge.ts`, `frontend/src/context/AppContext.tsx`,
+  `frontend/src/components/AppLayout.tsx`, `frontend/src/components/MenuBar.tsx`
+
+## Multi-window support — corrected to a lightweight child window (follow-up)
+- **User correction:** the first pass opened a second window with the FULL app shell (header,
+  MenuBar, Quick Menu bar) just landed on a different page — not what was wanted. The ask was a
+  window showing ONLY that page's own content, matching the legacy app's per-document floating
+  windows (`ref-pics/batch2` — "JOURNAL ENTRY" as its own small window with just its own toolbar
+  and fields, no main app nav repeated inside it).
+- **`windowManager.js`**: `createAppWindow(page, tab, { child })` — `child: true` (only ever passed
+  by `windows:open`, never the app's own first/main window) adds `child=1` to the query string and
+  sizes the window smaller (1000×720 vs 1280×800) by default, still freely resizable.
+- **`windows.ipc.js`**: now calls `createAppWindow(page, tab, { child: true })`.
+- **`AppLayout.tsx`**: new module-level `IS_CHILD_WINDOW` (`?child=1` in `location.search`, read
+  once — safe since this app has no client-side routing, so a window's own URL never changes
+  after creation). When set, the header/`<MenuBar>`/Quick Menu bar block is skipped entirely; a
+  much thinner strip (just `pageTitle` + the page's own `headerAction`, e.g. Journal Voucher's
+  "New Journal Voucher"/"JV Ledger" switcher) replaces it — that switcher is the page's OWN
+  content, not app-wide chrome, so it still needs to work in a child window even with everything
+  else gone. `<main>{children}</main>` renders unconditionally either way.
+- `npx tsc -b` and `npm run lint` (frontend) both pass clean on `AppLayout.tsx`; `node --check`
+  passes on the touched backend files.
+- **Not yet live-verified**, same caveat as above — needs a real Electron launch to confirm a
+  child window actually renders just the page (no header/nav) and its own tab switcher still works.
+- **Files:** `backend/electron/windowManager.js`, `backend/src/ipc/windows.ipc.js`,
+  `frontend/src/components/AppLayout.tsx`
+
+## Multi-window support — every bar/menu item opens a window directly (2nd follow-up)
+- **User request:** widen scope to every report (`3.ACCOUNT REPORTS`/`4.STOCK REPORTS`/
+  `5.SALE REPORTS` — same `{ page: 'reports', tab }` shape every other menu item already uses, so
+  this needed no new code, just the click behavior change below to apply to them too) and drop the
+  Ctrl/Cmd+Click requirement entirely — a plain click on ANY Quick Menu shortcut or MenuBar item
+  should open its new (child) window directly, no modifier key, no separate button.
+- **`AppLayout.tsx`**: Quick Menu shortcut chips' `onClick` now calls `api.openWindow(s.page,
+  s.tab)` unconditionally — the Ctrl/Cmd-key branch and the separate hover-revealed `ExternalLink`
+  icon button (both from the previous pass) are gone; a plain click IS "open in new window" now,
+  so neither was still needed. Import of `ExternalLink` removed (now unused).
+- **`MenuBar.tsx`**: same simplification — `onNavigate` prop removed entirely (nothing calls it
+  anymore, only `onOpenWindow` remains) and the item `onClick` unconditionally calls
+  `onOpenWindow(item.page, item.tab)`. `title` copy updated to say "Opens in a new window" instead
+  of describing a modifier-key shortcut that no longer exists.
+- **`AppLayout.tsx`**'s `<MenuBar>` call site: dropped the now-removed `onNavigate` prop.
+- The in-place `navigate()` function itself is untouched and still used by the header's Home
+  button — this change only affects the two "launch a document" surfaces (Quick Menu, MenuBar),
+  not all navigation in the app.
+- `npx tsc -b` and `npm run lint` both pass clean on both touched files.
+- **Not yet live-verified**, same caveat as the two entries above.
+- **Files:** `frontend/src/components/AppLayout.tsx`, `frontend/src/components/MenuBar.tsx`
+
+## Wage Run — Stage keyboard nav fix + Article converted to SearchModal
+- **User report:** after picking a Worker by keyboard, the Stage picker's Enter/Arrow keys did
+  nothing once it was open, and its highlight color was too light to see. Also asked for Article
+  to use "a modal popup instead of dropdown like in rest of the app."
+- **Root cause (Stage):** the Stage picker was a bespoke `createPortal` dropdown with NO keyboard
+  handling at all on its option buttons or the panel itself — only mouse clicks worked. Its own
+  outside-click listener, position-tracking state, and portal panel are all removed; replaced with
+  `SearchModal` (`@/components/SearchModal`), the same component already used for Vendor/Customer/
+  Article pickers elsewhere (`SaleBillPage.tsx`, `PurchasePage.tsx`, etc.) — it already handles
+  Up/Down/Enter/Escape correctly and already had its own highlight-color fix (see its own comment:
+  "darkened from a barely-visible pale cream — flagged directly by the user"). Removed
+  `isStageOpen`/`stagePos`/`stagePanelRef`/`openStageDropdown`/the mousedown-listener effect;
+  `stageRef` kept (still used to focus the trigger after picking a Worker). `createPortal` (react-
+  dom) and the `Check` icon are no longer used anywhere in the file — both imports dropped.
+- **Article**: same conversion — the per-row `SearchableSelect` dropdown replaced with a plain
+  trigger button (`data-field-nav="true"`, so it stays in the same Enter/Tab field-walk
+  `SearchableSelect`'s own trigger participated in) + a `SearchModal` per row, gated by one shared
+  `openArticleModalKey` (only one row's modal can be open at a time). `pickProduct`/`focusArticle`
+  needed no changes — the container ref and `button[data-field-nav]` lookup `focusArticle` already
+  used still resolve to the new trigger button.
+- Worker's own field (`SearchableSelect`) was untouched — the user's report was specifically about
+  Stage, not Worker, and `SearchableSelect` already has working keyboard nav.
+- `npx tsc -b` and `npm run lint` pass clean; the 3 remaining lint hits (`set-state-in-effect` ×2,
+  a `useMemo` exhaustive-deps warning) are pre-existing, confirmed via `git diff` — none touch
+  lines this change added.
+- **Not yet live-verified** — needs a real run-through: pick a Worker, Tab/Enter into Stage, use
+  Arrow keys + Enter to pick one (confirm the highlight is now clearly visible), then open an
+  Article's modal the same way and confirm it also selects correctly and returns focus to Rate.
+- **Files:** `frontend/src/pages/WageRunPage.tsx`
+
+## Wage Run — Worker also converted to SearchModal + compact single-screen layout
+- **User request:** convert Worker (still a `SearchableSelect` dropdown) to the same `SearchModal`
+  popup as Stage/Article, and make the page's overall layout compact like the rest of the app.
+- **Worker → SearchModal**: same conversion pattern as Stage/Article — a plain trigger button
+  (`data-field-nav="true"`, so the Date field's existing Enter-key handler — which looks up
+  `button[data-field-nav]` inside `workerContainerRef` — still finds it) + a `SearchModal`. Picking
+  a worker still resets Stage/Items and focuses the Stage trigger, same as before.
+  `SearchableSelect` import removed — no longer used anywhere in this file.
+- **Compact layout**: this page still had the OLDER shape (three separate `card-white` sections —
+  Header/Lines/Balance — stacked, whole page scrolling) that Purchase/SaleBill/JournalVoucherPage
+  were already converted away from. Merged all three into ONE `<form>` that IS the entry card,
+  height pinned to the remaining viewport space (`entryCardRef`/`entryCardHeight`, identical
+  measurement effect to those three pages), laid out `flex flex-col`: header fields and the
+  Articles-header row stay `shrink-0`, the Articles table becomes `flex-1 min-h-0 overflow-y-auto`
+  with a sticky `<thead>`, and the Balance block (still conditional on `employeeId`) sits below it
+  as a `shrink-0 border-t` footer section inside the same card instead of its own separate card.
+  The outer app window no longer scrolls past three cards — only the Articles table scrolls
+  internally, exactly like the three already-converted pages.
+- The `entryCardHeight` effect had to be placed AFTER `errorMsg`/`successMsg` are declared (both
+  are in its dependency array) — an earlier draft placed it right after `switchTab`, before those
+  `const`s, which would have thrown "Cannot access before initialization" on every render. Caught
+  before it shipped.
+- `npx tsc -b` and `npm run lint` both pass clean; the same 3 pre-existing lint hits as the
+  previous entry (confirmed unrelated).
+- **Not yet live-verified** — needs a real check that the page now fits one screen with only the
+  Articles table scrolling, and that Worker's modal keyboard nav/selection works end to end.
+- **Files:** `frontend/src/pages/WageRunPage.tsx`
+
+## Reports Hub — Vendor/Customer Balances text brought up to the app's bolder convention
+- **User report:** Payment Trail, Customer Balances, and Vendor Balances "text is old" — pointed to
+  the Reports Hub's other tabs as the reference for the bolder, clearer style to match.
+- **Investigation, not a guess:** compared all the Reports Hub tab components directly.
+  `PaymentTrailPage.tsx` and `ReportKhaataPage.tsx` (Account Ledger/Business Ledger tabs) already
+  use the target convention — `text-sm` table body with `font-bold` (often colored) debit/credit/
+  balance cells, `text-xs font-semibold uppercase` headers. `OverallTrailContent.tsx` — the ONE
+  component that actually powers both "Vendor Balances" and "Customer Balances" (via an
+  `initialGroup` prop) plus "Overall Trail" itself — was the real outlier: `text-xs`/`text-[11px]`/
+  `text-[10.5px]` throughout, with plain (non-bold) debit/credit numbers. Payment Trail's own table
+  already matched the target convention and needed no changes.
+- **`OverallTrailContent.tsx` — both on-screen tables** (the main "Business Accounts Balances
+  Details" table and the account drill-down ledger table) brought up to `text-sm`/`text-xs`-header
+  to match: base table text bumped from `text-xs` to `text-sm`; every micro-sized class
+  (`text-[11px]`, `text-[10.5px]`) replaced with `text-xs`; debit/credit values gained `font-bold`
+  (previously plain weight even though colored); the account description cell gained
+  `font-semibold` (aggregate/italic rows explicitly kept `font-normal` so they still read as
+  distinct from real accounts). Print-preview export layouts (the `renderPrintableDocument`/
+  `renderPrintableLedger` functions, separate inline-styled paper output) were deliberately left
+  untouched — a different medium/context, not what was on screen when this was reported.
+- `npx tsc -b` and `npm run lint` both pass clean; the 2 remaining lint hits are the same
+  pre-existing `set-state-in-effect` pattern seen elsewhere in this codebase, confirmed unrelated
+  (both are data-loading effects, not touched by this change).
+- **Not yet live-verified** — needs a look at the actual Vendor Balances/Customer Balances/Overall
+  Trail tabs to confirm the table now reads clearly bolder, matching Payment Trail/Account Ledger.
+- **Files:** `frontend/src/pages/OverallTrailContent.tsx`
+
+## Grand Total bar — credit total was unreadable on its own dark navy background
+- **User report, with screenshot:** on Vendor Balances (and the same component's Customer
+  Balances/Overall Trail), the dark navy "Grand Total" bar's numbers weren't readable; asked for
+  white "in the whole app."
+- **Searched the whole app first, not just this one screenshot** — grepped every page/component
+  for the dark-navy-background-on-a-real-content-row pattern (`bg-[var(--brand-navy)]`,
+  `bg-[#111c2a]`, `bg-slate-900` as a solid fill, not the many `bg-slate-900/40` modal backdrops)
+  plus every on-screen "Grand Total" row specifically (Sale Analysis, Vendor Report, Purchase,
+  Purchase Return, Payment Trail, Wage Run's `Figure` component). Every other one already sits on
+  a LIGHT background (`bg-slate-50`) with dark text, which is already readable — no changes needed
+  there. `OverallTrailContent.tsx`'s Grand Total row was the only one on a dark navy background,
+  and the only one with a contrast bug: its credit cell explicitly overrode the row's own
+  `text-white` with `text-rose-700` (dark red) — dark-on-dark, unreadable. `WageRunPage.tsx`'s
+  `Figure` component already uses `text-white` correctly on its own dark ("Net Balance") variant.
+- **Fix:** removed the `text-rose-700` override on that one cell, leaving it to inherit the row's
+  `text-white` (matching the debit cell right next to it, which was already correct).
+- `npx tsc -b` and `npm run lint` both pass clean; same 2 pre-existing lint hits as the previous
+  entry, confirmed unrelated.
+- **Not yet live-verified** — needs a look at Vendor Balances/Customer Balances/Overall Trail to
+  confirm the Grand Total row's credit figure is now clearly readable in white.
+- **Files:** `frontend/src/pages/OverallTrailContent.tsx`
+
+## Correction: it was the BAR's background that should change, not the number's color
+- **User correction:** the previous fix (recoloring the credit total to white) missed the actual
+  ask — the credit number should stay red; it's the dark navy BAR itself that should become
+  white/light, everywhere this pattern exists in the app.
+- Reverted the text-color change and instead changed the row's own background from
+  `bg-[var(--brand-navy)]`/`text-white` to the light `bg-slate-50` style already used by every
+  other "Grand Total" row in the app (Sale Analysis, Vendor Report) — dark navy label
+  (`font-lora`, `var(--brand-navy)`), dark debit figure, RED credit figure (`text-rose-700`,
+  unchanged from before either of these two fixes), all on a light background instead of navy.
+  Border colors adjusted from `border-slate-600`/`border-slate-800` (dark-bg values) to
+  `border-slate-200`/`border-slate-300` (light-bg values) to match.
+- Confirmed via the earlier "whole app" grep (previous entry) that this row was the only dark-navy
+  content bar in the app to begin with — this correction only touches that same one spot.
+- `npx tsc -b` passes clean.
+- **Not yet live-verified** — needs a look at Vendor Balances/Customer Balances/Overall Trail to
+  confirm the Grand Total bar is now light with a red (not white) credit figure.
+- **Files:** `frontend/src/pages/OverallTrailContent.tsx`
+
+## Same dark-bar fix extended to data-entry pages
+- **User request:** apply the same navy-bar-to-light fix "in all data entry pages."
+- **Searched every data-entry page first** (Sale Bill, Sale Return, Purchase, Purchase Return,
+  Receipts, Expenses, Transfer, Journal Voucher, Cheque, Wage Run, Salary Run, Stock Voucher) for
+  every `bg-[#111c2a]`/`bg-[var(--brand-navy)]`/solid `bg-slate-900` occurrence. The overwhelming
+  majority are active-tab pills and buttons (gold-on-navy, `text-[#B08D57]` — already good
+  contrast, not a "total bar," left untouched). The ONE genuine total/balance bar with a dark navy
+  fill in any data-entry page was `WageRunPage.tsx`'s `Figure` component's `highlight` variant
+  (used for the "Net Balance" figure) — structurally the same pattern as the Reports Hub bug, even
+  though this one's white text was already readable.
+- **Fix:** `Figure`'s `highlight` branch changed from `bg-[#111c2a] border-[#111c2a]` +
+  `text-[#B08D57]`/`text-white` to a light `bg-amber-50 border-amber-300` card with
+  `text-amber-800` label and `text-slate-900` value — matching the light-bar convention now used
+  for the Reports Hub Grand Total row, instead of a dark fill.
+- Checked `AccountBalancePanel.tsx`, `SalaryRunPage.tsx`, and every other data-entry page
+  specifically for a second instance — none found.
+- `npx tsc -b` and `npm run lint` pass clean; same 3 pre-existing lint hits as WageRunPage's
+  earlier entries, confirmed unrelated.
+- **Not yet live-verified** — needs a look at Wage Run's Net Balance figure to confirm it now
+  reads as a light amber card instead of a dark navy one.
+- **Files:** `frontend/src/pages/WageRunPage.tsx`
+
+## Found the REAL source: an inline-style dark bar the earlier greps missed entirely
+- **User report, with screenshots:** the dark bar is still there on Sale Bill, Sale Return,
+  Receipts, Expenses, and Stock Voucher.
+- **Root cause:** every earlier "whole app" search grepped for Tailwind arbitrary-value classes
+  (`bg-[#111c2a]`, `bg-[var(--brand-navy)]`). This bar isn't a Tailwind class at all — it's a plain
+  inline `style={{ background: '#111c2a', ... }}` on the final totals field (Sale Bill/Sale
+  Return's "Rs.", Receipts/Expenses' "Total Amount", Stock Voucher's second total field, Journal
+  Voucher's balanced "Net Total") — invisible to a class-name grep, which is exactly why it slipped
+  through every prior pass despite those pages being checked.
+- **Found by grepping for the literal string** `background: '#111c2a'` instead of a Tailwind
+  pattern — turned up in exactly 6 files: `ReceiptsPage.tsx`, `ExpensesPage.tsx`,
+  `SaleReturnPage.tsx`, `SaleBillPage.tsx`, `StockVoucherPage.tsx`, and `JournalVoucherPage.tsx`
+  (this last one wasn't in the user's list but has the identical pattern — fixed for consistency).
+- **Fix, same in all six:** background changed from `#111c2a` (navy) to `#fdf6ec` (a light cream,
+  matching the app's existing amber/gold-highlight family — e.g. `ReportKhaataPage.tsx`'s opening-
+  balance row) and border from `#334155` to `#e7d5b8` to match. Text color kept as `var(--brand-
+  gold)` where it already was (gold-on-light is an established accent elsewhere in the app — the
+  Overall Trial Balance heading, other Grand Total rows); `StockVoucherPage.tsx`'s field used plain
+  white text (which would have vanished on a light background) and was switched to the same gold.
+  `JournalVoucherPage.tsx`'s out-of-balance red warning state (white on saturated red) was left
+  alone — that one was never unreadable, only its balanced/navy state was.
+- `npx tsc -b` passes clean on all six files. `npm run lint` also passes clean on five of them;
+  `StockVoucherPage.tsx` has 37 pre-existing React Compiler/memoization lint errors (confirmed via
+  `git diff` — this change only touched 6 lines, none of the flagged ones).
+- **Not yet live-verified** — needs a look at all six pages to confirm the final total field is now
+  a light cream bar with gold text instead of dark navy.
+- **Files:** `frontend/src/pages/ReceiptsPage.tsx`, `frontend/src/pages/ExpensesPage.tsx`,
+  `frontend/src/pages/SaleReturnPage.tsx`, `frontend/src/pages/SaleBillPage.tsx`,
+  `frontend/src/pages/StockVoucherPage.tsx`, `frontend/src/pages/JournalVoucherPage.tsx`
+
+## Correction: white, not cream
+- **User correction:** the cream (`#fdf6ec`) from the previous fix wasn't what was meant — plain
+  white, on the same six fields.
+- Changed `background: '#fdf6ec'` → `'#ffffff'` and `borderColor: '#e7d5b8'` →
+  `'var(--border-color)'` (the same border variable every other plain input on these pages already
+  uses) across the same six occurrences. Text stays `var(--brand-gold)`, unchanged.
+- **Did NOT touch** `OverallTrailContent.tsx`'s own `#fdf6ec` (line 272, an opening-balance row
+  inside `renderPrintableLedger()`'s print-preview output) — that one predates this whole fix
+  entirely and is a different, unrelated element; confirmed by checking its context before editing
+  anything, not just search-and-replacing every match of the color.
+- `npx tsc -b` passes clean on all six files.
+- **Not yet live-verified** — needs a look at all six pages to confirm the total field is now a
+  plain white bar with gold text.
+- **Files:** `frontend/src/pages/ReceiptsPage.tsx`, `frontend/src/pages/ExpensesPage.tsx`,
+  `frontend/src/pages/SaleReturnPage.tsx`, `frontend/src/pages/SaleBillPage.tsx`,
+  `frontend/src/pages/StockVoucherPage.tsx`, `frontend/src/pages/JournalVoucherPage.tsx`
+
+## Multi-window support — closing the main window now closes every child window too
+- **User request:** child windows (opened via Ctrl/Cmd+Click or the shortcut icon,
+  `windows:open`/`createAppWindow`) had no real relationship to the main window — closing the main
+  window left every child window still open.
+- **`backend/electron/windowManager.js`**: added a module-level `mainWindow` reference, set
+  whenever `createAppWindow()` is called with `child` false (the app's own startup window from
+  `main.js`, and again if it's reopened via the macOS dock `activate` handler). Every window opened
+  WITH `child: true` now gets `parent: mainWindow` in its `BrowserWindow` constructor options
+  (guarded by `!mainWindow.isDestroyed()`, in case the main window was somehow already gone).
+  Electron's own native parent/child window lifecycle is what then closes every child
+  automatically when its parent closes — nothing hand-rolled (no manual window-tracking array or
+  `close` event listener needed); this is the documented behavior of the `parent` `BrowserWindow`
+  option.
+- A child window opened FROM another child window still becomes a child of the one true
+  `mainWindow`, not of whichever window it was triggered from — `windows:open`'s handler doesn't
+  know or care which window sent the request, it only ever reads the tracked `mainWindow`.
+- `node --check` passes clean on the touched file (can't run the actual Electron app from this
+  sandbox to verify the native close-cascade).
+- **Not yet live-verified** — needs a real check: open 2-3 child windows, close the main window,
+  confirm every child window closes with it.
+- **Files:** `backend/electron/windowManager.js`
+
+## Removed the system-generated article code ("P-101" etc.) everywhere it was shown
+- **User request:** the auto-generated article code (`dbo.articles.code`, `nextCode()` = `P-<n>`)
+  is gone from every screen it appeared on — Current Stock report's CODE column (the user's
+  screenshot), Product Setup, and every article picker across the app.
+- **Real dependency fixed first, before any UI removal:** four repositories returned only
+  `a.code AS article_code` (not `article_id`) for a saved bill/return's line items, so the frontend
+  re-resolved each line's product by string-matching `product.code === item.article_code`.
+  Removing the code from display without this would have silently broken re-opening an existing
+  Sale Bill/Sale Return for editing. Added `a.article_id,` to the items SELECT in
+  `saleBills.repository.js` (`findById`), `saleReturns.repository.js`,
+  `draftSaleBills.repository.js`, `draftSaleReturns.repository.js` — `a` was already joined, so
+  this is a pure additive column. `node --check` passes on all four.
+- Frontend matching switched from `p.code === it.article_code` to
+  `p.article_id === it.article_id` in `SaleBillPage.tsx` (2x), `SaleReturnPage.tsx` (3x),
+  `FindTab.tsx`, `FindReturnTab.tsx`; the `it.article_name || it.article_code || 'Article'` label
+  fallback in the same files drops the code branch (`it.article_name || 'Article'`).
+- `frontend/src/lib/api.ts`: added `article_id?: number` to `SaleBillItemRow`,
+  `DraftSaleBillItemRow`, `SaleReturnItemRow`, `DraftSaleReturnItemRow`.
+- `ReportStockPage.tsx` turned out to repeat the same CODE column across ~7 separate table
+  renderings (multiple print-preview variants for current/ledger/production tabs plus their
+  on-screen equivalents) — removed the column/cell and re-keyed every list `key={...}`/sort
+  comparator off `articleId`/`commonName` instead of `code` in all of them, adjusted every
+  `colSpan` accordingly, and dropped `code`/`article_code` from the three Excel export branches.
+- `ProductSetupPage.tsx`: renamed `selectedProductCode` state to `selectedProductName` (now set
+  from `prod.name`, used to build the "Editing {x}" / view-mode page title instead of the code);
+  removed the read-only Code form field and its `nextCodePreview` computation entirely (kept
+  `nextBatchNoPreview`, unaffected); dropped `code` from the product directory's client-side search
+  filter and its placeholder text; dropped the CODE column from both the "articles under this
+  category" staged table and the product directory `DataListTable` (column-config entry removed),
+  adjusting `colSpan`s.
+- Picker labels changed from `` `${p.code} — ${p.name}` `` to plain `p.name` in `SaleBillPage.tsx`,
+  `SaleReturnPage.tsx`, `WageRunPage.tsx`, `FindTab.tsx`, `StockVoucherPage.tsx` (two separate
+  pickers there). `StockVoucherPage.tsx` also carried a whole extra "Article Code" column in its
+  committed-lines grid, backed by an `articleCode` field on the `UiLine`/`EntryLine` shapes — that
+  field and column were removed entirely (not just hidden), along with the now-unused `product`
+  lookup in `handleCommitLine` that only existed to populate it.
+- **Not touched, deliberately:** `business_accounts.code` (10-digit ledger account codes, e.g. in
+  `StockVoucherPage.tsx`'s on-account picker) — a structurally different, load-bearing concept, not
+  the article code this task was about. The backend `dbo.articles.code` column, its `NOT NULL
+  UNIQUE` constraint, and `nextCode()` itself are unchanged — insert-time uniqueness still relies
+  on it, it's simply never displayed or matched against from the frontend anymore.
+- `npx tsc -b` passes clean on the full frontend after every file in this task.
+- **Not yet live-verified** — needs a look at Current Stock report, Product Setup, and each article
+  picker (Sale Bill, Sale Return, Stock Voucher, Wage Run, Find/Find Return tabs) to confirm the
+  code is gone and nothing renders blank where it used to be; also needs re-opening an existing
+  Sale Bill/Sale Return for edit to confirm the `article_id`-based line match works correctly.
+- **Files:** `backend/src/repositories/saleBills.repository.js`,
+  `backend/src/repositories/saleReturns.repository.js`,
+  `backend/src/repositories/draftSaleBills.repository.js`,
+  `backend/src/repositories/draftSaleReturns.repository.js`, `frontend/src/lib/api.ts`,
+  `frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/SaleReturnPage.tsx`,
+  `frontend/src/pages/ReportStockPage.tsx`, `frontend/src/pages/ProductSetupPage.tsx`,
+  `frontend/src/pages/StockVoucherPage.tsx`, `frontend/src/pages/WageRunPage.tsx`,
+  `frontend/src/components/FindTab.tsx`, `frontend/src/components/FindReturnTab.tsx`
+
+## Fix: child windows' minimize/maximize buttons weren't working
+- **User report:** every child window opened via the multi-window feature had non-functional
+  minimize and maximize (zoom) buttons.
+- **Root cause:** `createAppWindow()` gave every child window `parent: mainWindow`, which was the
+  mechanism for "closing the main window closes all children" (2026-09-03 entry above). Electron
+  treats a `BrowserWindow` with `parent` set as an OS-attached child window, and on macOS this
+  disables the window's own minimize/zoom controls — they're expected to follow the parent instead
+  of acting independently.
+- **Fix, in `backend/electron/windowManager.js`:** removed `parent: ...` entirely from the
+  `BrowserWindow` constructor options. Replaced the close-cascade with manual tracking instead: a
+  module-level `childWindows` Set, added to on every `child: true` window and pruned via its own
+  `closed` listener; the main (non-child) window's `closed` listener now iterates that Set and
+  closes every still-open child itself. Same end-user behavior (main window closing takes every
+  child with it), but windows are no longer OS-parented, so minimize/zoom work normally on all of
+  them.
+- `node --check` passes on the touched file.
+- **Not yet live-verified** — needs a real check: open a couple of child windows, confirm their
+  minimize/maximize buttons now work, then close the main window and confirm children still close
+  with it.
+- **Files:** `backend/electron/windowManager.js`
+
+## "Show Print Preview" opens a new window everywhere, instead of an in-page overlay
+- **User request:** every report/ledger page's "Show Print Preview" button used to toggle a local
+  full-screen modal (`ReportPrintPreviewModal`). Clicking it should instead open a brand-new
+  Electron window — styled like the app's other "open in new window" child windows — landing
+  straight on the same filtered report. Example given: opening "Business Ledger" as a second
+  window, then clicking Print Preview inside it opens a third window the same way.
+- **Root problem:** the existing multi-window mechanism (`windows:open`) only ever carried
+  `page`/`tab` in the new window's URL — no page's filter/selection state (dates, search text,
+  selected customer/vendor/account, active tab, drill-down id, etc.) traveled with it, so a fresh
+  window had no way to reproduce what was on screen.
+- **Generic infra added first:**
+  - `backend/electron/windowManager.js`: `createAppWindow(page, tab, { child, params })` now spreads
+    an optional `params` map into the query object alongside `page`/`tab`/`child` — pure passthrough,
+    no schema. The existing dev-URL `searchParams` loop and prod `loadFile(..., { query })` already
+    handled arbitrary extra keys with no further change.
+  - `backend/src/ipc/windows.ipc.js`: `windows:open` forwards `payload?.params` through.
+  - `frontend/src/lib/api.ts`: `openWindow(page, tab, params?)` gained the optional third argument.
+  - New `frontend/src/lib/windowParams.ts`: `getWindowParam(key)`, `isChildWindow()`,
+    `shouldAutoPreview()` — the read side, used once on mount by every page below.
+- **Per-page pattern** (same shape 17 times, across 15 files): each filter's `useState` initializer
+  now reads `getWindowParam('key') ?? <old default>`; the "Show Print Preview" button's `onClick`
+  now calls `openWindow(page, tab, { ...currentFilterValues, autoPreview: '1' })` instead of
+  `setIsPreviewOpen(true)`; a new effect opens the preview automatically once the resulting window's
+  own data fetch has resolved (tracked via a `hasLoadedOnce` flag set in the load function's own
+  `finally`/end, since `loading` itself starts `false` and would fire the effect immediately if
+  watched alone). Where the print target is a drill-down record (an account, vendor, customer,
+  cheque, or "person" entity) rather than plain filters, the id is carried instead and the record is
+  re-selected from the freshly-loaded list once it arrives (matched by `ba_id`/`ac_id`, vendor id,
+  customer id, or entity id + entity type, per page).
+- Two pages needed one extra wire-up beyond the pattern: `SaleBillPage.tsx` and `SaleReturnPage.tsx`
+  read their own `activeTab` local state from `getWindowParam('tab')` on mount (previously always
+  defaulted to `'bill'`/`'return'`), since that's what lets a window opened at `tab: 'find'` (from
+  `FindTab`/`FindReturnTab`'s own Show Print Preview) actually land on the Find tab instead of the
+  default one.
+- Touched: `ReportStockPage.tsx`, `OverallTrailContent.tsx` (two independent preview triggers —
+  grouped balances and the per-account ledger drill-down), `PaymentTrailPage.tsx`,
+  `ReportCashBookPage.tsx`, `VendorReportPage.tsx`, `ReportKhaataPage.tsx` (the user's own "Business
+  Ledger"/"Customer Khaata" example), `SaleAnalysisPage.tsx`, `SaleReportPage.tsx`,
+  `OverallSearchPage.tsx`, `CustomerSetupPage.tsx`, `BiltyUpdatePage.tsx`, `SearchCustomerPage.tsx`,
+  `ChequeLedgerContent.tsx`, `ProductLedgerContent.tsx`, `ChequesTab.tsx`, `FindTab.tsx`,
+  `FindReturnTab.tsx` — 17 triggers total, every one confirmed present via a final sweep for
+  `onClick={() => setIsPreviewOpen(true)}` returning zero matches app-wide.
+- `npx tsc -b` run after every single file's edits (not just once at the end) — clean throughout.
+- **Not yet live-verified** — needs a real check: set non-default filters on a few of these pages,
+  click Show Print Preview, confirm a new (child-styled) window opens showing the same filtered
+  report immediately rather than one reset to defaults.
+- **Files:** `backend/electron/windowManager.js`, `backend/src/ipc/windows.ipc.js`,
+  `frontend/src/lib/api.ts`, `frontend/src/lib/windowParams.ts` (new), `frontend/src/pages/ReportStockPage.tsx`,
+  `frontend/src/pages/OverallTrailContent.tsx`, `frontend/src/pages/PaymentTrailPage.tsx`,
+  `frontend/src/pages/ReportCashBookPage.tsx`, `frontend/src/pages/VendorReportPage.tsx`,
+  `frontend/src/pages/ReportKhaataPage.tsx`, `frontend/src/pages/SaleAnalysisPage.tsx`,
+  `frontend/src/pages/SaleReportPage.tsx`, `frontend/src/pages/OverallSearchPage.tsx`,
+  `frontend/src/pages/CustomerSetupPage.tsx`, `frontend/src/pages/BiltyUpdatePage.tsx`,
+  `frontend/src/pages/SearchCustomerPage.tsx`, `frontend/src/pages/ChequeLedgerContent.tsx`,
+  `frontend/src/pages/ProductLedgerContent.tsx`, `frontend/src/components/ChequesTab.tsx`,
+  `frontend/src/components/FindTab.tsx`, `frontend/src/components/FindReturnTab.tsx`,
+  `frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/SaleReturnPage.tsx`

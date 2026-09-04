@@ -91,11 +91,11 @@ export default function ProductSetupPage() {
   // ── Bound-record form state (Register Product tab) ──
   const [mode, setMode] = useState<'new' | 'view' | 'edit'>('new');
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
-  const [selectedProductCode, setSelectedProductCode] = useState('');
+  const [selectedProductName, setSelectedProductName] = useState('');
   const [selectedBatchNo, setSelectedBatchNo] = useState<number | null>(null);
   // A New Product's own in-progress fields persist across switching pages AND an app restart
   // (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied to
-  // selectedProductId/selectedProductCode/selectedBatchNo/mode — an already-saved product loaded
+  // selectedProductId/selectedProductName/selectedBatchNo/mode — an already-saved product loaded
   // for view/edit is safely re-openable by id at any time, so caching it risks showing a stale
   // copy instead; only the in-progress "new" form (category + fields; the list below is now real
   // records, saved on Enter)
@@ -204,7 +204,7 @@ export default function ProductSetupPage() {
   // New with no category selected still starts there.
   const handleNew = () => {
     setSelectedProductId(null);
-    setSelectedProductCode('');
+    setSelectedProductName('');
     setSelectedBatchNo(null);
     setFormValues(emptyArticleValues());
     setExistingColors([]);
@@ -236,7 +236,7 @@ export default function ProductSetupPage() {
   // the Register Product tab, where the bound-record form lives.
   const handleSelectProduct = (prod: ProductRow) => {
     setSelectedProductId(prod.article_id);
-    setSelectedProductCode(prod.code);
+    setSelectedProductName(prod.name);
     setSelectedBatchNo(prod.batch_no);
     setCategoryId(String(prod.category_id));
     setFormValues({
@@ -495,7 +495,7 @@ export default function ProductSetupPage() {
     if (!categoryId) return [];
     return productList
       .filter(p => p.is_active && String(p.category_id) === String(categoryId))
-      .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   }, [productList, categoryId]);
 
   // article_ids entered during this sitting — flagged in the list so a long-established category
@@ -514,21 +514,14 @@ export default function ProductSetupPage() {
     const q = productSearch.toLowerCase();
     return active.filter(prod =>
       prod.name.toLowerCase().includes(q) ||
-      prod.code.toLowerCase().includes(q) ||
       (prod.category_name || '').toLowerCase().includes(q) ||
       (prod.vendor_name || '').toLowerCase().includes(q)
     );
   }, [productList, productSearch]);
 
-  // Preview of the Code/Batch No. a brand-new article will get — nextCode()/nextBatchNo() are
-  // transaction-scoped server-side, so this is a client-side approximation only (real values are
-  // assigned at Save); mirrors Stock Voucher/Sale Bill's own "Number" preview pattern.
-  const nextCodePreview = useMemo(() => {
-    const nums = productList
-      .map(p => (p.code.startsWith('P-') ? parseInt(p.code.slice(2), 10) : NaN))
-      .filter(n => !Number.isNaN(n));
-    return `P-${Math.max(100, ...nums) + 1}`;
-  }, [productList]);
+  // Preview of the Batch No. a brand-new article will get — nextBatchNo() is transaction-scoped
+  // server-side, so this is a client-side approximation only (real value is assigned at Save);
+  // mirrors Stock Voucher/Sale Bill's own "Number" preview pattern.
   const nextBatchNoPreview = useMemo(
     () => Math.max(0, ...productList.map(p => p.batch_no || 0)) + 1,
     [productList]
@@ -660,8 +653,8 @@ export default function ProductSetupPage() {
             </button>
           </div>
           <span className="font-lora font-bold text-xs text-slate-900">
-            {mode === 'edit' ? `Editing ${selectedProductCode}`
-              : mode === 'view' ? selectedProductCode
+            {mode === 'edit' ? `Editing ${selectedProductName}`
+              : mode === 'view' ? selectedProductName
               : stagedArticles.length > 0 ? `New Product — ${stagedArticles.length} saved`
               : 'New Product'}
           </span>
@@ -728,15 +721,6 @@ export default function ProductSetupPage() {
             leadingSlot={
               <div className="flex gap-2">
                 <div className="flex-1">
-                  <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">Code</label>
-                  <input
-                    type="text"
-                    value={selectedProductCode || (mode === 'new' ? `${nextCodePreview} (pending)` : '(auto)')}
-                    disabled
-                    className="soleria-input soleria-input-compact font-semibold bg-slate-100 text-slate-500 cursor-not-allowed"
-                  />
-                </div>
-                <div className="flex-1">
                   <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">Batch No.</label>
                   <input
                     type="text"
@@ -770,8 +754,7 @@ export default function ProductSetupPage() {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 border-b text-[10px] font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                    <th className="sticky top-0 z-10 bg-slate-50 py-1 px-2 pl-3" style={{ width: '96px' }}>Code</th>
-                    <th className="sticky top-0 z-10 bg-slate-50 py-1 px-2">Name</th>
+                    <th className="sticky top-0 z-10 bg-slate-50 py-1 px-2 pl-3">Name</th>
                     <th className="sticky top-0 z-10 bg-slate-50 py-1 px-2 text-center" style={{ width: '72px' }}>Batch</th>
                     <th className="sticky top-0 z-10 bg-slate-50 py-1 px-2 text-center" style={{ width: '80px' }}>Packing</th>
                     <th className="sticky top-0 z-10 bg-slate-50 py-1 px-2 text-right" style={{ width: '110px' }}>Cost</th>
@@ -781,7 +764,7 @@ export default function ProductSetupPage() {
                 <tbody>
                   {categoryProducts.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-6 text-center text-xs text-slate-400">
+                      <td colSpan={5} className="py-6 text-center text-xs text-slate-400">
                         No articles registered under this category yet.
                       </td>
                     </tr>
@@ -795,8 +778,7 @@ export default function ProductSetupPage() {
                       }`}
                       style={{ borderColor: 'var(--border-table)' }}
                     >
-                      <td className="py-0.5 px-2 pl-3 text-[11px] font-semibold text-slate-700">{prod.code}</td>
-                      <td className="py-0.5 px-2 text-[11px] font-semibold text-slate-900">{prod.name}</td>
+                      <td className="py-0.5 px-2 pl-3 text-[11px] font-semibold text-slate-900">{prod.name}</td>
                       <td className="py-0.5 px-2 text-center font-mono text-[11px] text-slate-600">{prod.batch_no}</td>
                       <td className="py-0.5 px-2 text-center font-mono text-[11px] text-slate-700">{prod.packing}</td>
                       <td className="py-0.5 px-2 text-right font-mono text-[11px] text-slate-600">{formatCurrency(totalCostOf(prod))}</td>
@@ -827,7 +809,7 @@ export default function ProductSetupPage() {
                 <input
                   ref={searchInputRef}
                   type="text"
-                  placeholder="Search by code, article, category..."
+                  placeholder="Search by article, category..."
                   value={productSearch}
                   onChange={e => setProductSearch(e.target.value)}
                   className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold"
@@ -844,12 +826,6 @@ export default function ProductSetupPage() {
               loading={loading}
               emptyMessage="No registered products found."
               columns={[
-                {
-                  key: 'code',
-                  header: 'Code',
-                  width: '120px',
-                  render: prod => <span className="font-semibold text-slate-700">{prod.code}</span>,
-                },
                 {
                   key: 'name',
                   header: 'Article Name',

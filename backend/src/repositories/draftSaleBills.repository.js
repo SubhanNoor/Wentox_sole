@@ -97,6 +97,7 @@ async function findById(draftId) {
     `SELECT
        dsbi.*,
        ac.color,
+       a.article_id,
        a.code AS article_code,
        a.name AS article_name
      FROM dbo.draft_sale_bill_items dsbi

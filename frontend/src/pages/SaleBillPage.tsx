@@ -27,6 +27,7 @@ import type {
 } from '@/lib/api';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import CartonsInput from '@/components/CartonsInput';
+import { getWindowParam } from '@/lib/windowParams';
 
 interface UiItem {
   uid: string;
@@ -71,7 +72,10 @@ export default function SaleBillPage() {
 
   // Weekly/Monthly/Overall/Find sub-tabs — same sub-tab bar as Sale Return's own (2026-08-26, per
   // the user: brought back here alongside it, not dropped).
-  const [activeTab, setActiveTab] = useState<'bill' | 'weekly' | 'monthly' | 'overall' | 'find'>('bill');
+  // Seeded from the URL's own `tab` (openWindow's second argument) so a window opened straight at
+  // the Find tab — e.g. from FindTab's own "Show Print Preview", per the user, 2026-09-03 — lands
+  // there instead of the default Bill entry tab.
+  const [activeTab, setActiveTab] = useState<'bill' | 'weekly' | 'monthly' | 'overall' | 'find'>(() => (getWindowParam('tab') as 'bill' | 'weekly' | 'monthly' | 'overall' | 'find') || 'bill');
 
   // ── Real lookup data ──
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
@@ -505,12 +509,12 @@ const nextSystemBillNo = useMemo(
     setInvoiceDiscount(row.invoice_discount || 0);
 
     const loadedItems: UiItem[] = row.items.map(it => {
-      const article = products.find(p => p.code === it.article_code);
+      const article = products.find(p => p.article_id === it.article_id);
       return {
         uid: 'row_' + it.item_id,
         articleId: article?.article_id ?? null,
         variantId: it.variant_id,
-        label: `${it.article_name || it.article_code || 'Article'} — ${it.color || ''}`,
+        label: `${it.article_name || 'Article'} — ${it.color || ''}`,
         packing: it.pairs && it.cartons ? it.pairs / it.cartons : 0,
         cartons: it.cartons,
         pairs: it.pairs,
@@ -565,12 +569,12 @@ const nextSystemBillNo = useMemo(
     setInvoiceDiscount(draft.invoice_discount || 0);
 
     const loadedItems: UiItem[] = (draft.items || []).map(it => {
-      const article = products.find(p => p.code === it.article_code);
+      const article = products.find(p => p.article_id === it.article_id);
       return {
         uid: 'draftrow_' + it.line_no,
         articleId: article?.article_id ?? null,
         variantId: it.variant_id,
-        label: `${it.article_name || it.article_code || 'Article'} — ${it.color || ''}`,
+        label: `${it.article_name || 'Article'} — ${it.color || ''}`,
         packing: it.pairs && it.cartons ? it.pairs / it.cartons : 0,
         cartons: it.cartons,
         pairs: it.pairs,
@@ -2334,7 +2338,7 @@ const nextSystemBillNo = useMemo(
                       const agg = getStockInfo(p.article_id, null);
                       return {
                         value: String(p.article_id),
-                        label: `${p.code} — ${p.name}`,
+                        label: p.name,
                         sublabel: agg ? `Stock: ${formatCartons(agg.cartons)} ctn / ${agg.pairs} prs` : undefined
                       };
                     })}
@@ -2554,7 +2558,9 @@ const nextSystemBillNo = useMemo(
                   value={formatCurrency(finalTotalValue)}
                   disabled
                   className="soleria-input soleria-input-compact text-right font-mono font-bold"
-                  style={{ width: '140px', color: 'var(--brand-gold)', background: '#111c2a', borderColor: '#334155' }}
+                  // Light bar, not the dark navy fill — same fix as Reports Hub/Wage Run/Receipts/
+                  // Expenses/Sale Return (per the user, 2026-09-03).
+                  style={{ width: '140px', color: 'var(--brand-gold)', background: '#ffffff', borderColor: 'var(--border-color)' }}
                 />
               </div>
             </div>

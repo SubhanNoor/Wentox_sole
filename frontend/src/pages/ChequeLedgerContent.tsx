@@ -7,6 +7,7 @@ import * as api from '@/lib/api';
 import type { ChequeRow, IssuedChequeRow, ChequeAllocationRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 // Every event a cheque's life can produce — a small fixed enum, so distinct colors per event
 // (same spirit as ChequesTab.tsx's own STATUS_STYLES) don't run into the "badge color from
@@ -128,10 +129,11 @@ function issuedEvents(e: IssuedChequeRow): LedgerEvent[] {
 export function ChequeLedgerContent() {
   const [events, setEvents] = useState<LedgerEvent[]>([]);
   const [loading, setLoading] = useState(false);
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState<'all' | 'received' | 'issued'>('all');
-  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
-  const [toDate, setToDate] = useState(getTodayDate());
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const [search, setSearch] = useState(() => getWindowParam('search') || '');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'received' | 'issued'>(() => (getWindowParam('typeFilter') as 'all' | 'received' | 'issued') || 'all');
+  const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -178,10 +180,22 @@ export function ChequeLedgerContent() {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to load the cheque ledger.');
     } finally {
       setLoading(false);
+      setHasLoadedOnce(true);
     }
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // "Show Print Preview" opens a new window on this same filtered ledger (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    api.openWindow('cheque-return', 'ledger', { search, typeFilter, fromDate, toDate, autoPreview: '1' });
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once loaded.
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && hasLoadedOnce) setIsPreviewOpen(true);
+  }, [hasLoadedOnce]);
 
   const ledgerRows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -325,7 +339,7 @@ export function ChequeLedgerContent() {
         </div>
 
         <button
-          onClick={() => setIsPreviewOpen(true)}
+          onClick={handleShowPrintPreview}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
         >
           <Eye size={14} /> Show Print Preview

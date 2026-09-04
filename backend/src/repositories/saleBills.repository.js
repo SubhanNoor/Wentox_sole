@@ -96,6 +96,7 @@ async function findById(billId) {
     `SELECT
        sbi.*,
        ac.color,
+       a.article_id,
        a.code AS article_code,
        a.name AS article_name
      FROM dbo.sale_bill_items sbi

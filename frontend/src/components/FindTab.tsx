@@ -8,6 +8,7 @@ import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime, format
 import SearchableSelect from '@/components/SearchableSelect';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 interface FindTabProps {
   onEditBill: (bill: SaleBillRow) => void;
@@ -21,6 +22,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
   const [addas, setAddas] = useState<AddaRow[]>([]);
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -35,19 +37,19 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
   }, []);
 
   // ── Search Filter State ──────────────────────────────────────────────────────
-  const [fromDate, setFromDate]             = useState(getThreeMonthsAgoDate());
-  const [toDate, setToDate]                 = useState(getTodayDate());
-  const [customerQuery, setCustomerQuery]   = useState('');
-  const [subCustomerQuery, setSubCustomerQuery] = useState('');
+  const [fromDate, setFromDate]             = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
+  const [toDate, setToDate]                 = useState(() => getWindowParam('toDate') || getTodayDate());
+  const [customerQuery, setCustomerQuery]   = useState(() => getWindowParam('customerQuery') || '');
+  const [subCustomerQuery, setSubCustomerQuery] = useState(() => getWindowParam('subCustomerQuery') || '');
   // BA-01: manual (client-typed) and system-generated (IDENTITY bill_id) bill numbers are
   // separate fields, both filtered client-side against their own column — same pattern used on
   // the Search Customer and Search & Bilty Adda Updation pages.
-  const [billNoQuery, setBillNoQuery]       = useState('');
-  const [systemBillNoQuery, setSystemBillNoQuery] = useState('');
-  const [biltyNoQuery, setBiltyNoQuery]     = useState('');
-  const [addaFilter, setAddaFilter]         = useState('');
-  const [articleFilter, setArticleFilter]   = useState('');
-  const [missingFilter, setMissingFilter]   = useState<'all' | 'missingBilty' | 'missingAdda'>('all');
+  const [billNoQuery, setBillNoQuery]       = useState(() => getWindowParam('billNoQuery') || '');
+  const [systemBillNoQuery, setSystemBillNoQuery] = useState(() => getWindowParam('systemBillNoQuery') || '');
+  const [biltyNoQuery, setBiltyNoQuery]     = useState(() => getWindowParam('biltyNoQuery') || '');
+  const [addaFilter, setAddaFilter]         = useState(() => getWindowParam('addaFilter') || '');
+  const [articleFilter, setArticleFilter]   = useState(() => getWindowParam('articleFilter') || '');
+  const [missingFilter, setMissingFilter]   = useState<'all' | 'missingBilty' | 'missingAdda'>(() => (getWindowParam('missingFilter') as 'all' | 'missingBilty' | 'missingAdda') || 'all');
 
   const [itemsCache, setItemsCache] = useState<Record<number, SaleBillItemRow[]>>({});
   useEffect(() => {
@@ -71,8 +73,23 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
         date_to: toDate || undefined,
       });
       if (res.ok) setBills(res.data);
+      setHasLoadedOnce(true);
     })();
   }, [fromDate, toDate]);
+
+  // "Show Print Preview" opens a new window on this same filtered directory (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    api.openWindow('sale-bill', 'find', {
+      fromDate, toDate, customerQuery, subCustomerQuery, billNoQuery, systemBillNoQuery,
+      biltyNoQuery, addaFilter, articleFilter, missingFilter, autoPreview: '1',
+    });
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once loaded.
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && hasLoadedOnce) setIsPreviewOpen(true);
+  }, [hasLoadedOnce]);
 
   const filteredInvoices = useMemo(() => {
     let result = [...bills];
@@ -116,7 +133,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
     if (articleFilter) {
       const product = products.find(p => p.article_id === Number(articleFilter));
       if (product) {
-        result = result.filter(b => (itemsCache[b.bill_id] || []).some(item => item.article_code === product.code));
+        result = result.filter(b => (itemsCache[b.bill_id] || []).some(item => item.article_id === product.article_id));
       }
     }
 
@@ -373,7 +390,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
                 <Package size={12} /> By Article Product
               </label>
               <SearchableSelect
-                options={products.map(p => ({ value: String(p.article_id), label: `${p.code} — ${p.name}` }))}
+                options={products.map(p => ({ value: String(p.article_id), label: p.name }))}
                 value={articleFilter}
                 onChange={val => setArticleFilter(val ? String(val) : '')}
                 placeholder="All Articles"
@@ -462,7 +479,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
             </span>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setIsPreviewOpen(true)}
+                onClick={handleShowPrintPreview}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
               >
                 <Eye size={14} /> Show Print Preview

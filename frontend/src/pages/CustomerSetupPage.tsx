@@ -12,11 +12,12 @@ import * as api from '@/lib/api';
 import type { CustomerRow, RegionRow, CityRow, AccountLedgerResult } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 
 export default function CustomerSetupPage() {
   // Directory view state
-  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(() => { const p = getWindowParam('selectedCustomerId'); return p != null ? Number(p) : null; });
   const [searchQuery, setSearchQuery] = useState('');
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
@@ -63,8 +64,8 @@ export default function CustomerSetupPage() {
   const [pendingCustomer, setPendingCustomer] = useState<{ name: string; region_id: number; city_id?: number } | null>(null);
 
   // Ledger detail filters
-  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
-  const [toDate, setToDate] = useState(getTodayDate());
+  const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
   const [ledger, setLedger] = useState<AccountLedgerResult | null>(null);
   const [ledgerLoading, setLedgerLoading] = useState(false);
 
@@ -81,6 +82,22 @@ export default function CustomerSetupPage() {
   }, [selectedCustomer, fromDate, toDate]);
 
   useEffect(() => { if (selectedCustomerId) loadLedger(); }, [selectedCustomerId, loadLedger]);
+
+  // "Show Print Preview" opens a new window on this same customer's ledger (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    if (selectedCustomerId == null) return;
+    api.openWindow('setup-customer', undefined, {
+      selectedCustomerId: String(selectedCustomerId), fromDate, toDate, autoPreview: '1',
+    });
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once loaded.
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && selectedCustomerId != null && ledger) {
+      setIsPreviewOpen(true);
+    }
+  }, [selectedCustomerId, ledger]);
 
   const filteredCustomers = useMemo(() => {
     if (!searchQuery.trim()) return customerList;
@@ -266,7 +283,7 @@ export default function CustomerSetupPage() {
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontStyle: 'italic' }}>Opening Balance brought forward</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>0</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>0</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold' }}>{formatCurrency(ledger?.opening_balance || 0)}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: balanceColor(ledger?.opening_balance || 0) }}>{formatCurrency(ledger?.opening_balance || 0)}</td>
             </tr>
 
             {/* Transaction Rows */}
@@ -283,13 +300,13 @@ export default function CustomerSetupPage() {
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{row.type}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.narration || '-'}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>
                     {row.debit > 0 ? formatCurrency(row.debit) : '-'}
                   </td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>
-                    {row.credit > 0 ? formatCurrency(row.credit) : '-'}
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>
+                    {row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}
                   </td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold' }}>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: balanceColor(row.balance) }}>
                     {formatCurrency(row.balance)}
                   </td>
                 </tr>
@@ -301,9 +318,9 @@ export default function CustomerSetupPage() {
               <td colSpan={4} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'left', textTransform: 'uppercase' }}>
                 Totals for Selected Period
               </td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(ledger?.total_debit || 0)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(ledger?.total_credit || 0)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(ledger?.closing_balance || 0)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{formatCurrency(ledger?.total_debit || 0)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>({formatCurrency(ledger?.total_credit || 0)})</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: balanceColor(ledger?.closing_balance || 0) }}>{formatCurrency(ledger?.closing_balance || 0)}</td>
             </tr>
           </tbody>
         </table>
@@ -485,7 +502,7 @@ export default function CustomerSetupPage() {
 
               {/* Single Gold Action Button: Show Print Preview */}
               <button
-                onClick={() => setIsPreviewOpen(true)}
+                onClick={handleShowPrintPreview}
                 className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
               >
                 <Eye size={15} /> Show Print Preview
@@ -551,8 +568,8 @@ export default function CustomerSetupPage() {
                           <td className="p-3 text-slate-700">{row.type}</td>
                           <td className="p-3 text-slate-500 font-mono">{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                           <td className="p-3 text-slate-600">{row.narration || '-'}</td>
-                          <td className="p-3 text-right font-semibold text-slate-900">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-                          <td className="p-3 text-right font-semibold text-rose-700">{row.credit > 0 ? formatCurrency(row.credit) : '-'}</td>
+                          <td className="p-3 text-right font-semibold text-emerald-700">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
+                          <td className="p-3 text-right font-semibold text-rose-700">{row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}</td>
                           <td className="p-3 text-right font-bold" style={{ color: balanceColor(row.balance) }}>{formatCurrency(row.balance)}</td>
                         </tr>
                       ))
@@ -561,8 +578,8 @@ export default function CustomerSetupPage() {
                   <tfoot>
                     <tr className="bg-slate-900 text-white font-bold text-xs">
                       <td colSpan={4} className="p-3 text-right uppercase tracking-wider text-[#B08D57]">Totals</td>
-                      <td className="p-3 text-right">{formatCurrency(ledger?.total_debit || 0)}</td>
-                      <td className="p-3 text-right text-rose-700">{formatCurrency(ledger?.total_credit || 0)}</td>
+                      <td className="p-3 text-right text-emerald-700">{formatCurrency(ledger?.total_debit || 0)}</td>
+                      <td className="p-3 text-right text-rose-700">({formatCurrency(ledger?.total_credit || 0)})</td>
                       <td className="p-3 text-right" style={{ color: balanceColor(ledger?.closing_balance || 0) }}>{formatCurrency(ledger?.closing_balance || 0)}</td>
                     </tr>
                   </tfoot>

@@ -22,6 +22,15 @@ module.exports = function register() {
     }),
   );
 
+  // No requireSession() — this is how a freshly opened window (windows:open) finds out whether
+  // the app is already logged in (session is one shared in-memory value for the whole Electron
+  // process, not per-window) so it can skip its own Login screen. Returns null, not a thrown
+  // error, when nothing is logged in yet — that's a normal answer here, not a failure.
+  ipcMain.handle(
+    'auth:currentSession',
+    wrap(() => session.current()),
+  );
+
   // Action names stay camelCase (not kebab-case) — the preload Proxy passes the JS property
   // access straight through as the action segment with no case conversion, so this must match
   // window.api.auth.updateCredentials(...) / window.api.auth.verifyPassword(...) exactly.

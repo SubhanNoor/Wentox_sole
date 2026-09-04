@@ -1544,7 +1544,9 @@ export default function ExpensesPage() {
                       value={formatCurrency(Number(voucher?.total_amount ?? 0))}
                       disabled
                       className="soleria-input soleria-input-compact text-right font-mono font-bold"
-                      style={{ width: '140px', color: 'var(--brand-gold)', background: '#111c2a', borderColor: '#334155' }}
+                      // Light bar, not the dark navy fill — same fix as Reports Hub/Wage Run/
+                      // Receipts (per the user, 2026-09-03).
+                      style={{ width: '140px', color: 'var(--brand-gold)', background: '#ffffff', borderColor: 'var(--border-color)' }}
                     />
                   </div>
                 </div>

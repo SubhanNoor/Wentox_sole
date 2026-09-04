@@ -27,6 +27,7 @@ import type {
 } from '@/lib/api';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import CartonsInput from '@/components/CartonsInput';
+import { getWindowParam } from '@/lib/windowParams';
 
 interface UiItem {
   uid: string;
@@ -69,7 +70,10 @@ function recalcItem(item: UiItem): UiItem {
 export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?: 'return' | 'weekly' | 'monthly' | 'overall' | 'find' }) {
   const { state, dispatch } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'return' | 'weekly' | 'monthly' | 'overall' | 'find'>(initialTab);
+  // Seeded from the URL's own `tab` (openWindow's second argument) so a window opened straight at
+  // the Find tab — e.g. from FindReturnTab's own "Show Print Preview", per the user, 2026-09-03 —
+  // lands there instead of the default Return entry tab.
+  const [activeTab, setActiveTab] = useState<'return' | 'weekly' | 'monthly' | 'overall' | 'find'>(() => (getWindowParam('tab') as 'return' | 'weekly' | 'monthly' | 'overall' | 'find') || initialTab);
 
   // ── Real lookup data ──
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
@@ -306,12 +310,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setInvoiceDiscount(row.invoice_discount || 0);
 
     const loadedItems: UiItem[] = row.items.map(it => {
-      const article = products.find(p => p.code === it.article_code);
+      const article = products.find(p => p.article_id === it.article_id);
       return {
         uid: 'row_' + it.item_id,
         articleId: article?.article_id ?? null,
         variantId: it.variant_id,
-        label: `${it.article_name || it.article_code || 'Article'} — ${it.color || ''}`,
+        label: `${it.article_name || 'Article'} — ${it.color || ''}`,
         packing: it.pairs && it.cartons ? it.pairs / it.cartons : 0,
         cartons: it.cartons,
         pairs: it.pairs,
@@ -499,12 +503,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       // fields (per the user: "if user select non manual and any bill then all the articles
       // appear along with every field").
       const mappedItems: UiItem[] = bill.items.map(it => {
-        const article = products.find(p => p.code === it.article_code);
+        const article = products.find(p => p.article_id === it.article_id);
         return recalcItem({
           uid: 'row_' + Date.now() + '_' + it.item_id,
           articleId: article?.article_id ?? null,
           variantId: it.variant_id,
-          label: `${it.article_name || it.article_code || 'Article'} — ${it.color || ''}`,
+          label: `${it.article_name || 'Article'} — ${it.color || ''}`,
           packing: it.pairs && it.cartons ? it.pairs / it.cartons : 0,
           cartons: it.cartons,
           pairs: it.pairs,
@@ -1008,12 +1012,12 @@ const nextSystemReturnNo = useMemo(
     setInvoiceDiscount(draft.invoice_discount || 0);
 
     const loadedItems: UiItem[] = (draft.items || []).map(it => {
-      const article = products.find(p => p.code === it.article_code);
+      const article = products.find(p => p.article_id === it.article_id);
       return {
         uid: 'draftrow_' + it.line_no,
         articleId: article?.article_id ?? null,
         variantId: it.variant_id,
-        label: `${it.article_name || it.article_code || 'Article'} — ${it.color || ''}`,
+        label: `${it.article_name || 'Article'} — ${it.color || ''}`,
         packing: it.pairs && it.cartons ? it.pairs / it.cartons : 0,
         cartons: it.cartons,
         pairs: it.pairs,
@@ -2152,7 +2156,7 @@ const nextSystemReturnNo = useMemo(
                   <SearchModal
                     isOpen={isProductModalOpen}
                     title="Select Article"
-                    options={products.map(p => ({ value: String(p.article_id), label: `${p.code} — ${p.name}` }))}
+                    options={products.map(p => ({ value: String(p.article_id), label: p.name }))}
                     value={entry.articleId != null ? String(entry.articleId) : ''}
                     initialSearch={productSearchText}
                     onSelect={(val) => {
@@ -2369,7 +2373,9 @@ const nextSystemReturnNo = useMemo(
                   value={formatCurrency(finalTotalValue)}
                   disabled
                   className="soleria-input soleria-input-compact text-right font-mono font-bold"
-                  style={{ width: '140px', color: 'var(--brand-gold)', background: '#111c2a', borderColor: '#334155' }}
+                  // Light bar, not the dark navy fill — same fix as Reports Hub/Wage Run/Receipts/
+                  // Expenses (per the user, 2026-09-03).
+                  style={{ width: '140px', color: 'var(--brand-gold)', background: '#ffffff', borderColor: 'var(--border-color)' }}
                 />
               </div>
             </div>

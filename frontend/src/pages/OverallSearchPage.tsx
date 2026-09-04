@@ -9,6 +9,7 @@ import * as api from '@/lib/api';
 import type { OverallDirectoryRow, OverallEntityType, LedgerRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 type EntityType = 'customer' | 'vendor' | 'employee' | 'subcustomer' | 'account' | 'bank';
 
@@ -47,8 +48,8 @@ export default function OverallSearchPage() {
     }, 200);
   };
 
-  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
-  const [toDate, setToDate] = useState(getTodayDate());
+  const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
 
   const [directory, setDirectory] = useState<OverallDirectoryRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -82,6 +83,17 @@ export default function OverallSearchPage() {
     return allPeople.filter(p => p.type === entityFilter);
   }, [allPeople, entityFilter]);
 
+  // Opened via another window's "Show Print Preview" — once the directory arrives, re-select the
+  // same person by id + entity type (per the user, 2026-09-03).
+  useEffect(() => {
+    if (!isChildWindow() || selectedPerson || allPeople.length === 0) return;
+    const id = getWindowParam('selectedPersonId');
+    const entityType = getWindowParam('selectedPersonType');
+    if (id == null || entityType == null) return;
+    const match = allPeople.find(p => p.id === Number(id) && p.entityType === entityType);
+    if (match) setSelectedPerson(match);
+  }, [allPeople, selectedPerson]);
+
   // ── Ledger drill-down ──
   const [ledger, setLedger] = useState<{ has_account: boolean; message?: string; opening_balance?: number; rows?: LedgerRow[]; total_debit?: number; total_credit?: number; closing_balance?: number } | null>(null);
   const [ledgerLoading, setLedgerLoading] = useState(false);
@@ -100,6 +112,23 @@ export default function OverallSearchPage() {
   }, [selectedPerson, fromDate, toDate]);
 
   useEffect(() => { if (selectedPerson) loadLedger(); }, [selectedPerson, loadLedger]);
+
+  // "Show Print Preview" opens a new window on this same person's ledger (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    if (!selectedPerson) return;
+    api.openWindow('overall-search', undefined, {
+      selectedPersonId: String(selectedPerson.id), selectedPersonType: selectedPerson.entityType,
+      fromDate, toDate, autoPreview: '1',
+    });
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once loaded.
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && selectedPerson && ledger) {
+      setIsPreviewOpen(true);
+    }
+  }, [selectedPerson, ledger]);
 
   const openingBalance = ledger?.opening_balance || 0;
   const totalDebit = ledger?.total_debit || 0;
@@ -183,7 +212,7 @@ export default function OverallSearchPage() {
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontStyle: 'italic' }}>Opening Balance brought forward</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>0</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>0</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold' }}>{formatCurrency(openingBalance)}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: balanceColor(openingBalance) }}>{formatCurrency(openingBalance)}</td>
             </tr>
 
             {/* Transaction Rows */}
@@ -200,13 +229,13 @@ export default function OverallSearchPage() {
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{row.type}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.narration || '-'}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>
                     {row.debit > 0 ? formatCurrency(row.debit) : '-'}
                   </td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>
-                    {row.credit > 0 ? formatCurrency(row.credit) : '-'}
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>
+                    {row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}
                   </td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold' }}>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: balanceColor(row.balance) }}>
                     {formatCurrency(row.balance)}
                   </td>
                 </tr>
@@ -218,9 +247,9 @@ export default function OverallSearchPage() {
               <td colSpan={4} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'left', textTransform: 'uppercase' }}>
                 Totals for Selected Period
               </td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totalDebit)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totalCredit)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(endingBalance)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{formatCurrency(totalDebit)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>({formatCurrency(totalCredit)})</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: balanceColor(endingBalance) }}>{formatCurrency(endingBalance)}</td>
             </tr>
           </tbody>
         </table>
@@ -384,7 +413,7 @@ export default function OverallSearchPage() {
 
               {/* Action Button: Single Gold Show Print Preview */}
               <button
-                onClick={() => setIsPreviewOpen(true)}
+                onClick={handleShowPrintPreview}
                 className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
               >
                 <Eye size={15} /> Show Print Preview
@@ -487,11 +516,11 @@ export default function OverallSearchPage() {
                             <td className="p-3 font-semibold text-slate-800">{row.type}</td>
                             <td className="p-3 text-slate-500 font-mono">{row.inv_no ?? row.bill_no ?? `#${row.entry_id}`}</td>
                             <td className="p-3 text-slate-700">{row.narration}</td>
-                            <td className="p-3 text-right font-semibold text-slate-900">
+                            <td className="p-3 text-right font-semibold text-emerald-700">
                               {row.debit > 0 ? formatCurrency(row.debit) : '-'}
                             </td>
                             <td className="p-3 text-right font-semibold text-rose-700">
-                              {row.credit > 0 ? formatCurrency(row.credit) : '-'}
+                              {row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}
                             </td>
                             <td className="p-3 text-right font-bold" style={{ color: balanceColor(row.balance) }}>
                               {formatCurrency(row.balance)}
@@ -506,8 +535,8 @@ export default function OverallSearchPage() {
                         <td colSpan={4} className="p-3 text-right uppercase tracking-wider text-[#B08D57]">
                           Totals for Selected Period
                         </td>
-                        <td className="p-3 text-right">{formatCurrency(totalDebit)}</td>
-                        <td className="p-3 text-right text-rose-700">{formatCurrency(totalCredit)}</td>
+                        <td className="p-3 text-right text-emerald-700">{formatCurrency(totalDebit)}</td>
+                        <td className="p-3 text-right text-rose-700">({formatCurrency(totalCredit)})</td>
                         <td className="p-3 text-right" style={{ color: balanceColor(endingBalance) }}>{formatCurrency(endingBalance)}</td>
                       </tr>
                     </tfoot>

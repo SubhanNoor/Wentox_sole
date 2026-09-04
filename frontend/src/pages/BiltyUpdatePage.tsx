@@ -8,23 +8,24 @@ import * as api from '@/lib/api';
 import type { SaleBillRow, AddaRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 export default function BiltyUpdatePage() {
   // Search Filters State
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [customerQuery, setCustomerQuery] = useState('');
-  const [subCustomerQuery, setSubCustomerQuery] = useState('');
+  const [startDate, setStartDate] = useState(() => getWindowParam('startDate') || '');
+  const [endDate, setEndDate] = useState(() => getWindowParam('endDate') || '');
+  const [customerQuery, setCustomerQuery] = useState(() => getWindowParam('customerQuery') || '');
+  const [subCustomerQuery, setSubCustomerQuery] = useState(() => getWindowParam('subCustomerQuery') || '');
   // BA-01: manual (client-typed) and system-generated (IDENTITY bill_id) bill numbers are
   // separate fields — each filters client-side against its own column, same pattern as
   // customerQuery/subCustomerQuery below, rather than one combined field guessing which is meant.
-  const [manualBillNoQuery, setManualBillNoQuery] = useState('');
-  const [systemBillNoQuery, setSystemBillNoQuery] = useState('');
-  const [biltyNoQuery, setBiltyNoQuery] = useState('');
+  const [manualBillNoQuery, setManualBillNoQuery] = useState(() => getWindowParam('manualBillNoQuery') || '');
+  const [systemBillNoQuery, setSystemBillNoQuery] = useState(() => getWindowParam('systemBillNoQuery') || '');
+  const [biltyNoQuery, setBiltyNoQuery] = useState(() => getWindowParam('biltyNoQuery') || '');
 
   // Radio Filters State
-  const [biltyStatusFilter, setBiltyStatusFilter] = useState<'all' | 'no-bilty' | 'no-adda' | 'has-bilty'>('all');
-  const [sortBy, setSortBy] = useState<'inv-no' | 'bill-no'>('inv-no');
+  const [biltyStatusFilter, setBiltyStatusFilter] = useState<'all' | 'no-bilty' | 'no-adda' | 'has-bilty'>(() => (getWindowParam('biltyStatusFilter') as 'all' | 'no-bilty' | 'no-adda' | 'has-bilty') || 'all');
+  const [sortBy, setSortBy] = useState<'inv-no' | 'bill-no'>(() => (getWindowParam('sortBy') as 'inv-no' | 'bill-no') || 'inv-no');
 
   // Selected Invoice for Updation
   const [selectedBillId, setSelectedBillId] = useState<number | null>(null);
@@ -40,6 +41,7 @@ export default function BiltyUpdatePage() {
   const [addas, setAddas] = useState<AddaRow[]>([]);
   const [invoices, setInvoices] = useState<SaleBillRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   useEffect(() => { api.listAddas().then(r => { if (r.ok) setAddas(r.data); }); }, []);
 
@@ -51,9 +53,24 @@ export default function BiltyUpdatePage() {
     });
     if (res.ok) setInvoices(res.data);
     setLoading(false);
+    setHasLoadedOnce(true);
   }, [startDate, endDate]);
 
   useEffect(() => { loadInvoices(); }, [loadInvoices]);
+
+  // "Show Print Preview" opens a new window on this same filtered directory (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    api.openWindow('bilty-update', undefined, {
+      startDate, endDate, customerQuery, subCustomerQuery, manualBillNoQuery, systemBillNoQuery,
+      biltyNoQuery, biltyStatusFilter, sortBy, autoPreview: '1',
+    });
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once loaded.
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && hasLoadedOnce) setIsPreviewOpen(true);
+  }, [hasLoadedOnce]);
 
   // Select a bill from table
   const handleSelectBill = (bill: SaleBillRow) => {
@@ -480,7 +497,7 @@ export default function BiltyUpdatePage() {
             )}
           </div>
           <button
-            onClick={() => setIsPreviewOpen(true)}
+            onClick={handleShowPrintPreview}
             className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
           >
             <Eye size={14} /> Show Print Preview

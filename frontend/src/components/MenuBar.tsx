@@ -10,13 +10,16 @@ interface Props {
   subTabId?: string;
   /** 'User' hides adminOnly items — same rule the sidebar applied. */
   isAdmin: boolean;
-  onNavigate: (page: NavPage, tab?: string) => void;
+  /** Every item opens its own new (child) window — no in-place navigation, no modifier key
+   *  needed, per the user 2026-09-03: every bar/menu item is a document launcher, matching the
+   *  legacy app's per-page floating windows (ref-pics/batch2). */
+  onOpenWindow: (page: NavPage, tab?: string) => void;
   /** Pinning: a dropdown item is the drag source now that the sidebar is gone. */
   onDragStart: (payload: { page: NavPage; tab?: string; label: string }) => void;
   onDragEnd: () => void;
 }
 
-export default function MenuBar({ currentPage, subTabId, isAdmin, onNavigate, onDragStart, onDragEnd }: Props) {
+export default function MenuBar({ currentPage, subTabId, isAdmin, onOpenWindow, onDragStart, onDragEnd }: Props) {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
   // Closing is delayed so the diagonal mouse path from a menu button down into its own dropdown
@@ -159,8 +162,8 @@ export default function MenuBar({ currentPage, subTabId, isAdmin, onNavigate, on
                         onDragStart({ page: item.page, tab: item.tab, label: item.label });
                       }}
                       onDragEnd={onDragEnd}
-                      onClick={() => { setOpenIndex(null); onNavigate(item.page, item.tab); }}
-                      title="Click to open · drag onto the Quick Menu to pin"
+                      onClick={() => { setOpenIndex(null); onOpenWindow(item.page, item.tab); }}
+                      title="Opens in a new window · drag onto the Quick Menu to pin"
                       // Text color lives in these classes (not the inline `style` below) on purpose —
                       // an inline style's color always beats a stylesheet `:hover` rule regardless of
                       // specificity, so `hover:text-*` here silently never applied when it was set via

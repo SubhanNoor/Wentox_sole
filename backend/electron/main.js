@@ -1,10 +1,10 @@
-const path = require('path');
 const { app, BrowserWindow, Menu } = require('electron');
 const registerIpcHandlers = require('../src/ipc');
 const alertsService = require('../src/services/alerts.service');
 const backupService = require('../src/services/backup.service');
 const migrate = require('../src/db/migrate');
 const seed = require('../src/db/seeds/run');
+const { createAppWindow } = require('./windowManager');
 
 // package.json's "name" (wentox-backend) is an npm package name, not a user-facing product name —
 // without this, app.getPath('userData') (where appConfig.js reads the installer-chosen backup
@@ -24,27 +24,12 @@ app.commandLine.appendSwitch('lang', 'en-GB');
 // paths, so the window jumped two steps and the percentage shown on screen stopped matching the
 // window it described. This app.whenReady() below now clears the application menu entirely
 // (Menu.setApplicationMenu(null), 2026-08-26 — see that comment), which removes that conflict too.
+//
+// Window creation itself now lives in windowManager.js's createAppWindow(), shared with
+// windows:open (src/ipc/windows.ipc.js) — opening an additional window from inside the running
+// app uses the exact same dev/packaged/unpackaged-prod loading logic as this first one.
 function createWindow() {
-  const win = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  if (process.env.VITE_DEV_SERVER_URL) {
-    win.loadURL(process.env.VITE_DEV_SERVER_URL); // dev: Vite server
-  } else if (app.isPackaged) {
-    // electron-builder copies frontend/dist into resources/frontend/dist (see package.json's
-    // "extraResources") rather than preserving the monorepo's ../../frontend layout, which
-    // doesn't exist once packaged.
-    win.loadFile(path.join(process.resourcesPath, 'frontend/dist/index.html'));
-  } else {
-    win.loadFile(path.join(__dirname, '../../frontend/dist/index.html')); // unpackaged prod: `npm start` against a local frontend build
-  }
+  return createAppWindow();
 }
 
 const ALERTS_REFRESH_INTERVAL_MS = 15 * 60 * 1000;

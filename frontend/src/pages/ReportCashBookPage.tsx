@@ -9,6 +9,7 @@ import * as api from '@/lib/api';
 import type { CashBookResult } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -29,11 +30,11 @@ function summaryLines(result: CashBookResult): [string, number, boolean][] {
 }
 
 export function ReportCashBookContent() {
-  const [filterBy, setFilterBy] = useState<'date' | 'month'>('date');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [specificDate, setSpecificDate] = useState(new Date().toISOString().split('T')[0]);
-  const [filterMonth, setFilterMonth] = useState<number>(new Date().getMonth());
-  const [filterYear, setFilterYear] = useState<number>(new Date().getFullYear());
+  const [filterBy, setFilterBy] = useState<'date' | 'month'>(() => (getWindowParam('filterBy') as 'date' | 'month') || 'date');
+  const [searchQuery, setSearchQuery] = useState(() => getWindowParam('searchQuery') || '');
+  const [specificDate, setSpecificDate] = useState(() => getWindowParam('specificDate') || new Date().toISOString().split('T')[0]);
+  const [filterMonth, setFilterMonth] = useState<number>(() => { const p = getWindowParam('filterMonth'); return p != null ? Number(p) : new Date().getMonth(); });
+  const [filterYear, setFilterYear] = useState<number>(() => { const p = getWindowParam('filterYear'); return p != null ? Number(p) : new Date().getFullYear(); });
 
   const [result, setResult] = useState<CashBookResult>({
     opening_cash: 0, cash_received: 0, total_cash: 0, cash_paid: 0, cash_in_hand: 0,
@@ -41,6 +42,7 @@ export function ReportCashBookContent() {
     rows: [], bank_transfers: [], cheque_deposits: [],
   });
   const [loading, setLoading] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   // formatDate, not the raw value: specificDate is the ISO string the <input type="date"> holds,
@@ -76,9 +78,26 @@ export function ReportCashBookContent() {
     const res = await api.reports.cashBook(payload);
     if (res.ok) setResult(res.data);
     setLoading(false);
+    setHasLoadedOnce(true);
   }, [filterBy, specificDate, filterMonth, filterYear]);
 
   useEffect(() => { load(); }, [load]);
+
+  // "Show Print Preview" opens a new window landing on this same filtered report (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    const params: Record<string, string> = { filterBy, searchQuery, autoPreview: '1' };
+    if (filterBy === 'date') params.specificDate = specificDate;
+    else { params.filterMonth = String(filterMonth); params.filterYear = String(filterYear); }
+    api.openWindow('reports', 'cash-book', params);
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once the
+  // first load has actually finished (see `load()`'s own `setHasLoadedOnce(true)` above; `loading`
+  // starts false before `load()` has run even once, so watching it alone would fire immediately).
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && hasLoadedOnce) setIsPreviewOpen(true);
+  }, [hasLoadedOnce]);
 
   const filteredRows = useMemo(() => {
     if (!searchQuery.trim()) return result.rows;
@@ -197,9 +216,9 @@ export function ReportCashBookContent() {
           <tfoot>
             <tr>
               <td colSpan={showDate ? 6 : 5} style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold' }}>Totals :</td>
-              <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(result.totals.receipt_bank)}</td>
+              <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace', color: '#047857' }}>{formatCurrency(result.totals.receipt_bank)}</td>
               <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace', color: '#e11d48' }}>{formatCurrency(outgoing(result.totals.payment_bank))}</td>
-              <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(result.totals.receipt_cash)}</td>
+              <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace', color: '#047857' }}>{formatCurrency(result.totals.receipt_cash)}</td>
               <td style={{ ...td('right'), backgroundColor: '#f2f2f2', fontWeight: 'bold', fontFamily: 'monospace', color: '#e11d48' }}>{formatCurrency(outgoing(result.totals.payment_cash))}</td>
             </tr>
           </tfoot>
@@ -325,7 +344,7 @@ export function ReportCashBookContent() {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setIsPreviewOpen(true)}
+              onClick={handleShowPrintPreview}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs self-end h-9"
             >
               <Eye size={14} /> Show Print Preview

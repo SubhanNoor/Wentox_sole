@@ -60,7 +60,6 @@ interface UiLine {
   articleId: number | null;
   variantId: number | null;
   label: string; // "Article Name — Color"
-  articleCode: string;
   categoryName: string;
   packing: number;
   cartons: number;
@@ -458,7 +457,7 @@ export default function StockVoucherPage() {
       ...prev,
       articleId,
       variantId: null,
-      articleSearchText: product ? `${product.code} — ${product.name}` : '',
+      articleSearchText: product?.name || '',
       label: product?.name || '',
       categoryName: product?.category_name || '',
       packing: product?.packing || 0,
@@ -544,13 +543,11 @@ export default function StockVoucherPage() {
     if (cartonsIssue) { fail(cartonsIssue); return; }
     if (entry.pairs <= 0) { fail('Pairs must be greater than 0 — check the article\'s packing.'); return; }
     setErrorMsg('');
-    const product = products.find(p => p.article_id === entry.articleId);
     const committed: UiLine = {
       uid: editingIndex != null ? lines[editingIndex].uid : newLineUid(),
       articleId: entry.articleId,
       variantId: entry.variantId,
       label: entry.label,
-      articleCode: product?.code || '',
       categoryName: entry.categoryName,
       packing: entry.packing,
       cartons: entry.cartons,
@@ -595,7 +592,7 @@ export default function StockVoucherPage() {
   const loadLineIntoEntry = (idx: number) => {
     const row = lines[idx];
     setEntry({
-      articleId: row.articleId, variantId: row.variantId, articleSearchText: row.articleCode ? `${row.articleCode} — ${row.label.split(' — ')[0]}` : row.label,
+      articleId: row.articleId, variantId: row.variantId, articleSearchText: row.label,
       label: row.label, categoryName: row.categoryName, packing: row.packing, cartons: row.cartons, pairs: row.pairs,
     });
     setEditingIndex(idx);
@@ -737,8 +734,7 @@ export default function StockVoucherPage() {
       uid: 'svl_' + l.line_id,
       articleId: l.article_id ?? null,
       variantId: l.variant_id,
-      label: `${l.article_name || l.article_code || 'Article'} — ${l.color || ''}`,
-      articleCode: l.article_code || '',
+      label: `${l.article_name || 'Article'} — ${l.color || ''}`,
       // Not returned by the lines join — looked up from the already-loaded products list by
       // article_id, same as the entry strip does when an article is freshly picked.
       categoryName: products.find(p => p.article_id === l.article_id)?.category_name || '',
@@ -1315,7 +1311,7 @@ export default function StockVoucherPage() {
                     const stock = getStockInfo(p.article_id, null);
                     return {
                       value: String(p.article_id),
-                      label: `${p.code} — ${p.name}`,
+                      label: p.name,
                       sublabel: stock ? `Stock: ${formatCartons(stock.cartons)} ctn / ${stock.pairs} prs` : undefined,
                     };
                   })}
@@ -1472,8 +1468,7 @@ export default function StockVoucherPage() {
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 pl-4" style={{ minWidth: '120px' }}>Article Code</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5">Article Description</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1.5 pl-4">Article Description</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1.5" style={{ minWidth: '120px' }}>Category</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '110px' }}>Cartons</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '110px' }}>Pairs</th>
@@ -1487,8 +1482,7 @@ export default function StockVoucherPage() {
                     className={`border-b cursor-pointer hover:bg-slate-50/55 transition-colors ${idx === editingIndex ? 'bg-blue-50' : ''}`}
                     style={{ borderColor: 'var(--border-table)' }}
                   >
-                    <td className="py-1 px-2 pl-4 font-mono text-xs text-slate-600">{line.articleCode || '—'}</td>
-                    <td className="py-1 px-2 text-xs text-slate-800 font-semibold">{line.label || 'N/A'}</td>
+                    <td className="py-1 px-2 pl-4 text-xs text-slate-800 font-semibold">{line.label || 'N/A'}</td>
                     <td className="py-1 px-2 text-xs text-slate-600">{line.categoryName || '—'}</td>
                     <td className="py-1 px-2 text-center font-mono text-sm text-slate-700">{formatCartons(line.cartons)}</td>
                     <td className="py-1 px-2 text-right font-mono text-sm text-slate-700">{line.pairs.toLocaleString()}</td>
@@ -1496,7 +1490,7 @@ export default function StockVoucherPage() {
                 ))}
                 {lines.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="p-3 text-center text-xs text-slate-400">
+                    <td colSpan={4} className="p-3 text-center text-xs text-slate-400">
                       No lines added yet.
                     </td>
                   </tr>
@@ -1518,7 +1512,11 @@ export default function StockVoucherPage() {
                 value={totals.totalPairs.toLocaleString()}
                 disabled
                 className="soleria-input soleria-input-compact text-right font-mono font-bold"
-                style={{ width: '140px', color: '#ffffff', background: '#111c2a', borderColor: '#334155' }}
+                // Light bar, not the dark navy fill — same fix as Reports Hub/Wage Run/Receipts/
+                // Expenses/Sale Bill/Sale Return/Journal Voucher (per the user, 2026-09-03). Text
+                // switched from white (which would vanish on a light background) to the app's
+                // usual gold accent for "the important total."
+                style={{ width: '140px', color: 'var(--brand-gold)', background: '#ffffff', borderColor: 'var(--border-color)' }}
               />
             </div>
           </div>

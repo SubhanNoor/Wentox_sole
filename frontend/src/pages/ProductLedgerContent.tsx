@@ -7,6 +7,7 @@ import { exportRowsToExcel } from '@/lib/export';
 import type { ProductLedgerResult, CategoryRow, VendorRow, StockMovementType } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
   PRODUCTION: 'Production',
@@ -20,16 +21,17 @@ const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
 // vendor, and article/category. This is the same report embedded as a tab inside the Stock page,
 // exposed here as its own report for the unified Reports hub.
 export default function ProductLedgerContent() {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('all');
-  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
-  const [toDate, setToDate] = useState(getTodayDate());
-  const [vendorFilter, setVendorFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState(() => getWindowParam('searchQuery') || '');
+  const [selectedCategory, setSelectedCategory] = useState(() => getWindowParam('selectedCategory') || 'all');
+  const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
+  const [vendorFilter, setVendorFilter] = useState(() => getWindowParam('vendorFilter') || 'all');
 
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [vendors, setVendors] = useState<VendorRow[]>([]);
   const [result, setResult] = useState<ProductLedgerResult>({ rows: [], total_in: 0, total_out: 0, net: 0 });
   const [loading, setLoading] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   useEffect(() => {
@@ -48,9 +50,23 @@ export default function ProductLedgerContent() {
     });
     if (res.ok) setResult(res.data);
     setLoading(false);
+    setHasLoadedOnce(true);
   }, [selectedCategory, vendorFilter, searchQuery, fromDate, toDate]);
 
   useEffect(() => { load(); }, [load]);
+
+  // "Show Print Preview" opens a new window on this same filtered ledger (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    api.openWindow('reports', 'product-ledger', {
+      searchQuery, selectedCategory, vendorFilter, fromDate, toDate, autoPreview: '1',
+    });
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once loaded.
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && hasLoadedOnce) setIsPreviewOpen(true);
+  }, [hasLoadedOnce]);
 
   const handleExportExcel = () => {
     const headers = ['Date', 'Product Code', 'Article', 'Color', 'Vendor', 'Type', 'Ref #', 'Debit (IN)', 'Credit (OUT)'];
@@ -101,13 +117,13 @@ export default function ProductLedgerContent() {
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{MOVEMENT_TYPE_LABEL[entry.movement_type]}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>#{entry.movement_id}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#047857' }}>{entry.debit > 0 ? entry.debit : '-'}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#e11d48' }}>{entry.credit > 0 ? entry.credit : '-'}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#e11d48' }}>{entry.credit > 0 ? `(${entry.credit})` : '-'}</td>
               </tr>
             ))}
             <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
               <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{result.total_in.toLocaleString()}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{result.total_out.toLocaleString()}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{result.total_in.toLocaleString()}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: '#e11d48' }}>({result.total_out.toLocaleString()})</td>
             </tr>
           </tbody>
         </table>
@@ -186,7 +202,7 @@ export default function ProductLedgerContent() {
             </div>
           </div>
           <button
-            onClick={() => setIsPreviewOpen(true)}
+            onClick={handleShowPrintPreview}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
           >
             <Eye size={14} /> Show Print Preview
@@ -239,7 +255,7 @@ export default function ProductLedgerContent() {
                     </td>
                     <td className="p-3 text-slate-500">#{entry.movement_id}</td>
                     <td className="p-3 text-right font-semibold text-emerald-700">{entry.debit > 0 ? entry.debit : '-'}</td>
-                    <td className="p-3 text-right font-semibold text-rose-700">{entry.credit > 0 ? entry.credit : '-'}</td>
+                    <td className="p-3 text-right font-semibold text-rose-700">{entry.credit > 0 ? `(${entry.credit})` : '-'}</td>
                   </tr>
                 ))
               )}
@@ -248,7 +264,7 @@ export default function ProductLedgerContent() {
               <tr className="bg-slate-50 font-bold border-t-2 border-b text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
                 <td colSpan={7} className="p-4 text-left font-lora">REPORT TOTAL</td>
                 <td className="p-4 text-right text-emerald-800">{result.total_in.toLocaleString()}</td>
-                <td className="p-4 text-right text-rose-800">{result.total_out.toLocaleString()}</td>
+                <td className="p-4 text-right text-rose-800">({result.total_out.toLocaleString()})</td>
               </tr>
             </tfoot>
           </table>

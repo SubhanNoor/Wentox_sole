@@ -14,6 +14,14 @@ import * as api from '@/lib/api';
 // Navigation moved out of this file entirely: the five hover menus and their page mapping live in
 // MenuBar.tsx as MENU_GROUPS. The sidebar's NavItem/NavSection/navSections went with it.
 
+// Multi-window support (windows:open, backend/electron/windowManager.js): a window opened via
+// Ctrl/Cmd+Click or the shortcut's "open in new window" icon carries `?child=1` and is meant to
+// show ONLY that page's own content — no header, no MenuBar, no Quick Menu bar — matching the
+// legacy app's own per-document floating windows (ref-pics/batch2), not a second full copy of the
+// whole app shell. Read once at module scope: this app has no client-side routing, so a window's
+// `location.search` never changes after it's created — safe to treat as fixed for its lifetime.
+const IS_CHILD_WINDOW = new URLSearchParams(window.location.search).get('child') === '1';
+
 interface QuickShortcut {
   id: string;
   label: string;
@@ -36,6 +44,10 @@ const DEFAULT_SHORTCUTS: QuickShortcut[] = [
   // shortcut, same as before, just pointing at the new page instead of Current Stock Report.
   { id: 'default_stock-voucher', label: 'Stock', page: 'stock-voucher' },
   { id: 'default_search-customer', label: 'Search Customer', page: 'search-customer' },
+  // Bilty Adda Updation's page title is "Search & Bilty Adda Updation" — too long for a shortcut
+  // chip, so this default carries its own short label rather than relying on self-pin (which
+  // always uses the page's own title verbatim, with no rename option).
+  { id: 'default_bilty-update', label: 'Search', page: 'bilty-update' },
   { id: 'default_backup', label: 'Backup', page: 'settings', tab: 'backup' },
 ];
 
@@ -50,19 +62,50 @@ const SHORTCUTS_STORAGE_KEY = 'wento_quick_shortcuts_clean_v3';
 const SHORTCUTS_SEED_KEY = 'wento_quick_shortcuts_seed';
 const SHORTCUTS_SEED_VERSION = '2026-08-26c';
 
+// One-off backfill for a machine that was already seeded before a given shortcut existed in
+// DEFAULT_SHORTCUTS — ensures it's present with the given label, instead of bumping
+// SHORTCUTS_SEED_VERSION, which would silently replace the user's entire customized bar just to
+// add one shortcut. If the page was already pinned under a different label (e.g. self-pinned via
+// "+ Pin Page to Bar", which always uses the page's own title verbatim), that label is corrected
+// rather than left alone — this is the one thing an insert-only backfill got wrong the first time
+// (v1 found "Search & Bilty Adda Updation" already pinned and left it as-is). Runs once per
+// (backfill key, machine); bump the key's version suffix if the label/page needs fixing again.
+function ensureShortcutLabel(list: QuickShortcut[], shortcut: QuickShortcut, version: string): QuickShortcut[] {
+  const backfillKey = `wento_quick_shortcuts_backfill_${shortcut.id}_${version}`;
+  if (localStorage.getItem(backfillKey)) return list;
+  localStorage.setItem(backfillKey, '1');
+  const idx = list.findIndex(s => s.page === shortcut.page && s.tab === shortcut.tab);
+  let updated: QuickShortcut[];
+  if (idx === -1) {
+    updated = [...list, shortcut];
+  } else if (list[idx].label !== shortcut.label) {
+    updated = list.map((s, i) => (i === idx ? { ...s, label: shortcut.label } : s));
+  } else {
+    return list;
+  }
+  localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(updated));
+  return updated;
+}
+
+const BILTY_UPDATE_SHORTCUT: QuickShortcut = { id: 'default_bilty-update', label: 'Search', page: 'bilty-update' };
+
 function loadShortcuts(): QuickShortcut[] {
   if (localStorage.getItem(SHORTCUTS_SEED_KEY) !== SHORTCUTS_SEED_VERSION) {
     localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(DEFAULT_SHORTCUTS));
     localStorage.setItem(SHORTCUTS_SEED_KEY, SHORTCUTS_SEED_VERSION);
+    // A fresh seed already carries every DEFAULT_SHORTCUTS entry — mark this backfill done too,
+    // so it doesn't immediately re-run against the very next load.
+    localStorage.setItem(`wento_quick_shortcuts_backfill_${BILTY_UPDATE_SHORTCUT.id}_v2`, '1');
     return DEFAULT_SHORTCUTS;
   }
   // Already seeded, so from here on the user's own bar wins — including an empty one they cleared
   // themselves, which is why this returns [] rather than re-seeding.
   const saved = localStorage.getItem(SHORTCUTS_STORAGE_KEY);
-  if (!saved) return [];
+  if (!saved) return ensureShortcutLabel([], BILTY_UPDATE_SHORTCUT, 'v2');
   try {
     const parsed = JSON.parse(saved);
-    return Array.isArray(parsed) ? parsed : DEFAULT_SHORTCUTS;
+    if (!Array.isArray(parsed)) return DEFAULT_SHORTCUTS;
+    return ensureShortcutLabel(parsed, BILTY_UPDATE_SHORTCUT, 'v2');
   } catch {
     return DEFAULT_SHORTCUTS;
   }
@@ -335,6 +378,11 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     <div className="flex h-screen w-full overflow-hidden" style={{ background: 'var(--app-bg)' }}>
       {/* Main Content — the sidebar is gone; navigation lives in <MenuBar> below the header. */}
       <div className="flex flex-col flex-1 min-w-0">
+        {/* Header + MenuBar + Quick Menu bar are the whole-app chrome — a child window (see
+            IS_CHILD_WINDOW above) skips all of it and shows only this page's own content below,
+            since it was opened specifically to be that one document, not a second full app. */}
+        {!IS_CHILD_WINDOW && (
+        <>
         {/* Top Header */}
         <header
           data-no-print
@@ -477,7 +525,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
           currentPage={currentPage}
           subTabId={subTabId}
           isAdmin={state.currentUserRole !== 'User'}
-          onNavigate={(page, tab) => navigate(page, tab)}
+          onOpenWindow={(page, tab) => api.openWindow(page, tab)}
           onDragStart={() => setIsDragging(true)}
           onDragEnd={() => { setIsDragging(false); setIsDragOver(false); }}
         />
@@ -531,9 +579,13 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
                           : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-200 hover:border-amber-400'
                       }`}
                     >
+                      {/* Every shortcut opens its own new (child) window — no modifier key, no
+                          separate button — per the user, 2026-09-03: every bar/menu item should
+                          behave like a document launcher, matching the legacy app's per-page
+                          floating windows (ref-pics/batch2), not in-place navigation. */}
                       <button
                         type="button"
-                        onClick={() => navigate(s.page, s.tab)}
+                        onClick={() => api.openWindow(s.page, s.tab)}
                         className="cursor-pointer font-semibold hover:underline"
                       >
                         {s.label}
@@ -561,6 +613,27 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
             {isCurrentPagePinned ? 'Pinned to Bar' : '+ Pin Page to Bar'}
           </button>
         </div>
+        </>
+        )}
+
+        {/* A child window still needs the page's OWN sub-tab switcher (e.g. Journal Voucher's
+            "New Journal Voucher"/"JV Ledger") — that's part of this page's own content, not
+            app-wide chrome, so it survives even with the rest of the header gone. Just the page
+            title + that switcher, no brand mark/Home/zoom/notifications/user menu. */}
+        {IS_CHILD_WINDOW && (pageTitle || headerAction) && (
+          <div
+            data-no-print
+            className="flex items-center gap-4 px-4 flex-shrink-0"
+            style={{ height: 44, background: 'var(--app-bg)', borderBottom: '1px solid var(--border-color)' }}
+          >
+            {pageTitle && (
+              <span className="font-lora font-semibold flex-shrink-0" style={{ fontSize: '13px', color: 'var(--dark-heading)' }}>
+                {pageTitle}
+              </span>
+            )}
+            {headerAction && <div className="flex-1 overflow-x-auto min-w-0">{headerAction}</div>}
+          </div>
+        )}
 
         {/* Content — top padding trimmed well below the sides/bottom so the page's own subpage
             tab bar and cards sit close under the Quick Menu bar instead of leaving a tall gap. */}

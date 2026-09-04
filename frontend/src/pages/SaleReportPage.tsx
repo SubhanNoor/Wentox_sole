@@ -10,6 +10,7 @@ import * as api from '@/lib/api';
 import type { SaleReportRow as ApiSaleReportRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 interface SaleReportRow {
   key: string;
@@ -91,12 +92,12 @@ function mapRow(r: ApiSaleReportRow): SaleReportRow {
 }
 
 export function SaleReportContent() {
-  const [groupMode, setGroupMode] = useState<GroupMode>('overall');
-  const [viewMode, setViewMode] = useState<'overall' | 'month' | 'range'>('overall');
-  const [filterMonth, setFilterMonth] = useState(new Date().getMonth());
-  const [filterYear, setFilterYear] = useState(new Date().getFullYear());
-  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
-  const [toDate, setToDate] = useState(getTodayDate());
+  const [groupMode, setGroupMode] = useState<GroupMode>(() => (getWindowParam('groupMode') as GroupMode) || 'overall');
+  const [viewMode, setViewMode] = useState<'overall' | 'month' | 'range'>(() => (getWindowParam('viewMode') as 'overall' | 'month' | 'range') || 'overall');
+  const [filterMonth, setFilterMonth] = useState(() => { const p = getWindowParam('filterMonth'); return p != null ? Number(p) : new Date().getMonth(); });
+  const [filterYear, setFilterYear] = useState(() => { const p = getWindowParam('filterYear'); return p != null ? Number(p) : new Date().getFullYear(); });
+  const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
   const [expandedRegionId, setExpandedRegionId] = useState<number | null>(null);
   const [expandedCityId, setExpandedCityId] = useState<number | null>(null);
 
@@ -108,6 +109,7 @@ export function SaleReportContent() {
 
   const [customerRows, setCustomerRows] = useState<SaleReportRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   const { periodStart, periodEnd, periodLabel } = useMemo(() => {
     if (viewMode === 'month') {
@@ -131,9 +133,24 @@ export function SaleReportContent() {
     const res = await api.reports.saleReport({ date_from: periodStart, date_to: periodEnd });
     if (res.ok) setCustomerRows((res.data as ApiSaleReportRow[]).map(mapRow).filter(r => r.totalSales > 0 || r.saleReturn > 0 || r.payment > 0));
     setLoading(false);
+    setHasLoadedOnce(true);
   }, [periodStart, periodEnd]);
 
   useEffect(() => { loadRows(); }, [loadRows]);
+
+  // "Show Print Preview" opens a new window on this same filtered/grouped report (per the user,
+  // 2026-09-03), instead of an in-page overlay.
+  const handleShowPrintPreview = () => {
+    api.openWindow('reports', 'sale-report', {
+      groupMode, viewMode, filterMonth: String(filterMonth), filterYear: String(filterYear),
+      fromDate, toDate, autoPreview: '1',
+    });
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview once loaded.
+  useEffect(() => {
+    if (isChildWindow() && getWindowParam('autoPreview') === '1' && hasLoadedOnce) setIsPreviewOpen(true);
+  }, [hasLoadedOnce]);
 
   const overallRow: SaleReportRow = useMemo(() => ({
     key: 'overall', label: 'Overall', regionId: null, regionName: null, cityId: null, cityName: null,
@@ -377,7 +394,7 @@ export function SaleReportContent() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setIsPreviewOpen(true)}
+              onClick={handleShowPrintPreview}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
             >
               <Eye size={14} /> Show Print Preview

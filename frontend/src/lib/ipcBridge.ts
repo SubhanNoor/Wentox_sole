@@ -24,6 +24,7 @@ const FEATURES = [
   'receiptVouchers',
   'regions', 'reports', 'salaryRuns', 'saleBills', 'saleReturns', 'stages', 'stock', 'stores',
   'subCustomers', 'systemReset', 'transfers', 'settlements', 'journalVouchers', 'stockVouchers', 'deposits', 'updates', 'vendors', 'wageRuns',
+  'windows',
   'zoom',
 ] as const;
 

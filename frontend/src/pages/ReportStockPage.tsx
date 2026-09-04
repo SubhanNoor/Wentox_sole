@@ -8,6 +8,7 @@ import * as api from '@/lib/api';
 import type { StockRow, VendorStockRow, ProductLedgerResult, StockMovementRow, StockMovementType, CategoryRow, VendorRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { getWindowParam, shouldAutoPreview, isChildWindow } from '@/lib/windowParams';
 
 const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
   PRODUCTION: 'Production',
@@ -43,7 +44,10 @@ const iso = (d: Date) => d.toISOString().split('T')[0];
 
 export default function ReportStockPage() {
   type StockTab = 'current' | 'material' | 'ledger' | 'daily' | 'weekly' | 'monthly' | 'overall';
-  const [activeStockTab, setActiveStockTab] = useState<StockTab>('current');
+  // Seeded from the URL when this window was opened by another window's "Show Print Preview"
+  // (openWindow's `params`, per the user, 2026-09-03) so it lands on the exact same filtered
+  // report instead of the defaults below.
+  const [activeStockTab, setActiveStockTab] = useState<StockTab>(() => (getWindowParam('activeStockTab') as StockTab) || 'current');
   const [tabAnimating, setTabAnimating] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
@@ -56,9 +60,9 @@ export default function ReportStockPage() {
     }, 180);
   };
 
-  const [materialVendorFilter, setMaterialVendorFilter] = useState('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [materialVendorFilter, setMaterialVendorFilter] = useState(() => getWindowParam('materialVendorFilter') || 'all');
+  const [searchQuery, setSearchQuery] = useState(() => getWindowParam('searchQuery') || '');
+  const [selectedCategory, setSelectedCategory] = useState(() => getWindowParam('selectedCategory') || 'all');
 
   // Real lookups
   const [categories, setCategories] = useState<CategoryRow[]>([]);
@@ -134,17 +138,17 @@ export default function ReportStockPage() {
   }
 
   // Production log filtering states
-  const [dailyDate, setDailyDate] = useState(new Date().toISOString().split('T')[0]);
-  const [weeklyDate, setWeeklyDate] = useState(new Date().toISOString().split('T')[0]);
-  const [monthlyMonth, setMonthlyMonth] = useState(new Date().getMonth());
-  const [monthlyYear, setMonthlyYear] = useState(new Date().getFullYear());
-  const [fromDate, setFromDate] = useState(getThreeMonthsAgoDate());
-  const [toDate, setToDate] = useState(getTodayDate());
+  const [dailyDate, setDailyDate] = useState(() => getWindowParam('dailyDate') || new Date().toISOString().split('T')[0]);
+  const [weeklyDate, setWeeklyDate] = useState(() => getWindowParam('weeklyDate') || new Date().toISOString().split('T')[0]);
+  const [monthlyMonth, setMonthlyMonth] = useState(() => { const p = getWindowParam('monthlyMonth'); return p != null ? Number(p) : new Date().getMonth(); });
+  const [monthlyYear, setMonthlyYear] = useState(() => { const p = getWindowParam('monthlyYear'); return p != null ? Number(p) : new Date().getFullYear(); });
+  const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
 
   // Product Ledger tab filtering state
-  const [ledgerFromDate, setLedgerFromDate] = useState(getThreeMonthsAgoDate());
-  const [ledgerToDate, setLedgerToDate] = useState(getTodayDate());
-  const [ledgerVendorFilter, setLedgerVendorFilter] = useState('all');
+  const [ledgerFromDate, setLedgerFromDate] = useState(() => getWindowParam('ledgerFromDate') || getThreeMonthsAgoDate());
+  const [ledgerToDate, setLedgerToDate] = useState(() => getWindowParam('ledgerToDate') || getTodayDate());
+  const [ledgerVendorFilter, setLedgerVendorFilter] = useState(() => getWindowParam('ledgerVendorFilter') || 'all');
 
   const categoryIdParam = selectedCategory !== 'all' ? Number(selectedCategory) : undefined;
 
@@ -162,19 +166,19 @@ export default function ReportStockPage() {
   const filteredStockRows = useMemo(() => {
     if (!searchQuery.trim()) return stockRows;
     const q = searchQuery.toLowerCase();
-    return stockRows.filter(r => r.article_name.toLowerCase().includes(q) || r.article_code.toLowerCase().includes(q));
+    return stockRows.filter(r => r.article_name.toLowerCase().includes(q));
   }, [stockRows, searchQuery]);
 
   // Group color variants of the same article under one row.
   const groupedArticles = useMemo(() => {
-    const groups: Record<number, { articleId: number; code: string; commonName: string; categoryName: string; packing: number; rows: StockRow[] }> = {};
+    const groups: Record<number, { articleId: number; commonName: string; categoryName: string; packing: number; rows: StockRow[] }> = {};
     filteredStockRows.forEach(r => {
       if (!groups[r.article_id]) {
-        groups[r.article_id] = { articleId: r.article_id, code: r.article_code, commonName: r.article_name, categoryName: r.category_name, packing: r.effective_packing, rows: [] };
+        groups[r.article_id] = { articleId: r.article_id, commonName: r.article_name, categoryName: r.category_name, packing: r.effective_packing, rows: [] };
       }
       groups[r.article_id].rows.push(r);
     });
-    return Object.values(groups).sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
+    return Object.values(groups).sort((a, b) => a.commonName.localeCompare(b.commonName, undefined, { numeric: true }));
   }, [filteredStockRows]);
 
   // Full Report: a pivot table — one column per distinct color found across ALL filtered
@@ -189,7 +193,7 @@ export default function ReportStockPage() {
       const byColor: Record<string, { cartons: number; extraPairs: number }> = {};
       group.rows.forEach(r => { byColor[r.color] = { cartons: r.cartons, extraPairs: r.extra_pairs }; });
       const totalPairs = group.rows.reduce((sum, r) => sum + r.total_pairs, 0);
-      return { code: group.code, commonName: group.commonName, categoryName: group.categoryName, byColor, totalPairs };
+      return { articleId: group.articleId, commonName: group.commonName, categoryName: group.categoryName, byColor, totalPairs };
     });
   }, [groupedArticles]);
 
@@ -279,9 +283,9 @@ export default function ReportStockPage() {
 
   const handleExportExcel = () => {
     if (activeStockTab === 'current') {
-      const headers = ['Product Code', 'Article', 'Category', ...allColorsAcrossArticles.map(c => `${c} (Ctn/Prs)`), 'Total Pairs'];
+      const headers = ['Article', 'Category', ...allColorsAcrossArticles.map(c => `${c} (Ctn/Prs)`), 'Total Pairs'];
       const rows = colorReportRows.map(r => [
-        r.code, r.commonName, r.categoryName,
+        r.commonName, r.categoryName,
         ...allColorsAcrossArticles.map(c => `${r.byColor[c]?.cartons ?? 0}/${r.byColor[c]?.extraPairs ?? 0}`),
         r.totalPairs
       ]);
@@ -291,15 +295,47 @@ export default function ReportStockPage() {
       const rows = materialStockRows.map(r => [r.vendor_name, r.material_name, r.unit, r.purchased_qty, r.returned_qty, r.on_hand]);
       exportRowsToExcel('material-stock', headers, rows);
     } else if (activeStockTab === 'ledger') {
-      const headers = ['Date', 'Product Code', 'Article', 'Color', 'Vendor', 'Type', 'Ref', 'Debit (IN)', 'Credit (OUT)'];
-      const rows = ledgerResult.rows.map(e => [e.movement_date, e.article_code, e.article_name, e.color, e.vendor_name || '', MOVEMENT_TYPE_LABEL[e.movement_type], e.movement_id, e.debit, e.credit]);
+      const headers = ['Date', 'Article', 'Color', 'Vendor', 'Type', 'Ref', 'Debit (IN)', 'Credit (OUT)'];
+      const rows = ledgerResult.rows.map(e => [e.movement_date, e.article_name, e.color, e.vendor_name || '', MOVEMENT_TYPE_LABEL[e.movement_type], e.movement_id, e.debit, e.credit]);
       exportRowsToExcel('product-ledger', headers, rows);
     } else {
-      const headers = ['Date', 'Product Code', 'Article Name', 'Color', 'Category', 'Packing', 'Qty Added', 'Unit', 'Total Pairs'];
-      const rows = filteredLogs.map(log => [log.movement_date, log.article_code, log.article_name, log.color, log.category_name, log.packing ?? '', log.input_qty == null ? '' : formatCartons(log.input_qty), log.input_unit ?? '', log.qty_pairs]);
+      const headers = ['Date', 'Article Name', 'Color', 'Category', 'Packing', 'Qty Added', 'Unit', 'Total Pairs'];
+      const rows = filteredLogs.map(log => [log.movement_date, log.article_name, log.color, log.category_name, log.packing ?? '', log.input_qty == null ? '' : formatCartons(log.input_qty), log.input_unit ?? '', log.qty_pairs]);
       exportRowsToExcel(`production-${activeStockTab}`, headers, rows);
     }
   };
+
+  // "Show Print Preview" opens a new window landing on this same report, pre-filtered exactly as
+  // shown here (per the user, 2026-09-03) — behaving like the app's other "open in new window"
+  // child windows, rather than an in-page overlay. Only the filters relevant to the active tab are
+  // carried, matching what that tab's own renderPrintableDocument() branch actually reads.
+  const handleShowPrintPreview = () => {
+    const params: Record<string, string> = { activeStockTab, selectedCategory, searchQuery, autoPreview: '1' };
+    if (activeStockTab === 'material') {
+      params.materialVendorFilter = materialVendorFilter;
+    } else if (activeStockTab === 'ledger') {
+      params.ledgerFromDate = ledgerFromDate;
+      params.ledgerToDate = ledgerToDate;
+      params.ledgerVendorFilter = ledgerVendorFilter;
+    } else if (activeStockTab === 'daily') {
+      params.dailyDate = dailyDate;
+    } else if (activeStockTab === 'weekly') {
+      params.weeklyDate = weeklyDate;
+    } else if (activeStockTab === 'monthly') {
+      params.monthlyMonth = String(monthlyMonth);
+      params.monthlyYear = String(monthlyYear);
+    } else if (activeStockTab === 'overall') {
+      params.fromDate = fromDate;
+      params.toDate = toDate;
+    }
+    api.openWindow('report-stock', undefined, params);
+  };
+
+  // Opened via another window's "Show Print Preview" — go straight into the preview instead of
+  // landing on the plain report first.
+  useEffect(() => {
+    if (isChildWindow() && shouldAutoPreview()) setIsPreviewOpen(true);
+  }, []);
 
   const reportOrientation: 'portrait' | 'landscape' = useMemo(() => {
     if (activeStockTab === 'current' && allColorsAcrossArticles.length > 3) {
@@ -340,7 +376,6 @@ export default function ReportStockPage() {
           <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
             <thead>
               <tr>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '10.5px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Code</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '10.5px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Article</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '10.5px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Category</th>
                 {allColorsAcrossArticles.map(c => (
@@ -351,8 +386,7 @@ export default function ReportStockPage() {
             </thead>
             <tbody>
               {colorReportRows.map(row => (
-                <tr key={row.code}>
-                  <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10px', fontFamily: 'monospace', fontWeight: 'bold' }}>{row.code}</td>
+                <tr key={row.articleId}>
                   <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{row.commonName}</td>
                   <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10px' }}>{row.categoryName}</td>
                   {allColorsAcrossArticles.map(c => {
@@ -367,7 +401,7 @@ export default function ReportStockPage() {
                 </tr>
               ))}
               <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
-                <td colSpan={3 + allColorsAcrossArticles.length} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>TOTAL PAIRS ACROSS ALL ARTICLES & COLORS</td>
+                <td colSpan={2 + allColorsAcrossArticles.length} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>TOTAL PAIRS ACROSS ALL ARTICLES & COLORS</td>
                 <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{colorReportTotalPairs.toLocaleString()}</td>
               </tr>
             </tbody>
@@ -413,7 +447,6 @@ export default function ReportStockPage() {
               <tr>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Date</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Code</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '18%' }}>Article</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Color</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '14%' }}>Vendor</th>
@@ -426,7 +459,7 @@ export default function ReportStockPage() {
             <tbody>
               {ledgerResult.rows.length === 0 ? (
                 <tr>
-                  <td colSpan={10} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
+                  <td colSpan={9} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
                     No product ledger movements found matching your filters.
                   </td>
                 </tr>
@@ -435,21 +468,20 @@ export default function ReportStockPage() {
                   <tr key={e.movement_id}>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{idx + 1}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{formatDate(e.movement_date)}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace', fontWeight: 'bold' }}>{e.article_code}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{e.article_name}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{e.color}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{e.vendor_name || '—'}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontWeight: 'bold' }}>{MOVEMENT_TYPE_LABEL[e.movement_type]}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>#{e.movement_id}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#047857' }}>{e.debit > 0 ? e.debit : '-'}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#e11d48' }}>{e.credit > 0 ? e.credit : '-'}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#e11d48' }}>{e.credit > 0 ? `(${e.credit})` : '-'}</td>
                   </tr>
                 ))
               )}
               <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
                 <td colSpan={8} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL</td>
                 <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{ledgerResult.total_in.toLocaleString()}</td>
-                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>{ledgerResult.total_out.toLocaleString()}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>({ledgerResult.total_out.toLocaleString()})</td>
               </tr>
             </tbody>
           </table>
@@ -462,7 +494,6 @@ export default function ReportStockPage() {
               <tr>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '12%' }}>Date</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '12%' }}>Code</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '23%' }}>Article Description</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Color</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '12%' }}>Category</th>
@@ -475,7 +506,7 @@ export default function ReportStockPage() {
             <tbody>
               {filteredLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={10} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
+                  <td colSpan={9} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
                     No production records found for the selected criteria.
                   </td>
                 </tr>
@@ -484,7 +515,6 @@ export default function ReportStockPage() {
                   <tr key={log.movement_id}>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{idx + 1}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{formatDate(log.movement_date)}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace', fontWeight: 'bold' }}>{log.article_code}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{log.article_name}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{log.color}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{log.category_name}</td>
@@ -660,7 +690,7 @@ export default function ReportStockPage() {
                 )}
 
                 <button
-                  onClick={() => setIsPreviewOpen(true)}
+                  onClick={handleShowPrintPreview}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs shrink-0"
                 >
                   <Eye size={14} /> Show Print Preview
@@ -823,7 +853,7 @@ export default function ReportStockPage() {
                   <thead>
                     <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                       <th className="p-3 pl-4" style={{ width: '30px' }}></th>
-                      <th className="p-3">Product Code</th>
+                      <th className="p-3">Article</th>
                       <th className="p-3">Category</th>
                       <th className="p-3 text-right">Total Pairs</th>
                     </tr>
@@ -851,9 +881,9 @@ export default function ReportStockPage() {
                                 {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                               </td>
                               <td className="p-3 font-semibold text-slate-700">
-                                {group.code}
+                                {group.commonName}
                                 <span className="block text-xs font-normal text-slate-500">
-                                  {group.commonName} <span className="text-slate-400">({group.rows.length} color{group.rows.length !== 1 ? 's' : ''})</span>
+                                  {group.rows.length} color{group.rows.length !== 1 ? 's' : ''}
                                 </span>
                               </td>
                               <td className="p-3 text-slate-500">{group.categoryName}</td>
@@ -981,7 +1011,6 @@ export default function ReportStockPage() {
                   <thead>
                     <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                       <th className="p-3 pl-4">Date</th>
-                      <th className="p-3">Product Code</th>
                       <th className="p-3">Article</th>
                       <th className="p-3">Color</th>
                       <th className="p-3">Vendor</th>
@@ -994,7 +1023,7 @@ export default function ReportStockPage() {
                   <tbody>
                     {ledgerResult.rows.length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="text-center p-8 text-slate-400">
+                        <td colSpan={8} className="text-center p-8 text-slate-400">
                           No product ledger movements found matching your filters.
                         </td>
                       </tr>
@@ -1002,7 +1031,6 @@ export default function ReportStockPage() {
                       ledgerResult.rows.map((entry) => (
                         <tr key={entry.movement_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                           <td className="p-3 pl-4 font-mono text-slate-600">{formatDate(entry.movement_date)}</td>
-                          <td className="p-3 font-semibold text-slate-700">{entry.article_code}</td>
                           <td className="p-3 text-slate-700">{entry.article_name}</td>
                           <td className="p-3 text-slate-500">{entry.color}</td>
                           <td className="p-3 text-slate-500">{entry.vendor_name || '—'}</td>
@@ -1018,7 +1046,7 @@ export default function ReportStockPage() {
                           </td>
                           <td className="p-3 text-slate-500">#{entry.movement_id}</td>
                           <td className="p-3 text-right font-semibold text-emerald-700">{entry.debit > 0 ? entry.debit : '-'}</td>
-                          <td className="p-3 text-right font-semibold text-rose-700">{entry.credit > 0 ? entry.credit : '-'}</td>
+                          <td className="p-3 text-right font-semibold text-rose-700">{entry.credit > 0 ? `(${entry.credit})` : '-'}</td>
                         </tr>
                       ))
                     )}
@@ -1027,7 +1055,7 @@ export default function ReportStockPage() {
                     <tr className="bg-slate-50 font-bold border-t-2 border-b text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
                       <td colSpan={7} className="p-4 text-left font-lora">REPORT TOTAL</td>
                       <td className="p-4 text-right text-emerald-800">{ledgerResult.total_in.toLocaleString()}</td>
-                      <td className="p-4 text-right text-rose-800">{ledgerResult.total_out.toLocaleString()}</td>
+                      <td className="p-4 text-right text-rose-800">({ledgerResult.total_out.toLocaleString()})</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -1040,7 +1068,6 @@ export default function ReportStockPage() {
                     <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                       <th className="p-3 pl-4">S#</th>
                       <th className="p-3">Date</th>
-                      <th className="p-3">Product Code</th>
                       <th className="p-3">Article Name</th>
                       <th className="p-3">Color</th>
                       <th className="p-3">Category</th>
@@ -1053,7 +1080,7 @@ export default function ReportStockPage() {
                   <tbody>
                     {filteredLogs.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="text-center p-8 text-slate-400">
+                        <td colSpan={9} className="text-center p-8 text-slate-400">
                           No production records found for the selected criteria.
                         </td>
                       </tr>
@@ -1062,7 +1089,6 @@ export default function ReportStockPage() {
                         <tr key={log.movement_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                           <td className="p-3 pl-4 font-mono text-slate-500">{idx + 1}</td>
                           <td className="p-3 text-slate-600 font-semibold">{formatDate(log.movement_date)}</td>
-                          <td className="p-3 font-semibold text-slate-700">{log.article_code}</td>
                           <td className="p-3 font-semibold text-slate-800">{log.article_name}</td>
                           <td className="p-3">
                             <span className="px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
@@ -1148,7 +1174,6 @@ export default function ReportStockPage() {
               <thead>
                 <tr style={{ backgroundColor: '#f2f2f2' }}>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
-                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '15%' }}>Code</th>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '30%' }}>Article Description</th>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '12%' }}>Color</th>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '13%' }}>Category</th>
@@ -1162,7 +1187,6 @@ export default function ReportStockPage() {
                 {filteredStockRows.map((r, idx) => (
                   <tr key={r.variant_id}>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{r.article_code}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.article_name}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.color}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.category_name}</td>
@@ -1213,7 +1237,6 @@ export default function ReportStockPage() {
                 <tr style={{ backgroundColor: '#f2f2f2' }}>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Date</th>
-                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Code</th>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '18%' }}>Article</th>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Color</th>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '14%' }}>Vendor</th>
@@ -1228,14 +1251,13 @@ export default function ReportStockPage() {
                   <tr key={e.movement_id}>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{formatDate(e.movement_date)}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{e.article_code}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.article_name}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.color}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{e.vendor_name || ''}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{MOVEMENT_TYPE_LABEL[e.movement_type]}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>#{e.movement_id}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{e.debit > 0 ? e.debit : '-'}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{e.credit > 0 ? e.credit : '-'}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', color: '#047857' }}>{e.debit > 0 ? e.debit : '-'}</td>
+                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', color: '#e11d48' }}>{e.credit > 0 ? `(${e.credit})` : '-'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1246,7 +1268,6 @@ export default function ReportStockPage() {
                 <tr style={{ backgroundColor: '#f2f2f2' }}>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '12%' }}>Date</th>
-                  <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '12%' }}>Code</th>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '25%' }}>Article Description</th>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '12%' }}>Color</th>
                   <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '12%' }}>Category</th>
@@ -1261,7 +1282,6 @@ export default function ReportStockPage() {
                   <tr key={log.movement_id}>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{formatDate(log.movement_date)}</td>
-                    <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{log.article_code}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{log.article_name}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{log.color}</td>
                     <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{log.category_name}</td>
@@ -1327,7 +1347,6 @@ export default function ReportStockPage() {
             <thead>
               <tr style={{ backgroundColor: '#f2f2f2' }}>
                 <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center' }}>S#</th>
-                <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left' }}>Code</th>
                 <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left' }}>Article</th>
                 <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left' }}>Category</th>
                 {allColorsAcrossArticles.map(color => (
@@ -1338,10 +1357,9 @@ export default function ReportStockPage() {
             </thead>
             <tbody>
               {colorReportRows.map((r, idx) => (
-                <tr key={r.code}>
+                <tr key={r.articleId}>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{r.code}</td>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.commonName}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold' }}>{r.commonName}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{r.categoryName}</td>
                   {allColorsAcrossArticles.map(color => {
                     const cell = r.byColor[color];
@@ -1355,7 +1373,7 @@ export default function ReportStockPage() {
                 </tr>
               ))}
               <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2', fontSize: '12px' }}>
-                <td colSpan={4 + allColorsAcrossArticles.length} style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', textTransform: 'uppercase' }}>Report Total:</td>
+                <td colSpan={3 + allColorsAcrossArticles.length} style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', textTransform: 'uppercase' }}>Report Total:</td>
                 <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', borderBottom: '3px double #000000' }}>{colorReportTotalPairs.toLocaleString()}</td>
               </tr>
             </tbody>
@@ -1408,27 +1426,25 @@ export default function ReportStockPage() {
               <table className="w-full text-left border-collapse text-sm">
                 <thead>
                   <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                    <th className="p-3 pl-4 whitespace-nowrap">Code</th>
-                    <th className="p-3 whitespace-nowrap">Article</th>
+                    <th className="p-3 pl-4 whitespace-nowrap">Article</th>
                     <th className="p-3 whitespace-nowrap">Category</th>
                     {allColorsAcrossArticles.map(color => (
                       <th key={color} className="p-3 text-center whitespace-nowrap">{color}</th>
                     ))}
-                    <th className="p-3 text-right whitespace-nowrap">Total Pairs</th>
+                    <th className="sticky right-0 z-10 bg-slate-50 p-3 text-right whitespace-nowrap border-l" style={{ borderColor: 'var(--border-color)' }}>Total Pairs</th>
                   </tr>
                 </thead>
                 <tbody>
                   {colorReportRows.length === 0 ? (
                     <tr>
-                      <td colSpan={4 + allColorsAcrossArticles.length} className="text-center p-8 text-slate-400">
+                      <td colSpan={3 + allColorsAcrossArticles.length} className="text-center p-8 text-slate-400">
                         No products found matching stock criteria.
                       </td>
                     </tr>
                   ) : (
                     colorReportRows.map(r => (
-                      <tr key={r.code} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-3 pl-4 font-semibold text-slate-700 whitespace-nowrap">{r.code}</td>
-                        <td className="p-3 text-slate-700 whitespace-nowrap">{r.commonName}</td>
+                      <tr key={r.articleId} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
+                        <td className="p-3 pl-4 font-semibold text-slate-700 whitespace-nowrap">{r.commonName}</td>
                         <td className="p-3 text-slate-500 whitespace-nowrap">{r.categoryName}</td>
                         {allColorsAcrossArticles.map(color => {
                           const cell = r.byColor[color];
@@ -1442,7 +1458,7 @@ export default function ReportStockPage() {
                             </td>
                           );
                         })}
-                        <td className={`p-3 text-right font-bold whitespace-nowrap ${r.totalPairs <= 0 ? 'text-red-600' : 'text-slate-900'}`}>
+                        <td className={`sticky right-0 z-10 bg-white p-3 text-right font-bold whitespace-nowrap border-l ${r.totalPairs <= 0 ? 'text-red-600' : 'text-slate-900'}`} style={{ borderColor: 'var(--border-table)' }}>
                           {r.totalPairs.toLocaleString()}
                         </td>
                       </tr>
@@ -1451,8 +1467,8 @@ export default function ReportStockPage() {
                 </tbody>
                 <tfoot>
                   <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                    <td colSpan={3 + allColorsAcrossArticles.length} className="p-4 text-left font-lora">REPORT TOTAL</td>
-                    <td className="p-4 text-right text-lg whitespace-nowrap" style={{ color: 'var(--brand-gold)' }}>
+                    <td colSpan={2 + allColorsAcrossArticles.length} className="p-4 text-left font-lora">REPORT TOTAL</td>
+                    <td className="sticky right-0 z-10 bg-slate-50 p-4 text-right text-lg whitespace-nowrap border-l" style={{ color: 'var(--brand-gold)', borderColor: 'var(--border-color)' }}>
                       {colorReportTotalPairs.toLocaleString()} Pairs
                     </td>
                   </tr>
