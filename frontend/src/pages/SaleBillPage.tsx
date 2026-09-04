@@ -10,8 +10,9 @@ import {
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, LogOut, Search, X, Undo2, FilePlus2,
   PackageCheck, ChevronDown
 } from 'lucide-react';
-import { exportToPDF, exportRowsToExcel } from '@/lib/export';
-import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem } from '@/lib/utils';
+import { exportRowsToExcel } from '@/lib/export';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, cartonsAndPairs } from '@/lib/utils';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
@@ -26,6 +27,7 @@ import type {
   DraftSaleBillRow, ConfirmAllResult, BusinessAccountRow
 } from '@/lib/api';
 import EditScopeRadios from '@/components/EditScopeRadios';
+import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import CartonsInput from '@/components/CartonsInput';
 import { getWindowParam } from '@/lib/windowParams';
 
@@ -60,7 +62,7 @@ function newUiItem(): UiItem {
 }
 
 function recalcItem(item: UiItem): UiItem {
-  const pairs = item.cartons * item.packing;
+  const pairs = pairsFor(item.cartons, item.packing);
   const gross = pairs * item.rate;
   const discountValue = Math.round(gross * (item.discountPercent / 100));
   const value = Math.max(0, gross - discountValue);
@@ -160,11 +162,18 @@ export default function SaleBillPage() {
   // form Edit actually unlocks. Only meaningful once Edit has already been clicked while unposted
   // — it narrows what THAT click reaches, it doesn't reopen the existing isPosted gate on Edit
   // itself. Always resettable/pickable even in view mode, so it can be pre-chosen before Edit.
-  const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
+  // Persisted, not plain useState: mode/svId/status already are, for the exact reason —
+  // losing track of state across a page switch. editScope was the one piece left out, so
+  // returning to an in-progress 'edit' draft always reset it to 'master', locking the
+  // Detail half (entry strip + grid) shut even when that's what had been unlocked and typed
+  // into — reported by the user (2026-09-04) as "all the buttons are disable except New".
+  const [editScope, setEditScope] = usePersistentField<'master' | 'detail'>('sale-bill', 'editScope', 'master');
+  // Keeps the radios pointing at whichever half is being worked in — see the hook.
+  const autoEditScope = useAutoEditScope(setEditScope);
 
   // Password Modal Protection State
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
-  const [passwordActionType, setPasswordActionType] = useState<'save_bill' | 'save_and_post' | 'post_bill' | 'delete_unposted_bill' | 'edit_item_row' | null>(null);
+  const [passwordActionType, setPasswordActionType] = useState<'save_bill' | 'save_and_post' | 'post_bill' | 'delete_unposted_bill' | null>(null);
 
   // Draft persistence — see src/hooks/usePersistentField.ts. Only real in-progress entry data is
   // persisted; which EXISTING record is loaded (billId/currentBillIsPosted/mode) is deliberately
@@ -216,9 +225,13 @@ export default function SaleBillPage() {
     if (same) {
       setSubCustomerId('');
       setCustomAddress('');
-    } else if (!subCustomerId) {
-      setSubCustomerId(subCustomers[0] ? String(subCustomers[0].sub_customer_id) : '');
     }
+    // Switching TO custom used to silently fill Sub Cust. with subCustomers[0] whenever it was
+    // still empty — arbitrary (whatever the lookup happened to return first, not anything tied to
+    // this bill), and it left the field looking already-chosen even though nothing had been
+    // picked, which read as "I can't change the sub-customer" (reported by the user, 2026-09-04).
+    // Custom delivery now always starts blank — the field enables and the user picks explicitly,
+    // same as every other picker in this form.
   };
   const [customAddress, setCustomAddress] = usePersistentField('sale-bill', 'customAddress', '');
   const [errorMsg, setErrorMsg] = useState('');
@@ -248,6 +261,7 @@ export default function SaleBillPage() {
   const refreshUnposted = useCallback(async () => {
     const res = await api.draftSaleBills.list();
     if (res.ok) setUnpostedBills(res.data);
+    return res.ok ? res.data : null;
   }, []);
 
   useEffect(() => { refreshUnposted(); }, [refreshUnposted]);
@@ -276,7 +290,16 @@ export default function SaleBillPage() {
     // now) — ConfirmAllResult doesn't carry the new id back, so rather than leave the form pointed
     // at a draft that's gone, reset to a fresh one.
     await Promise.all([refreshUnposted(), refreshPosted(), refreshStock()]);
-    if (billId != null && !currentBillIsPosted && res.data.posted.some(p => p.draft_id === billId)) {
+    // Everything posted — nothing is left unposted to come back to, so reset to a fresh record
+    // ready for the next one (keeping the date being worked on), matching Stock Voucher/Journal
+    // Voucher's own Post All. Per the user (2026-09-04): Post All should "refresh the screen".
+    // A partial run deliberately does NOT wipe the form — the failures still need looking at, so
+    // there it only clears when the record on screen was itself one of the ones that posted.
+    if (res.data.failed.length === 0) {
+      const workingDate = date;
+      handleNew();
+      setDate(workingDate);
+    } else if (billId != null && !currentBillIsPosted && res.data.posted.some(p => p.draft_id === billId)) {
       handleNew();
     }
   };
@@ -426,21 +449,28 @@ const nextSystemBillNo = useMemo(
     // disabled, reported by the user (2026-08-31): "when I switch the page the save button set
     // blank". Also covers the fetch failing outright, which would otherwise disable Save forever.
     if (!stockLoaded) return {};
-    const requestedByVariant: Record<number, number> = {};
+    // Compared in PAIRS, not cartons. getStockInfo's `cartons` is the WHOLE-carton count only
+    // (stock.service.js#currentStock truncates, putting the remainder in extra_pairs), so with 6
+    // pairs of a 12-pair article on hand it reports 0 cartons — and asking for 0.5 cartons, which
+    // is exactly those 6 pairs, was rejected as exceeding stock. Reported by the user (2026-09-04):
+    // "if the data has 0 cartons and 6 pairs and user enter 0.5 means he want 6 pairs so it will be
+    // okay". Pairs are the real unit here (and what the server checks — saleBills.service.js works
+    // in pairsOnHand), so a part carton is measured against the part carton actually in stock.
+    const requestedPairsByVariant: Record<number, number> = {};
     items.forEach(it => {
-      if (it.variantId != null && it.cartons > 0) {
-        requestedByVariant[it.variantId] = (requestedByVariant[it.variantId] || 0) + it.cartons;
+      if (it.variantId != null && it.pairs > 0) {
+        requestedPairsByVariant[it.variantId] = (requestedPairsByVariant[it.variantId] || 0) + it.pairs;
       }
     });
 
-    const exceededMap: Record<string, { available: number; requested: number; itemCartons: number }> = {};
+    const exceededMap: Record<string, { availablePairs: number; requestedPairs: number; itemCartons: number }> = {};
     items.forEach((it) => {
-      if (it.variantId != null && it.cartons > 0) {
+      if (it.variantId != null && it.pairs > 0) {
         const stockInfo = getStockInfo(it.articleId, it.variantId);
-        const available = stockInfo ? stockInfo.cartons : 0;
-        const totalReq = requestedByVariant[it.variantId] || it.cartons;
-        if (totalReq > available) {
-          exceededMap[it.uid] = { available, requested: totalReq, itemCartons: it.cartons };
+        const availablePairs = stockInfo ? stockInfo.pairs : 0;
+        const requestedPairs = requestedPairsByVariant[it.variantId] || it.pairs;
+        if (requestedPairs > availablePairs) {
+          exceededMap[it.uid] = { availablePairs, requestedPairs, itemCartons: it.cartons };
         }
       }
     });
@@ -460,6 +490,27 @@ const nextSystemBillNo = useMemo(
     if (hasStockExceeded) return false;
     return true;
   }, [customerId, date, storeId, billNo, items, isCustomDelivery, subCustomerId, hasStockExceeded]);
+
+  // Repairs the one field a restored draft can come back missing.
+  //
+  // handleNew() picks the default store, but it does so inside clearSaleBillDraft()'s suppression
+  // window — usePersistentField deliberately skips the write-through while that flag is set, so
+  // this one value never reaches the draft store, and nothing touches storeId again afterwards to
+  // trigger a later write. Everything the user then types DOES persist. So on return the bill
+  // comes back looking complete — customer, bill no., lines, totals all there — with Store alone
+  // silently blank, and since Store is required that single gap makes isNecessaryFieldsFilled
+  // false, grEying out Save and Done on a bill that plainly should be saveable. Reported by the
+  // user, 2026-09-04 ("it show me the save data but not allow me to done").
+  //
+  // Gated on there actually having been a draft at mount: on a genuinely fresh page handleNew()
+  // still sets the store the old way, and staying silent here keeps that blank bill from writing
+  // a draft it doesn't need — which would otherwise make the next visit think work was in
+  // progress and skip opening the newest unposted bill.
+  useEffect(() => {
+    if (!hasSaleBillDraft) return;
+    if (!storeId && stores.length > 0) setStoreId(String(stores[0].store_id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasSaleBillDraft, storeId, stores]);
 
   const pendingDeleteBillId = useRef<number | null>(null);
 
@@ -546,7 +597,16 @@ const nextSystemBillNo = useMemo(
     let draft = draftIn;
     if (!draft.items) {
       const res = await api.draftSaleBills.get(draft.draft_id);
-      if (res.ok) draft = res.data;
+      // A failed re-fetch used to fall through and render `draftIn` anyway. That row can be stale
+      // list data for a draft that no longer exists — posting one DELETES it from draft_sale_bills
+      // and turns it into a posted bill — so the form silently filled with a bill that is not a
+      // draft at all. Reported by the user (2026-09-04): picking Unposted "still shows me the
+      // posted bill". Say so and leave the form alone instead; callers fall back to a blank one.
+      if (!res.ok) {
+        setErrorMsg('That draft no longer exists — it may have been posted or deleted.');
+        return false;
+      }
+      draft = res.data;
     }
     createdInThisRun.current = false;
     // Opening a different record must not carry over a stale scope from the last edit.
@@ -591,6 +651,7 @@ const nextSystemBillNo = useMemo(
 
     setMode(opts.mode ?? 'edit');
     setErrorMsg('');
+    return true;
   };
 
   // ── Record navigation: First/Pre./Next/Last + Posted/Unposted dropdown ──
@@ -668,9 +729,17 @@ const nextSystemBillNo = useMemo(
   const handleBrowseFilterChange = async (next: 'posted' | 'unposted') => {
     setBrowseFilter(next);
     if (next === 'unposted') {
-      const latest = navUnpostedList[navUnpostedList.length - 1];
-      if (latest) await loadDraftIntoForm(latest, { mode: 'view' });
-      else handleNew();
+      // Re-fetch first, exactly like the Posted branch below. Reading the list straight out of
+      // state meant a draft posted or deleted since it was last loaded was still in it, so
+      // switching to Unposted opened a "draft" that no longer exists — the user (2026-09-04) saw
+      // that as Unposted "still showing me the posted bill", since posting is precisely what turns
+      // a draft into one. With a fresh list the entry is gone, so there is nothing to open and the
+      // blank New bill below is what shows.
+      const fresh = await refreshUnposted();
+      const list = [...(fresh ?? unpostedBills)].reverse();
+      const latest = list[list.length - 1];
+      const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
+      if (!opened) handleNew();
       requestAnimationFrame(() => newButtonRef.current?.focus());
     } else {
       const fresh = await refreshPosted();
@@ -735,14 +804,6 @@ const nextSystemBillNo = useMemo(
   // effect fires a beat AFTER mount, once `stores` resolves, and handleNew() blanks every field
   // AND clears the stored draft — so without the guard, coming back to a half-typed bill wiped it
   // a fraction of a second after it was restored (reported by the user, 2026-08-30).
-  useEffect(() => {
-    if (hasSaleBillDraft) return;
-    if (mode === 'new' && billId === null && stores.length > 0) {
-      handleNew();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, billId, stores]);
-
   // One-time cleanup: a restored draft from before Bill No. stopped being auto-generated
   // (2026-08-30) can still be carrying the old random 5-digit value. Clears only that one field
   // — never the rest of a legitimately half-typed draft — and only while it's still untouched
@@ -1057,13 +1118,12 @@ const nextSystemBillNo = useMemo(
     setMode('edit');
   };
 
+  // Loads the target bill, then opens the preview modal on it — same trigger the toolbar's own
+  // Print/PDF buttons use (isPrintingSingle just names "which bill is on the print-preview modal
+  // right now", not "print immediately" — see renderBillPrintable above for why that changed).
   const handlePrintSpecificBill = async (bill: SaleBillRow) => {
     await loadBillRow(bill);
     setIsPrintingSingle(true);
-    setTimeout(() => {
-      window.print();
-      setIsPrintingSingle(false);
-    }, 150);
   };
 
   // Entering edit mode never needs its own password prompt anymore — Save (handleSave,
@@ -1099,13 +1159,6 @@ const nextSystemBillNo = useMemo(
           await Promise.all([refreshUnposted(), refreshStock()]);
         }
       }
-    } else if (passwordActionType === 'edit_item_row') {
-      const idx = pendingRowEditIndex.current;
-      pendingRowEditIndex.current = null;
-      if (idx != null) {
-        setMode('edit');
-        loadRowIntoEntry(idx);
-      }
     }
     setPasswordActionType(null);
   };
@@ -1122,7 +1175,24 @@ const nextSystemBillNo = useMemo(
   // committed row has been clicked back open for editing (see handleRowClick below).
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const entryProductCellRef = useRef<HTMLDivElement>(null);
-  const pendingRowEditIndex = useRef<number | null>(null);
+
+  // Declared down here, after every piece of state the loaders below touch: placing it
+  // earlier makes the React Compiler bail out ("accessed before it is declared") even
+  // though the effect only ever runs after mount.
+  // Landing on the page with nothing in progress: the Posted/Unposted dropdown already reads
+  // Unposted, so open the newest unposted bill and park focus on New, exactly as picking Unposted
+  // from the dropdown does (per the user, 2026-09-04). Falls back to a blank bill when there are
+  // none, which is what this effect used to do unconditionally. Runs once — the ref keeps a
+  // later state change from re-opening a record over whatever is being typed by then.
+  const didAutoOpenRef = useRef(false);
+  useEffect(() => {
+    if (hasSaleBillDraft || didAutoOpenRef.current) return;
+    if (mode === 'new' && billId === null && stores.length > 0) {
+      didAutoOpenRef.current = true;
+      handleBrowseFilterChange('unposted');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, billId, stores]);
 
   // Product field's SearchModal — same pattern as Customer's (pages_design.md §5): type the
   // article code, Enter opens a big centered popup to pick from, matching stock shown per row.
@@ -1172,7 +1242,10 @@ const nextSystemBillNo = useMemo(
   const updateEntryNumericField = (field: 'cartons' | 'rate' | 'discountPercent' | 'discountValue', val: number) => {
     setEntry(prev => {
       const next = { ...prev, [field]: val };
-      const gross = next.cartons * next.packing * next.rate;
+      // Same rounded pair count recalcItem uses for `value` — deriving gross from the raw
+      // cartons x packing instead would let the D% <-> DV conversion disagree with the
+      // line's own total by a fraction on quantities where that product drifts.
+      const gross = pairsFor(next.cartons, next.packing) * next.rate;
       if (field === 'discountValue') {
         next.discountPercent = gross > 0 ? parseFloat(((val / gross) * 100).toFixed(1)) : 0;
       }
@@ -1188,28 +1261,27 @@ const nextSystemBillNo = useMemo(
   // reserved on OTHER committed rows of this bill (per the user, 2026-08-30: re-picking a variant
   // already on the bill was showing the raw stock figure, not what's actually still available to
   // add). The row being re-edited (editingIndex) doesn't double-count against itself.
+  // Tracked in PAIRS — the indivisible unit, and the only one that can express a part carton (see
+  // stockExceededRows above). `cartons`/`pairs` here are that same remaining figure split back out
+  // for the readout, so "1 Ctn / 6 Prs" always describes exactly what remainingPairs is worth
+  // rather than mixing a truncated carton count with a separately-derived remainder.
   const entryStockInHand = useMemo(() => {
     if (entry.variantId == null) return null;
     const stockInfo = getStockInfo(entry.articleId, entry.variantId);
     if (!stockInfo) return null;
-    const otherReserved = items.reduce((acc, it, i) => {
-      if (i !== editingIndex && it.variantId === entry.variantId) {
-        acc.cartons += it.cartons;
-        acc.pairs += it.pairs;
-      }
-      return acc;
-    }, { cartons: 0, pairs: 0 });
-    return {
-      cartons: Math.max(0, stockInfo.cartons - otherReserved.cartons),
-      pairs: Math.max(0, stockInfo.pairs - otherReserved.pairs),
-    };
-  }, [entry.articleId, entry.variantId, items, editingIndex, getStockInfo]);
+    const reservedPairs = items.reduce(
+      (sum, it, i) => (i !== editingIndex && it.variantId === entry.variantId ? sum + it.pairs : sum),
+      0,
+    );
+    const remainingPairs = Math.max(0, stockInfo.pairs - reservedPairs);
+    return { remainingPairs, ...cartonsAndPairs(remainingPairs, entry.packing) };
+  }, [entry.articleId, entry.variantId, entry.packing, items, editingIndex, getStockInfo]);
 
   const entryStockCheck = useMemo(() => {
-    if (entry.variantId == null || entry.cartons <= 0 || !entryStockInHand) return null;
-    const available = entryStockInHand.cartons;
-    return entry.cartons > available ? { available, totalReq: entry.cartons } : null;
-  }, [entry.variantId, entry.cartons, entryStockInHand]);
+    if (entry.variantId == null || entry.pairs <= 0 || !entryStockInHand) return null;
+    const availablePairs = entryStockInHand.remainingPairs;
+    return entry.pairs > availablePairs ? { availablePairs, requestedPairs: entry.pairs } : null;
+  }, [entry.variantId, entry.pairs, entryStockInHand]);
 
   // Commits the strip's current entry into the table — appends a new row, or overwrites
   // `editingIndex` when the strip is re-editing a row clicked open from the table. Stock-blocked
@@ -1227,7 +1299,7 @@ const nextSystemBillNo = useMemo(
     if (cartonsIssue) { setErrorMsg(cartonsIssue); return; }
     if (entry.rate <= 0) { setErrorMsg('Rate must be greater than 0.'); return; }
     if (entryStockCheck) {
-      setErrorMsg(`Cannot add row: ${formatCartons(entryStockCheck.totalReq)} cartons requested exceeds ${formatCartons(entryStockCheck.available)} in stock.`);
+      setErrorMsg(`Cannot add row: ${entryStockCheck.requestedPairs} pairs requested exceeds ${entryStockCheck.availablePairs} in stock.`);
       return;
     }
     setErrorMsg('');
@@ -1283,12 +1355,10 @@ const nextSystemBillNo = useMemo(
     // grid re-opens a committed line for editing — a no-op while scope is Master, so master-only
     // edits can't sneak article changes in through the grid. Doesn't affect 'new'/view browsing.
     if (mode === 'edit' && editScope !== 'detail') return;
-    if (isViewMode && currentBillIsPosted) {
-      pendingRowEditIndex.current = idx;
-      setPasswordActionType('edit_item_row');
-      setIsPasswordModalOpen(true);
-      return;
-    }
+    // A posted bill is read-only — this used to offer a password prompt and then let the line
+    // be edited in place, which is a second way in that the disabled Edit button already
+    // refuses. Un Post is the only route (per the user, 2026-09-04).
+    if (currentBillIsPosted) return;
     if (isViewMode) setMode('edit');
     loadRowIntoEntry(idx);
   };
@@ -1391,7 +1461,15 @@ const nextSystemBillNo = useMemo(
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
-  if (isPrintingSingle) {
+  // The bill's printable document — built once here and handed to ReportPrintPreviewModal as its
+  // `children`, instead of the old approach of swapping the WHOLE page over to this markup and
+  // calling window.print() directly. That old path jumped straight to the OS print dialog with no
+  // on-screen preview at all — fine from the toolbar's own Print button (the user is already
+  // looking at this exact bill), but from Find & Update Bill (and Weekly/Monthly/Overall) printing
+  // a DIFFERENT bill than whatever was last open on screen, with nothing shown first to confirm it
+  // loaded the right one. Reported by the user, 2026-09-04: "print previw" not shown there. Routing
+  // through the same modal every report page already uses gives every entry point a real preview.
+  const renderBillPrintable = () => {
     const customerObj = customers.find(c => c.customer_id === Number(customerId));
     const customerName = customerObj ? customerObj.name : (customerId || 'N/A');
     const storeObj = stores.find(s => s.store_id === Number(storeId));
@@ -1579,7 +1657,7 @@ const nextSystemBillNo = useMemo(
         </div>
       </div>
     );
-  }
+  };
 
   // Sub-tab switcher — lives in the top header bar next to the page title (AppLayout's
   // headerAction slot), same as Sale Return, so the content below the Quick Menu bar starts
@@ -1631,7 +1709,7 @@ const nextSystemBillNo = useMemo(
 
   return (
     <AppLayout pageTitle="Sale Bill" headerAction={tabBar}>
-      <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto relative" style={{ maxWidth: 1200 }} {...autoEditScope}>
 
         {/* Tab contents (records & find) */}
         <div>
@@ -1651,8 +1729,6 @@ const nextSystemBillNo = useMemo(
             old gutter panel was gated on `2xl` and vanished entirely at 90% zoom (per the user,
             2026-09-03). Always enabled so a
             scope can be picked before Edit is even clicked (per the user, 2026-08-31). */}
-        <EditScopeRadios name="sale-bill-edit-scope" value={editScope} onChange={setEditScope} />
-
         {/* Banner Messages */}
         {/* Floated into the right-hand gutter, not rendered inline: a message used to push the
             toolbar and card down under the cursor mid-click (per the user, 2026-08-31). */}
@@ -1675,8 +1751,11 @@ const nextSystemBillNo = useMemo(
               neutral, amber = navigation. */}
           <div className="flex flex-wrap items-center gap-2">
           <div className="flex flex-wrap items-center gap-0.5">
+            {/* New and Post All both act on drafts — nonsensical while the dropdown is browsing
+                Posted, so both are disabled there rather than acting on whichever draft happened
+                to be on screen before the switch (per the user, 2026-09-04). */}
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1693,7 +1772,10 @@ const nextSystemBillNo = useMemo(
             <button
               type="button"
               onClick={handleEditCurrentBill}
-              disabled={mode !== 'view' || billId == null}
+              // Posted bills are read-only: while the dropdown is on Posted the only action
+              // offered is Un Post, which drops the bill back to a draft and follows it into
+              // the Unposted view, where it can be edited (per the user, 2026-09-04).
+              disabled={mode !== 'view' || billId == null || currentBillIsPosted}
               title="Edit"
               className="toolbar-btn"
             >
@@ -1778,10 +1860,7 @@ const nextSystemBillNo = useMemo(
 
             <button
               type="button"
-              onClick={() => {
-                setIsPrintingSingle(true);
-                setTimeout(() => { window.print(); setIsPrintingSingle(false); }, 100);
-              }}
+              onClick={() => setIsPrintingSingle(true)}
               disabled={mode !== 'view' || billId == null}
               title="Print"
               className="toolbar-btn"
@@ -1856,7 +1935,7 @@ const nextSystemBillNo = useMemo(
               <button
                 type="button"
                 onClick={handlePostAll}
-                disabled={postAllBusy}
+                disabled={postAllBusy || browseFilter === 'posted'}
                 title={`Post All (${unpostedBills.length})`}
                 className="toolbar-btn"
               >
@@ -1864,9 +1943,16 @@ const nextSystemBillNo = useMemo(
                 <span>Post All</span>
               </button>
             )}
+            {/* Opens the same preview modal as Print, rather than exporting straight away: that
+                used to call exportToPDF() with nothing shown first, which (a) gave no chance to
+                check it's the right bill and (b) was the direct cause of the empty-PDF bug fixed
+                just before this — printToPDF captured whatever was on screen at the instant of
+                the click, and the printable markup didn't exist unless isPrintingSingle was
+                already true. Opening the modal guarantees both: a visible preview, and the
+                printable content mounted before its own Export PDF button can be reached at all. */}
             <button
               type="button"
-              onClick={() => exportToPDF()}
+              onClick={() => setIsPrintingSingle(true)}
               disabled={mode !== 'view' || billId == null}
               title="Export PDF"
               className="toolbar-btn"
@@ -1935,6 +2021,12 @@ const nextSystemBillNo = useMemo(
           </select>
         </div>
 
+        {/* Master/Detail edit-scope — which half of the document the toolbar's Edit button
+            unlocks (per the user, 2026-08-31). Centred directly under the toolbar rather than
+            out in the page margin where it used to sit, so it reads as part of the same
+            control strip as the Edit button it modifies (per the user, 2026-09-04). */}
+        <EditScopeRadios name="sale-bill-edit-scope" value={editScope} onChange={setEditScope} />
+
         {/* Invoice Layout — height pinned to the remaining viewport space (see invoiceCardHeight
             above) and laid out as a flex column, so the item table below can flex-grow into
             whatever room that leaves and the footer lands at the bottom of the screen instead of
@@ -1943,6 +2035,7 @@ const nextSystemBillNo = useMemo(
         <div
           ref={invoiceCardRef}
           className="card-white shadow-sm p-3 md:p-4 flex flex-col"
+          data-edit-scope="detail"
           style={{ border: '1px solid var(--border-color)', background: '#ffffff', overflow: 'visible', height: invoiceCardHeight ?? undefined }}
         >
 
@@ -1973,6 +2066,7 @@ const nextSystemBillNo = useMemo(
               Always visible. */}
           <div
             className="shrink-0 grid gap-x-3 gap-y-1.5 mb-2 pb-2 border-b"
+            data-edit-scope="master"
             style={{
               borderColor: 'var(--border-table)',
               gridTemplateColumns: '1fr 1fr 1fr 190px',
@@ -2442,7 +2536,7 @@ const nextSystemBillNo = useMemo(
             {entryStockCheck && (
               <div className="mt-1.5 text-[11px] font-bold text-red-600 flex items-center gap-1">
                 <AlertTriangle size={12} className="shrink-0" />
-                <span>Exceeds Stock! {formatCartons(entryStockCheck.totalReq)} cartons requested, only {formatCartons(entryStockCheck.available)} in hand — row will not be added.</span>
+                <span>Exceeds Stock! {entryStockCheck.requestedPairs} pairs requested, only {entryStockCheck.availablePairs} in hand — row will not be added.</span>
               </div>
             )}
             {/* Editing banner, per pages_design.md §4 — the row stays visible (highlighted) in
@@ -2765,6 +2859,17 @@ const nextSystemBillNo = useMemo(
             : `Please enter password for user '${state.currentUsername || 'user'}' to save changes to Bill #${billNo || billId || ''}.`
         }
       />
+
+      {/* Print/PDF preview — see renderBillPrintable above for why this replaced the old
+          swap-the-whole-page-then-window.print() approach. */}
+      <ReportPrintPreviewModal
+        isOpen={isPrintingSingle}
+        onClose={() => setIsPrintingSingle(false)}
+        title={`Sale Invoice ${billNo ? `#${billNo}` : billId != null ? `#${billId}` : ''}`}
+        orientation="portrait"
+      >
+        {renderBillPrintable()}
+      </ReportPrintPreviewModal>
     </AppLayout>
   );
 }

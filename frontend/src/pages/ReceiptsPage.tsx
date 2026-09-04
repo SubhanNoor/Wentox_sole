@@ -8,7 +8,7 @@ import * as api from '@/lib/api';
 import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
-import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
 import {
   Save, Edit, Trash2, Plus, CheckCircle2, Undo2, ChevronDown,
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, PackageCheck, Search
@@ -20,6 +20,7 @@ import AccountBalanceTooltip from '@/components/AccountBalanceTooltip';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import { toDateInputValue, formatDate } from '@/lib/utils';
 import EditScopeRadios from '@/components/EditScopeRadios';
+import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 
 // Cheque disposal (deposit/endorse/bounce/return) moved to the consolidated Cheque page's
 // Disposal tab — see ChequePage.tsx. This page keeps only receipt entry/records.
@@ -100,7 +101,14 @@ export default function ReceiptsPage() {
   // the entries table's Edit/Delete. Only bites once mode is actually 'edit' — a brand-new voucher's
   // first line is unaffected, same convention as PurchasePage/StockVoucherPage's own editScope.
   // Reset to 'master' on New/loading a voucher so a stale scope never carries over, per the user 2026-08-31.
-  const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
+  // Persisted, not plain useState: mode/svId/status already are, for the exact reason —
+  // losing track of state across a page switch. editScope was the one piece left out, so
+  // returning to an in-progress 'edit' draft always reset it to 'master', locking the
+  // Detail half (entry strip + grid) shut even when that's what had been unlocked and typed
+  // into — reported by the user (2026-09-04) as "all the buttons are disable except New".
+  const [editScope, setEditScope] = usePersistentField<'master' | 'detail'>('receipts', 'editScope', 'master');
+  // Keeps the radios pointing at whichever half is being worked in — see the hook.
+  const autoEditScope = useAutoEditScope(setEditScope);
   // First/Previous/Next/Last + Posted/Unposted dropdown. `navFilter` is a REAL data filter and the
   // buttons page through whole VOUCHERS: 'posted' walks fully-posted ones, 'unposted' walks those
   // still awaiting posting (UNPOSTED or PARTIAL).
@@ -824,7 +832,13 @@ const nextVoucherNo = useMemo(
   const handleNavFilterChange = async (next: 'posted' | 'unposted') => {
     setNavFilter(next);
     if (next === 'unposted') {
-      const latest = navUnpostedVouchers[navUnpostedVouchers.length - 1];
+      // Re-fetch first, like the Posted branch below — reading the list straight out of state
+      // meant one posted or deleted since it was last loaded was still in it, so Unposted
+      // opened something that is no longer unposted (2026-09-04).
+      const freshAll = await refreshAllVouchers();
+      const unposted = (freshAll ?? allVouchers).filter(v => v.status !== 'POSTED')
+        .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no);
+      const latest = unposted[unposted.length - 1];
       if (latest) await openVoucherInEntry(latest.voucher_id);
       else startNewVoucher();
       requestAnimationFrame(() => newButtonRef.current?.focus());
@@ -947,6 +961,23 @@ const nextVoucherNo = useMemo(
     setMode('view');
   };
 
+  // Declared after openVoucherInEntry, which it calls through handleNavFilterChange:
+  // placing it earlier makes the React Compiler bail out ("accessed before it is
+  // declared") even though the effect only ever runs after mount.
+  // Landing on the page with nothing in progress: the Posted/Unposted dropdown already reads
+  // Unposted, so open the newest unposted voucher and park focus on New, exactly as picking
+  // Unposted from the dropdown does (per the user, 2026-09-04). Skipped when a draft was
+  // restored — that is real in-progress work and must not be overwritten. Runs once; the ref
+  // keeps a later state change from re-opening a record over whatever is being typed by then.
+  const hasPageDraftAtMount = useHasPageDraft('receipts');
+  const didAutoOpenRef = useRef(false);
+  useEffect(() => {
+    if (hasPageDraftAtMount || didAutoOpenRef.current) return;
+    didAutoOpenRef.current = true;
+    handleNavFilterChange('unposted');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Passed down to the records tabs: unposting a voucher there switches back to Receipt Entry and
   // loads that same voucher on screen.
   const handleVoucherUnpostedElsewhere = async (voucherId: number) => {
@@ -976,8 +1007,18 @@ const nextVoucherNo = useMemo(
     setPostAllVouchersResult({ posted, failed, attempted: navUnpostedVouchers.length });
     refreshAllVouchers();
     setBalanceRefreshKey(k => k + 1);
-    if (voucher && posted.some(p => p.voucher_id === voucher.voucher_id)) await refreshVoucher(voucher.voucher_id);
-    if (failed.length === 0) flash(`${posted.length} voucher(s) posted.`);
+    if (failed.length === 0) {
+      flash(`${posted.length} voucher(s) posted.`);
+      // Everything posted — the voucher that was on screen is now POSTED and can take no further
+      // entries, so leaving it up is a dead end. Start a fresh one ready for the next run,
+      // keeping the date being worked on. Matches every other entry page's Post All (per the
+      // user, 2026-09-04). A partial run keeps the voucher up: the failures still need looking at.
+      const workingDate = date;
+      startNewVoucher();
+      setDate(workingDate);
+    } else if (voucher && posted.some(p => p.voucher_id === voucher.voucher_id)) {
+      await refreshVoucher(voucher.voucher_id);
+    }
   };
 
   // Deletes the voucher currently on screen (password-gated via the shared PasswordPromptModal).
@@ -1084,7 +1125,7 @@ const nextVoucherNo = useMemo(
         {activeTab === 'overall' && <OverallReceiptsTab onVoucherUnposted={handleVoucherUnpostedElsewhere} />}
 
         {activeTab === 'entry' && (
-          <div className="max-w-6xl mx-auto flex items-start gap-3 animate-fadeIn">
+          <div className="max-w-5xl mx-auto animate-fadeIn" {...autoEditScope}>
 
             {/* Master/Detail edit-scope — two bare radios on the LEFT SIDE of the page, outside
                 the toolbar row (per the user, 2026-08-31; the card box around them was dropped
@@ -1095,9 +1136,7 @@ const nextVoucherNo = useMemo(
                 unlocks only the entry strip and the entries table's Edit/Delete — see
                 masterFieldsLocked/detailFieldsLocked above. Both radios stay enabled always;
                 they only have any effect once mode is 'edit'. */}
-            <EditScopeRadios name="receipt-edit-scope" value={editScope} onChange={setEditScope} variant="inline" />
-
-            <div className="flex-1 min-w-0 max-w-5xl relative">
+            <div className="relative">
 
             {/* The left-hand "Pending Posting" panel that used to live here (a floating list
                 of every not-yet-posted voucher, with its own Post All / per-voucher Post and
@@ -1135,7 +1174,7 @@ const nextVoucherNo = useMemo(
                   </button>
                 )}
                 <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={startNewVoucher} title="New Voucher" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={startNewVoucher} disabled={navFilter === 'posted'} title="New Voucher" className="toolbar-btn">
                   <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
                   <span>New</span>
                 </button>
@@ -1241,7 +1280,7 @@ const nextVoucherNo = useMemo(
                 <button
                   type="button"
                   onClick={handlePostAllVouchers}
-                  disabled={navUnpostedVouchers.length === 0 || postAllVouchersBusy}
+                  disabled={navUnpostedVouchers.length === 0 || postAllVouchersBusy || navFilter === 'posted'}
                   title={postAllVouchersBusy ? 'Posting…' : `Post All (${navUnpostedVouchers.length})`}
                   className="toolbar-btn"
                 >
@@ -1313,6 +1352,11 @@ const nextVoucherNo = useMemo(
               )}
             </div>
 
+            {/* Master/Detail edit-scope — which half of the voucher the toolbar's Edit button
+                unlocks. Centred directly under the toolbar rather than in a left-hand column,
+                matching every other entry page (per the user, 2026-09-04). */}
+            <EditScopeRadios name="receipt-edit-scope" value={editScope} onChange={setEditScope} />
+
             {/* Status badges only. The old "Receipt Voucher — C.Book No N" / "New Receipt
                 Voucher" heading that sat here was removed (per the user, 2026-08-31): it pushed
                 the entry card away from the toolbar, and the number it showed is already the
@@ -1360,7 +1404,7 @@ const nextVoucherNo = useMemo(
                 Unpost act on the whole voucher; the per-line status badge lives in the grid.
                 Padding matched to Sale Bill's own card (p-3/md:p-4, not p-6/md:p-8) — the user's
                 standing "keep it compact as the sale bill" rule. */}
-            <div className="card-white p-3 md:p-4 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print>
+            <div className="card-white p-3 md:p-4 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print data-edit-scope="detail">
 
               {/* RJ-03: submitting the form is "Done" — it commits the entry row as a line of the
                   voucher and re-arms for the next one. G-01's Enter-on-last-field rule fires the
@@ -1405,7 +1449,7 @@ const nextVoucherNo = useMemo(
                       pressed — Account/Narration/Payment Mode/Amount/Endorse are the DETAIL,
                       re-entered fresh for every receipt. Locked the moment the voucher exists at
                       all (first Done), not only once posted. */}
-                  <div style={{ gridArea: 'date' }}>
+                  <div style={{ gridArea: 'date' }} data-edit-scope="master">
                     <label className="block text-[11px] font-semibold uppercase tracking-wider mb-0.5" style={{ color: 'var(--secondary-text)' }}>Date</label>
                     <input
                       ref={firstFieldRef}
@@ -1421,7 +1465,7 @@ const nextVoucherNo = useMemo(
                       by the database (MAX+1 over receipt_vouchers), never typed. Every receipt
                       added to this voucher shares this SAME number. Before the first Done creates
                       the voucher it shows nextVoucherNo, a PREVIEW of what will be assigned. */}
-                  <div style={{ gridArea: 'cbook' }}>
+                  <div style={{ gridArea: 'cbook' }} data-edit-scope="master">
                     <label className="block text-[11px] font-semibold uppercase tracking-wider mb-0.5" style={{ color: 'var(--secondary-text)' }}>C.Book No</label>
                     <input
                       type="text"
@@ -1434,7 +1478,7 @@ const nextVoucherNo = useMemo(
                   </div>
 
                   {/* MASTER field — see the Date field's own comment above. */}
-                  <div style={{ gridArea: 'remarks' }}>
+                  <div style={{ gridArea: 'remarks' }} data-edit-scope="master">
                     <label className="block text-[11px] font-semibold uppercase tracking-wider mb-0.5" style={{ color: 'var(--secondary-text)' }}>Remarks</label>
                     <input
                       type="text"

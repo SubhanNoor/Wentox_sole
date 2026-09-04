@@ -10,8 +10,9 @@ import {
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, LogOut, Search, X, Undo2,
   PackageCheck, ChevronDown
 } from 'lucide-react';
-import { exportToPDF, exportRowsToExcel } from '@/lib/export';
-import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem } from '@/lib/utils';
+import { exportRowsToExcel } from '@/lib/export';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor } from '@/lib/utils';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
@@ -26,6 +27,7 @@ import type {
   DraftSaleReturnRow, ConfirmAllResult, SaleBillRow, SaleBillItemRow
 } from '@/lib/api';
 import EditScopeRadios from '@/components/EditScopeRadios';
+import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import CartonsInput from '@/components/CartonsInput';
 import { getWindowParam } from '@/lib/windowParams';
 
@@ -60,7 +62,7 @@ function newUiItem(): UiItem {
 }
 
 function recalcItem(item: UiItem): UiItem {
-  const pairs = item.cartons * item.packing;
+  const pairs = pairsFor(item.cartons, item.packing);
   const gross = pairs * item.rate;
   const discountValue = Math.round(gross * (item.discountPercent / 100));
   const value = Math.max(0, gross - discountValue);
@@ -117,11 +119,18 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // form Edit actually unlocks. Only meaningful once Edit has already been clicked while unposted
   // — it narrows what THAT click reaches, it doesn't reopen the existing isPosted gate on Edit
   // itself. Always resettable/pickable even in view mode, so it can be pre-chosen before Edit.
-  const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
+  // Persisted, not plain useState: mode/svId/status already are, for the exact reason —
+  // losing track of state across a page switch. editScope was the one piece left out, so
+  // returning to an in-progress 'edit' draft always reset it to 'master', locking the
+  // Detail half (entry strip + grid) shut even when that's what had been unlocked and typed
+  // into — reported by the user (2026-09-04) as "all the buttons are disable except New".
+  const [editScope, setEditScope] = usePersistentField<'master' | 'detail'>('sale-return', 'editScope', 'master');
+  // Keeps the radios pointing at whichever half is being worked in — see the hook.
+  const autoEditScope = useAutoEditScope(setEditScope);
 
   // Password Modal Protection State
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
-  const [passwordActionType, setPasswordActionType] = useState<'edit_return' | 'save_return' | 'save_and_post' | 'post_return' | 'delete_unposted_return' | null>(null);
+  const [passwordActionType, setPasswordActionType] = useState<'save_return' | 'save_and_post' | 'post_return' | 'delete_unposted_return' | null>(null);
 
   // Draft persistence — see src/hooks/usePersistentField.ts. Only real in-progress entry data is
   // persisted; which EXISTING record is loaded (returnId/currentReturnIsPosted/mode) is
@@ -279,6 +288,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   const refreshDrafts = useCallback(async () => {
     const res = await api.draftSaleReturns.list();
     if (res.ok) setDrafts(res.data);
+    return res.ok ? res.data : null;
   }, []);
 
   useEffect(() => { refreshDrafts(); }, [refreshDrafts]);
@@ -399,9 +409,14 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   const handleBrowseFilterChange = async (next: 'posted' | 'unposted') => {
     setBrowseFilter(next);
     if (next === 'unposted') {
-      const latest = navUnpostedList[navUnpostedList.length - 1];
-      if (latest) await loadDraftIntoForm(latest, { mode: 'view' });
-      else handleNew();
+      // Re-fetch first, exactly like the Posted branch below — reading the list straight out
+      // of state meant a draft posted or deleted since it was last loaded was still in it, so
+      // switching to Unposted opened a "draft" that no longer exists (2026-09-04).
+      const fresh = await refreshDrafts();
+      const list = [...(fresh ?? drafts)].reverse();
+      const latest = list[list.length - 1];
+      const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
+      if (!opened) handleNew();
       requestAnimationFrame(() => newButtonRef.current?.focus());
     } else {
       const fresh = await refreshPostedReturns();
@@ -701,13 +716,10 @@ const nextSystemReturnNo = useMemo(
     setMode('edit');
   };
 
+  // Loads the target return, then opens the preview modal on it — see renderReturnPrintable above.
   const handlePrintSpecificReturn = async (ret: SaleReturnRow) => {
     await loadReturnRow(ret);
     setIsPrintingSingle(true);
-    setTimeout(() => {
-      window.print();
-      setIsPrintingSingle(false);
-    }, 150);
   };
 
   // Initialize new return if mode is new and not set.
@@ -716,14 +728,6 @@ const nextSystemReturnNo = useMemo(
   // effect fires a beat AFTER mount, once `stores`/`addas` resolve, and handleNew() blanks every
   // field AND clears the stored draft — so without the guard, coming back to a half-typed return
   // wiped it a fraction of a second after it was restored (reported by the user, 2026-08-30).
-  useEffect(() => {
-    if (hasSaleReturnDraft) return;
-    if (activeTab === 'return' && mode === 'new' && returnId === null && stores.length > 0 && addas.length > 0) {
-      handleNew();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, mode, returnId, stores, addas]);
-
   // Calculations
   const totalCartons = useMemo(() => items.reduce((sum, item) => sum + (item.cartons || 0), 0), [items]);
   const totalPairs = useMemo(() => items.reduce((sum, item) => sum + (item.pairs || 0), 0), [items]);
@@ -929,6 +933,22 @@ const nextSystemReturnNo = useMemo(
     });
   };
 
+  // Repairs the fields a restored draft can come back missing — same bug as SaleBillPage's own
+  // storeId repair (see its comment for the full reasoning): handleNew() picks these defaults
+  // alongside clearSaleReturnDraft(), so usePersistentField's suppression window swallows the
+  // write and nothing touches them again to trigger a later one. Store is required, so losing it
+  // greys out Save/Done on a return that otherwise looks complete; Adda isn't required but is
+  // just as much lost state, so it gets restored too rather than silently coming back blank.
+  //
+  // Gated on there actually having been a draft at mount, so a genuinely fresh page still goes
+  // through handleNew() without writing a draft it doesn't need.
+  useEffect(() => {
+    if (!hasSaleReturnDraft) return;
+    if (!storeId && stores.length > 0) setStoreId(String(stores[0].store_id));
+    if (!addaId && addas.length > 0) setAddaId(String(addas[0].adda_id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasSaleReturnDraft, storeId, stores, addaId, addas]);
+
   const pendingDeleteReturnId = useRef<number | null>(null);
 
   // Toolbar's Delete — the currently-open UNPOSTED return only (mirrors SaleBillPage's own
@@ -958,15 +978,6 @@ const nextSystemReturnNo = useMemo(
           refreshDrafts();
         }
       }
-    } else if (passwordActionType === 'edit_return') {
-      // Row-level edit gate — clicking a line item on an already-POSTED return (handleRowClick) —
-      // same convention as SaleBillPage's own 'edit_item_row'.
-      const idx = pendingRowEditIndex.current;
-      pendingRowEditIndex.current = null;
-      if (idx != null) {
-        setMode('edit');
-        loadRowIntoEntry(idx);
-      }
     }
     setPasswordActionType(null);
   };
@@ -994,7 +1005,15 @@ const nextSystemReturnNo = useMemo(
     let draft = draftIn;
     if (!draft.items) {
       const res = await api.draftSaleReturns.get(draft.draft_id);
-      if (res.ok) draft = res.data;
+      // A failed re-fetch used to fall through and render `draftIn` anyway — stale list data
+      // for a draft that no longer exists, since posting one DELETES it and turns it into a
+      // posted return. Reported on Sale Bill by the user (2026-09-04) as Unposted "still showing
+      // me the posted bill"; same shape here. Say so and leave the form alone instead.
+      if (!res.ok) {
+        setErrorMsg('That draft no longer exists — it may have been posted or deleted.');
+        return false;
+      }
+      draft = res.data;
     }
     // Opening a different record must not carry over a stale scope from the last edit.
     setEditScope('master');
@@ -1038,6 +1057,7 @@ const nextSystemReturnNo = useMemo(
 
     setMode(opts.mode ?? 'edit');
     setErrorMsg('');
+    return true;
   };
 
 
@@ -1062,10 +1082,22 @@ const nextSystemReturnNo = useMemo(
     }
     // If the draft open on screen was one of the ones that posted, its draft row is gone —
     // drop back to a fresh form rather than leave the screen pointing at nothing.
-    if (returnId != null && !currentReturnIsPosted && res.data.posted.some(p => p.draft_id === returnId)) {
+    // Everything posted — nothing is left unposted to come back to, so reset to a fresh record
+    // ready for the next one (keeping the date being worked on), matching Stock Voucher/Journal
+    // Voucher's own Post All. Per the user (2026-09-04): Post All should "refresh the screen".
+    // A partial run deliberately does NOT wipe the form — the failures still need looking at, so
+    // there it only clears when the record on screen was itself one of the ones that posted.
+    if (res.data.failed.length === 0) {
+      const workingDate = date;
+      handleNew();
+      setDate(workingDate);
+    } else if (returnId != null && !currentReturnIsPosted && res.data.posted.some(p => p.draft_id === returnId)) {
       handleNew();
     }
+    // Both lists move: the drafts shrank AND the posted list grew. Only the drafts were being
+    // refreshed here, leaving Posted stale until something else happened to reload it.
     refreshDrafts();
+    refreshPostedReturns();
   };
 
   // Entry strip (ref-pic bound-record pattern, matching SaleBillPage exactly — per the user,
@@ -1080,7 +1112,24 @@ const nextSystemReturnNo = useMemo(
   // committed row has been clicked back open for editing (see handleRowClick below).
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const entryProductCellRef = useRef<HTMLDivElement>(null);
-  const pendingRowEditIndex = useRef<number | null>(null);
+
+  // Declared down here, after every piece of state the loaders below touch: placing it
+  // earlier makes the React Compiler bail out ("accessed before it is declared") even
+  // though the effect only ever runs after mount.
+  // Landing on the page with nothing in progress: the Posted/Unposted dropdown already reads
+  // Unposted, so open the newest unposted return and park focus on New, exactly as picking
+  // Unposted from the dropdown does (per the user, 2026-09-04). Falls back to a blank return when
+  // there are none, which is what this effect used to do unconditionally. Runs once — the ref
+  // keeps a later state change from re-opening a record over whatever is being typed by then.
+  const didAutoOpenRef = useRef(false);
+  useEffect(() => {
+    if (hasSaleReturnDraft || didAutoOpenRef.current) return;
+    if (activeTab === 'return' && mode === 'new' && returnId === null && stores.length > 0 && addas.length > 0) {
+      didAutoOpenRef.current = true;
+      handleBrowseFilterChange('unposted');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, mode, returnId, stores, addas]);
 
   // Product field's SearchModal — same pattern as Customer's: type the article code, Enter opens
   // a big centered popup to pick from.
@@ -1143,7 +1192,10 @@ const nextSystemReturnNo = useMemo(
   const updateEntryNumericField = (field: 'cartons' | 'rate' | 'discountPercent' | 'discountValue', val: number) => {
     setEntry(prev => {
       const next = { ...prev, [field]: val };
-      const gross = next.cartons * next.packing * next.rate;
+      // Same rounded pair count recalcItem uses for `value` — deriving gross from the raw
+      // cartons x packing instead would let the D% <-> DV conversion disagree with the
+      // line's own total by a fraction on quantities where that product drifts.
+      const gross = pairsFor(next.cartons, next.packing) * next.rate;
       if (field === 'discountValue') {
         next.discountPercent = gross > 0 ? parseFloat(((val / gross) * 100).toFixed(1)) : 0;
       }
@@ -1230,12 +1282,10 @@ const nextSystemReturnNo = useMemo(
     // grid re-opens a committed line for editing — a no-op while scope is Master, so master-only
     // edits can't sneak article changes in through the grid. Doesn't affect 'new'/view browsing.
     if (mode === 'edit' && editScope !== 'detail') return;
-    if (isViewMode && currentReturnIsPosted) {
-      pendingRowEditIndex.current = idx;
-      setIsPasswordModalOpen(true);
-      setPasswordActionType('edit_return');
-      return;
-    }
+    // A posted return is read-only — this used to offer a password prompt and then let the line
+    // be edited in place, which is a second way in that the disabled Edit button already
+    // refuses. Un Post is the only route (per the user, 2026-09-04).
+    if (currentReturnIsPosted) return;
     if (isViewMode) setMode('edit');
     loadRowIntoEntry(idx);
   };
@@ -1350,7 +1400,13 @@ const nextSystemReturnNo = useMemo(
   const [newSubCustomerRegionId, setNewSubCustomerRegionId] = useState('');
   const [newSubCustomerCityId, setNewSubCustomerCityId] = useState('');
 
-  if (isPrintingSingle) {
+  // Same reasoning as SaleBillPage's own renderBillPrintable: this used to be the WHOLE page's
+  // early-return content, swapped in then printed with a raw window.print() — no on-screen preview
+  // at all, and specifically broken from Find & Update Return / Weekly / Monthly / Overall
+  // (printing a different return than whatever was last open, with nothing shown first to confirm
+  // it loaded the right one). Reported by the user, 2026-09-04, on Sale Bill's own Find tab; fixed
+  // there and mirrored here since the two pages share the exact same print architecture.
+  const renderReturnPrintable = () => {
     const customerObj = customers.find(c => c.customer_id === Number(customerId));
     const customerName = customerObj ? customerObj.name : (customerId || 'N/A');
     const storeObj = stores.find(s => s.store_id === Number(storeId));
@@ -1511,7 +1567,7 @@ const nextSystemReturnNo = useMemo(
         </div>
       </div>
     );
-  }
+  };
 
   // Sub-tab switcher — lives in the top header bar next to the page title (AppLayout's
   // headerAction slot), same as Sale Bill, so the content below the Quick Menu bar starts
@@ -1563,15 +1619,13 @@ const nextSystemReturnNo = useMemo(
 
   return (
     <AppLayout pageTitle="Sale Return" headerAction={tabBar}>
-      <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto relative" style={{ maxWidth: 1200 }} {...autoEditScope}>
 
         {/* Master/Detail edit-scope — which half of the document the toolbar's Edit button
             unlocks (per the user, 2026-08-31). Two bare radios parked in the margin just left
             of the toolbar's New button, outside the card: absolute, so the centre card never
             moves, and behind no width gate, so no zoom level can hide them (per the user,
             2026-09-03). */}
-        <EditScopeRadios name="sale-return-edit-scope" value={editScope} onChange={setEditScope} />
-
         {/* Tab contents (records & find) */}
         <div>
           {activeTab === 'weekly' && <WeeklyReturnTab onEditReturn={handleEditSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
@@ -1599,7 +1653,7 @@ const nextSystemReturnNo = useMemo(
           <div className="flex flex-wrap items-center gap-2">
           <div className="flex flex-wrap items-center gap-0.5">
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1616,7 +1670,10 @@ const nextSystemReturnNo = useMemo(
             <button
               type="button"
               onClick={handleEditCurrentReturn}
-              disabled={mode !== 'view' || returnId == null}
+              // Posted returns are read-only: while the dropdown is on Posted the only action
+              // offered is Un Post, which drops the return back to a draft and follows it into
+              // the Unposted view, where it can be edited (per the user, 2026-09-04).
+              disabled={mode !== 'view' || returnId == null || currentReturnIsPosted}
               title="Edit"
               className="toolbar-btn"
             >
@@ -1677,10 +1734,7 @@ const nextSystemReturnNo = useMemo(
 
             <button
               type="button"
-              onClick={() => {
-                setIsPrintingSingle(true);
-                setTimeout(() => { window.print(); setIsPrintingSingle(false); }, 100);
-              }}
+              onClick={() => setIsPrintingSingle(true)}
               disabled={mode !== 'view' || returnId == null}
               title="Print"
               className="toolbar-btn"
@@ -1735,7 +1789,7 @@ const nextSystemReturnNo = useMemo(
               <button
                 type="button"
                 onClick={handlePostAllDrafts}
-                disabled={postAllDraftsBusy}
+                disabled={postAllDraftsBusy || browseFilter === 'posted'}
                 title={`Post All (${drafts.length})`}
                 className="toolbar-btn"
               >
@@ -1743,9 +1797,10 @@ const nextSystemReturnNo = useMemo(
                 <span>Post All</span>
               </button>
             )}
+            {/* Opens the same preview modal as Print — see SaleBillPage's own PDF button for why. */}
             <button
               type="button"
-              onClick={() => exportToPDF()}
+              onClick={() => setIsPrintingSingle(true)}
               disabled={mode !== 'view' || returnId == null}
               title="Export PDF"
               className="toolbar-btn"
@@ -1812,6 +1867,12 @@ const nextSystemReturnNo = useMemo(
           </select>
         </div>
 
+        {/* Master/Detail edit-scope — which half of the document the toolbar's Edit button
+            unlocks (per the user, 2026-08-31). Centred directly under the toolbar rather than
+            out in the page margin where it used to sit, so it reads as part of the same
+            control strip as the Edit button it modifies (per the user, 2026-09-04). */}
+        <EditScopeRadios name="sale-return-edit-scope" value={editScope} onChange={setEditScope} />
+
         {/* Invoice Layout — height pinned to the remaining viewport space (see invoiceCardHeight
             above) and laid out as a flex column, so the item table below can flex-grow into
             whatever room that leaves and the footer lands at the bottom of the screen. Every
@@ -1819,6 +1880,7 @@ const nextSystemReturnNo = useMemo(
         <div
           ref={invoiceCardRef}
           className="card-white shadow-sm p-3 md:p-4 flex flex-col"
+          data-edit-scope="detail"
           style={{ border: '1px solid var(--border-color)', background: '#ffffff', height: invoiceCardHeight ?? undefined }}
         >
 
@@ -1837,7 +1899,7 @@ const nextSystemReturnNo = useMemo(
           {/* Header fields — one dense grid, label-left per field (matches SaleBillPage's
               compact redesign), instead of stacked label-above-input fields split across
               bordered cards. */}
-          <div className="shrink-0 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }}>
+          <div className="shrink-0 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }} data-edit-scope="master">
             <div className="flex items-center gap-1.5">
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Return No.
@@ -2508,6 +2570,16 @@ const nextSystemReturnNo = useMemo(
         }
         subtitle={`Please enter password for user '${state.currentUsername || 'user'}' to confirm changes to Return #${billNo || returnId}.`}
       />
+
+      {/* Print/PDF preview — see renderReturnPrintable above. */}
+      <ReportPrintPreviewModal
+        isOpen={isPrintingSingle}
+        onClose={() => setIsPrintingSingle(false)}
+        title={`Sale Return ${billNo ? `#${billNo}` : returnId != null ? `#${returnId}` : ''}`}
+        orientation="portrait"
+      >
+        {renderReturnPrintable()}
+      </ReportPrintPreviewModal>
     </AppLayout>
   );
 }

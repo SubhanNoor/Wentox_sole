@@ -9,7 +9,7 @@ import type {
   ExpenseVoucherRow, VoucherActionResult
 } from '@/lib/api';
 import { focusNextField } from '@/lib/fieldNav';
-import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
 import {
   Save, Edit, Trash2, Plus, CheckCircle2, Undo2, ChevronDown,
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, PackageCheck, Search
@@ -23,6 +23,7 @@ import ConfirmModal from '@/components/ConfirmModal';
 import PageToasts from '@/components/PageToasts';
 import { toDateInputValue, formatDate } from '@/lib/utils';
 import EditScopeRadios from '@/components/EditScopeRadios';
+import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 
 const today = () => new Date().toISOString().split('T')[0];
 
@@ -96,7 +97,14 @@ export default function ExpensesPage() {
   // only the entry strip and the entries table's Edit/Delete. Only bites once mode is actually
   // 'edit'; reset to 'master' on New/loading a voucher so a stale scope never carries over, per
   // the user 2026-08-31.
-  const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
+  // Persisted, not plain useState: mode/svId/status already are, for the exact reason —
+  // losing track of state across a page switch. editScope was the one piece left out, so
+  // returning to an in-progress 'edit' draft always reset it to 'master', locking the
+  // Detail half (entry strip + grid) shut even when that's what had been unlocked and typed
+  // into — reported by the user (2026-09-04) as "all the buttons are disable except New".
+  const [editScope, setEditScope] = usePersistentField<'master' | 'detail'>('expenses', 'editScope', 'master');
+  // Keeps the radios pointing at whichever half is being worked in — see the hook.
+  const autoEditScope = useAutoEditScope(setEditScope);
   // First/Previous/Next/Last + Posted/Unposted dropdown, mirroring Receipts. `navFilter` is a REAL
   // data filter and the buttons page through whole VOUCHERS: 'posted' walks fully-posted ones,
   // 'unposted' walks those still awaiting posting (UNPOSTED or PARTIAL). Changed 2026-08-27 on the
@@ -785,7 +793,13 @@ export default function ExpensesPage() {
   const handleNavFilterChange = async (next: 'posted' | 'unposted') => {
     setNavFilter(next);
     if (next === 'unposted') {
-      const latest = navUnpostedVouchers[navUnpostedVouchers.length - 1];
+      // Re-fetch first, like the Posted branch below — reading the list straight out of state
+      // meant one posted or deleted since it was last loaded was still in it, so Unposted
+      // opened something that is no longer unposted (2026-09-04).
+      const freshAll = await refreshAllVouchers();
+      const unposted = (freshAll ?? allVouchers).filter(v => v.status !== 'POSTED')
+        .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no);
+      const latest = unposted[unposted.length - 1];
       if (latest) await openVoucherInEntry(latest.voucher_id);
       else startNewVoucher();
       requestAnimationFrame(() => newButtonRef.current?.focus());
@@ -822,6 +836,23 @@ export default function ExpensesPage() {
     setMode('view');
   };
 
+  // Declared after openVoucherInEntry, which it calls through handleNavFilterChange:
+  // placing it earlier makes the React Compiler bail out ("accessed before it is
+  // declared") even though the effect only ever runs after mount.
+  // Landing on the page with nothing in progress: the Posted/Unposted dropdown already reads
+  // Unposted, so open the newest unposted voucher and park focus on New, exactly as picking
+  // Unposted from the dropdown does (per the user, 2026-09-04). Skipped when a draft was
+  // restored — that is real in-progress work and must not be overwritten. Runs once; the ref
+  // keeps a later state change from re-opening a record over whatever is being typed by then.
+  const hasPageDraftAtMount = useHasPageDraft('expenses');
+  const didAutoOpenRef = useRef(false);
+  useEffect(() => {
+    if (hasPageDraftAtMount || didAutoOpenRef.current) return;
+    didAutoOpenRef.current = true;
+    handleNavFilterChange('unposted');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Passed down to the records tabs: unposting a voucher there switches back to Expense Entry and
   // loads that same voucher on screen.
   const handleVoucherUnpostedElsewhere = async (voucherId: number) => {
@@ -857,8 +888,18 @@ export default function ExpensesPage() {
     refreshAllVouchers();
     refreshCheques();
     setBalanceRefreshKey(k => k + 1);
-    if (voucher && posted.some(p => p.voucher_id === voucher.voucher_id)) await refreshVoucher(voucher.voucher_id);
-    if (failed.length === 0) flash(`${posted.length} voucher(s) posted.`);
+    if (failed.length === 0) {
+      flash(`${posted.length} voucher(s) posted.`);
+      // Everything posted — the voucher that was on screen is now POSTED and can take no further
+      // entries, so leaving it up is a dead end. Start a fresh one ready for the next run,
+      // keeping the date being worked on. Matches every other entry page's Post All (per the
+      // user, 2026-09-04). A partial run keeps the voucher up: the failures still need looking at.
+      const workingDate = date;
+      startNewVoucher();
+      setDate(workingDate);
+    } else if (voucher && posted.some(p => p.voucher_id === voucher.voucher_id)) {
+      await refreshVoucher(voucher.voucher_id);
+    }
   };
 
   // Deletes the voucher currently on screen (password-gated). Was a per-row button in the removed
@@ -943,7 +984,7 @@ export default function ExpensesPage() {
         {activeTab === 'overall' && <OverallExpensesTab onVoucherUnposted={handleVoucherUnpostedElsewhere} />}
 
         {activeTab === 'entry' && (
-          <div className="max-w-6xl mx-auto flex items-start gap-3 animate-fadeIn">
+          <div className="max-w-5xl mx-auto animate-fadeIn" {...autoEditScope}>
 
             {/* Master/Detail edit-scope — two bare radios on the LEFT SIDE of the page, outside
                 the toolbar row (per the user, 2026-08-31), mirroring Receipts' own; the card box
@@ -953,9 +994,7 @@ export default function ExpensesPage() {
                 Detail unlocks only the entry strip and the entries table's Edit/Delete — see
                 masterFieldsLocked/detailFieldsLocked above. Both radios stay enabled always; they
                 only have any effect once mode is 'edit'. */}
-            <EditScopeRadios name="expense-edit-scope" value={editScope} onChange={setEditScope} variant="inline" />
-
-            <div className="flex-1 min-w-0 max-w-5xl relative">
+            <div className="relative">
 
             {/* The left-hand "Pending Posting" panel that used to live here was removed
                 226-08-27 at the user's request, same as Receipts: Payments should read like Sale
@@ -1006,7 +1045,7 @@ export default function ExpensesPage() {
                   </button>
                 )}
                 <button
-                  data-new-action="true" ref={newButtonRef} type="button" onClick={startNewVoucher} title="New Voucher" className="toolbar-btn">
+                  data-new-action="true" ref={newButtonRef} type="button" onClick={startNewVoucher} disabled={navFilter === 'posted'} title="New Voucher" className="toolbar-btn">
                   <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
                   <span>New</span>
                 </button>
@@ -1104,7 +1143,7 @@ export default function ExpensesPage() {
                 <button
                   type="button"
                   onClick={handlePostAllVouchers}
-                  disabled={navUnpostedVouchers.length === 0 || postAllVouchersBusy}
+                  disabled={navUnpostedVouchers.length === 0 || postAllVouchersBusy || navFilter === 'posted'}
                   title={postAllVouchersBusy ? 'Posting…' : `Post All (${navUnpostedVouchers.length})`}
                   className="toolbar-btn"
                 >
@@ -1154,10 +1193,15 @@ export default function ExpensesPage() {
               )}
             </div>
 
+            {/* Master/Detail edit-scope — which half of the voucher the toolbar's Edit button
+                unlocks. Centred directly under the toolbar rather than in a left-hand column,
+                matching every other entry page (per the user, 2026-09-04). */}
+            <EditScopeRadios name="expense-edit-scope" value={editScope} onChange={setEditScope} />
+
 
 
             {/* Entry Form Card */}
-            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print>
+            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print data-edit-scope="detail">
 
               <form id="expense-entry-form" onSubmit={handleEntrySubmit} className="flex flex-col gap-4">
                 {/* Hidden submit target for the app-wide G-01 rule (see fieldNav.ts#findSubmitButton)
@@ -1167,7 +1211,7 @@ export default function ExpensesPage() {
                     own, different click behavior (finish the whole voucher). */}
                 <button type="submit" className="hidden" aria-hidden="true" tabIndex={-1} />
                 {/* Row 1 — Date, System Voucher No. (C.Book No), Remarks */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4" data-edit-scope="master">
                   <div>
                     <label className="block text-xs font-bold text-slate-900 mb-1">Date</label>
                     <input

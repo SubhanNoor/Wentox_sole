@@ -777,8 +777,18 @@ select option:hover {
     overflow: visible !important;
   }
 
-  /* 3. Hide on-screen app layout (#root) when printing from modal portal */
-  #root {
+  /* 3. Hide on-screen app layout (#root) when printing from the report modal's portal.
+     Report previews (ReportPrintPreviewModal) render their `.report-modal-print-source` via
+     createPortal into document.body, as a SIBLING of #root, so hiding #root unconditionally used
+     to be fine for that flow — the portal content sat outside it and kept showing.
+     But every voucher page's own print/PDF output (Sale Bill, Sale Return, and every report page
+     built on the same `.excel-print-container` pattern — ReportStockPage, SaleAnalysisPage,
+     VendorReportPage, etc.) renders that content IN-TREE, inside #root, with no portal at all.
+     For those, blanking #root blanked the entire printable page, which is what the user (2026-09-04)
+     saw as "print preview is not showing" and a blank PDF. Scoped with :has() so #root is only
+     hidden while the report modal's portal is actually mounted in the DOM — every other page's
+     in-tree print content is left alone. */
+  body:has(.report-modal-print-source) #root {
     display: none !important;
   }
 

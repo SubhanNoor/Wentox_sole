@@ -3,13 +3,13 @@ import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchModal from '@/components/SearchModal';
 import { focusNextField } from '@/lib/fieldNav';
-import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
 import * as api from '@/lib/api';
 import type {
   ProductRow, ProductVariantRow, StoreRow, StockVoucherRow, StockVoucherLineInput,
   StockVoucherCreateInput, UnpostedStockVoucherRow, PostAllResult, StockRow, BusinessAccountRow,
 } from '@/lib/api';
-import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem } from '@/lib/utils';
+import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, cartonsAndPairs } from '@/lib/utils';
 import {
   Edit, Search, Plus, Trash2, Boxes, ChevronDown, CheckCircle2, PackageCheck, Undo2,
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Printer
@@ -17,6 +17,7 @@ import {
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
 import EditScopeRadios from '@/components/EditScopeRadios';
+import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import CartonsInput from '@/components/CartonsInput';
 
 /**
@@ -221,7 +222,14 @@ export default function StockVoucherPage() {
   // the toolbar's Edit, this further splits WHICH half becomes editable — the header (Master) or
   // the entry strip/grid (Detail), never both at once. Only bites once mode is actually 'edit';
   // pre-picking it doesn't change anything until Edit is clicked.
-  const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
+  // Persisted, not plain useState: mode/svId/status already are, for the exact reason —
+  // losing track of state across a page switch. editScope was the one piece left out, so
+  // returning to an in-progress 'edit' draft always reset it to 'master', locking the
+  // Detail half (entry strip + grid) shut even when that's what had been unlocked and typed
+  // into — reported by the user (2026-09-04) as "all the buttons are disable except New".
+  const [editScope, setEditScope] = usePersistentField<'master' | 'detail'>('stock-voucher', 'editScope', 'master');
+  // Keeps the radios pointing at whichever half is being worked in — see the hook.
+  const autoEditScope = useAutoEditScope(setEditScope);
   // A New Stock Voucher's own in-progress fields persist across switching pages AND an app
   // restart (usePersistentField — see src/hooks/usePersistentField.ts), so typing one up and
   // getting pulled away mid-entry never loses it. Deliberately NOT applied to mode/svId/status —
@@ -370,6 +378,18 @@ export default function StockVoucherPage() {
     return Math.max(0, raw - reserved - usedInThisVoucher);
   }, [entry.articleId, entry.variantId, getStockInfo, unpostedReservations, lines, editingIndex, stockRows]);
 
+  // Shown split into whole cartons + leftover pairs, matching Sale Bill's own readout. A bare
+  // number was ambiguous once part cartons became enterable (2026-09-04) — "6" reads as 6 cartons
+  // just as easily as the 6 pairs it actually is, which is the exact confusion this whole change
+  // is about. Only meaningful once a colour is picked; at article level packing isn't known yet,
+  // so the raw pair total is all that can honestly be shown.
+  const stockInHandLabel = useMemo(() => {
+    if (stockInHand == null) return '';
+    if (entry.variantId == null || !(entry.packing > 0)) return `${stockInHand.toLocaleString()} Prs`;
+    const split = cartonsAndPairs(stockInHand, entry.packing);
+    return `${formatCartons(split.cartons)} Ctn / ${split.pairs} Prs`;
+  }, [stockInHand, entry.variantId, entry.packing]);
+
   const entryArticleTriggerRef = useRef<HTMLInputElement>(null);
   const [isEntryArticleModalOpen, setIsEntryArticleModalOpen] = useState(false);
   const [entryArticleModalSeed, setEntryArticleModalSeed] = useState('');
@@ -484,7 +504,7 @@ export default function StockVoucherPage() {
         variantId,
         label: variant ? `${product?.name || ''} — ${variant.color}` : (product?.name || ''),
         packing,
-        pairs: prev.cartons * packing,
+        pairs: pairsFor(prev.cartons, packing),
       };
     });
   };
@@ -521,14 +541,14 @@ export default function StockVoucherPage() {
         variantId: variant.variant_id,
         label: `${product?.name || ''} — ${variant.color}`,
         packing,
-        pairs: prev.cartons * packing,
+        pairs: pairsFor(prev.cartons, packing),
       };
     });
     requestAnimationFrame(() => cartonsInputRef.current?.focus());
   };
 
   const updateEntryCartons = (cartons: number) => {
-    setEntry(prev => ({ ...prev, cartons, pairs: cartons * prev.packing }));
+    setEntry(prev => ({ ...prev, cartons, pairs: pairsFor(cartons, prev.packing) }));
   };
 
   const handleCommitLine = () => {
@@ -858,7 +878,11 @@ export default function StockVoucherPage() {
   const handleBrowseFilterChange = async (next: 'posted' | 'unposted') => {
     setBrowseFilter(next);
     if (next === 'unposted') {
-      const latest = unpostedSvs[unpostedSvs.length - 1];
+      // Re-fetch first, like the Posted branch below — reading the list straight out of state
+      // meant one posted or deleted since it was last loaded was still in it, so Unposted
+      // opened something that is no longer unposted (2026-09-04).
+      const freshUnposted = await refreshUnposted();
+      const latest = (freshUnposted ?? unpostedSvs).slice(-1)[0];
       if (latest) await loadSv(latest.stock_voucher_id);
       else handleNew();
       requestAnimationFrame(() => newButtonRef.current?.focus());
@@ -869,6 +893,20 @@ export default function StockVoucherPage() {
       if (latest) await loadSv(latest.stock_voucher_id);
     }
   };
+
+  // Landing on the page with nothing in progress: the Posted/Unposted dropdown already reads
+  // Unposted, so open the newest unposted voucher and park focus on New, exactly as picking
+  // Unposted from the dropdown does (per the user, 2026-09-04). Skipped when a draft was
+  // restored — that is real in-progress work and must not be overwritten. Runs once; the ref
+  // keeps a later state change from re-opening a record over whatever is being typed by then.
+  const hasPageDraftAtMount = useHasPageDraft('stock-voucher');
+  const didAutoOpenRef = useRef(false);
+  useEffect(() => {
+    if (hasPageDraftAtMount || didAutoOpenRef.current) return;
+    didAutoOpenRef.current = true;
+    handleBrowseFilterChange('unposted');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Preview of the Number a brand-new voucher will get — stock_voucher_id is assigned the moment
   // Save actually creates the row (draft or posted alike), so this is a client-side preview only.
@@ -936,15 +974,13 @@ export default function StockVoucherPage() {
 
   return (
     <AppLayout pageTitle="Stock Voucher" headerAction={tabBar}>
-      <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto relative" style={{ maxWidth: 1200 }} {...autoEditScope}>
 
         {/* Master/Detail edit-scope — which half of the document the toolbar's Edit button
             unlocks (per the user, 2026-08-31). Two bare radios parked in the margin just left
             of the toolbar's New button, outside the card: absolute, so the centre card never
             moves, and behind no width gate, so no zoom level can hide them (per the user,
             2026-09-03). */}
-        <EditScopeRadios name="sv-edit-scope" value={editScope} onChange={setEditScope} />
-
         <PasswordPromptModal
           isOpen={isPasswordModalOpen}
           onClose={() => { setIsPasswordModalOpen(false); pendingDeleteSvId.current = null; }}
@@ -1017,7 +1053,7 @@ export default function StockVoucherPage() {
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-0.5">
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1117,7 +1153,7 @@ export default function StockVoucherPage() {
                 dropdown plus First/Prev./Next/Last. */}
             {unpostedSvs.length > 0 && (
               <button
-                type="button" onClick={handlePostAll} disabled={postAllBusy}
+                type="button" onClick={handlePostAll} disabled={postAllBusy || browseFilter === 'posted'}
                 title={`Post All (${unpostedSvs.length})`}
                 className="toolbar-btn"
               >
@@ -1164,9 +1200,16 @@ export default function StockVoucherPage() {
           )}
         </div>
 
+        {/* Master/Detail edit-scope — which half of the document the toolbar's Edit button
+            unlocks (per the user, 2026-08-31). Centred directly under the toolbar rather than
+            out in the page margin where it used to sit, so it reads as part of the same
+            control strip as the Edit button it modifies (per the user, 2026-09-04). */}
+        <EditScopeRadios name="sv-edit-scope" value={editScope} onChange={setEditScope} />
+
         <form
           id="sv-entry-form" ref={entryCardRef} onSubmit={handleSave}
           className="card-white p-6 bg-white border flex flex-col" style={{ height: entryCardHeight ?? undefined }}
+          data-edit-scope="detail"
         >
           <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-4">
             <Boxes size={18} className="text-[#B08D57]" />
@@ -1178,6 +1221,7 @@ export default function StockVoucherPage() {
               2026-08-31) each their own row; Remarks last. */}
           <div
             className="shrink-0 grid gap-x-3 gap-y-1.5 mb-2 p-3 rounded-lg border"
+            data-edit-scope="master"
             style={{
               background: 'rgba(176,141,87,0.06)', borderColor: 'var(--border-color)',
               gridTemplateColumns: '180px 220px 1fr',
@@ -1438,7 +1482,7 @@ export default function StockVoucherPage() {
                 <label className="block text-xs font-medium text-slate-600 mb-1 whitespace-nowrap">Stock in Hand</label>
                 <input
                   type="text"
-                  value={entry.articleId == null ? '—' : stockInHand == null ? '…' : stockInHand.toLocaleString()}
+                  value={entry.articleId == null ? '—' : stockInHand == null ? '…' : stockInHandLabel}
                   disabled
                   className="soleria-input bg-gray-100 text-gray-500 font-mono text-center"
                   style={{ fontSize: '13px' }}

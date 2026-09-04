@@ -15,8 +15,9 @@ import {
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
-import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
 import EditScopeRadios from '@/components/EditScopeRadios';
+import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 
 /**
  * Journal Voucher — a real multi-line double-entry journal (legacy "Journal Entry" screen): N
@@ -90,6 +91,7 @@ export default function JournalVoucherPage() {
   const refreshUnposted = useCallback(async () => {
     const res = await api.journalVouchers.listUnposted();
     if (res.ok) setUnpostedJvs(res.data);
+    return res.ok ? res.data : null;
   }, []);
 
   useEffect(() => {
@@ -142,7 +144,14 @@ export default function JournalVoucherPage() {
   // toolbar's Edit, this further splits WHICH half becomes editable — the header (Master) or the
   // entry strip/grid (Detail), never both at once. Only bites once mode is actually 'edit';
   // pre-picking it doesn't change anything until Edit is clicked.
-  const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
+  // Persisted, not plain useState: mode/svId/status already are, for the exact reason —
+  // losing track of state across a page switch. editScope was the one piece left out, so
+  // returning to an in-progress 'edit' draft always reset it to 'master', locking the
+  // Detail half (entry strip + grid) shut even when that's what had been unlocked and typed
+  // into — reported by the user (2026-09-04) as "all the buttons are disable except New".
+  const [editScope, setEditScope] = usePersistentField<'master' | 'detail'>('journal-voucher', 'editScope', 'master');
+  // Keeps the radios pointing at whichever half is being worked in — see the hook.
+  const autoEditScope = useAutoEditScope(setEditScope);
   // A New Journal Voucher's own in-progress fields persist across switching pages AND an app
   // restart (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied
   // to mode/jvId/status — an already-saved JV loaded for view/edit is safely re-openable by id at
@@ -528,7 +537,11 @@ export default function JournalVoucherPage() {
   const handleBrowseFilterChange = async (next: 'posted' | 'unposted') => {
     setBrowseFilter(next);
     if (next === 'unposted') {
-      const latest = unpostedJvs[unpostedJvs.length - 1];
+      // Re-fetch first, like the Posted branch below — reading the list straight out of state
+      // meant one posted or deleted since it was last loaded was still in it, so Unposted
+      // opened something that is no longer unposted (2026-09-04).
+      const freshUnposted = await refreshUnposted();
+      const latest = (freshUnposted ?? unpostedJvs).slice(-1)[0];
       if (latest) await loadJv(latest.jv_id);
       else handleNew();
       requestAnimationFrame(() => newButtonRef.current?.focus());
@@ -539,6 +552,20 @@ export default function JournalVoucherPage() {
       if (latest) await loadJv(latest.jv_id);
     }
   };
+
+  // Landing on the page with nothing in progress: the Posted/Unposted dropdown already reads
+  // Unposted, so open the newest unposted voucher and park focus on New, exactly as picking
+  // Unposted from the dropdown does (per the user, 2026-09-04). Skipped when a draft was
+  // restored — that is real in-progress work and must not be overwritten. Runs once; the ref
+  // keeps a later state change from re-opening a record over whatever is being typed by then.
+  const hasPageDraftAtMount = useHasPageDraft('journal-voucher');
+  const didAutoOpenRef = useRef(false);
+  useEffect(() => {
+    if (hasPageDraftAtMount || didAutoOpenRef.current) return;
+    didAutoOpenRef.current = true;
+    handleBrowseFilterChange('unposted');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Preview of the Number a brand-new JV will get — jv_id is assigned the moment Save actually
   // creates the row (draft or posted alike), so this is a client-side preview only, correct as
@@ -597,15 +624,13 @@ const nextJvNoPreview = useMemo(
 
   return (
     <AppLayout pageTitle="Journal Voucher" headerAction={tabBar}>
-      <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
+      <div className="mx-auto relative" style={{ maxWidth: 1200 }} {...autoEditScope}>
 
         {/* Master/Detail edit-scope — which half of the document the toolbar's Edit button
             unlocks (per the user, 2026-08-31). Two bare radios parked in the margin just left
             of the toolbar's New button, outside the card: absolute, so the centre card never
             moves, and behind no width gate, so no zoom level can hide them (per the user,
             2026-09-03). */}
-        <EditScopeRadios name="jv-edit-scope" value={editScope} onChange={setEditScope} />
-
         <PasswordPromptModal
           isOpen={isPasswordModalOpen}
           onClose={() => { setIsPasswordModalOpen(false); pendingDeleteJvId.current = null; }}
@@ -675,7 +700,7 @@ const nextJvNoPreview = useMemo(
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-0.5">
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} title="New" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -774,7 +799,7 @@ const nextJvNoPreview = useMemo(
                 unposted JV is the Unposted dropdown plus First/Prev./Next/Last. */}
             {unpostedJvs.length > 0 && (
               <button
-                type="button" onClick={handlePostAll} disabled={postAllBusy}
+                type="button" onClick={handlePostAll} disabled={postAllBusy || browseFilter === 'posted'}
                 title={`Post All (${unpostedJvs.length})`}
                 className="toolbar-btn"
               >
@@ -821,6 +846,12 @@ const nextJvNoPreview = useMemo(
           )}
         </div>
 
+        {/* Master/Detail edit-scope — which half of the document the toolbar's Edit button
+            unlocks (per the user, 2026-08-31). Centred directly under the toolbar rather than
+            out in the page margin where it used to sit, so it reads as part of the same
+            control strip as the Edit button it modifies (per the user, 2026-09-04). */}
+        <EditScopeRadios name="jv-edit-scope" value={editScope} onChange={setEditScope} />
+
         {/* This <form> IS the entry card — height pinned to the remaining viewport space (see
             entryCardHeight above) and laid out as a flex column, so the line-items table below
             can flex-grow into whatever room that leaves. Every other child keeps its natural
@@ -828,6 +859,7 @@ const nextJvNoPreview = useMemo(
         <form
           id="jv-entry-form" ref={entryCardRef} onSubmit={handleSave}
           className="card-white p-6 bg-white border flex flex-col" style={{ height: entryCardHeight ?? undefined }}
+          data-edit-scope="detail"
         >
           {/* Header row — "JOURNAL ENTRY" title. Master/Detail radios removed (per the user,
               2026-08-26) — display-only and didn't do anything, same reason they're gone from
@@ -845,6 +877,7 @@ const nextJvNoPreview = useMemo(
               SaleBillPage's own System No. */}
           <div
             className="shrink-0 grid grid-cols-1 md:grid-cols-4 gap-4 mb-4 p-4 rounded-lg border"
+            data-edit-scope="master"
             style={{ background: 'rgba(176,141,87,0.06)', borderColor: 'var(--border-color)' }}
           >
             <div>

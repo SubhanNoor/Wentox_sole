@@ -160,3 +160,27 @@ export function cartonsProblem(cartons: number, packing: number): string | null 
   }
   return null;
 }
+
+/**
+ * How many pairs a carton quantity comes to — the one conversion, mirroring the server's own
+ * backend/src/utils/cartons.js#pairsFor.
+ *
+ * A part carton IS pairs: at a packing of 12, 1.5 cartons is 1 carton plus 6 pairs, i.e. 18 pairs,
+ * and 0.5 cartons is 6 pairs with no whole carton at all. Rounded, not left as raw float: cartons
+ * is a decimal, so 0.3 * 10 is 2.9999999999999996 in IEEE 754, and pairs must be a whole number
+ * (stock_movements.qty_pairs is INT and a pair is indivisible). cartonsProblem() above has already
+ * rejected any quantity that isn't whole to a meaningful precision, so this only absorbs the noise.
+ */
+export function pairsFor(cartons: number, packing: number): number {
+  return Math.round(Number(cartons) * packing);
+}
+
+/**
+ * Split a pair count back into whole cartons + leftover pairs, for readouts that show stock the way
+ * it is counted on the floor ("1 Ctn / 6 Prs"). Inverse of pairsFor for display purposes.
+ */
+export function cartonsAndPairs(totalPairs: number, packing: number): { cartons: number; pairs: number } {
+  if (!(packing > 0)) return { cartons: 0, pairs: Math.max(0, totalPairs) };
+  const p = Math.max(0, totalPairs);
+  return { cartons: Math.trunc(p / packing), pairs: p % packing };
+}

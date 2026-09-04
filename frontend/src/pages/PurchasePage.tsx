@@ -16,8 +16,9 @@ import {
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
-import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
 import EditScopeRadios from '@/components/EditScopeRadios';
+import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
 
@@ -87,6 +88,7 @@ export default function PurchasePage() {
   const refreshUnposted = useCallback(async () => {
     const res = await api.draftPurchases.list();
     if (res.ok) setUnpostedPurchases(res.data);
+    return res.ok ? res.data : null;
   }, []);
 
   useEffect(() => {
@@ -109,7 +111,14 @@ export default function PurchasePage() {
   // actually unlocks. Per the user, 2026-08-31: Edit used to unlock the whole document at once;
   // now Master unlocks only the header fields, Detail only the entry strip + grid. Reset to
   // 'master' on New/loading a record so a stale scope never carries over from the last edit.
-  const [editScope, setEditScope] = useState<'master' | 'detail'>('master');
+  // Persisted, not plain useState: mode/svId/status already are, for the exact reason —
+  // losing track of state across a page switch. editScope was the one piece left out, so
+  // returning to an in-progress 'edit' draft always reset it to 'master', locking the
+  // Detail half (entry strip + grid) shut even when that's what had been unlocked and typed
+  // into — reported by the user (2026-09-04) as "all the buttons are disable except New".
+  const [editScope, setEditScope] = usePersistentField<'master' | 'detail'>('purchase', 'editScope', 'master');
+  // Keeps the radios pointing at whichever half is being worked in — see the hook.
+  const autoEditScope = useAutoEditScope(setEditScope);
 
   // purchaseId/currentIsPosted are persisted alongside the field values, NOT plain useState — see
   // SaleBillPage's own comment for the full reasoning. Short version: leaving them out lost track
@@ -643,7 +652,16 @@ const nextSystemBillNo = useMemo(
     // The draft open on screen (if any) may have just been posted — its id is gone either way
     // (ConfirmAllResult doesn't carry the new purchase_id back), so reset rather than leave the
     // form pointed at nothing.
-    if (purchaseId != null && !currentIsPosted && res.data.posted.some(p => p.draft_id === purchaseId)) {
+    // Everything posted — nothing is left unposted to come back to, so reset to a fresh record
+    // ready for the next one (keeping the date being worked on), matching Stock Voucher/Journal
+    // Voucher's own Post All. Per the user (2026-09-04): Post All should "refresh the screen".
+    // A partial run deliberately does NOT wipe the form — the failures still need looking at, so
+    // there it only clears when the record on screen was itself one of the ones that posted.
+    if (res.data.failed.length === 0) {
+      const workingDate = date;
+      handleNew();
+      setDate(workingDate);
+    } else if (purchaseId != null && !currentIsPosted && res.data.posted.some(p => p.draft_id === purchaseId)) {
       handleNew();
     }
   };
@@ -681,7 +699,15 @@ const nextSystemBillNo = useMemo(
     let draft = draftIn;
     if (!draft.items) {
       const res = await api.draftPurchases.get(draft.draft_id);
-      if (res.ok) draft = res.data;
+      // A failed re-fetch used to fall through and render `draftIn` anyway — stale list data
+      // for a draft that no longer exists, since posting one DELETES it and turns it into a
+      // posted purchase. Reported on Sale Bill by the user (2026-09-04) as Unposted "still showing
+      // me the posted bill"; same shape here. Say so and leave the form alone instead.
+      if (!res.ok) {
+        setErrorMsg('That draft no longer exists — it may have been posted or deleted.');
+        return false;
+      }
+      draft = res.data;
     }
     createdInThisRun.current = false;
     setPurchaseId(draft.draft_id);
@@ -704,6 +730,7 @@ const nextSystemBillNo = useMemo(
     setErrorMsg('');
     setEditScope('master'); // opening a different draft must not carry over a stale edit scope
     setMode(opts.mode ?? 'edit');
+    return true;
   };
 
 
@@ -791,9 +818,14 @@ const nextSystemBillNo = useMemo(
   const handleNavFilterChange = async (next: 'posted' | 'unposted') => {
     setNavFilter(next);
     if (next === 'unposted') {
-      const latest = navUnpostedList[navUnpostedList.length - 1];
-      if (latest) await loadDraftIntoForm(latest, { mode: 'view' });
-      else startNewPurchase();
+      // Re-fetch first, exactly like the Posted branch below — reading the list straight out
+      // of state meant a draft posted or deleted since it was last loaded was still in it, so
+      // switching to Unposted opened a "draft" that no longer exists (2026-09-04).
+      const fresh = await refreshUnposted();
+      const list = [...(fresh ?? unpostedPurchases)].reverse();
+      const latest = list[list.length - 1];
+      const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
+      if (!opened) startNewPurchase();
       requestAnimationFrame(() => newButtonRef.current?.focus());
     } else {
       const fresh = await refreshPurchases();
@@ -802,6 +834,20 @@ const nextSystemBillNo = useMemo(
       if (latest) await loadPurchaseRow(latest);
     }
   };
+
+  // Landing on the page with nothing in progress: the Posted/Unposted dropdown already reads
+  // Unposted, so open the newest unposted purchase and park focus on New, exactly as picking
+  // Unposted from the dropdown does (per the user, 2026-09-04). Skipped when a draft was
+  // restored — that is real in-progress work and must not be overwritten. Runs once; the ref
+  // keeps a later state change from re-opening a record over whatever is being typed by then.
+  const hasPageDraftAtMount = useHasPageDraft('purchase');
+  const didAutoOpenRef = useRef(false);
+  useEffect(() => {
+    if (hasPageDraftAtMount || didAutoOpenRef.current) return;
+    didAutoOpenRef.current = true;
+    handleNavFilterChange('unposted');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleNavFirst = () => goToNavIndex(0);
   const handleNavLast = () => goToNavIndex(navList.length - 1);
@@ -857,16 +903,7 @@ const nextSystemBillNo = useMemo(
 
   return (
     <AppLayout pageTitle="Purchase Entry" headerAction={tabBar}>
-      <div className="mx-auto relative" style={{ maxWidth: 1200 }}>
-
-        {/* Master/Detail edit-scope — which half of the document the toolbar's Edit button
-            unlocks (per the user, 2026-08-31). Two bare radios parked in the margin just left
-            of the toolbar's New button, outside the card: absolute, so the centre card never
-            moves, and behind no width gate, so no zoom level can hide them (per the user,
-            2026-09-03). */}
-        {activeTab === 'entry' && (
-          <EditScopeRadios name="purchase-edit-scope" value={editScope} onChange={setEditScope} />
-        )}
+      <div className="mx-auto relative" style={{ maxWidth: 1200 }} {...autoEditScope}>
 
         {/* Floated into the right-hand gutter, not rendered inline: a message used to push the
             toolbar and card down under the cursor mid-click (per the user, 2026-08-31). */}
@@ -893,7 +930,7 @@ const nextSystemBillNo = useMemo(
             {/* ref-pics/batch2/sale bill.png toolbar style: small square buttons, icon on top,
                 label underneath, tightly packed in one strip — not pill-shaped colored buttons. */}
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={startNewPurchase} title="New Purchase" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={startNewPurchase} disabled={navFilter === 'posted'} title="New Purchase" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
@@ -1011,7 +1048,7 @@ const nextSystemBillNo = useMemo(
                 draft is the Unposted dropdown plus First/Prev./Next/Last. */}
             {unpostedPurchases.length > 0 && (
               <button
-                type="button" onClick={handlePostAll} disabled={postAllBusy}
+                type="button" onClick={handlePostAll} disabled={postAllBusy || navFilter === 'posted'}
                 title={`Post All (${unpostedPurchases.length})`}
                 className="toolbar-btn"
               >
@@ -1059,6 +1096,12 @@ const nextSystemBillNo = useMemo(
           )}
         </div>
 
+        {/* Master/Detail edit-scope — which half of the document the toolbar's Edit button
+            unlocks (per the user, 2026-08-31). Centred directly under the toolbar rather than
+            out in the page margin where it used to sit, so it reads as part of the same
+            control strip as the Edit button it modifies (per the user, 2026-09-04). */}
+        <EditScopeRadios name="purchase-edit-scope" value={editScope} onChange={setEditScope} />
+
         {/* This <form> IS the invoice card — height pinned to the remaining viewport space (see
             invoiceCardHeight above) and laid out as a flex column, so the item table below can
             flex-grow into whatever room that leaves. Every other child here keeps its natural
@@ -1068,6 +1111,7 @@ const nextSystemBillNo = useMemo(
           ref={invoiceCardRef}
           onSubmit={handleSave}
           className="card-white p-6 bg-white border flex flex-col"
+          data-edit-scope="detail"
           style={{ height: invoiceCardHeight ?? undefined }}
           data-no-print
         >
@@ -1077,7 +1121,7 @@ const nextSystemBillNo = useMemo(
           </div>
 
           {/* Header fields */}
-          <div className="shrink-0 grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+          <div className="shrink-0 grid grid-cols-1 md:grid-cols-5 gap-4 mb-6" data-edit-scope="master">
             <div>
               <label className="block text-xs font-bold text-slate-900 mb-1">
                 Date <span className="text-red-500 font-bold">*</span>
