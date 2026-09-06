@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
-import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor } from '@/lib/utils';
+import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, nextSystemNoPreview, mergeWithDeleted } from '@/lib/utils';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
@@ -24,11 +24,12 @@ import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
   SaleReturnRow, SaleReturnCreateInput, SaleReturnItemInput,
-  DraftSaleReturnRow, ConfirmAllResult, SaleBillRow, SaleBillItemRow
+  DraftSaleReturnRow, ConfirmAllResult, SaleBillRow, SaleBillItemRow, DeletedNumberRow
 } from '@/lib/api';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import CartonsInput from '@/components/CartonsInput';
+import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
 import { getWindowParam } from '@/lib/windowParams';
 
 interface UiItem {
@@ -147,6 +148,9 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // re-fetch on mount" attempt was worse still — it overwrote the user's unsaved edits with the
   // last-saved copy and reopened in 'view' mode, which disables Save.
   const [returnId, setReturnId] = usePersistentField<number | null>('sale-return', 'returnId', null);
+  // The loaded record's own System No. — display-only, kept in step with returnId but never used
+  // for API calls; those stay on returnId/draftId as before.
+  const [currentSystemNo, setCurrentSystemNo] = usePersistentField<number | null>('sale-return', 'currentSystemNo', null);
   const [currentReturnIsPosted, setCurrentReturnIsPosted] = usePersistentField('sale-return', 'currentReturnIsPosted', false);
   const [date, setDate] = usePersistentField('sale-return', 'date', getTodayDate());
   const [storeId, setStoreId] = usePersistentField('sale-return', 'storeId', '');
@@ -293,6 +297,26 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   useEffect(() => { refreshDrafts(); }, [refreshDrafts]);
 
+  // Every Sale Return System No. permanently retired by a delete (migration 032) — merged into the
+  // browse lists below so First/Prev/Next/Last can show "#N — Deleted" as an actual stop.
+  const [deletedNumbers, setDeletedNumbers] = useState<DeletedNumberRow[]>([]);
+  const refreshDeletedNumbers = useCallback(async () => {
+    const res = await api.draftSaleReturns.listDeletedNumbers();
+    if (res.ok) setDeletedNumbers(res.data);
+  }, []);
+  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
+
+  // Set when First/Prev/Next/Last lands on a deleted number — DeletedDocumentOverlay renders while
+  // this is non-null. Cleared as soon as a real document loads (see the returnId effect below).
+  const [deletedPlaceholder, setDeletedPlaceholder] = useState<number | null>(null);
+  // navIndex normally tracks the loaded return's own position via returnId — a deleted marker has
+  // no returnId to match, so this overrides it while a placeholder is on screen.
+  const [navIndexOverride, setNavIndexOverride] = useState<number | null>(null);
+  useEffect(() => {
+    setDeletedPlaceholder(null);
+    setNavIndexOverride(null);
+  }, [returnId]);
+
   const loadReturnRow = async (rowIn: SaleReturnRow) => {
     // list() rows never carry items (only get() does) — the tabs pass those straight through,
     // so re-fetch the full record whenever items are missing.
@@ -307,6 +331,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     }
 
     setReturnId(row.return_id);
+    setCurrentSystemNo(row.system_no);
     setCurrentReturnIsPosted(row.is_posted);
     setDate(toDateInputValue(row.return_date));
     setStoreId(row.store_id != null ? String(row.store_id) : '');
@@ -365,35 +390,53 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   useEffect(() => { refreshPostedReturns(); }, [refreshPostedReturns]);
 
-  // Both list() calls return newest-first — reversed for oldest-first, so First = earliest.
-  const navPostedList = useMemo(() => [...postedReturns].reverse(), [postedReturns]);
-  const navUnpostedList = useMemo(() => [...drafts].reverse(), [drafts]);
+  // Sorted by system_no (creation order), not the shared list()'s own date-based ORDER BY — see
+  // SaleBillPage.tsx's navPostedList for why (a backdated document's date can otherwise put it
+  // next to an unrelated one when browsing, reported by the user, 2026-09-07).
+  const navPostedList = useMemo(
+    () => mergeWithDeleted([...postedReturns].sort((a, b) => a.system_no - b.system_no), deletedNumbers),
+    [postedReturns, deletedNumbers],
+  );
+  const navUnpostedList = useMemo(
+    () => mergeWithDeleted([...drafts].sort((a, b) => a.system_no - b.system_no), deletedNumbers),
+    [drafts, deletedNumbers],
+  );
 
   // Whichever list the dropdown selects — this is what the nav buttons page through.
   const navList = browseFilter === 'posted' ? navPostedList : navUnpostedList;
 
   // -1 when the return on screen isn't in the ACTIVE list (unsaved, or a draft while the dropdown
   // is on Posted and vice versa); the handlers treat that as "start from the beginning".
-  const navIndex = useMemo(() => {
+  // navIndexOverride wins while a deleted-number placeholder is on screen — see SaleBillPage.tsx's
+  // navIndex for why.
+  const derivedNavIndex = useMemo(() => {
     if (returnId == null) return -1;
     return browseFilter === 'posted'
-      ? (currentReturnIsPosted ? navPostedList.findIndex(r => r.return_id === returnId) : -1)
-      : (!currentReturnIsPosted ? navUnpostedList.findIndex(r => r.draft_id === returnId) : -1);
+      ? (currentReturnIsPosted ? navPostedList.findIndex(e => e.kind === 'doc' && e.row.return_id === returnId) : -1)
+      : (!currentReturnIsPosted ? navUnpostedList.findIndex(e => e.kind === 'doc' && e.row.draft_id === returnId) : -1);
   }, [returnId, currentReturnIsPosted, browseFilter, navPostedList, navUnpostedList]);
+  const navIndex = navIndexOverride ?? derivedNavIndex;
 
   const canBrowse = navList.length > 0;
   const canNavPrevious = canBrowse && navIndex !== 0;
   const canNavNext = canBrowse && navIndex !== navList.length - 1;
 
   // Posted rows come from sale_returns, unposted ones from draft_sale_returns — each needs its
-  // own loader. Both open read-only; Edit stays a separate deliberate click.
+  // own loader. Both open read-only; Edit stays a separate deliberate click. A 'deleted' entry
+  // shows DeletedDocumentOverlay instead of loading anything.
   const goToNavIndex = async (idx: number) => {
     if (idx < 0 || idx >= navList.length) return;
+    const entry = navList[idx];
+    if (entry.kind === 'deleted') {
+      setNavIndexOverride(idx);
+      setDeletedPlaceholder(entry.system_no);
+      return;
+    }
     if (browseFilter === 'posted') {
-      await loadReturnRow(navList[idx] as SaleReturnRow);
+      await loadReturnRow(entry.row as SaleReturnRow);
       setMode('view');
     } else {
-      await loadDraftIntoForm(navList[idx] as DraftSaleReturnRow, { mode: 'view' });
+      await loadDraftIntoForm(entry.row as DraftSaleReturnRow, { mode: 'view' });
     }
   };
 
@@ -413,14 +456,14 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       // of state meant a draft posted or deleted since it was last loaded was still in it, so
       // switching to Unposted opened a "draft" that no longer exists (2026-09-04).
       const fresh = await refreshDrafts();
-      const list = [...(fresh ?? drafts)].reverse();
+      const list = [...(fresh ?? drafts)].sort((a, b) => a.system_no - b.system_no);
       const latest = list[list.length - 1];
       const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
       if (!opened) handleNew();
       requestAnimationFrame(() => newButtonRef.current?.focus());
     } else {
       const fresh = await refreshPostedReturns();
-      const list = [...(fresh ?? postedReturns)].reverse();
+      const list = [...(fresh ?? postedReturns)].sort((a, b) => a.system_no - b.system_no);
       const latest = list[list.length - 1];
       if (latest) { await loadReturnRow(latest); setMode('view'); }
     }
@@ -687,14 +730,15 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     return true;
   }, [customerId, date, storeId, billNo, items, isCopiedFromBill, sourceBillItems]);
 
-  // Preview of the Return No. a brand-new return will get — same idea as SaleBillPage's own
-  // nextSystemBillNo: what Save actually assigns is the next draft_sale_return.draft_id, a
-  // separate IDENTITY sequence from the real return_id assigned later on Post. Client-side preview
-  // only (MAX(id)+1, never reserved server-side). Always shown, from the moment the page opens — an
-  // earlier round gated it behind pressing New, which the user reversed (2026-08-31).
+  // Preview of the Return No. a brand-new return will get. This number is now assigned once at
+  // draft-save time and carried through posting unchanged (per the user, 2026-09-05) — a real SQL
+  // Server SEQUENCE (dbo.seq_sale_return_no) is the actual source of truth server-side, so this is
+  // a client-side estimate only (MAX across whatever's already loaded, +1). Always shown, from the
+  // moment the page opens — an earlier round gated it behind pressing New, which the user reversed
+  // (2026-08-31).
 const nextSystemReturnNo = useMemo(
-    () => Math.max(0, ...drafts.map(d => d.draft_id)) + 1,
-    [drafts]
+    () => nextSystemNoPreview(...drafts.map(d => d.system_no), ...postedReturns.map(r => r.system_no)),
+    [drafts, postedReturns]
   );
 
   // G-01: auto-focus the first field (Date) whenever the return tab becomes the active view and
@@ -739,6 +783,7 @@ const nextSystemReturnNo = useMemo(
     setMode('new');
     setEditScope('master');
     setReturnId(null);
+    setCurrentSystemNo(null);
     setCurrentReturnIsPosted(false);
     setDate(getTodayDate());
     setStoreId(stores[0] ? String(stores[0].store_id) : '');
@@ -833,6 +878,7 @@ const nextSystemReturnNo = useMemo(
         return null;
       }
       setReturnId(result.data.return_id);
+      setCurrentSystemNo(result.data.system_no);
       setCurrentReturnIsPosted(true);
       setSuccessMsg('Sale return updated successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
@@ -854,6 +900,7 @@ const nextSystemReturnNo = useMemo(
     }
 
     setReturnId(result.data.draft_id);
+    setCurrentSystemNo(result.data.system_no);
     setCurrentReturnIsPosted(false);
     setSuccessMsg(mode === 'edit' ? 'Sale return updated successfully.' : 'New sale return saved successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
@@ -893,6 +940,7 @@ const nextSystemReturnNo = useMemo(
       setErrorMsg('Failed to post return: ' + res.error.message);
     } else {
       setReturnId(res.data.return_id);
+      setCurrentSystemNo(res.data.system_no);
       setCurrentReturnIsPosted(true);
       setSuccessMsg('Return posted successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
@@ -910,6 +958,7 @@ const nextSystemReturnNo = useMemo(
       return;
     }
     setReturnId(res.data.draft_id);
+    setCurrentSystemNo(res.data.system_no);
     setCurrentReturnIsPosted(false);
     setSuccessMsg('Return unposted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
@@ -976,6 +1025,7 @@ const nextSystemReturnNo = useMemo(
           setTimeout(() => setSuccessMsg(''), 3000);
           if (returnId === targetId && !currentReturnIsPosted) handleNew();
           refreshDrafts();
+          refreshDeletedNumbers();
         }
       }
     }
@@ -1018,6 +1068,7 @@ const nextSystemReturnNo = useMemo(
     // Opening a different record must not carry over a stale scope from the last edit.
     setEditScope('master');
     setReturnId(draft.draft_id);
+    setCurrentSystemNo(draft.system_no);
     setCurrentReturnIsPosted(false);
     setDate(toDateInputValue(draft.return_date));
     setStoreId(draft.store_id != null ? String(draft.store_id) : '');
@@ -1455,7 +1506,7 @@ const nextSystemReturnNo = useMemo(
         }}>
           <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>System ID</label>
-            <span>{returnId ?? 'Unsaved'}</span>
+            <span>{currentSystemNo ?? 'Unsaved'}</span>
           </div>
           <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Date</label>
@@ -1660,7 +1711,7 @@ const nextSystemReturnNo = useMemo(
             <button
               type="button"
               onClick={handleDeleteAction}
-              disabled={editingIndex != null ? isViewMode : (mode !== 'view' || returnId == null || currentReturnIsPosted)}
+              disabled={deletedPlaceholder != null || (editingIndex != null ? isViewMode : (mode !== 'view' || returnId == null || currentReturnIsPosted))}
               title={editingIndex != null ? 'Delete selected article' : 'Delete'}
               className="toolbar-btn"
             >
@@ -1673,7 +1724,7 @@ const nextSystemReturnNo = useMemo(
               // Posted returns are read-only: while the dropdown is on Posted the only action
               // offered is Un Post, which drops the return back to a draft and follows it into
               // the Unposted view, where it can be edited (per the user, 2026-09-04).
-              disabled={mode !== 'view' || returnId == null || currentReturnIsPosted}
+              disabled={deletedPlaceholder != null || mode !== 'view' || returnId == null || currentReturnIsPosted}
               title="Edit"
               className="toolbar-btn"
             >
@@ -1683,7 +1734,7 @@ const nextSystemReturnNo = useMemo(
             <button
               type="button"
               onClick={() => handleSave(false)}
-              disabled={mode === 'view' || !isNecessaryFieldsFilled}
+              disabled={deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled}
               title="Save — keep editing this return"
               className="toolbar-btn"
             >
@@ -1693,7 +1744,7 @@ const nextSystemReturnNo = useMemo(
             <button
               type="submit"
               onClick={() => handleSave(true)}
-              disabled={mode === 'view' || !isNecessaryFieldsFilled}
+              disabled={deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled}
               title="Done — finish this return, then Post it"
               className="toolbar-btn"
             >
@@ -1735,7 +1786,7 @@ const nextSystemReturnNo = useMemo(
             <button
               type="button"
               onClick={() => setIsPrintingSingle(true)}
-              disabled={mode !== 'view' || returnId == null}
+              disabled={deletedPlaceholder != null || mode !== 'view' || returnId == null}
               title="Print"
               className="toolbar-btn"
             >
@@ -1753,7 +1804,7 @@ const nextSystemReturnNo = useMemo(
               type="button"
               onClick={handleUnpostCurrentReturn}
               // No longer gated on the dropdown — see SaleBillPage's Un Post button for why.
-              disabled={mode !== 'view' || returnId == null || !currentReturnIsPosted}
+              disabled={deletedPlaceholder != null || mode !== 'view' || returnId == null || !currentReturnIsPosted}
               title="Un Post — move this posted return back to drafts"
               className="toolbar-btn"
             >
@@ -1763,7 +1814,7 @@ const nextSystemReturnNo = useMemo(
             <button
               type="button"
               onClick={handlePostCurrentReturn}
-              disabled={mode !== 'view' || returnId == null || currentReturnIsPosted}
+              disabled={deletedPlaceholder != null || mode !== 'view' || returnId == null || currentReturnIsPosted}
               title="Post"
               className="toolbar-btn"
             >
@@ -1801,7 +1852,7 @@ const nextSystemReturnNo = useMemo(
             <button
               type="button"
               onClick={() => setIsPrintingSingle(true)}
-              disabled={mode !== 'view' || returnId == null}
+              disabled={deletedPlaceholder != null || mode !== 'view' || returnId == null}
               title="Export PDF"
               className="toolbar-btn"
             >
@@ -1815,7 +1866,7 @@ const nextSystemReturnNo = useMemo(
                 const rows = items.map(it => [it.label, it.packing, formatCartons(it.cartons), it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
                 exportRowsToExcel(`sale-return-${billNo || returnId}`, headers, rows);
               }}
-              disabled={mode !== 'view' || returnId == null}
+              disabled={deletedPlaceholder != null || mode !== 'view' || returnId == null}
               title="Export Excel"
               className="toolbar-btn"
             >
@@ -1846,7 +1897,7 @@ const nextSystemReturnNo = useMemo(
 
           {mode === 'edit' && (
             <div className="text-sm font-semibold text-slate-500 font-inter">
-              Editing System Return: <span className="text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-100">{returnId ?? 'New'}</span>
+              Editing System Return: <span className="text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-100">{currentSystemNo ?? 'New'}</span>
             </div>
           )}
 
@@ -1881,8 +1932,9 @@ const nextSystemReturnNo = useMemo(
           ref={invoiceCardRef}
           className="card-white shadow-sm p-3 md:p-4 flex flex-col"
           data-edit-scope="detail"
-          style={{ border: '1px solid var(--border-color)', background: '#ffffff', height: invoiceCardHeight ?? undefined }}
+          style={{ border: '1px solid var(--border-color)', background: '#ffffff', height: invoiceCardHeight ?? undefined, position: 'relative' }}
         >
+          {deletedPlaceholder != null && <DeletedDocumentOverlay systemNo={deletedPlaceholder} label="return" />}
 
           {/* Print Title (Visible only when printing) */}
           <div className="hidden print:flex items-center justify-between mb-6 pb-4 border-b">
@@ -1904,7 +1956,7 @@ const nextSystemReturnNo = useMemo(
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Return No.
               </label>
-              <input type="text" value={returnId != null ? `#${returnId}` : `#${nextSystemReturnNo} (pending)`} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
+              <input type="text" value={currentSystemNo != null ? `#${currentSystemNo}` : `#${nextSystemReturnNo}`} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
             <div className="flex items-center gap-1.5">
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
@@ -2469,7 +2521,7 @@ const nextSystemReturnNo = useMemo(
                   onClick={() => handleFindResultSelect(filter, row)}
                   className="px-3 py-2 text-xs cursor-pointer hover:bg-amber-50/60 flex items-center justify-between gap-2"
                 >
-                  <span className="font-mono font-semibold text-slate-700">{row.bill_no || `#${'return_id' in row ? row.return_id : row.draft_id}`}</span>
+                  <span className="font-mono font-semibold text-slate-700">{row.bill_no || `#${row.system_no}`}</span>
                   <span className="text-slate-400 truncate">{customers.find(c => c.customer_id === row.customer_id)?.name || 'Unnamed Customer'}</span>
                   <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${filter === 'posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{filter}</span>
                 </li>
@@ -2568,14 +2620,14 @@ const nextSystemReturnNo = useMemo(
             ? 'Authorization Required to Post Return'
             : 'Authorization Required to Save Return Changes'
         }
-        subtitle={`Please enter password for user '${state.currentUsername || 'user'}' to confirm changes to Return #${billNo || returnId}.`}
+        subtitle={`Please enter password for user '${state.currentUsername || 'user'}' to confirm changes to Return #${billNo || currentSystemNo}.`}
       />
 
       {/* Print/PDF preview — see renderReturnPrintable above. */}
       <ReportPrintPreviewModal
         isOpen={isPrintingSingle}
         onClose={() => setIsPrintingSingle(false)}
-        title={`Sale Return ${billNo ? `#${billNo}` : returnId != null ? `#${returnId}` : ''}`}
+        title={`Sale Return ${billNo ? `#${billNo}` : currentSystemNo != null ? `#${currentSystemNo}` : ''}`}
         orientation="portrait"
       >
         {renderReturnPrintable()}

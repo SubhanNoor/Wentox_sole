@@ -12,6 +12,17 @@ const { createAppWindow } = require('./windowManager');
 // installer script writes to. Must run before app.whenReady()/any getPath() call.
 app.setName('Wentox');
 
+// Reported by the user (2026-09-07): a window still shows as the ACTIVE taskbar entry (not
+// minimized — Windows itself still thinks it's the focused window) but stops rendering anything
+// on screen the instant it loses focus to any other window, including literally clicking outside
+// it. That's not app code — nothing here ever calls .minimize()/.hide() (searched the whole repo) —
+// it's a known Chromium-on-Windows GPU compositor bug on certain graphics drivers, where a
+// hardware-accelerated window fails to repaint after a focus change. The standard mitigation is to
+// disable hardware acceleration for the whole app; must run before app.whenReady()/any window is
+// created, same as setName and the lang switch below. Costs some rendering performance, immaterial
+// for this app's plain HTML/CSS UI (no heavy graphics/animation).
+app.disableHardwareAcceleration();
+
 // Forces Chromium's UI locale for this whole renderer to en-GB, so every native <input
 // type="date"> picker displays dd/mm/yyyy — the OS/Chromium default locale here is en-US
 // (mm/dd/yyyy), and a per-element `lang` attribute does NOT override a native date input's

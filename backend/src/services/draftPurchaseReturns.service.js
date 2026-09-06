@@ -1,6 +1,7 @@
 // Service layer: business logic, validation, transactions.
 // Throw ApiError for expected failures; use withTransaction for multi-write ops.
 const repository = require('../repositories/draftPurchaseReturns.repository');
+const deletedNumbersRepository = require('../repositories/deletedDocumentNumbers.repository');
 const materialsRepository = require('../repositories/materials.repository');
 const purchaseReturnsService = require('./purchaseReturns.service');
 const ApiError = require('../errors/ApiError');
@@ -93,9 +94,14 @@ async function update(draftId, payload) {
 }
 
 // No stock to reverse (draft-create never touched vendor_stock_movements) — just delete the row.
-async function remove(draftId) {
-  await getById(draftId);
-  await withTransaction((transaction) => repository.deleteDraft(transaction, draftId));
+// Also records the draft's system_no as permanently deleted (migration 032) — see
+// draftSaleBills.service.js#remove()'s comment.
+async function remove(draftId, userId) {
+  const draft = await getById(draftId);
+  await withTransaction(async (transaction) => {
+    await repository.deleteDraft(transaction, draftId);
+    await deletedNumbersRepository.record(transaction, 'PURCHASE_RETURN', draft.system_no, userId);
+  });
   return { ok: true };
 }
 
@@ -119,6 +125,9 @@ async function confirm(draftId, userId) {
     remarks: draft.remarks,
     total_value: draft.total_value,
     created_by: userId,
+    // Carries the draft's own System No. forward — never regenerated on posting, per the user,
+    // 2026-09-05: the number stays identical whether the document is a draft or posted.
+    system_no: draft.system_no,
   };
 
   const returnId = await withTransaction(async (transaction) => {
@@ -168,4 +177,8 @@ async function confirmAll(ids, userId) {
   return { posted, failed, attempted: targets.length };
 }
 
-module.exports = { create, getById, list, update, remove, confirm, confirmAll };
+function listDeletedNumbers() {
+  return deletedNumbersRepository.listByType('PURCHASE_RETURN');
+}
+
+module.exports = { create, getById, list, update, remove, confirm, confirmAll, listDeletedNumbers };

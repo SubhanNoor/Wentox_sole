@@ -101,7 +101,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
 
     if (systemBillNoQuery.trim()) {
       const q = systemBillNoQuery.trim();
-      result = result.filter(b => String(b.bill_id).includes(q));
+      result = result.filter(b => String(b.system_no).includes(q));
     }
 
     if (biltyNoQuery.trim()) {
@@ -163,7 +163,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
     const headers = ['Date', 'Sys ID', 'Bill No.', 'Customer', 'Cartons', 'Pairs', 'Invoice Value', 'Status'];
     const rows = filteredInvoices.map(bill => {
       const cust = customers.find(c => c.customer_id === bill.customer_id);
-      return [formatDate(bill.bill_date), bill.bill_id, bill.bill_no, cust?.name || '-', formatCartons(bill.total_cartons), bill.total_pairs, bill.net_value, bill.is_posted ? 'Posted' : 'Unposted'];
+      return [formatDate(bill.bill_date), bill.system_no, bill.bill_no, cust?.name || '-', formatCartons(bill.total_cartons), bill.total_pairs, bill.net_value, bill.is_posted ? 'Posted' : 'Unposted'];
     });
     exportRowsToExcel('sale-bills-search', headers, rows);
   };
@@ -237,7 +237,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
               return (
                 <tr key={bill.bill_id}>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{formatDate(bill.bill_date)}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontFamily: 'monospace' }}>{bill.bill_id}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontFamily: 'monospace' }}>{bill.system_no}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontWeight: 'bold', fontFamily: 'monospace' }}>{bill.bill_no}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{cust?.name || 'Walk-in'}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px' }}>{subCust ? subCust.name : '-'}</td>
@@ -525,7 +525,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
                         <td className="p-3.5 pl-4 font-mono text-slate-600 whitespace-nowrap">{formatDate(bill.bill_date)}</td>
                         <td className="p-3.5 text-center">
                           <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
-                            {bill.bill_id}
+                            {bill.system_no}
                           </span>
                         </td>
                         <td className="p-3.5 text-center font-mono font-bold text-slate-800">{bill.bill_no}</td>

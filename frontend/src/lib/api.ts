@@ -29,6 +29,13 @@ export interface SaleBillItemRow {
   article_name?: string;
 }
 
+// A permanently-retired System No. (migration 032) — recorded once, when the document carrying it
+// is deleted, so the browse UI can show "#N — Deleted" instead of silently jumping over the gap.
+export interface DeletedNumberRow {
+  system_no: number;
+  deleted_at: string;
+}
+
 export interface SaleBillItemInput {
   variant_id: number;
   cartons: number;
@@ -38,6 +45,9 @@ export interface SaleBillItemInput {
 
 export interface SaleBillRow {
   bill_id: number;
+  // Stable from the moment this bill was first saved as a draft, through posting — never
+  // regenerated. Shown to the user as "System No."; see 031_document_system_numbers.sql.
+  system_no: number;
   bill_date: string;
   store_id: number | null;
   customer_id: number;
@@ -113,6 +123,9 @@ export interface DraftSaleBillItemRow {
 
 export interface DraftSaleBillRow {
   draft_id: number;
+  // Same field, same meaning as SaleBillRow's own system_no — assigned here at draft creation and
+  // carried forward unchanged when this draft is confirmed into a real sale_bills row.
+  system_no: number;
   bill_date: string;
   store_id: number | null;
   customer_id: number;
@@ -169,6 +182,9 @@ export interface SaleReturnItemInput {
 
 export interface SaleReturnRow {
   return_id: number;
+  // Stable from the moment this return was first saved as a draft, through posting — never
+  // regenerated. Shown to the user as "System No."; see 031_document_system_numbers.sql.
+  system_no: number;
   return_date: string;
   store_id: number | null;
   customer_id: number;
@@ -230,6 +246,8 @@ export interface DraftSaleReturnItemRow {
  *  never posted by definition). */
 export interface DraftSaleReturnRow {
   draft_id: number;
+  // Same field, same meaning as SaleReturnRow's own system_no.
+  system_no: number;
   return_date: string;
   store_id: number | null;
   customer_id: number;
@@ -512,6 +530,9 @@ export interface PurchaseItemInput {
 
 export interface PurchaseRow {
   purchase_id: number;
+  // Stable from the moment this purchase was first saved as a draft, through posting — never
+  // regenerated. Shown to the user as "System No."; see 031_document_system_numbers.sql.
+  system_no: number;
   purchase_date: string;
   vendor_id: number;
   bill_no: string | null;
@@ -553,6 +574,8 @@ export interface DraftPurchaseItemRow {
  *  draftPurchases.service.js), so there's nothing stock-related to normalize here. */
 export interface DraftPurchaseRow {
   draft_id: number;
+  // Same field, same meaning as PurchaseRow's own system_no.
+  system_no: number;
   purchase_date: string;
   vendor_id: number;
   bill_no: string | null;
@@ -587,6 +610,9 @@ export interface PurchaseReturnItemInput {
 
 export interface PurchaseReturnRow {
   return_id: number;
+  // Stable from the moment this return was first saved as a draft, through posting — never
+  // regenerated. Shown to the user as "System No."; see 031_document_system_numbers.sql.
+  system_no: number;
   return_date: string;
   vendor_id: number;
   bill_no: string | null;
@@ -621,6 +647,8 @@ export interface DraftPurchaseReturnItemRow {
  *  (see draftPurchaseReturns.service.js), so there's nothing stock-related to normalize here. */
 export interface DraftPurchaseReturnRow {
   draft_id: number;
+  // Same field, same meaning as PurchaseReturnRow's own system_no.
+  system_no: number;
   return_date: string;
   vendor_id: number;
   bill_no: string | null;
@@ -1935,6 +1963,7 @@ declare global {
         get: (payload: { id: number }) => Promise<ApiResult<DraftSaleBillRow>>;
         update: (payload: { id: number } & Partial<SaleBillCreateInput>) => Promise<ApiResult<DraftSaleBillRow>>;
         remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
+        listDeletedNumbers: () => Promise<ApiResult<DeletedNumberRow[]>>;
         confirm: (payload: { id: number }) => Promise<ApiResult<SaleBillRow>>;
         confirmAll: (payload?: { ids?: number[] }) => Promise<ApiResult<ConfirmAllResult>>;
       };
@@ -1944,6 +1973,7 @@ declare global {
         get: (payload: { id: number }) => Promise<ApiResult<DraftSaleReturnRow>>;
         update: (payload: { id: number } & Partial<SaleReturnCreateInput>) => Promise<ApiResult<DraftSaleReturnRow>>;
         remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
+        listDeletedNumbers: () => Promise<ApiResult<DeletedNumberRow[]>>;
         confirm: (payload: { id: number }) => Promise<ApiResult<SaleReturnRow>>;
         confirmAll: (payload?: { ids?: number[] }) => Promise<ApiResult<ConfirmAllResult>>;
       };
@@ -2056,6 +2086,7 @@ declare global {
         get: (payload: { id: number }) => Promise<ApiResult<DraftPurchaseRow>>;
         update: (payload: { id: number } & Partial<PurchaseCreateInput>) => Promise<ApiResult<DraftPurchaseRow>>;
         remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
+        listDeletedNumbers: () => Promise<ApiResult<DeletedNumberRow[]>>;
         confirm: (payload: { id: number }) => Promise<ApiResult<PurchaseRow>>;
         confirmAll: (payload?: { ids?: number[] }) => Promise<ApiResult<ConfirmAllResult>>;
       };
@@ -2065,6 +2096,7 @@ declare global {
         get: (payload: { id: number }) => Promise<ApiResult<DraftPurchaseReturnRow>>;
         update: (payload: { id: number } & Partial<PurchaseReturnCreateInput>) => Promise<ApiResult<DraftPurchaseReturnRow>>;
         remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
+        listDeletedNumbers: () => Promise<ApiResult<DeletedNumberRow[]>>;
         confirm: (payload: { id: number }) => Promise<ApiResult<PurchaseReturnRow>>;
         confirmAll: (payload?: { ids?: number[] }) => Promise<ApiResult<ConfirmAllResult>>;
       };
@@ -2145,6 +2177,7 @@ declare global {
         post: (payload: { id: number }) => Promise<ApiResult<VoucherActionResult<'receipt_id', ReceiptVoucherRow>>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<VoucherActionResult<'receipt_id', ReceiptVoucherRow>>>;
         remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
+        listDeletedNumbers: () => Promise<ApiResult<DeletedNumberRow[]>>;
       };
       draftReceipts: {
         list: (payload?: ReceiptListFilters) => Promise<ApiResult<DraftReceiptRow[]>>;
@@ -2222,6 +2255,7 @@ declare global {
         post: (payload: { id: number }) => Promise<ApiResult<VoucherActionResult<'expense_id', ExpenseVoucherRow>>>;
         unpost: (payload: { id: number; reverse_endorsement?: boolean }) => Promise<ApiResult<VoucherActionResult<'expense_id', ExpenseVoucherRow>>>;
         remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
+        listDeletedNumbers: () => Promise<ApiResult<DeletedNumberRow[]>>;
       };
       draftExpenses: {
         list: (payload?: ExpenseListFilters) => Promise<ApiResult<DraftExpenseRow[]>>;
@@ -2578,6 +2612,9 @@ export const draftSaleBills = {
     window.api ? window.api.draftSaleBills.update({ id, ...payload }).then(r => mapResult(r, normalizeDraftBillRow)) : Promise.resolve(NO_BRIDGE),
   remove: (id: number, password: string) =>
     window.api ? window.api.draftSaleBills.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
+  // Every Sale Bill System No. permanently retired by a delete — see DeletedNumberRow.
+  listDeletedNumbers: (): Promise<ApiResult<DeletedNumberRow[]>> =>
+    window.api ? window.api.draftSaleBills.listDeletedNumbers() : Promise.resolve(NO_BRIDGE),
   confirm: (id: number) =>
     window.api ? window.api.draftSaleBills.confirm({ id }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
   // Post All — every draft awaiting posting. Resolving ok does NOT mean everything posted — read
@@ -2597,6 +2634,8 @@ export const draftSaleReturns = {
     window.api ? window.api.draftSaleReturns.update({ id, ...payload }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE),
   remove: (id: number, password: string) =>
     window.api ? window.api.draftSaleReturns.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
+  listDeletedNumbers: (): Promise<ApiResult<DeletedNumberRow[]>> =>
+    window.api ? window.api.draftSaleReturns.listDeletedNumbers() : Promise.resolve(NO_BRIDGE),
   confirm: (id: number) =>
     window.api ? window.api.draftSaleReturns.confirm({ id }).then(r => mapResult(r, normalizeReturnRow)) : Promise.resolve(NO_BRIDGE),
   confirmAll: (ids?: number[]) =>
@@ -2827,6 +2866,8 @@ export const draftPurchases = {
     window.api ? window.api.draftPurchases.update({ id, ...payload }).then(r => mapResult(r, normalizePurchaseRow)) : Promise.resolve(NO_BRIDGE),
   remove: (id: number, password: string) =>
     window.api ? window.api.draftPurchases.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
+  listDeletedNumbers: (): Promise<ApiResult<DeletedNumberRow[]>> =>
+    window.api ? window.api.draftPurchases.listDeletedNumbers() : Promise.resolve(NO_BRIDGE),
   confirm: (id: number) =>
     window.api ? window.api.draftPurchases.confirm({ id }).then(r => mapResult(r, normalizePurchaseRow)) : Promise.resolve(NO_BRIDGE),
   confirmAll: (ids?: number[]) =>
@@ -2844,6 +2885,8 @@ export const draftPurchaseReturns = {
     window.api ? window.api.draftPurchaseReturns.update({ id, ...payload }).then(r => mapResult(r, normalizePurchaseReturnRow)) : Promise.resolve(NO_BRIDGE),
   remove: (id: number, password: string) =>
     window.api ? window.api.draftPurchaseReturns.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
+  listDeletedNumbers: (): Promise<ApiResult<DeletedNumberRow[]>> =>
+    window.api ? window.api.draftPurchaseReturns.listDeletedNumbers() : Promise.resolve(NO_BRIDGE),
   confirm: (id: number) =>
     window.api ? window.api.draftPurchaseReturns.confirm({ id }).then(r => mapResult(r, normalizePurchaseReturnRow)) : Promise.resolve(NO_BRIDGE),
   confirmAll: (ids?: number[]) =>
@@ -3120,7 +3163,11 @@ export const receiptVouchers = {
   unpost: (id: number) =>
     window.api ? window.api.receiptVouchers.unpost({ id }).then(r => mapResult(r, d => ({ ...d, voucher: normalizeVoucher(d.voucher) }))) : Promise.resolve(NO_BRIDGE),
   remove: (id: number, password: string) =>
-    window.api ? window.api.receiptVouchers.remove({ id, password }) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.receiptVouchers.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
+  // Every voucher_no currently sitting as a deleted gap (it can still be reused by a later
+  // voucher — see DeletedNumberRow's sibling comment on the backend side).
+  listDeletedNumbers: (): Promise<ApiResult<DeletedNumberRow[]>> =>
+    window.api ? window.api.receiptVouchers.listDeletedNumbers() : Promise.resolve(NO_BRIDGE)
 };
 
 function normalizeDraftReceiptRow(row: DraftReceiptRow): DraftReceiptRow {
@@ -3319,7 +3366,9 @@ export const expenseVouchers = {
   unpost: (id: number, reverseEndorsement = false) =>
     window.api ? window.api.expenseVouchers.unpost({ id, reverse_endorsement: reverseEndorsement }).then(r => mapResult(r, d => ({ ...d, voucher: normalizeExpenseVoucher(d.voucher) }))) : Promise.resolve(NO_BRIDGE),
   remove: (id: number, password: string) =>
-    window.api ? window.api.expenseVouchers.remove({ id, password }) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.expenseVouchers.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
+  listDeletedNumbers: (): Promise<ApiResult<DeletedNumberRow[]>> =>
+    window.api ? window.api.expenseVouchers.listDeletedNumbers() : Promise.resolve(NO_BRIDGE)
 };
 
 export const draftExpenses = {

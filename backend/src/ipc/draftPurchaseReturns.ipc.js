@@ -30,13 +30,21 @@ module.exports = function register() {
     }),
   );
 
+  ipcMain.handle(
+    'draft-purchase-returns:listDeletedNumbers',
+    wrap(() => {
+      requireSession();
+      return service.listDeletedNumbers();
+    }),
+  );
+
   // Password required unconditionally — same guard as draft-purchases:remove.
   ipcMain.handle(
     'draft-purchase-returns:remove',
     wrap(async (payload) => {
       const session = requireSession();
       await authService.verifyPassword(session.userId, payload.password);
-      return service.remove(payload.id);
+      return service.remove(payload.id, session.userId);
     }),
   );
 

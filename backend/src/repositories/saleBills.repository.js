@@ -1,6 +1,6 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, nextSequenceValue } = require('../db/pool');
 
 // Effective packing per variant is COALESCE(article_colors.packing, articles.packing) — schema.sql §5.
 async function getVariantPackings(variantIds) {
@@ -22,6 +22,10 @@ async function getVariantPackings(variantIds) {
 }
 
 async function insert(transaction, bill) {
+  // confirm() supplies its own carried-over number; the direct-create path has none and gets a
+  // fresh one from the shared sequence. Deleted numbers are NOT reused (per the user, 2026-09-07).
+  const systemNo = bill.system_no
+    ?? await nextSequenceValue(transaction, 'dbo.seq_sale_bill_no');
   const request = requestWithParams(transaction, {
     billDate: { type: sql.Date, value: bill.bill_date },
     storeId: { type: sql.Int, value: bill.store_id ?? null },
@@ -42,19 +46,20 @@ async function insert(transaction, bill) {
     netValue: { type: sql.Decimal(14, 2), value: bill.net_value },
     dueDate: { type: sql.Date, value: bill.due_date ?? null },
     createdBy: { type: sql.Int, value: bill.created_by ?? null },
+    systemNo: { type: sql.Int, value: systemNo },
   });
 
   const result = await request.query(`
     INSERT INTO dbo.sale_bills (
       bill_date, store_id, customer_id, sub_customer_id, main_ac_id, delivery_type,
       delivery_address, bill_no, gp_no, bilty_no, adda_id, remarks, invoice_discount,
-      total_cartons, total_pairs, gross_value, net_value, due_date, created_by
+      total_cartons, total_pairs, gross_value, net_value, due_date, created_by, system_no
     )
     OUTPUT inserted.bill_id
     VALUES (
       @billDate, @storeId, @customerId, @subCustomerId, @mainAcId, @deliveryType,
       @deliveryAddress, @billNo, @gpNo, @biltyNo, @addaId, @remarks, @invoiceDiscount,
-      @totalCartons, @totalPairs, @grossValue, @netValue, @dueDate, @createdBy
+      @totalCartons, @totalPairs, @grossValue, @netValue, @dueDate, @createdBy, @systemNo
     )
   `);
   return result.recordset[0].bill_id;
@@ -305,14 +310,14 @@ async function biltySearch(filters = {}) {
   }
   if (filters.bill_no) {
     // BA-01: search by either bill number — the manual one (bill_no, client-typed) or the
-    // system-generated one (bill_id, the IDENTITY "Inv #"). A numeric query might be either, so
-    // both sides of the OR are checked; billId is null (never matches) when the query isn't a
-    // plain integer.
+    // system-generated one (system_no, stable from draft through posted — see
+    // 031_document_system_numbers.sql). A numeric query might be either, so both sides of the OR
+    // are checked; asSystemNo is null (never matches) when the query isn't a plain integer.
     const trimmed = String(filters.bill_no).trim();
-    const asBillId = /^\d+$/.test(trimmed) ? Number(trimmed) : null;
-    conditions.push('(sb.bill_no = @billNo OR sb.bill_id = @billId)');
+    const asSystemNo = /^\d+$/.test(trimmed) ? Number(trimmed) : null;
+    conditions.push('(sb.bill_no = @billNo OR sb.system_no = @systemNo)');
     params.billNo = { type: sql.VarChar(30), value: trimmed };
-    params.billId = { type: sql.Int, value: asBillId };
+    params.systemNo = { type: sql.Int, value: asSystemNo };
   }
   if (filters.date_from) {
     conditions.push('sb.bill_date >= @dateFrom');

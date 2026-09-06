@@ -14,6 +14,7 @@ const expensesService = require('./expenses.service');
 // expenses.unconfirm() (real -> draft); the per-line isolation and reporting below are unchanged.
 const draftExpensesService = require('./draftExpenses.service');
 const draftExpensesRepository = require('../repositories/draftExpenses.repository');
+const deletedNumbersRepository = require('../repositories/deletedDocumentNumbers.repository');
 const { withTransaction } = require('../db/pool');
 const ApiError = require('../errors/ApiError');
 const { today } = require('../utils/dates');
@@ -75,6 +76,10 @@ async function create(payload, userId) {
   validateHeader(payload);
   const voucherId = await withTransaction(async (transaction) => {
     const voucherNo = await repository.nextVoucherNo(transaction);
+    // voucher_no is MAX+1, not a sequence — it CAN reuse a number a deleted voucher left behind
+    // (per the user, 2026-09-07, unlike Sale Bill/Purchase). Clear any stale "deleted" log row for
+    // it so a live voucher never also shows as a deleted placeholder when browsing.
+    await deletedNumbersRepository.unrecord(transaction, 'EXPENSE_VOUCHER', voucherNo);
     return repository.insert(transaction, {
       voucher_no: voucherNo,
       voucher_date: payload.voucher_date || today(),
@@ -191,7 +196,10 @@ async function unpost(voucherId, session, { reverseEndorsement = false } = {}) {
 // Only an entirely unposted voucher can be deleted, and its lines go with it. The FK on
 // expenses.voucher_id is deliberately NOT ON DELETE CASCADE — a cascade would silently delete
 // posted lines and strand their ledger entries.
-async function remove(voucherId) {
+// Records the deleted voucher_no (see receiptVouchers.service.js#remove()'s comment — same
+// treatment: reuse via create()'s unrecord() call is kept, only the visibility is new). Only
+// whole-voucher deletion touches voucher_no — deleting one line never reaches here.
+async function remove(voucherId, userId) {
   const voucher = await getById(voucherId);
   if (voucher.status !== 'UNPOSTED') {
     throw ApiError.conflict('Unpost this voucher before deleting it', 'POSTED_LOCK');
@@ -208,9 +216,14 @@ async function remove(voucherId) {
       }
     }
     await repository.remove(transaction, voucherId);
+    await deletedNumbersRepository.record(transaction, 'EXPENSE_VOUCHER', voucher.voucher_no, userId);
   });
 }
 
+function listDeletedNumbers() {
+  return deletedNumbersRepository.listByType('EXPENSE_VOUCHER');
+}
+
 module.exports = {
-  list, getById, create, update, post, unpost, remove, deriveStatus,
+  list, getById, create, update, post, unpost, remove, deriveStatus, listDeletedNumbers,
 };

@@ -84,7 +84,7 @@ export default function SearchCustomerPage() {
 
     if (systemBillNoQuery.trim()) {
       const q = systemBillNoQuery.trim();
-      result = result.filter(b => String(b.bill_id).includes(q));
+      result = result.filter(b => String(b.system_no).includes(q));
     }
 
     switch (quickFilter) {
@@ -109,7 +109,7 @@ export default function SearchCustomerPage() {
     if (!selectedCustomer) return;
     const headers = ['Date', 'Inv. No (Sys)', 'Manual No.', 'Cartons', 'Pairs', 'Bilty No.', 'Transport Adda', 'GP No.', 'Net Value'];
     const rows = filteredBills.map(b => [
-      formatDate(b.bill_date), b.bill_id, b.bill_no, formatCartons(b.total_cartons), b.total_pairs,
+      formatDate(b.bill_date), b.system_no, b.bill_no, formatCartons(b.total_cartons), b.total_pairs,
       b.bilty_no || 'Missing', b.adda_name || 'Unassigned', b.gp_no || 'Missing', b.net_value
     ]);
     exportRowsToExcel(`search-customer-${selectedCustomer.name.toLowerCase().replace(/\s+/g, '-')}`, headers, rows);
@@ -151,7 +151,7 @@ export default function SearchCustomerPage() {
           ) : filteredBills.map((b, idx) => (
             <tr key={b.bill_id} style={{ backgroundColor: idx % 2 === 0 ? '#ffffff' : '#fafafa' }}>
               <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace' }}>{formatDate(b.bill_date)}</td>
-              <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', textAlign: 'center' }}>{b.bill_id}</td>
+              <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', textAlign: 'center' }}>{b.system_no}</td>
               <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', textAlign: 'center', fontWeight: 'bold' }}>{b.bill_no}</td>
               <td style={{ border: '1px solid #000', padding: '4px 7px', textAlign: 'right' }}>{formatCartons(b.total_cartons)}</td>
               <td style={{ border: '1px solid #000', padding: '4px 7px', textAlign: 'right' }}>{b.total_pairs}</td>
@@ -330,7 +330,7 @@ export default function SearchCustomerPage() {
                       filteredBills.map(b => (
                         <tr key={b.bill_id} className="border-b text-sm hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                           <td className="p-3 pl-4 font-mono">{formatDate(b.bill_date)}</td>
-                          <td className="p-3 text-center font-mono">{b.bill_id}</td>
+                          <td className="p-3 text-center font-mono">{b.system_no}</td>
                           <td className="p-3 text-center font-mono font-semibold">{b.bill_no}</td>
                           <td className="p-3 text-right font-mono">{formatCartons(b.total_cartons)}</td>
                           <td className="p-3 text-right font-mono">{b.total_pairs}</td>

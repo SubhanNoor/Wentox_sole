@@ -5,19 +5,23 @@ import SearchModal from '@/components/SearchModal';
 import * as api from '@/lib/api';
 import type {
   VendorRow, CityRow, PurchaseRow, PurchaseItemRow, PurchaseReturnRow, PurchaseReturnCreateInput,
-  PurchaseReturnItemInput, DraftPurchaseReturnRow, ConfirmAllResult
+  PurchaseReturnItemInput, DraftPurchaseReturnRow, ConfirmAllResult, DeletedNumberRow
 } from '@/lib/api';
-import { formatDate, getTodayDate, getThreeMonthsAgoDate, toDateInputValue } from '@/lib/utils';
+import { formatDate, getTodayDate, getThreeMonthsAgoDate, toDateInputValue, nextSystemNoPreview, mergeWithDeleted } from '@/lib/utils';
+import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
 import { focusNextField } from '@/lib/fieldNav';
 import {
   Plus, Trash2, Save, Undo2, Edit, CheckCircle2, XCircle, ChevronDown,
-  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight
+  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Printer, FileDown, FileSpreadsheet, Search
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
 import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { exportRowsToExcel } from '@/lib/export';
+import wentoxLogo from '@/assets/wentox_logo.png';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
 
@@ -111,7 +115,30 @@ export default function PurchaseReturnPage() {
   // re-fetch on mount" attempt was worse still — it overwrote the user's unsaved edits with the
   // last-saved copy and reopened in 'view' mode, which disables Save.
   const [returnId, setReturnId] = usePersistentField<number | null>('purchase-return', 'returnId', null);
+  // The loaded record's own System No. — display-only, kept in step with returnId but never used
+  // for API calls; those stay on returnId/draftId as before.
+  const [currentSystemNo, setCurrentSystemNo] = usePersistentField<number | null>('purchase-return', 'currentSystemNo', null);
   const [currentIsPosted, setCurrentIsPosted] = usePersistentField('purchase-return', 'currentIsPosted', false);
+
+  // Every Purchase Return System No. permanently retired by a delete (migration 032) — merged into
+  // the browse lists below so First/Prev/Next/Last can show "#N — Deleted" as an actual stop.
+  const [deletedNumbers, setDeletedNumbers] = useState<DeletedNumberRow[]>([]);
+  const refreshDeletedNumbers = useCallback(async () => {
+    const res = await api.draftPurchaseReturns.listDeletedNumbers();
+    if (res.ok) setDeletedNumbers(res.data);
+  }, []);
+  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
+
+  // Set when First/Prev/Next/Last lands on a deleted number — DeletedDocumentOverlay renders while
+  // this is non-null. Cleared as soon as a real document loads (see the returnId effect below).
+  const [deletedPlaceholder, setDeletedPlaceholder] = useState<number | null>(null);
+  // navIndex normally tracks the loaded return's own position via returnId — a deleted marker has
+  // no returnId to match, so this overrides it while a placeholder is on screen.
+  const [navIndexOverride, setNavIndexOverride] = useState<number | null>(null);
+  useEffect(() => {
+    setDeletedPlaceholder(null);
+    setNavIndexOverride(null);
+  }, [returnId]);
   // A New Return's own in-progress fields persist across switching pages AND an app restart
   // (usePersistentField — see src/hooks/usePersistentField.ts), so typing one up and getting
   // pulled away mid-entry never loses it. Deliberately NOT applied to mode/returnId/
@@ -150,16 +177,15 @@ export default function PurchaseReturnPage() {
     return vendors.find(v => v.vendor_id === Number(vendorId));
   }, [vendorId, vendors]);
 
-  // Preview of the System Bill No. a brand-new return will get — see PurchasePage's identical
-  // nextSystemBillNo for why this is the next draft_purchase_returns.draft_id, not the next real
-  // return_id (a separate IDENTITY sequence only assigned later, on Post), and why it's a preview
-  // rather than a guarantee.
-  // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
-  // Always shown, from the moment the page opens — an earlier round gated it behind pressing New,
-  // which the user reversed (2026-08-31): the number should just be there.
+  // Preview of the System No. a brand-new return will get. This number is now assigned once at
+  // draft-save time and carried through posting unchanged (per the user, 2026-09-05) — a real SQL
+  // Server SEQUENCE (dbo.seq_purchase_return_no) is the actual source of truth server-side, so
+  // this is a client-side estimate only (MAX across whatever's already loaded, +1). Always shown,
+  // from the moment the page opens — an earlier round gated it behind pressing New, which the
+  // user reversed (2026-08-31): the number should just be there.
 const nextSystemBillNo = useMemo(
-    () => Math.max(0, ...unpostedReturns.map(d => d.draft_id)) + 1,
-    [unpostedReturns]
+    () => nextSystemNoPreview(...unpostedReturns.map(d => d.system_no), ...returns.map(r => r.system_no)),
+    [unpostedReturns, returns]
   );
 
   // Vendor field is a typable <input> (2026-08-27, matching PurchasePage.tsx: "do this purchase
@@ -220,15 +246,16 @@ const nextSystemBillNo = useMemo(
   }
 
   // Prior purchases from this vendor, to optionally prefill a return. The label carries BOTH the
-  // system bill no. (#purchase_id, auto-assigned, never typed) and the vendor's own bill_no, so
-  // typing either into the search box finds the right purchase — SearchableSelect matches typed
-  // text against this label (and against `value`, which is also the system number, redundantly).
+  // system bill no. (auto-assigned, never typed — stable from draft through posting, see
+  // 031_document_system_numbers.sql) and the vendor's own bill_no, so typing either into the
+  // search box finds the right purchase — SearchableSelect matches typed text against this label.
+  // `value` stays the real purchase_id (handleCopyFromPurchase looks the record up by it).
   const priorPurchaseOptions = useMemo(() => {
     return priorPurchases
       .filter(p => !vendorId || p.vendor_id === Number(vendorId))
       .map(p => ({
         value: String(p.purchase_id),
-        label: `#${p.purchase_id} · ${p.bill_no || 'No Vendor Bill No.'} · ${formatDate(p.purchase_date)} — ${formatCurrency(p.total_value)}`
+        label: `#${p.system_no} · ${p.bill_no || 'No Vendor Bill No.'} · ${formatDate(p.purchase_date)} — ${formatCurrency(p.total_value)}`
       }));
   }, [priorPurchases, vendorId]);
 
@@ -563,11 +590,26 @@ const nextSystemBillNo = useMemo(
     if (editingUid === uid) cancelEditRow(); // was mid-edit on the row just deleted
   };
 
-  // Toolbar "Delete" targets the selected ARTICLE (the row clicked into the entry fields below),
-  // not the whole return — return deletion stays where it was, password-gated in the Pending
-  // Posting panel. Disabled until a row is selected (editingUid set).
+  // Whole-return delete (password-gated) — the infrastructure for this (isPasswordModalOpen/
+  // pendingDeleteDraftId/handleDeletePasswordSuccess below) already existed but had no caller left:
+  // it used to be triggered from the Pending Posting panel, removed 2026-09-03, which silently
+  // orphaned this capability entirely (flagged by the user, 2026-09-07 — Purchase Return had no way
+  // left to delete a whole unposted return, unlike Sale Bill/Sale Return's dual-purpose Delete).
+  const handleDeleteCurrentReturn = () => {
+    if (returnId == null || currentIsPosted) return;
+    pendingDeleteDraftId.current = returnId;
+    setIsPasswordModalOpen(true);
+  };
+
+  // Toolbar "Delete" is dual-purpose, matching Sale Bill/Sale Return's own Delete: with a row
+  // selected (editingUid set) it removes THAT article; with none selected, it falls back to
+  // deleting the whole unposted return.
   const deleteSelectedArticle = () => {
-    if (editingUid) removeItemRow(editingUid);
+    if (editingUid) {
+      removeItemRow(editingUid);
+      return;
+    }
+    handleDeleteCurrentReturn();
   };
 
   // Invoice card (the <form> itself — see its opening tag below) fills whatever vertical space is
@@ -610,6 +652,7 @@ const nextSystemBillNo = useMemo(
   const handleNew = () => {
     setMode('new');
     setReturnId(null);
+    setCurrentSystemNo(null);
     setCurrentIsPosted(false);
     setDate(getTodayDate());
     setVendorId('');
@@ -679,6 +722,7 @@ const nextSystemBillNo = useMemo(
     }
 
     setReturnId(result.data.draft_id);
+    setCurrentSystemNo(result.data.system_no);
     setCurrentIsPosted(false);
     // Only a freshly created return (not an edit of an existing draft) is "done" work whose
     // draft should stop being cached — mirrors PurchasePage's isNewPurchase distinction.
@@ -711,6 +755,7 @@ const nextSystemBillNo = useMemo(
     }
 
     setReturnId(row.return_id);
+    setCurrentSystemNo(row.system_no);
     setCurrentIsPosted(row.is_posted);
     setDate(toDateInputValue(row.return_date));
     setVendorId(String(row.vendor_id));
@@ -747,6 +792,7 @@ const nextSystemBillNo = useMemo(
       return;
     }
     setReturnId(res.data.return_id);
+    setCurrentSystemNo(res.data.system_no);
     setCurrentIsPosted(true);
     setSuccessMsg('Purchase return posted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
@@ -764,6 +810,7 @@ const nextSystemBillNo = useMemo(
       return;
     }
     setReturnId(res.data.draft_id);
+    setCurrentSystemNo(res.data.system_no);
     setCurrentIsPosted(false);
     setMode('edit'); // land on the editable screen straight away, not the read-only view
     setSuccessMsg('Purchase return unposted successfully.');
@@ -832,6 +879,7 @@ const nextSystemBillNo = useMemo(
       draft = res.data;
     }
     setReturnId(draft.draft_id);
+    setCurrentSystemNo(draft.system_no);
     setCurrentIsPosted(false);
     setDate(toDateInputValue(draft.return_date));
     setVendorId(String(draft.vendor_id));
@@ -879,6 +927,7 @@ const nextSystemBillNo = useMemo(
     setTimeout(() => setSuccessMsg(''), 3000);
     if (returnId === targetId && !currentIsPosted) handleNew();
     refreshUnposted();
+    refreshDeletedNumbers();
   };
 
   // Recorded Purchase Returns (the tab below) shows only POSTED returns — same reasoning and
@@ -899,33 +948,178 @@ const nextSystemBillNo = useMemo(
   const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('unposted');
   const newButtonRef = useRef<HTMLButtonElement>(null);
 
-  const navPostedList = useMemo(() => [...sortedReturns].reverse(), [sortedReturns]);
-  const navUnpostedList = useMemo(() => [...unpostedReturns].reverse(), [unpostedReturns]);
+  // Sorted by system_no (creation order), NOT sortedReturns' own date-based order (right for the
+  // "Recorded Purchase Returns" listing below, wrong here) — same fix as PurchasePage/SaleBillPage,
+  // reported by the user, 2026-09-07.
+  const navPostedList = useMemo(
+    () => mergeWithDeleted(returns.filter(r => r.is_posted).sort((a, b) => a.system_no - b.system_no), deletedNumbers),
+    [returns, deletedNumbers],
+  );
+  const navUnpostedList = useMemo(
+    () => mergeWithDeleted([...unpostedReturns].sort((a, b) => a.system_no - b.system_no), deletedNumbers),
+    [unpostedReturns, deletedNumbers],
+  );
 
   // Whichever list the dropdown selects — this is what the nav buttons page through.
   const navList = navFilter === 'posted' ? navPostedList : navUnpostedList;
 
   // -1 when the return on screen isn't in the ACTIVE list (unsaved, or a draft while the dropdown
   // is on Posted and vice versa); the handlers treat that as "start from the beginning".
-  const navIndex = useMemo(() => {
+  // navIndexOverride wins while a deleted-number placeholder is on screen — see SaleBillPage.tsx's
+  // navIndex for why.
+  const derivedNavIndex = useMemo(() => {
     if (returnId == null) return -1;
     return navFilter === 'posted'
-      ? (currentIsPosted ? navPostedList.findIndex(r => r.return_id === returnId) : -1)
-      : (!currentIsPosted ? navUnpostedList.findIndex(r => r.draft_id === returnId) : -1);
+      ? (currentIsPosted ? navPostedList.findIndex(e => e.kind === 'doc' && e.row.return_id === returnId) : -1)
+      : (!currentIsPosted ? navUnpostedList.findIndex(e => e.kind === 'doc' && e.row.draft_id === returnId) : -1);
   }, [currentIsPosted, returnId, navFilter, navPostedList, navUnpostedList]);
+  const navIndex = navIndexOverride ?? derivedNavIndex;
 
   const canNavPrevious = navList.length > 0 && navIndex !== 0;
   const canNavNext = navList.length > 0 && navIndex !== navList.length - 1;
+  // First/Last only need SOMETHING to browse — matching SaleBillPage/SaleReturnPage (per the user,
+  // 2026-09-07).
+  const canBrowse = navList.length > 0;
 
   // Posted rows come from purchase_returns, unposted ones from draft_purchase_returns — each needs
-  // its own loader. Both open read-only; Edit stays a separate deliberate click.
+  // its own loader. Both open read-only; Edit stays a separate deliberate click. A 'deleted' entry
+  // shows DeletedDocumentOverlay instead of loading anything.
   const goToNavIndex = async (idx: number) => {
     if (idx < 0 || idx >= navList.length) return;
-    if (navFilter === 'posted') {
-      await loadReturnRow(navList[idx] as PurchaseReturnRow);
-    } else {
-      await loadDraftIntoForm(navList[idx] as DraftPurchaseReturnRow, { mode: 'view' });
+    const entry = navList[idx];
+    if (entry.kind === 'deleted') {
+      setNavIndexOverride(idx);
+      setDeletedPlaceholder(entry.system_no);
+      return;
     }
+    if (navFilter === 'posted') {
+      await loadReturnRow(entry.row as PurchaseReturnRow);
+    } else {
+      await loadDraftIntoForm(entry.row as DraftPurchaseReturnRow, { mode: 'view' });
+    }
+  };
+
+  // Toolbar's Find button — a quick jump to any return (posted or unposted) by System No., manual
+  // bill no., or vendor name, same pattern as SaleBillPage's own Find (per the user, 2026-09-07 —
+  // Purchase Return had none of this).
+  const [isFindOpen, setIsFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const findResults = useMemo(() => {
+    const q = findQuery.trim().toLowerCase();
+    if (!q) return [];
+    const matches = (r: { bill_no: string | null; vendor_id: number; system_no: number }) =>
+      String(r.system_no).includes(q) ||
+      (r.bill_no || '').toLowerCase().includes(q) ||
+      (vendors.find(v => v.vendor_id === r.vendor_id)?.name || '').toLowerCase().includes(q);
+    const posted = returns.filter(matches).map(row => ({ filter: 'posted' as const, row }));
+    const unposted = unpostedReturns.filter(matches).map(row => ({ filter: 'unposted' as const, row }));
+    return [...posted, ...unposted].slice(0, 30);
+  }, [findQuery, returns, unpostedReturns, vendors]);
+
+  const handleFindSelect = async (filter: 'posted' | 'unposted', row: PurchaseReturnRow | DraftPurchaseReturnRow) => {
+    setIsFindOpen(false);
+    setFindQuery('');
+    if (filter === 'posted') {
+      await loadReturnRow(row as PurchaseReturnRow);
+    } else {
+      await loadDraftIntoForm(row as DraftPurchaseReturnRow, { mode: 'view' });
+    }
+  };
+
+  // Print/PDF share one preview modal, per SaleBillPage's own pattern.
+  const [isPrintingSingle, setIsPrintingSingle] = useState(false);
+
+  // The return's printable document — mirrors PurchasePage's renderPurchasePrintable() shape.
+  const renderReturnPrintable = () => {
+    const vendorObj = vendors.find(v => v.vendor_id === Number(vendorId));
+    const vendorName = vendorObj ? vendorObj.name : (vendorId || 'N/A');
+    const statusLabel = currentIsPosted ? 'Posted' : 'Unposted';
+
+    return (
+      <div className="excel-print-container" style={{
+        display: 'block', margin: '0 auto', width: '210mm', padding: '10mm',
+        backgroundColor: '#ffffff', color: '#000000', fontFamily: 'Calibri, Arial, sans-serif',
+        boxSizing: 'border-box',
+      }}>
+        <div className="excel-print-header" style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '10px',
+        }}>
+          <div>
+            <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '90px', width: 'auto', objectFit: 'contain' }} />
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>PURCHASE RETURN</h2>
+            <p style={{ margin: 0, fontSize: '11px', color: '#555555' }}>Status: {statusLabel}</p>
+          </div>
+        </div>
+
+        <div className="excel-grid-info" style={{
+          display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', border: '1px solid #000000', marginBottom: '15px',
+        }}>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>System No.</label>
+            <span>{currentSystemNo ?? 'Unsaved'}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Date</label>
+            <span>{formatDate(date)}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Vendor</label>
+            <span>{vendorName}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Manual Bill No.</label>
+            <span>{billNo || 'N/A'}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px', gridColumn: 'span 4' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Remarks</label>
+            <span>{remarks || 'N/A'}</span>
+          </div>
+        </div>
+
+        <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+          <thead>
+            <tr style={{ backgroundColor: '#f2f2f2' }}>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '40%' }}>Material</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '15%' }}>Unit</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '15%' }}>Quantity</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right', width: '12%' }}>Rate</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right', width: '13%' }}>Total Price</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item, idx) => (
+              <tr key={item.uid}>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{item.materialName || 'N/A'}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.unit}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.quantity}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{item.pricePerUnit.toLocaleString()}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{item.totalPrice.toLocaleString()}</td>
+              </tr>
+            ))}
+            <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2', fontSize: '12px' }}>
+              <td colSpan={5} style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', textTransform: 'uppercase' }}>Net Payable Amount (PKR):</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', borderBottom: '3px double #000000' }}>{grandTotal.toLocaleString()}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '45px', fontSize: '11px' }}>
+          <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>Prepared By</div>
+          <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>Checked By</div>
+          <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>Authorized Signature</div>
+        </div>
+
+        <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
+          <div>WENTOX FOOTWEAR DISTRIBUTION</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        </div>
+      </div>
+    );
   };
 
   const handleNavFirst = () => goToNavIndex(0);
@@ -944,14 +1138,14 @@ const nextSystemBillNo = useMemo(
       // of state meant a draft posted or deleted since it was last loaded was still in it, so
       // switching to Unposted opened a "draft" that no longer exists (2026-09-04).
       const fresh = await refreshUnposted();
-      const list = [...(fresh ?? unpostedReturns)].reverse();
+      const list = [...(fresh ?? unpostedReturns)].sort((a, b) => a.system_no - b.system_no);
       const latest = list[list.length - 1];
       const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
       if (!opened) startNewReturn();
       requestAnimationFrame(() => newButtonRef.current?.focus());
     } else {
       const fresh = await refreshReturns();
-      const list = [...(fresh ?? returns).filter(r => r.is_posted)].reverse();
+      const list = [...(fresh ?? returns).filter(r => r.is_posted)].sort((a, b) => a.system_no - b.system_no);
       const latest = list[list.length - 1];
       if (latest) await loadReturnRow(latest);
     }
@@ -1042,8 +1236,8 @@ const nextSystemBillNo = useMemo(
             <button
               type="button"
               onClick={deleteSelectedArticle}
-              disabled={isViewMode || !editingUid}
-              title="Delete selected article"
+              disabled={deletedPlaceholder != null || (editingUid ? isViewMode : (!isViewMode || returnId == null || currentIsPosted))}
+              title={editingUid ? 'Delete selected article' : 'Delete'}
               className="toolbar-btn"
             >
               <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
@@ -1059,7 +1253,7 @@ const nextSystemBillNo = useMemo(
                   else firstFieldRef.current?.focus();
                 });
               }}
-              disabled={!isViewMode || currentIsPosted}
+              disabled={deletedPlaceholder != null || !isViewMode || currentIsPosted}
               title="Edit"
               className="toolbar-btn"
             >
@@ -1069,7 +1263,7 @@ const nextSystemBillNo = useMemo(
             <button
               type="button"
               onClick={() => doSave(false)}
-              disabled={isViewMode || !isValid}
+              disabled={deletedPlaceholder != null || isViewMode || !isValid}
               title="Save — keep editing this return"
               className="toolbar-btn"
             >
@@ -1079,7 +1273,7 @@ const nextSystemBillNo = useMemo(
             <button
               type="submit"
               form="purchase-return-form"
-              disabled={isViewMode || !isValid}
+              disabled={deletedPlaceholder != null || isViewMode || !isValid}
               title="Done — finish this return, then Post it"
               className="toolbar-btn"
             >
@@ -1105,7 +1299,7 @@ const nextSystemBillNo = useMemo(
 
             {/* Record navigation — always browses posted returns; only active while the
                 Posted/Unposted dropdown (right) says Unposted. See §3. */}
-            <button type="button" onClick={handleNavFirst} disabled={!canNavPrevious} title="First" className="toolbar-btn">
+            <button type="button" onClick={handleNavFirst} disabled={!canBrowse} title="First" className="toolbar-btn">
               <ChevronsLeft size={20} strokeWidth={2.5} className="text-amber-600" />
               <span>First</span>
             </button>
@@ -1117,7 +1311,7 @@ const nextSystemBillNo = useMemo(
               <ChevronRight size={20} strokeWidth={2.5} className="text-amber-600" />
               <span>Next</span>
             </button>
-            <button type="button" onClick={handleNavLast} disabled={!canNavNext} title="Last" className="toolbar-btn">
+            <button type="button" onClick={handleNavLast} disabled={!canBrowse} title="Last" className="toolbar-btn">
               <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
               <span>Last</span>
             </button>
@@ -1126,9 +1320,31 @@ const nextSystemBillNo = useMemo(
 
             <button
               type="button"
+              onClick={() => setIsPrintingSingle(true)}
+              disabled={deletedPlaceholder != null || !isViewMode || returnId == null}
+              title="Print"
+              className="toolbar-btn"
+            >
+              <Printer size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Print</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsFindOpen(true)}
+              title="Find"
+              className="toolbar-btn"
+            >
+              <Search size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Find</span>
+            </button>
+
+            <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            <button
+              type="button"
               onClick={handleUnpost}
               // No longer gated on the dropdown — see PurchasePage's Unpost button for why.
-              disabled={!isViewMode || returnId == null || !currentIsPosted}
+              disabled={deletedPlaceholder != null || !isViewMode || returnId == null || !currentIsPosted}
               title="Unpost — move this posted return back to drafts"
               className="toolbar-btn"
             >
@@ -1138,7 +1354,7 @@ const nextSystemBillNo = useMemo(
             <button
               type="button"
               onClick={handlePost}
-              disabled={!isViewMode || returnId == null || currentIsPosted}
+              disabled={deletedPlaceholder != null || !isViewMode || returnId == null || currentIsPosted}
               title="Post"
               className="toolbar-btn"
             >
@@ -1158,6 +1374,30 @@ const nextSystemBillNo = useMemo(
                 <span>{postAllBusy ? 'Posting…' : 'Post All'}</span>
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => setIsPrintingSingle(true)}
+              disabled={deletedPlaceholder != null || !isViewMode || returnId == null}
+              title="Export PDF"
+              className="toolbar-btn"
+            >
+              <FileDown size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>PDF</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const headers = ['Material', 'Unit', 'Quantity', 'Rate', 'Total Price'];
+                const rows = items.map(it => [it.materialName, it.unit, it.quantity, it.pricePerUnit, it.totalPrice]);
+                exportRowsToExcel(`purchase-return-${billNo || returnId}`, headers, rows);
+              }}
+              disabled={deletedPlaceholder != null || !isViewMode || returnId == null}
+              title="Export Excel"
+              className="toolbar-btn"
+            >
+              <FileSpreadsheet size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Excel</span>
+            </button>
           </div>
 
           {/* Posted/Unposted — picks which list Previous/Next/First/Last page through. Unposted
@@ -1212,9 +1452,10 @@ const nextSystemBillNo = useMemo(
           onSubmit={handleSave}
           className="card-white p-6 bg-white border flex flex-col"
           data-edit-scope="detail"
-          style={{ height: invoiceCardHeight ?? undefined }}
+          style={{ height: invoiceCardHeight ?? undefined, position: 'relative' }}
           data-no-print
         >
+          {deletedPlaceholder != null && <DeletedDocumentOverlay systemNo={deletedPlaceholder} label="purchase return" />}
           <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-5">
             <Undo2 size={18} className="text-[#B08D57]" />
             <h3 className="font-lora font-bold text-lg text-slate-900">Raw Material Purchase Return</h3>
@@ -1281,15 +1522,16 @@ const nextSystemBillNo = useMemo(
               </div>
             )}
             <div>
-              {/* System Bill No. — this RETURN's own return_id (draft_id while unposted),
-                  assigned by the database, never typed. Read-only always. Distinct from the
-                  "Find Purchase to Return" search below, which looks up a PRIOR PURCHASE by its
-                  own system/vendor bill no. — and from "Vendor Bill No." further along, which is
-                  the vendor's own free-text invoice number for this return. */}
+              {/* System Bill No. — this RETURN's own stable number, assigned once at draft
+                  creation and carried through posting unchanged (see
+                  031_document_system_numbers.sql), never typed. Read-only always. Distinct from
+                  the "Find Purchase to Return" search below, which looks up a PRIOR PURCHASE by
+                  its own system/vendor bill no. — and from "Vendor Bill No." further along, which
+                  is the vendor's own free-text invoice number for this return. */}
               <label className="block text-xs font-bold text-slate-900 mb-1">System Bill No.</label>
               <input
                 type="text"
-                value={returnId != null ? `#${returnId}` : `#${nextSystemBillNo} (pending)`}
+                value={currentSystemNo != null ? `#${currentSystemNo}` : `#${nextSystemBillNo}`}
                 disabled
                 readOnly
                 className="soleria-input bg-slate-100 text-slate-500 font-mono"
@@ -1665,7 +1907,59 @@ const nextSystemBillNo = useMemo(
           subtitle="Enter your password to permanently delete this unposted purchase return."
         />
 
+        {/* Find Purchase Return Modal — jump to any posted or unposted return by System No.,
+            manual bill no., or vendor name. */}
+        {isFindOpen && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
+              <h3 className="font-lora font-bold text-lg text-slate-800 mb-4">Find Purchase Return</h3>
+              <input
+                type="text"
+                value={findQuery}
+                onChange={e => setFindQuery(e.target.value)}
+                placeholder="System No., bill no., or vendor name..."
+                className="soleria-input w-full font-semibold mb-3"
+                autoFocus
+              />
+              <ul className="max-h-72 overflow-y-auto border rounded-lg divide-y" style={{ borderColor: 'var(--border-color)' }}>
+                {findResults.map(({ filter, row }) => (
+                  <li
+                    key={`${filter}-${'return_id' in row ? row.return_id : row.draft_id}`}
+                    onClick={() => handleFindSelect(filter, row)}
+                    className="px-3 py-2 text-xs cursor-pointer hover:bg-amber-50/60 flex items-center justify-between gap-2"
+                  >
+                    <span className="font-mono font-semibold text-slate-700">{row.bill_no || `#${row.system_no}`}</span>
+                    <span className="text-slate-400 truncate">{vendors.find(v => v.vendor_id === row.vendor_id)?.name || 'Unnamed Vendor'}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${filter === 'posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{filter}</span>
+                  </li>
+                ))}
+                {findQuery.trim() && findResults.length === 0 && (
+                  <li className="px-3 py-3 text-xs text-slate-400 text-center">No matching returns.</li>
+                )}
+              </ul>
+              <div className="flex justify-end mt-4">
+                <button
+                  type="button"
+                  onClick={() => { setIsFindOpen(false); setFindQuery(''); }}
+                  className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm font-semibold"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
+
+      <ReportPrintPreviewModal
+        isOpen={isPrintingSingle}
+        onClose={() => setIsPrintingSingle(false)}
+        title={`Purchase Return ${billNo ? `#${billNo}` : currentSystemNo != null ? `#${currentSystemNo}` : ''}`}
+        orientation="portrait"
+      >
+        {renderReturnPrintable()}
+      </ReportPrintPreviewModal>
     </AppLayout>
   );
 }

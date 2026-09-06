@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
-import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, cartonsAndPairs } from '@/lib/utils';
+import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, cartonsAndPairs, nextSystemNoPreview, mergeWithDeleted } from '@/lib/utils';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
@@ -24,11 +24,12 @@ import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
   RegionRow, CityRow, SaleBillRow, SaleBillCreateInput, SaleBillItemInput, StockRow,
-  DraftSaleBillRow, ConfirmAllResult, BusinessAccountRow
+  DraftSaleBillRow, ConfirmAllResult, BusinessAccountRow, DeletedNumberRow
 } from '@/lib/api';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import CartonsInput from '@/components/CartonsInput';
+import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
 import { getWindowParam } from '@/lib/windowParams';
 
 interface UiItem {
@@ -197,6 +198,9 @@ export default function SaleBillPage() {
   // values ARE the user's own unsaved work, which is exactly what has to survive. Restoring the
   // ids as-is is both simpler and the only correct behaviour.
   const [billId, setBillId] = usePersistentField<number | null>('sale-bill', 'billId', null);
+  // The loaded record's own System No. — display-only, kept in step with billId (see that field's
+  // own comment) but never used for API calls; those stay on billId/draftId as before.
+  const [currentSystemNo, setCurrentSystemNo] = usePersistentField<number | null>('sale-bill', 'currentSystemNo', null);
   const [currentBillIsPosted, setCurrentBillIsPosted] = usePersistentField('sale-bill', 'currentBillIsPosted', false);
   const [date, setDate] = usePersistentField('sale-bill', 'date', getTodayDate());
   const [storeId, setStoreId] = usePersistentField('sale-bill', 'storeId', '');
@@ -255,6 +259,10 @@ export default function SaleBillPage() {
   // to be two separate concepts ("Saved Drafts" for incomplete entries vs "Pending Posting" for
   // complete-but-unposted ones) — there's no longer a meaningful distinction at the data level.
   const [unpostedBills, setUnpostedBills] = useState<DraftSaleBillRow[]>([]);
+  // Declared here (rather than down with browseFilter/refreshPosted below) so nextSystemBillNo's
+  // preview, right below, can read both lists' system_no — it needs to see this state before it's
+  // otherwise used.
+  const [postedBills, setPostedBills] = useState<SaleBillRow[]>([]);
   const [postAllBusy, setPostAllBusy] = useState(false);
   const [postAllResult, setPostAllResult] = useState<ConfirmAllResult | null>(null);
 
@@ -265,6 +273,27 @@ export default function SaleBillPage() {
   }, []);
 
   useEffect(() => { refreshUnposted(); }, [refreshUnposted]);
+
+  // Every Sale Bill System No. permanently retired by a delete (migration 032) — merged into the
+  // browse lists below so First/Prev/Next/Last can show "#N — Deleted" as an actual stop.
+  const [deletedNumbers, setDeletedNumbers] = useState<DeletedNumberRow[]>([]);
+  const refreshDeletedNumbers = useCallback(async () => {
+    const res = await api.draftSaleBills.listDeletedNumbers();
+    if (res.ok) setDeletedNumbers(res.data);
+  }, []);
+  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
+
+  // Set when First/Prev/Next/Last lands on a deleted number — DeletedDocumentOverlay renders while
+  // this is non-null. Cleared as soon as a real document loads (see the billId effect below).
+  const [deletedPlaceholder, setDeletedPlaceholder] = useState<number | null>(null);
+  // navIndex normally tracks the loaded bill's own position via billId (see navIndex below), but a
+  // deleted marker has no billId to match — this overrides it while a placeholder is on screen, so
+  // Prev/Next can still step from wherever the placeholder sits instead of restarting at 0.
+  const [navIndexOverride, setNavIndexOverride] = useState<number | null>(null);
+  useEffect(() => {
+    setDeletedPlaceholder(null);
+    setNavIndexOverride(null);
+  }, [billId]);
 
   // SB-06: post the whole run. Each draft confirms in its own transaction on the backend, so one
   // that can't confirm leaves the rest posted — which is why this reads `failed` instead of
@@ -347,15 +376,16 @@ export default function SaleBillPage() {
 
   const selectedCustomer = useMemo(() => customers.find(c => c.customer_id === Number(customerId)), [customers, customerId]);
 
-  // Preview of the System No. a brand-new bill will get — same idea as Purchase's own
-  // nextSystemBillNo: what Save actually assigns is the next draft_sale_bill.draft_id, a
-  // separate IDENTITY sequence from the real bill_id assigned later on Post. Client-side preview
-  // only (MAX(id)+1, never reserved server-side), correct as long as nothing else inserts a draft
-  // between now and Save. Always shown, from the moment the page opens — an earlier round gated it
-  // behind pressing New, which the user reversed (2026-08-31): the number should just be there.
+  // Preview of the System No. a brand-new bill will get. This number is now assigned once at
+  // draft-save time and carried through posting unchanged (per the user, 2026-09-05) — a real
+  // SQL Server SEQUENCE (dbo.seq_sale_bill_no) is the actual source of truth server-side, so this
+  // is a client-side estimate only (MAX across whatever's already loaded, +1), correct as long as
+  // nothing else inserts a bill between now and Save. Always shown, from the moment the page
+  // opens — an earlier round gated it behind pressing New, which the user reversed (2026-08-31):
+  // the number should just be there.
 const nextSystemBillNo = useMemo(
-    () => Math.max(0, ...unpostedBills.map(d => d.draft_id)) + 1,
-    [unpostedBills]
+    () => nextSystemNoPreview(...unpostedBills.map(d => d.system_no), ...postedBills.map(b => b.system_no)),
+    [unpostedBills, postedBills]
   );
 
   // Customer, Store, Sub Cust., Adda Code — every lookup on this form is a real, typable <input>
@@ -543,6 +573,7 @@ const nextSystemBillNo = useMemo(
     setEditScope('master');
 
     setBillId(row.bill_id);
+    setCurrentSystemNo(row.system_no);
     setCurrentBillIsPosted(row.is_posted);
     setDate(toDateInputValue(row.bill_date));
     setStoreId(row.store_id != null ? String(row.store_id) : '');
@@ -612,6 +643,7 @@ const nextSystemBillNo = useMemo(
     // Opening a different record must not carry over a stale scope from the last edit.
     setEditScope('master');
     setBillId(draft.draft_id);
+    setCurrentSystemNo(draft.system_no);
     setCurrentBillIsPosted(false);
     setDate(toDateInputValue(draft.bill_date));
     setStoreId(draft.store_id != null ? String(draft.store_id) : '');
@@ -669,7 +701,6 @@ const nextSystemBillNo = useMemo(
   // new bills from. Posted is purely a browse mode over already-posted bills (First/Prev./Next/
   // Last + Un Post).
   const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('unposted');
-  const [postedBills, setPostedBills] = useState<SaleBillRow[]>([]);
   const newButtonRef = useRef<HTMLButtonElement>(null);
 
   const refreshPosted = useCallback(async () => {
@@ -680,39 +711,58 @@ const nextSystemBillNo = useMemo(
 
   useEffect(() => { refreshPosted(); }, [refreshPosted]);
 
-  // Both list() calls return newest-first (ORDER BY date DESC, id DESC) — reversed here for
-  // oldest-first, so First = earliest and Last = most recent.
-  const navPostedList = useMemo(() => [...postedBills].reverse(), [postedBills]);
-  const navUnpostedList = useMemo(() => [...unpostedBills].reverse(), [unpostedBills]);
+  // Sorted by system_no (creation order), NOT the shared list()'s own ORDER BY (bill_date DESC,
+  // bill_id DESC — right for the date-driven report views that also call it, but wrong here): a
+  // backdated bill_date used to put that bill next to whatever else shares its date when browsing,
+  // so First..Last could jump straight from system_no 11 to system_no 24 (reported by the user,
+  // 2026-09-07). system_no order is what "First = earliest, Last = most recent" actually promises.
+  const navPostedList = useMemo(
+    () => mergeWithDeleted([...postedBills].sort((a, b) => a.system_no - b.system_no), deletedNumbers),
+    [postedBills, deletedNumbers],
+  );
+  const navUnpostedList = useMemo(
+    () => mergeWithDeleted([...unpostedBills].sort((a, b) => a.system_no - b.system_no), deletedNumbers),
+    [unpostedBills, deletedNumbers],
+  );
 
   // Whichever list the dropdown currently selects — this is what the nav buttons page through.
   const navList = browseFilter === 'posted' ? navPostedList : navUnpostedList;
 
   // Where the bill on screen sits in the ACTIVE list — -1 when it isn't in it at all (a brand-new
   // unsaved bill, or a draft while the dropdown is on Posted and vice versa), which the handlers
-  // below treat as "start from the beginning".
-  const navIndex = useMemo(() => {
+  // below treat as "start from the beginning". navIndexOverride wins while a deleted-number
+  // placeholder is on screen — it has no billId to find, so the derived lookup would otherwise
+  // report -1 and Prev/Next would wrongly restart from the beginning instead of stepping on from it.
+  const derivedNavIndex = useMemo(() => {
     if (billId == null) return -1;
     return browseFilter === 'posted'
-      ? (currentBillIsPosted ? navPostedList.findIndex(b => b.bill_id === billId) : -1)
-      : (!currentBillIsPosted ? navUnpostedList.findIndex(b => b.draft_id === billId) : -1);
+      ? (currentBillIsPosted ? navPostedList.findIndex(e => e.kind === 'doc' && e.row.bill_id === billId) : -1)
+      : (!currentBillIsPosted ? navUnpostedList.findIndex(e => e.kind === 'doc' && e.row.draft_id === billId) : -1);
   }, [billId, currentBillIsPosted, browseFilter, navPostedList, navUnpostedList]);
+  const navIndex = navIndexOverride ?? derivedNavIndex;
 
   const canBrowse = navList.length > 0;
   const canNavPrevious = canBrowse && navIndex !== 0;
   const canNavNext = canBrowse && navIndex !== navList.length - 1;
 
-  // Loads whichever row sits at `idx` of the ACTIVE list into the form, read-only — browsing is
+  // Loads whichever entry sits at `idx` of the ACTIVE list into the form, read-only — browsing is
   // look-then-decide, same as opening any other existing bill; Edit still needs its own explicit
   // click (and, for a posted bill, its own password gate on Save). Posted rows come from
-  // sale_bills, unposted ones from draft_sale_bills, so each needs its own loader.
+  // sale_bills, unposted ones from draft_sale_bills, so each needs its own loader. A 'deleted'
+  // entry shows DeletedDocumentOverlay instead of loading anything (see navIndexOverride above).
   const goToNavIndex = async (idx: number) => {
     if (idx < 0 || idx >= navList.length) return;
+    const entry = navList[idx];
+    if (entry.kind === 'deleted') {
+      setNavIndexOverride(idx);
+      setDeletedPlaceholder(entry.system_no);
+      return;
+    }
     if (browseFilter === 'posted') {
-      await loadBillRow(navList[idx] as SaleBillRow);
+      await loadBillRow(entry.row as SaleBillRow);
       setMode('view');
     } else {
-      await loadDraftIntoForm(navList[idx] as DraftSaleBillRow, { mode: 'view' });
+      await loadDraftIntoForm(entry.row as DraftSaleBillRow, { mode: 'view' });
     }
   };
 
@@ -736,14 +786,14 @@ const nextSystemBillNo = useMemo(
       // a draft into one. With a fresh list the entry is gone, so there is nothing to open and the
       // blank New bill below is what shows.
       const fresh = await refreshUnposted();
-      const list = [...(fresh ?? unpostedBills)].reverse();
+      const list = [...(fresh ?? unpostedBills)].sort((a, b) => a.system_no - b.system_no);
       const latest = list[list.length - 1];
       const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
       if (!opened) handleNew();
       requestAnimationFrame(() => newButtonRef.current?.focus());
     } else {
       const fresh = await refreshPosted();
-      const list = [...(fresh ?? postedBills)].reverse();
+      const list = [...(fresh ?? postedBills)].sort((a, b) => a.system_no - b.system_no);
       const latest = list[list.length - 1];
       if (latest) { await loadBillRow(latest); setMode('view'); }
     }
@@ -835,6 +885,7 @@ const nextSystemBillNo = useMemo(
     createdInThisRun.current = false;
     setEditScope('master');
     setBillId(null);
+    setCurrentSystemNo(null);
     setCurrentBillIsPosted(false);
     setDate(getTodayDate());
     setStoreId(stores[0] ? String(stores[0].store_id) : '');
@@ -961,6 +1012,7 @@ const nextSystemBillNo = useMemo(
         return null;
       }
       setBillId(result.data.bill_id);
+      setCurrentSystemNo(result.data.system_no);
       setCurrentBillIsPosted(true);
       setSuccessMsg('Sale bill updated successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
@@ -982,6 +1034,7 @@ const nextSystemBillNo = useMemo(
     }
 
     setBillId(result.data.draft_id);
+    setCurrentSystemNo(result.data.system_no);
     setCurrentBillIsPosted(false);
     // SB-05: only a freshly created bill counts as "part of this run" — an edit of an existing
     // bill must not clear the form out from under the user when it posts.
@@ -1048,6 +1101,7 @@ const nextSystemBillNo = useMemo(
         setErrorMsg('Bill was saved, but posting failed: ' + postRes.error.message);
       } else {
         setBillId(postRes.data.bill_id);
+        setCurrentSystemNo(postRes.data.system_no);
         setCurrentBillIsPosted(true);
         // SB-05: name the bill in the message, because the form is about to empty — otherwise the
         // screen clearing is the only feedback that anything was saved at all.
@@ -1068,6 +1122,7 @@ const nextSystemBillNo = useMemo(
       setErrorMsg('Failed to post bill: ' + res.error.message);
     } else {
       setBillId(res.data.bill_id);
+      setCurrentSystemNo(res.data.system_no);
       setCurrentBillIsPosted(true);
       refreshUnposted(); // SB-06: it just left the pending list.
       refreshPosted();
@@ -1095,6 +1150,7 @@ const nextSystemBillNo = useMemo(
       return;
     }
     setBillId(res.data.draft_id);
+    setCurrentSystemNo(res.data.system_no);
     setCurrentBillIsPosted(false);
     // pages_design.md §3: land on the editable screen immediately after unposting, not a
     // read-only one — the whole point of unposting is to go fix something.
@@ -1156,7 +1212,7 @@ const nextSystemBillNo = useMemo(
           // The bill on screen (if any) may have just been the one deleted — drop back to a
           // fresh form rather than leave it pointing at a bill that no longer exists.
           if (billId === targetId && !currentBillIsPosted) handleNew();
-          await Promise.all([refreshUnposted(), refreshStock()]);
+          await Promise.all([refreshUnposted(), refreshStock(), refreshDeletedNumbers()]);
         }
       }
     }
@@ -1524,7 +1580,7 @@ const nextSystemBillNo = useMemo(
         }}>
           <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>System ID</label>
-            <span>{billId ?? 'Unsaved'}</span>
+            <span>{currentSystemNo ?? 'Unsaved'}</span>
           </div>
           <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Date</label>
@@ -1762,7 +1818,7 @@ const nextSystemBillNo = useMemo(
             <button
               type="button"
               onClick={handleDeleteAction}
-              disabled={editingIndex != null ? isViewMode : (mode !== 'view' || billId == null || currentBillIsPosted)}
+              disabled={deletedPlaceholder != null || (editingIndex != null ? isViewMode : (mode !== 'view' || billId == null || currentBillIsPosted))}
               title={editingIndex != null ? 'Delete selected article' : 'Delete'}
               className="toolbar-btn"
             >
@@ -1775,7 +1831,7 @@ const nextSystemBillNo = useMemo(
               // Posted bills are read-only: while the dropdown is on Posted the only action
               // offered is Un Post, which drops the bill back to a draft and follows it into
               // the Unposted view, where it can be edited (per the user, 2026-09-04).
-              disabled={mode !== 'view' || billId == null || currentBillIsPosted}
+              disabled={deletedPlaceholder != null || mode !== 'view' || billId == null || currentBillIsPosted}
               title="Edit"
               className="toolbar-btn"
             >
@@ -1785,7 +1841,7 @@ const nextSystemBillNo = useMemo(
             <button
               type="button"
               onClick={() => handleSave(false)}
-              disabled={mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded}
+              disabled={deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded}
               title="Save — keep editing this bill"
               className="toolbar-btn"
             >
@@ -1795,7 +1851,7 @@ const nextSystemBillNo = useMemo(
             <button
               type="submit"
               onClick={() => handleSave(true)}
-              disabled={mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded}
+              disabled={deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded}
               title="Done — finish this bill, then Post it"
               className="toolbar-btn"
             >
@@ -1861,7 +1917,7 @@ const nextSystemBillNo = useMemo(
             <button
               type="button"
               onClick={() => setIsPrintingSingle(true)}
-              disabled={mode !== 'view' || billId == null}
+              disabled={deletedPlaceholder != null || mode !== 'view' || billId == null}
               title="Print"
               className="toolbar-btn"
             >
@@ -1887,7 +1943,7 @@ const nextSystemBillNo = useMemo(
               // back when that value MEANT "I'm here to unpost". Now that the dropdown genuinely
               // filters, requiring it would be backwards — "Unposted" lists drafts, none of which
               // can be unposted. Being on a posted bill is the only real precondition.
-              disabled={mode !== 'view' || billId == null || !currentBillIsPosted}
+              disabled={deletedPlaceholder != null || mode !== 'view' || billId == null || !currentBillIsPosted}
               title="Un Post — move this posted bill back to drafts"
               className="toolbar-btn"
             >
@@ -1897,7 +1953,7 @@ const nextSystemBillNo = useMemo(
             <button
               type="button"
               onClick={handlePostCurrentBill}
-              disabled={mode !== 'view' || billId == null || currentBillIsPosted}
+              disabled={deletedPlaceholder != null || mode !== 'view' || billId == null || currentBillIsPosted}
               title="Post"
               className="toolbar-btn"
             >
@@ -1924,7 +1980,7 @@ const nextSystemBillNo = useMemo(
             <button
               type="button"
               onClick={handleSaveAndPost}
-              disabled={mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded || currentBillIsPosted}
+              disabled={deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded || currentBillIsPosted}
               title="Save & Post"
               className="toolbar-btn"
             >
@@ -1953,7 +2009,7 @@ const nextSystemBillNo = useMemo(
             <button
               type="button"
               onClick={() => setIsPrintingSingle(true)}
-              disabled={mode !== 'view' || billId == null}
+              disabled={deletedPlaceholder != null || mode !== 'view' || billId == null}
               title="Export PDF"
               className="toolbar-btn"
             >
@@ -1967,7 +2023,7 @@ const nextSystemBillNo = useMemo(
                 const rows = items.map(it => [it.label, it.packing, formatCartons(it.cartons), it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
                 exportRowsToExcel(`sale-bill-${billNo || billId}`, headers, rows);
               }}
-              disabled={mode !== 'view' || billId == null}
+              disabled={deletedPlaceholder != null || mode !== 'view' || billId == null}
               title="Export Excel"
               className="toolbar-btn"
             >
@@ -2000,7 +2056,7 @@ const nextSystemBillNo = useMemo(
 
           {mode === 'edit' && (
             <div className="text-sm font-semibold text-slate-500 font-inter">
-              Editing System Invoice: <span className="font-mono text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-100">{billId ?? 'New'}</span>
+              Editing System Invoice: <span className="font-mono text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-100">{currentSystemNo ?? 'New'}</span>
             </div>
           )}
 
@@ -2036,8 +2092,9 @@ const nextSystemBillNo = useMemo(
           ref={invoiceCardRef}
           className="card-white shadow-sm p-3 md:p-4 flex flex-col"
           data-edit-scope="detail"
-          style={{ border: '1px solid var(--border-color)', background: '#ffffff', overflow: 'visible', height: invoiceCardHeight ?? undefined }}
+          style={{ border: '1px solid var(--border-color)', background: '#ffffff', overflow: 'visible', height: invoiceCardHeight ?? undefined, position: 'relative' }}
         >
+          {deletedPlaceholder != null && <DeletedDocumentOverlay systemNo={deletedPlaceholder} label="bill" />}
 
           {/* Print Title (Visible only when printing) */}
           <div className="hidden print:flex items-center justify-between mb-6 pb-4 border-b">
@@ -2370,7 +2427,7 @@ const nextSystemBillNo = useMemo(
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 No. &gt;&gt;&gt;&gt;
               </label>
-              <input type="text" value={billId != null ? `#${billId}` : `#${nextSystemBillNo} (pending)`} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
+              <input type="text" value={currentSystemNo != null ? `#${currentSystemNo}` : `#${nextSystemBillNo}`} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
           </div>
 
@@ -2685,7 +2742,7 @@ const nextSystemBillNo = useMemo(
                   onClick={() => handleFindSelect(filter, row)}
                   className="px-3 py-2 text-xs cursor-pointer hover:bg-amber-50/60 flex items-center justify-between gap-2"
                 >
-                  <span className="font-mono font-semibold text-slate-700">{row.bill_no || `#${'bill_id' in row ? row.bill_id : row.draft_id}`}</span>
+                  <span className="font-mono font-semibold text-slate-700">{row.bill_no || `#${row.system_no}`}</span>
                   <span className="text-slate-400 truncate">{customers.find(c => c.customer_id === row.customer_id)?.name || 'Unnamed Customer'}</span>
                   <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${filter === 'posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{filter}</span>
                 </li>
@@ -2856,7 +2913,7 @@ const nextSystemBillNo = useMemo(
         subtitle={
           passwordActionType === 'delete_unposted_bill'
             ? `Please enter password for user '${state.currentUsername || 'user'}' to permanently delete this unposted bill.`
-            : `Please enter password for user '${state.currentUsername || 'user'}' to save changes to Bill #${billNo || billId || ''}.`
+            : `Please enter password for user '${state.currentUsername || 'user'}' to save changes to Bill #${billNo || currentSystemNo || ''}.`
         }
       />
 
@@ -2865,7 +2922,7 @@ const nextSystemBillNo = useMemo(
       <ReportPrintPreviewModal
         isOpen={isPrintingSingle}
         onClose={() => setIsPrintingSingle(false)}
-        title={`Sale Invoice ${billNo ? `#${billNo}` : billId != null ? `#${billId}` : ''}`}
+        title={`Sale Invoice ${billNo ? `#${billNo}` : currentSystemNo != null ? `#${currentSystemNo}` : ''}`}
         orientation="portrait"
       >
         {renderBillPrintable()}

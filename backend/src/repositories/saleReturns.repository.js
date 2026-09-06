@@ -1,6 +1,6 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, nextSequenceValue } = require('../db/pool');
 
 // Effective packing per variant is COALESCE(article_colors.packing, articles.packing) — schema.sql §5.
 async function getVariantPackings(variantIds) {
@@ -22,6 +22,10 @@ async function getVariantPackings(variantIds) {
 }
 
 async function insert(transaction, ret) {
+  // confirm() supplies its own carried-over number; the direct-create path has none and gets a
+  // fresh one from the shared sequence. Deleted numbers are NOT reused (per the user, 2026-09-07).
+  const systemNo = ret.system_no
+    ?? await nextSequenceValue(transaction, 'dbo.seq_sale_return_no');
   const request = requestWithParams(transaction, {
     returnDate: { type: sql.Date, value: ret.return_date },
     storeId: { type: sql.Int, value: ret.store_id ?? null },
@@ -38,17 +42,22 @@ async function insert(transaction, ret) {
     grossValue: { type: sql.Decimal(14, 2), value: ret.gross_value },
     netValue: { type: sql.Decimal(14, 2), value: ret.net_value },
     createdBy: { type: sql.Int, value: ret.created_by ?? null },
+    // Confirming a draft carries its own system_no forward (see draftSaleReturns.service.js#
+    // confirm); the direct-create path has none and gets a fresh one.
+    systemNo: { type: sql.Int, value: systemNo },
   });
 
   const result = await request.query(`
     INSERT INTO dbo.sale_returns (
       return_date, store_id, customer_id, sub_customer_id, bill_no, gp_no, bilty_no, adda_id,
-      remarks, invoice_discount, total_cartons, total_pairs, gross_value, net_value, created_by
+      remarks, invoice_discount, total_cartons, total_pairs, gross_value, net_value, created_by,
+      system_no
     )
     OUTPUT inserted.return_id
     VALUES (
       @returnDate, @storeId, @customerId, @subCustomerId, @billNo, @gpNo, @biltyNo, @addaId,
-      @remarks, @invoiceDiscount, @totalCartons, @totalPairs, @grossValue, @netValue, @createdBy
+      @remarks, @invoiceDiscount, @totalCartons, @totalPairs, @grossValue, @netValue, @createdBy,
+      @systemNo
     )
   `);
   return result.recordset[0].return_id;

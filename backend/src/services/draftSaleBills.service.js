@@ -1,6 +1,7 @@
 // Service layer: business logic, validation, transactions.
 // Throw ApiError for expected failures; use withTransaction for multi-write ops.
 const repository = require('../repositories/draftSaleBills.repository');
+const deletedNumbersRepository = require('../repositories/deletedDocumentNumbers.repository');
 const saleBillsService = require('./saleBills.service');
 const stockService = require('./stock.service');
 const productColorsService = require('./productColors.service');
@@ -202,7 +203,11 @@ async function update(draftId, payload) {
 
 // Deleting a draft restores the stock it deducted (a positive reversing ADJUSTMENT — the original
 // deduct row is never deleted, matching the schema's reverse-never-erase pattern elsewhere).
-async function remove(draftId) {
+//
+// Also records the draft's system_no as permanently deleted (migration 032) — its number is never
+// reused (see nextSequenceValue's comment), but browsing should still show "#N — Deleted" as an
+// actual stop rather than silently jumping over the gap (per the user, 2026-09-07).
+async function remove(draftId, userId) {
   const draft = await getById(draftId);
 
   await withTransaction(async (transaction) => {
@@ -218,6 +223,7 @@ async function remove(draftId) {
       })),
     );
     await repository.deleteDraft(transaction, draftId);
+    await deletedNumbersRepository.record(transaction, 'SALE_BILL', draft.system_no, userId);
   });
 
   return { ok: true };
@@ -269,6 +275,9 @@ async function confirm(draftId, userId) {
     gross_value: draft.gross_value,
     net_value: draft.net_value,
     created_by: userId,
+    // Carries the draft's own System No. forward — never regenerated on posting, per the user,
+    // 2026-09-05: the number stays identical whether the document is a draft or posted.
+    system_no: draft.system_no,
   };
 
   const billId = await withTransaction(async (transaction) => {
@@ -336,4 +345,10 @@ async function confirmAll(ids, userId) {
   return { posted, failed, attempted: targets.length };
 }
 
-module.exports = { create, getById, list, update, remove, confirm, confirmAll };
+// For the browse UI: every System No. permanently retired by a delete (migration 032), so
+// First/Prev/Next/Last can show "#N — Deleted" instead of silently skipping the gap.
+function listDeletedNumbers() {
+  return deletedNumbersRepository.listByType('SALE_BILL');
+}
+
+module.exports = { create, getById, list, update, remove, confirm, confirmAll, listDeletedNumbers };

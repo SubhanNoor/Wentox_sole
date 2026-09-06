@@ -724,7 +724,7 @@ export default function ProductSetupPage() {
                   <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">Batch No.</label>
                   <input
                     type="text"
-                    value={selectedBatchNo ?? (mode === 'new' ? `${nextBatchNoPreview} (pending)` : '(auto)')}
+                    value={selectedBatchNo ?? (mode === 'new' ? `${nextBatchNoPreview}` : '(auto)')}
                     disabled
                     className="soleria-input soleria-input-compact font-semibold bg-slate-100 text-slate-500 cursor-not-allowed"
                   />

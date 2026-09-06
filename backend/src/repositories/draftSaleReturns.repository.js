@@ -1,6 +1,6 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, nextSequenceValue } = require('../db/pool');
 
 // Effective packing per variant is COALESCE(article_colors.packing, articles.packing) — schema.sql §5.
 // Kept as its own copy (same shape as saleReturns.repository.getVariantPackings) rather than a
@@ -24,6 +24,10 @@ async function getVariantPackings(variantIds) {
 }
 
 async function insertDraft(transaction, draft) {
+  // A genuinely new draft gets the next number from the shared sequence; confirm/unconfirm supply
+  // their own carried-over value instead. Deleted numbers are NOT reused (per the user, 2026-09-07).
+  const systemNo = draft.system_no
+    ?? await nextSequenceValue(transaction, 'dbo.seq_sale_return_no');
   const request = requestWithParams(transaction, {
     returnDate: { type: sql.Date, value: draft.return_date },
     storeId: { type: sql.Int, value: draft.store_id ?? null },
@@ -40,17 +44,23 @@ async function insertDraft(transaction, draft) {
     grossValue: { type: sql.Decimal(14, 2), value: draft.gross_value },
     netValue: { type: sql.Decimal(14, 2), value: draft.net_value },
     createdBy: { type: sql.Int, value: draft.created_by ?? null },
+    // A genuinely new draft has none, so it gets the next number from the shared sequence;
+    // unposting a return back into a draft (saleReturns.service.js#unconfirm) supplies the
+    // return's own existing number here instead, so it survives the round trip unchanged.
+    systemNo: { type: sql.Int, value: systemNo },
   });
 
   const result = await request.query(`
     INSERT INTO dbo.draft_sale_returns (
       return_date, store_id, customer_id, sub_customer_id, bill_no, gp_no, bilty_no, adda_id,
-      remarks, invoice_discount, total_cartons, total_pairs, gross_value, net_value, created_by
+      remarks, invoice_discount, total_cartons, total_pairs, gross_value, net_value, created_by,
+      system_no
     )
     OUTPUT inserted.draft_id
     VALUES (
       @returnDate, @storeId, @customerId, @subCustomerId, @billNo, @gpNo, @biltyNo, @addaId,
-      @remarks, @invoiceDiscount, @totalCartons, @totalPairs, @grossValue, @netValue, @createdBy
+      @remarks, @invoiceDiscount, @totalCartons, @totalPairs, @grossValue, @netValue, @createdBy,
+      @systemNo
     )
   `);
   return result.recordset[0].draft_id;

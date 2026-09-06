@@ -97,7 +97,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
 
     if (systemReturnNoQuery.trim()) {
       const q = systemReturnNoQuery.trim();
-      result = result.filter(r => String(r.return_id).includes(q));
+      result = result.filter(r => String(r.system_no).includes(q));
     }
 
     if (biltyNoQuery.trim()) {
@@ -154,7 +154,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
     const headers = ['Date', 'Sys ID', 'Return No.', 'Customer', 'Cartons', 'Pairs', 'Total Value', 'Status'];
     const rows = filteredReturns.map(ret => {
       const cust = customers.find(c => c.customer_id === ret.customer_id);
-      return [formatDate(ret.return_date), ret.return_id, ret.bill_no, cust?.name || '-', formatCartons(ret.total_cartons), ret.total_pairs, ret.net_value, ret.is_posted ? 'Posted' : 'Unposted'];
+      return [formatDate(ret.return_date), ret.system_no, ret.bill_no, cust?.name || '-', formatCartons(ret.total_cartons), ret.total_pairs, ret.net_value, ret.is_posted ? 'Posted' : 'Unposted'];
     });
     exportRowsToExcel('sale-returns-search', headers, rows);
   };
@@ -225,7 +225,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
               return (
                 <tr key={ret.return_id}>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{formatDate(ret.return_date)}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontFamily: 'monospace' }}>{ret.return_id}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontFamily: 'monospace' }}>{ret.system_no}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'center', fontWeight: 'bold', fontFamily: 'monospace' }}>{ret.bill_no}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{cust?.name || 'Walk-in'}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px' }}>{subCust ? subCust.name : '-'}</td>
@@ -462,7 +462,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
                         <td className="p-3.5 pl-4 font-mono text-slate-600 whitespace-nowrap">{formatDate(ret.return_date)}</td>
                         <td className="p-3.5 text-center">
                           <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
-                            {ret.return_id}
+                            {ret.system_no}
                           </span>
                         </td>
                         <td className="p-3.5 text-center font-mono font-bold text-slate-800">{ret.bill_no}</td>

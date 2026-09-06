@@ -30,6 +30,14 @@ module.exports = function register() {
     }),
   );
 
+  ipcMain.handle(
+    'draft-sale-returns:listDeletedNumbers',
+    wrap(() => {
+      requireSession();
+      return service.listDeletedNumbers();
+    }),
+  );
+
   // Password required unconditionally — same guard as draft-sale-bills:remove: deleting any
   // saved-unposted return is destructive with no reverse-never-erase trail.
   ipcMain.handle(
@@ -37,7 +45,7 @@ module.exports = function register() {
     wrap(async (payload) => {
       const session = requireSession();
       await authService.verifyPassword(session.userId, payload.password);
-      return service.remove(payload.id);
+      return service.remove(payload.id, session.userId);
     }),
   );
 

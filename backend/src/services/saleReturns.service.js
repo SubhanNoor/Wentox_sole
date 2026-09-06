@@ -206,6 +206,9 @@ async function unconfirm(id) {
       gross_value: ret.gross_value,
       net_value: ret.net_value,
       created_by: ret.created_by,
+      // Same number the return has had since it was first created — unposting must not hand it a
+      // new one (per the user, 2026-09-05).
+      system_no: ret.system_no,
     };
     const lines = ret.items.map((item) => ({
       variant_id: item.variant_id,

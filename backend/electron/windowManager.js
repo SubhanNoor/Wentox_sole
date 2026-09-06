@@ -2,7 +2,7 @@
 // on demand from the renderer (windows:open, src/ipc/windows.ipc.js) using the exact same
 // dev/packaged/unpackaged-prod loading logic as the first window, instead of duplicating it.
 const path = require('path');
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, screen } = require('electron');
 
 // The app's one true main window — whichever non-child window was created most recently (normally
 // just the one from main.js's own startup `createWindow()`, but also updated if it's reopened via
@@ -16,6 +16,23 @@ let mainWindow = null;
 // maximize buttons doesnt work"). Tracking and closing manually keeps every window fully
 // independent.
 const childWindows = new Set();
+
+// Cascades each new window a little further down-right than the last, like the legacy app's own
+// floating document windows (the reference screenshot the user sent, 2026-09-07). Without an
+// explicit position, every BrowserWindow defaults to roughly the same spot, so a second window
+// lands exactly on top of the first with nothing peeking out from behind it — indistinguishable
+// from the first having been minimized, which is what the user reported ("previous window gets
+// minimized... not under the new window"). No code here ever calls .minimize() on anything; this
+// is the fix for the actual cause. Wraps back to the top-left corner (mod maxSteps) so a long
+// session of opening windows never cascades one off the visible screen.
+function nextCascadePosition(width, height) {
+  const { x: workX, y: workY, width: workWidth, height: workHeight } = screen.getPrimaryDisplay().workArea;
+  const step = 32;
+  const maxSteps = Math.max(1, Math.floor(Math.min(workWidth - width, workHeight - height) / step));
+  const openCount = childWindows.size + (mainWindow && !mainWindow.isDestroyed() ? 1 : 0);
+  const offset = (openCount % maxSteps) * step;
+  return { x: workX + offset, y: workY + offset };
+}
 
 // `page`/`tab` become a URL query string the fresh window's own AppContext reads on mount
 // (frontend/src/context/AppContext.tsx's bootstrap effect) to land directly on that page/tab
@@ -33,9 +50,12 @@ const childWindows = new Set();
 // Preview" can open a new window landing on the exact same filtered report (per the user,
 // 2026-09-03) instead of a blank default one.
 function createAppWindow(page, tab, { child = false, params = {} } = {}) {
+  const width = child ? 1000 : 1280;
+  const height = child ? 720 : 800;
   const win = new BrowserWindow({
-    width: child ? 1000 : 1280,
-    height: child ? 720 : 800,
+    width,
+    height,
+    ...nextCascadePosition(width, height),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

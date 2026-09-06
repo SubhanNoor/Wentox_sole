@@ -5,7 +5,7 @@ import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
 import PageToasts from '@/components/PageToasts';
 import * as api from '@/lib/api';
-import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult } from '@/lib/api';
+import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult, DeletedNumberRow } from '@/lib/api';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
 import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
@@ -18,7 +18,8 @@ import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
 import AccountBalanceTooltip from '@/components/AccountBalanceTooltip';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
-import { toDateInputValue, formatDate } from '@/lib/utils';
+import { toDateInputValue, formatDate, mergeWithDeleted } from '@/lib/utils';
+import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 
@@ -88,6 +89,17 @@ export default function ReceiptsPage() {
     })();
     refreshAllVouchers();
   }, [refreshAllVouchers]);
+
+  // Every Receipt voucher_no currently sitting as a deleted gap — merged into the browse lists
+  // below so First/Prev/Next/Last can show "#N — Deleted" as an actual stop. Unlike Sale Bill etc.,
+  // a deleted voucher_no CAN be reused by a later voucher (see receiptVouchers.service.js#create()'s
+  // unrecord() call), so this list can shrink again on its own, not just grow.
+  const [deletedNumbers, setDeletedNumbers] = useState<DeletedNumberRow[]>([]);
+  const refreshDeletedNumbers = useCallback(async () => {
+    const res = await api.receiptVouchers.listDeletedNumbers();
+    if (res.ok) setDeletedNumbers(res.data);
+  }, []);
+  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
 
   // ── Real-receipt form (mirrors PurchasePage.tsx's mode structure) ──
   // Persisted with the rest of the draft (2026-08-31): if the strip was mid-correction of an
@@ -193,6 +205,8 @@ export default function ReceiptsPage() {
     if (!res.ok) return fail('Failed to delete: ' + res.error.message);
     flash(deleteTarget.kind === 'voucher' ? 'Voucher deleted.' : 'Receipt deleted.');
     refreshAllVouchers();
+    // Only a whole-voucher delete touches voucher_no — a single line's deletion never does.
+    if (deleteTarget.kind === 'voucher') refreshDeletedNumbers();
     setBalanceRefreshKey(k => k + 1);
     // The deleted voucher may be the one open on screen — reset rather than leave the form
     // pointed at a voucher that no longer exists. Any other delete just re-reads it.
@@ -227,6 +241,17 @@ export default function ReceiptsPage() {
   // the real voucher from it.
   const [openVoucherId, setOpenVoucherId] = usePersistentField<number | null>('receipts', 'openVoucherId', null);
   useEffect(() => { setOpenVoucherId(voucher?.voucher_id ?? null); }, [voucher, setOpenVoucherId]);
+
+  // Set when First/Prev/Next/Last lands on a deleted number — DeletedDocumentOverlay renders while
+  // this is non-null. Cleared as soon as a real voucher loads.
+  const [deletedPlaceholder, setDeletedPlaceholder] = useState<number | null>(null);
+  // navIndex normally tracks the loaded voucher's own position via voucher_id — a deleted marker
+  // has no voucher_id to match, so this overrides it while a placeholder is on screen.
+  const [navIndexOverride, setNavIndexOverride] = useState<number | null>(null);
+  useEffect(() => {
+    setDeletedPlaceholder(null);
+    setNavIndexOverride(null);
+  }, [voucher?.voucher_id]);
 
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
@@ -772,13 +797,28 @@ const nextVoucherNo = useMemo(
       .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no),
     [allVouchers]
   );
-  const navList = navFilter === 'posted' ? navPostedVouchers : navUnpostedVouchers;
+  // Merged with deleted voucher_no's for browsing only — navPostedVouchers/navUnpostedVouchers
+  // above stay real-only (Post All, dropdown counts, Find all still use those unaffected).
+  // mergeWithDeleted re-sorts by its numeric key regardless of input order, so the date-based sort
+  // above doesn't need to change for this to come out in the right voucher_no order.
+  const navPostedList = useMemo(
+    () => mergeWithDeleted(navPostedVouchers.map(v => ({ ...v, system_no: v.voucher_no })), deletedNumbers),
+    [navPostedVouchers, deletedNumbers],
+  );
+  const navUnpostedList = useMemo(
+    () => mergeWithDeleted(navUnpostedVouchers.map(v => ({ ...v, system_no: v.voucher_no })), deletedNumbers),
+    [navUnpostedVouchers, deletedNumbers],
+  );
+  const navList = navFilter === 'posted' ? navPostedList : navUnpostedList;
 
   // -1 when the voucher on screen isn't in the ACTIVE list (nothing open yet, or it's posted while
   // the dropdown says Unposted and vice versa) — handlers treat that as "start from the beginning".
-  const navIndex = voucher == null
+  // navIndexOverride wins while a deleted-number placeholder is on screen — see SaleBillPage.tsx's
+  // navIndex for why.
+  const derivedNavIndex = voucher == null
     ? -1
-    : navList.findIndex(v => v.voucher_id === voucher.voucher_id);
+    : navList.findIndex(e => e.kind === 'doc' && e.row.voucher_id === voucher.voucher_id);
+  const navIndex = navIndexOverride ?? derivedNavIndex;
 
   const canNavPrevious = navList.length > 0 && navIndex !== 0;
   const canNavNext = navList.length > 0 && navIndex !== navList.length - 1;
@@ -786,10 +826,17 @@ const nextVoucherNo = useMemo(
 
   // Opens whichever VOUCHER sits at `idx` of the active list, with all of its lines — the entries
   // grid below the form is what shows them, which is why the left-hand Pending Posting panel could
-  // be dropped entirely (per the user, 2026-08-27).
+  // be dropped entirely (per the user, 2026-08-27). A 'deleted' entry shows DeletedDocumentOverlay
+  // instead of loading anything.
   const goToNavIndex = (idx: number) => {
     if (idx < 0 || idx >= navList.length) return;
-    openVoucherInEntry(navList[idx].voucher_id);
+    const entry = navList[idx];
+    if (entry.kind === 'deleted') {
+      setNavIndexOverride(idx);
+      setDeletedPlaceholder(entry.system_no);
+      return;
+    }
+    openVoucherInEntry(entry.row.voucher_id);
   };
 
   // navIndex === -1 (nothing from this list open yet) behaves like First, not a no-op.
@@ -1167,7 +1214,7 @@ const nextVoucherNo = useMemo(
                 since the button itself now sits outside the <form> tag. */}
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
               <div className="flex flex-wrap items-center gap-0.5">
-                {!isViewMode && (
+                {!isViewMode && deletedPlaceholder == null && (
                   <button type="submit" form="receipt-entry-form" title={isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done'} className="toolbar-btn">
                     <Save size={20} strokeWidth={2.5} className="text-blue-600" />
                     <span>{mode === 'edit' ? 'Update' : 'Done'}</span>
@@ -1183,7 +1230,7 @@ const nextVoucherNo = useMemo(
                 <button
                   type="button"
                   onClick={handleDeleteVoucherClick}
-                  disabled={selectedLineId != null ? false : (!voucher || voucher.status !== 'UNPOSTED')}
+                  disabled={deletedPlaceholder != null || (selectedLineId != null ? false : (!voucher || voucher.status !== 'UNPOSTED'))}
                   title={selectedLineId != null
                     ? 'Delete the selected entry (asks for your password)'
                     : 'Delete this voucher (asks for your password)'}
@@ -1212,7 +1259,7 @@ const nextVoucherNo = useMemo(
                       else firstFieldRef.current?.focus();
                     });
                   }}
-                  disabled={!voucher || voucher.status === 'POSTED'}
+                  disabled={deletedPlaceholder != null || !voucher || voucher.status === 'POSTED'}
                   title="Edit — unlock the voucher header or entry strip, per the Edit Scope selected"
                   className="toolbar-btn"
                 >
@@ -1258,7 +1305,7 @@ const nextVoucherNo = useMemo(
                 <button
                   type="button"
                   onClick={handleUnpostVoucher}
-                  disabled={!voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy}
+                  disabled={deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy}
                   title="Unpost Voucher"
                   className="toolbar-btn"
                 >
@@ -1268,7 +1315,7 @@ const nextVoucherNo = useMemo(
                 <button
                   type="button"
                   onClick={handlePostVoucher}
-                  disabled={!voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy}
+                  disabled={deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy}
                   title={voucherBusy ? 'Posting…' : `Post Voucher${voucherLines.length ? ` (${voucherLines.length})` : ''}`}
                   className="toolbar-btn"
                 >
@@ -1289,7 +1336,7 @@ const nextVoucherNo = useMemo(
                 </button>
 
                 {/* Endorsements post on their own, not with a voucher — same Unpost gate applies. */}
-                {docKind === 'SETTLEMENT' && mode === 'view' && receiptId != null && (
+                {docKind === 'SETTLEMENT' && mode === 'view' && receiptId != null && deletedPlaceholder == null && (
                   isPosted ? (
                     <button
                       type="button"
@@ -1404,7 +1451,8 @@ const nextVoucherNo = useMemo(
                 Unpost act on the whole voucher; the per-line status badge lives in the grid.
                 Padding matched to Sale Bill's own card (p-3/md:p-4, not p-6/md:p-8) — the user's
                 standing "keep it compact as the sale bill" rule. */}
-            <div className="card-white p-3 md:p-4 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print data-edit-scope="detail">
+            <div className="card-white p-3 md:p-4 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print data-edit-scope="detail" style={{ position: 'relative' }}>
+              {deletedPlaceholder != null && <DeletedDocumentOverlay systemNo={deletedPlaceholder} label="voucher" />}
 
               {/* RJ-03: submitting the form is "Done" — it commits the entry row as a line of the
                   voucher and re-arms for the next one. G-01's Enter-on-last-field rule fires the

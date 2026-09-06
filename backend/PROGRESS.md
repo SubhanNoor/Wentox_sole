@@ -5376,3 +5376,498 @@ no logic** — every cheque / online / endorsement / bounce / voucher rule behav
   `frontend/src/pages/ProductLedgerContent.tsx`, `frontend/src/components/ChequesTab.tsx`,
   `frontend/src/components/FindTab.tsx`, `frontend/src/components/FindReturnTab.tsx`,
   `frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/SaleReturnPage.tsx`
+
+## One stable System No. per document, from draft through posted
+- **User request:** "no change that entirely no matter if the bill is posted or unposted the
+  system no will be genrated in order everything" — Sale Bill's System No. changed the moment a
+  draft was posted (it switched from `draft_sale_bills.draft_id` to `sale_bills.bill_id`, two
+  separate `IDENTITY(1,1)` counters). The user wants one number, assigned once at creation, that
+  never changes for that document's life — and confirmed (2026-09-05) this should apply to every
+  document type with the same architecture: Sale Bill, Sale Return, Purchase, Purchase Return.
+- **Root cause, same shape across all four:** posting deletes the draft row and INSERTs a
+  brand-new row into the real table, which assigns a fresh id from that table's own independent
+  counter — unrelated to the draft's own id.
+- **Scope correction made mid-implementation:** Receipts (Payments) and Expenses have the exact
+  same draft/real table split (`draft_receipts`/`receipts`, `draft_expenses`/`expenses`), so they
+  were initially included too — until checking the frontend showed the number those pages actually
+  display and search by is `receipt_vouchers.voucher_no` / `expense_vouchers.voucher_no` (migration
+  022), assigned once at voucher creation and **already** never touched by posting/unposting an
+  individual line. The user's ask was already satisfied there. Backend changes made for Receipts
+  were reverted (`git checkout` back to committed state) once this was confirmed, rather than
+  adding an unused, parallel `system_no` with no user-visible effect.
+- **Schema** (`031_document_system_numbers.sql`): adds `system_no INT NOT NULL` to both tables of
+  each of the four pairs, backfills every existing row (draft + real, unioned and numbered by
+  `ROW_NUMBER() OVER (ORDER BY created_at, id)` — best-effort for old posted documents, since a
+  posted row's original draft-creation moment no longer exists once posted; the user explicitly
+  accepted this one-time renumbering), then creates one `SEQUENCE` per type
+  (`seq_sale_bill_no`/`seq_sale_return_no`/`seq_purchase_no`/`seq_purchase_return_no`) starting
+  right after the highest backfilled number. IF NOT EXISTS-guarded throughout, matching
+  021/022/025/028/030.
+- **Backend wiring, same three points per type:**
+  - `draftXRepository`'s insert: `system_no` column added, value `NEXT VALUE FOR` the type's
+    sequence — a new draft always gets a fresh number.
+  - `draftXService.js#confirm()`: the object built from the draft and passed into
+    `insertConfirmed()` gains `system_no: draft.system_no` — carried forward, never regenerated.
+  - `XRepository`'s insert (the real table, shared by `insertConfirmed` and the direct/legacy
+    `create()` path): `system_no` column added via `ISNULL(@systemNo, NEXT VALUE FOR ...)` — an
+    explicit value (from confirm) is used as-is, a missing one (direct create) falls back to a
+    fresh number.
+  - **Caught while implementing** (not in the original plan): `unconfirm()` — unposting a real
+    document back into a draft — builds a fresh draft object and calls the SAME `insertDraft`/
+    `insert` repository function as a brand-new draft. Without carrying `system_no` through there
+    too, unposting a document would silently hand it a new number, defeating the whole point. Fixed
+    in all four types' `unconfirm()` (`saleBills.service.js`, `saleReturns.service.js`,
+    `purchases.service.js`, `purchaseReturns.service.js`) by adding `system_no: <doc>.system_no` to
+    the rebuilt draft object, and switching each `draftXRepository`'s insert from an unconditional
+    `NEXT VALUE FOR` to the same `ISNULL(@systemNo, NEXT VALUE FOR ...)` pattern so it accepts an
+    explicit carry-over value.
+  - `saleBills.repository.js#biltySearch()`'s numeric-or-manual-number search switched its numeric
+    branch from matching `bill_id` to matching `system_no` — that's the number a user actually
+    searches by now.
+- **Frontend, same pattern per type** (`SaleBillPage.tsx`, `SaleReturnPage.tsx`,
+  `PurchasePage.tsx`, `PurchaseReturnPage.tsx`): added a `system_no: number` field to each
+  Row/DraftRow TypeScript interface in `api.ts`; the "System No." preview shown before saving
+  switched from `MAX(draft_id)+1` to `MAX(system_no across loaded unposted+posted lists)+1`; added
+  a new `currentSystemNo` persisted-field state (parallel to the existing `billId`/`returnId`/etc.
+  identity-tracking state, which keeps its original job of driving every API call) set alongside
+  every place the page loads/creates/posts/unposts a record, and swapped every "System No." display
+  location (the read-only field, page headers, print titles, password-prompt text, Excel exports,
+  duplicate-bill-no warnings) from the raw id to this new state. Also updated every directory/search
+  page that showed or searched by the raw id as "the number" —
+  `BiltyUpdatePage.tsx`/`SearchCustomerPage.tsx`/`FindTab.tsx`/`FindReturnTab.tsx` and the
+  `OverallTab`/`MonthlyTab`/`WeeklyTab` (+ Return equivalents) family — to use `system_no` instead.
+  React `key=` props and every direct API call by id were deliberately left on the real
+  `draft_id`/`bill_id`/etc. — only the user-facing label and search field changed.
+- `node --check` passes on every touched backend file; `npx tsc -b` passes clean on the frontend
+  after every single file's edits (not just once at the end).
+- **Fix found and applied 2026-09-07**: the migration failed on first real run —
+  `Invalid object name 'numbered'`. Each of the four backfill blocks defined one CTE
+  (`WITH ordered AS (...), numbered AS (...)`) and then referenced `numbered` from TWO separate
+  `UPDATE` statements — but a CTE in SQL Server is only in scope for the single statement
+  immediately following it, so the second `UPDATE` in each block couldn't see it. `migrate()`
+  caught the error, logged it, and rolled back the transaction (per its per-file try/catch in
+  `electron/main.js`), so the app kept running normally on the old schema — which is why every
+  bill showed the `#1 (pending)` fallback (no row anywhere had a `system_no` yet, so
+  `nextSystemNoPreview()`'s max-of-nothing was always 0+1). Fixed by replacing each CTE pair with a
+  `#temp` table (`#numbered_sb`/`#numbered_sr`/`#numbered_pur`/`#numbered_pret`), which stays in
+  scope for the whole batch — both `UPDATE`s per type now share one numbering pass correctly.
+  Verified live: ran `migrate()` directly against `wentox_db` — `applied
+  031_document_system_numbers.sql`, all 4 sequences created (`seq_sale_bill_no`,
+  `seq_sale_return_no`, `seq_purchase_no`, `seq_purchase_return_no`), and the sanity query
+  (count vs. distinct-count vs. min/max) came back clean for every type: Sale Bill 24/24 (1–24),
+  Sale Return 3/3 (1–3), Purchase 8/8 (1–8), Purchase Return 1/1 (1–1) — no duplicates, no gaps.
+- **Still to do**: the manual per-type check — create a draft, note its System No., post it,
+  confirm the number is identical before and after; create a second draft and confirm its number
+  is exactly one higher regardless of whether the first was posted in between; unpost a document
+  and confirm its number survives that round trip too.
+- **Files:** `backend/src/db/migrations/031_document_system_numbers.sql` (new),
+  `backend/src/repositories/draftSaleBills.repository.js`, `backend/src/services/draftSaleBills.service.js`,
+  `backend/src/repositories/saleBills.repository.js`, `backend/src/services/saleBills.service.js`,
+  `backend/src/repositories/draftSaleReturns.repository.js`, `backend/src/services/draftSaleReturns.service.js`,
+  `backend/src/repositories/saleReturns.repository.js`, `backend/src/services/saleReturns.service.js`,
+  `backend/src/repositories/draftPurchases.repository.js`, `backend/src/services/draftPurchases.service.js`,
+  `backend/src/repositories/purchases.repository.js`, `backend/src/services/purchases.service.js`,
+  `backend/src/repositories/draftPurchaseReturns.repository.js`, `backend/src/services/draftPurchaseReturns.service.js`,
+  `backend/src/repositories/purchaseReturns.repository.js`, `backend/src/services/purchaseReturns.service.js`,
+  `frontend/src/lib/api.ts`, `frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/SaleReturnPage.tsx`,
+  `frontend/src/pages/PurchasePage.tsx`, `frontend/src/pages/PurchaseReturnPage.tsx`,
+  `frontend/src/pages/BiltyUpdatePage.tsx`, `frontend/src/pages/SearchCustomerPage.tsx`,
+  `frontend/src/components/FindTab.tsx`, `frontend/src/components/FindReturnTab.tsx`,
+  `frontend/src/components/OverallTab.tsx`, `frontend/src/components/MonthlyTab.tsx`,
+  `frontend/src/components/WeeklyTab.tsx`, `frontend/src/components/OverallReturnTab.tsx`,
+  `frontend/src/components/MonthlyReturnTab.tsx`, `frontend/src/components/WeeklyReturnTab.tsx`
+
+## First/Prev/Next/Last browsing now walks documents in System No. order, not date order
+
+Follow-up, reported by the user 2026-09-07: "not in order... after 11 comes 24". The `navPostedList`/
+`navUnpostedList` arrays that back First/Prev/Next/Last on Sale Bill/Sale Return/Purchase/Purchase
+Return were built from the shared `list()` repository call's own `ORDER BY bill_date DESC, bill_id
+DESC` (`.reverse()`d for oldest-first) — correct for the date-driven report views that also call the
+same endpoint (Weekly/Monthly/Overall/Find), wrong for record-by-record browsing once System No. was
+meant to be the stable, creation-order identity. A document entered with a backdated `bill_date`
+sorted next to whatever else shared that date, so browsing could jump straight from system_no 11 to
+24 even though nothing was actually out of order — verified live: bill_id 3022 (system_no 24, created
+2026-09-05) carries `bill_date` 2026-08-20, the same date as bill_id 2008 (system_no 11).
+
+Fixed by sorting each nav list by `system_no` directly in the frontend, independent of whatever order
+the underlying list arrived in — a pure frontend change, the shared backend `list()` endpoint and its
+date ordering are untouched (still correct for the report views). Also updated the analogous
+"jump to most recently posted/saved" logic in each page's Posted/Unposted dropdown handler to use the
+same `system_no` ordering instead of `.reverse()`.
+
+**Files:** `frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/SaleReturnPage.tsx`,
+`frontend/src/pages/PurchasePage.tsx`, `frontend/src/pages/PurchaseReturnPage.tsx`.
+`npx tsc -b` passes clean.
+
+## `ISNULL(@systemNo, NEXT VALUE FOR ...)` — SQL Server rejects it outright, every new save failed
+
+Reported by the user 2026-09-07: "Failed to save bill: Internal error" (Sale Bill Save/Done, Detail
+mode). `wrap.js` sanitizes any non-`ApiError` failure to that generic message before it reaches the
+renderer, so the real cause was only in the backend console. Reproduced by calling
+`draftSaleBills.service.create()` directly against the live `wentox_db`:
+
+    RequestError: NEXT VALUE FOR function cannot be used within CASE, CHOOSE, COALESCE, IIF,
+    ISNULL and NULLIF.
+
+Every one of the 8 repository inserts wired for `system_no` (all four document types, draft + real
+table each) used exactly this pattern — `ISNULL(@systemNo, NEXT VALUE FOR dbo.seq_x_no)` — to let one
+INSERT serve both "assign a fresh number" (param NULL) and "use this carried-over number" (param
+supplied) callers. SQL Server refuses the statement outright the moment `NEXT VALUE FOR` sits inside
+`ISNULL`/`COALESCE`/`CASE`/`IIF`/`NULLIF` — this isn't a typo, it's a hard restriction, so **every**
+save/confirm/unconfirm across all four types was broken, not just Sale Bill. `node --check` can't
+catch it (valid JS calling a SQL string SQL Server itself refuses) — only actually running an insert
+surfaces it, which is what caught it here.
+
+Fixed by resolving the value in JS before the INSERT instead of inside the SQL: added
+`nextSequenceValue(transaction, sequenceName)` to `src/db/pool.js` (runs `SELECT NEXT VALUE FOR
+<sequenceName> AS n` against the in-flight transaction), and each of the 8 repository inserts now
+does `const systemNo = doc.system_no ?? await nextSequenceValue(transaction, 'dbo.seq_x_no');` then
+binds `@systemNo` as a plain parameter — no `ISNULL` in the SQL at all.
+
+**Verified live**, not just `node --check`: called `draftSaleBills.service.create()` directly against
+`wentox_db` — succeeded, produced `draft_id 2014` / `system_no 25` (matching the `#25 (pending)`
+preview the user's own screen was already showing). Cleaned up afterward via
+`draftSaleBills.service.remove()` (restores the stock the test draft had deducted) — confirmed the
+row is gone.
+
+**Files:** `backend/src/db/pool.js` (new `nextSequenceValue` export),
+`backend/src/repositories/draftSaleBills.repository.js`, `backend/src/repositories/saleBills.repository.js`,
+`backend/src/repositories/draftSaleReturns.repository.js`, `backend/src/repositories/saleReturns.repository.js`,
+`backend/src/repositories/draftPurchases.repository.js`, `backend/src/repositories/purchases.repository.js`,
+`backend/src/repositories/draftPurchaseReturns.repository.js`, `backend/src/repositories/purchaseReturns.repository.js`.
+`node --check` passes on all 9 touched files.
+
+## Deleted documents' System No. is now reclaimed for the next new one
+
+Follow-up, requested by the user 2026-09-07 after noticing #25's gap (from the earlier live test):
+if a document is deleted, its number should go back into the pool rather than being retired forever.
+Confirmed scope with the user first: applies to ANY deletion (a plain unposted draft, or a document
+that was posted then unposted then deleted — though in practice these are the same code path, since
+the app never allows deleting a still-posted document; unposting always comes first), and the user
+explicitly accepted the trade-off this requires: reused numbers are no longer strictly chronological
+(delete #25, then a later new document can become #25 again even though it's actually the newest).
+
+A `SEQUENCE` (migration 031's mechanism) can't support this — it never gives a value back once
+issued, which is exactly what made it safe against two saves at once. Reusing a deleted number means
+finding the smallest currently-unused number instead, which is a read-then-use pattern: two saves at
+the same instant could otherwise compute the same gap and collide. Added `nextGapSystemNo()` to
+`src/db/pool.js`: it takes an exclusive `sp_getapplock` scoped to the current transaction (one lock
+resource per document type, e.g. `'seq_sale_bill_no'` — reused as a lock name even though the actual
+SEQUENCE objects are no longer used for assignment) so only one save per document type can compute a
+gap at a time, then finds `MIN(n)` over `1..(current max + 1)` that isn't already used by either the
+draft or real table. Swapped into all 8 repository inserts in place of the `nextSequenceValue()` calls
+added for the previous fix — same `doc.system_no ?? <resolve a new one>` shape, just resolving via
+the gap search instead. No change needed to any delete path: since the search always reads the
+tables' live state, a freed number is picked up automatically on the very next save.
+
+**Verified live** against `wentox_db`: created a real draft — got `system_no 25` (correctly reclaimed,
+matching the gap from the earlier test). Deleted it via `draftSaleBills.service.remove()`. Created
+another — got `25` again, confirming it's genuinely reusable, not a one-time fluke. Deleted that one
+too. Final state checked directly: 25 rows across `draft_sale_bills`/`sale_bills`, 25 distinct, no
+duplicates, only `25` itself missing (expected — that's the number my last cleanup just freed; `26`
+is the user's real bill).
+
+The `SEQUENCE` objects from migration 031 are left in the schema, unused — harmless, but nothing
+calls `nextSequenceValue()` anymore.
+
+**Files:** `backend/src/db/pool.js` (new `nextGapSystemNo` export),
+`backend/src/repositories/draftSaleBills.repository.js`, `backend/src/repositories/saleBills.repository.js`,
+`backend/src/repositories/draftSaleReturns.repository.js`, `backend/src/repositories/saleReturns.repository.js`,
+`backend/src/repositories/draftPurchases.repository.js`, `backend/src/repositories/purchases.repository.js`,
+`backend/src/repositories/draftPurchaseReturns.repository.js`, `backend/src/repositories/purchaseReturns.repository.js`.
+`node --check` passes on all 9 touched files.
+
+## Reverted number reuse; deleted System No.s are now shown as an actual "Deleted" stop instead
+
+The user reconsidered the previous fix (reused numbers, gaps eliminated) after seeing the reassignment
+trade-off explained in detail — decided the trade-off wasn't worth it: a reused number could later be
+handed to a completely unrelated document, which is worse than a permanent gap. New instruction:
+revert to the plain, never-reused `SEQUENCE` (gaps kept forever), but when First/Prev/Next/Last would
+otherwise silently jump over a deleted number's gap, make it an actual stop showing "#N — Deleted".
+
+**Reverted**: all 8 repository inserts switched back from `nextGapSystemNo()` to `nextSequenceValue()`
+(the `ISNULL`-fix version from earlier). `nextGapSystemNo()` and its `sp_getapplock`/gap-search SQL
+were deleted from `src/db/pool.js` entirely — nothing needs it anymore. Checked the SEQUENCE's live
+`current_value` for all 4 types against their live `MAX(system_no)` before reverting, to rule out a
+collision from the numbers already issued via gap-filling during the one iteration it was live —
+all 4 were safely consistent, no manual correction needed.
+
+**New**: migration `032_deleted_document_numbers.sql` adds `dbo.deleted_document_numbers`
+(`doc_type`, `system_no`, `deleted_by`, `deleted_at` — PK on `(doc_type, system_no)`). Each of the
+4 `draftX.service.js#remove()` functions now records the draft's own `system_no` into this table in
+the SAME transaction as the delete (via new `deletedDocumentNumbers.repository.js`'s `record()`) —
+this is the ONLY delete path per type (the app never allows deleting a still-posted document;
+unposting always comes first), so this one call site per type is exhaustive. Each service also
+exports `listDeletedNumbers()`, wired to a new `<feature>:list-deleted-numbers` ipc channel (no
+`FEATURES` array change needed — all 4 features were already registered).
+
+**Frontend**: `lib/utils.ts` gained `mergeWithDeleted()` — merges a sorted document array with the
+type's full deleted-number log into one System-No.-ordered array of `{kind:'doc', row}` /
+`{kind:'deleted', system_no}` entries (the deleted log isn't split by posted/unposted — a deletion
+always happens to a draft row, so there's no reliable posted/unposted split to filter it by; the same
+marker can legitimately appear in both browse lists). All four pages' `navPostedList`/`navUnpostedList`
+now run through it. `goToNavIndex` shows a new `DeletedDocumentOverlay` component (absolutely
+positioned over the existing form card, so none of the large existing form JSX needed restructuring)
+instead of loading a document when it lands on a `'deleted'` entry. Since a placeholder has no
+`billId`/`returnId`/`purchaseId` to find itself by, added a `navIndexOverride` state (set by
+`goToNavIndex`, cleared by an effect on the page's own id field) so Prev/Next can keep stepping on
+from a placeholder instead of the derived index falling back to -1 and restarting from the beginning.
+Each page's delete-password-success handler also now calls the new `refreshDeletedNumbers()` so a
+just-deleted number's placeholder appears immediately, no reload needed.
+
+**Verified live** against `wentox_db`: created a Sale Bill draft (got `system_no 29`), deleted it,
+confirmed `deleted_document_numbers` now has a `SALE_BILL`/`29` row, created another draft and
+confirmed it got `30` — NOT `29` — proving the gap is genuinely kept, not reused. Cleaned up both
+test drafts and the two test log rows afterward.
+
+**Files:** `backend/src/db/migrations/032_deleted_document_numbers.sql` (new),
+`backend/src/repositories/deletedDocumentNumbers.repository.js` (new), `backend/src/db/pool.js`,
+`backend/src/repositories/draftSaleBills.repository.js`, `backend/src/repositories/saleBills.repository.js`,
+`backend/src/repositories/draftSaleReturns.repository.js`, `backend/src/repositories/saleReturns.repository.js`,
+`backend/src/repositories/draftPurchases.repository.js`, `backend/src/repositories/purchases.repository.js`,
+`backend/src/repositories/draftPurchaseReturns.repository.js`, `backend/src/repositories/purchaseReturns.repository.js`,
+`backend/src/services/draftSaleBills.service.js`, `backend/src/services/draftSaleReturns.service.js`,
+`backend/src/services/draftPurchases.service.js`, `backend/src/services/draftPurchaseReturns.service.js`,
+`backend/src/ipc/draftSaleBills.ipc.js`, `backend/src/ipc/draftSaleReturns.ipc.js`,
+`backend/src/ipc/draftPurchases.ipc.js`, `backend/src/ipc/draftPurchaseReturns.ipc.js`,
+`frontend/src/lib/api.ts` (new `DeletedNumberRow` + `listDeletedNumbers` per type),
+`frontend/src/lib/utils.ts` (new `mergeWithDeleted`/`NavEntry`),
+`frontend/src/components/DeletedDocumentOverlay.tsx` (new),
+`frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/SaleReturnPage.tsx`,
+`frontend/src/pages/PurchasePage.tsx`, `frontend/src/pages/PurchaseReturnPage.tsx`.
+`node --check` passes on all touched backend files; `npx tsc -b` passes clean.
+
+**Fix, 2026-09-07**: user hit `No handler registered for 'draft-sale-bills:listDeletedNumbers'`
+immediately on the Sale Bill screen. Cause: `frontend/src/lib/ipcBridge.ts`'s auto-bridge only
+kebab-cases the FEATURE prefix (`draftSaleBills` → `draft-sale-bills`) — the action name is used
+exactly as accessed, unconverted (confirmed against the existing `confirmAll` channel, which is
+registered as `draft-sale-bills:confirmAll`, not `-confirm-all`). The 4 new ipc handlers were
+registered as `<feature>:list-deleted-numbers` (wrongly kebab-cased) while the frontend called
+`.listDeletedNumbers()`, i.e. `<feature>:listDeletedNumbers` — a mismatch on every one of the 4
+document types, not just Sale Bill. Fixed by renaming all 4 channel registrations to camelCase to
+match. `node --check` passes on all 4 `ipc/draftX.ipc.js` files.
+
+## Extended deleted-number tracking to Receipt/Payment vouchers too
+
+Requested by the user, 2026-09-07 ("do the same for purchase and purchase return receipt and
+payments also"). First checked whether Purchase/Purchase Return needed the same historical-gap
+backfill Sale Bill got — they didn't: their `system_no` sequences and data have zero gaps (I never
+ran test saves against those two types), so nothing to backfill there; the deleted-number
+tracking itself was already live for all four types.
+
+Receipts/Payments needed real new work: they use a completely different numbering mechanism —
+`receipt_vouchers.voucher_no`/`expense_vouchers.voucher_no` is `SELECT ISNULL(MAX(voucher_no),0)+1`
+(`receiptVouchers.repository.js#nextVoucherNo`), not a `SEQUENCE` — so unlike Sale Bill/Purchase, a
+deleted voucher's number was ALREADY being reused before this (deleting the highest-numbered
+voucher lowers `MAX`, so the next `create()` picks up the same number). Asked the user explicitly
+whether to also switch this to a never-reused sequence to match the other four types — they said no,
+keep the reuse behavior, just log deletions so a gap can still show as "Deleted" while it exists.
+Also confirmed scope: only WHOLE-voucher deletion (`receiptVouchers.service.js#remove()`/
+`expenseVouchers.service.js#remove()`) touches `voucher_no` — deleting one line out of a multi-line
+voucher (`draftReceipts.service.js#remove()`, etc.) never does, so only those two functions needed
+the `deletedNumbersRepository.record(...)` call, same trio pattern as the other four types
+(`record()` in `remove()`, a `listDeletedNumbers()` export, an ipc channel).
+
+**New wrinkle vs. the other four types**: since reuse stays intact, a "deleted" voucher_no can later
+belong to a genuinely live voucher again — a stale log row would then make that live voucher ALSO
+show as a deleted placeholder when browsing. Added `deletedDocumentNumbers.repository.js#unrecord()`
+and call it from both `create()` functions right after `nextVoucherNo()` resolves a number, clearing
+any stale log row for that number in the same transaction as the insert. No schema change needed —
+`deleted_document_numbers.doc_type` has no `CHECK` constraint, so `'RECEIPT_VOUCHER'`/
+`'EXPENSE_VOUCHER'` are just two more values in the same table from migration 032.
+
+**Frontend**: `ReceiptsPage.tsx`/`ExpensesPage.tsx` already had First/Prev/Next/Last browsing
+(`navPostedVouchers`/`navUnpostedVouchers`, sorted by `voucher_date` then `voucher_no`), used for
+more than just navigation (Post All's loop, the dropdown's counts) — so rather than touch those,
+added SEPARATE `navPostedList`/`navUnpostedList` built via `mergeWithDeleted()` (mapping
+`voucher_no` to the `system_no` key it expects) purely for `navList`/`navIndex`/`goToNavIndex`. Since
+`mergeWithDeleted` re-sorts everything by its numeric key regardless of input order, the existing
+date-based sort on the real-only arrays didn't need to change at all — a smaller, safer change than
+it first looked. Same `navIndexOverride`/placeholder-clearing-on-id-change pattern as the other four
+pages; `DeletedDocumentOverlay` placed over each page's single "Entry Form Card" (which also holds
+the System Voucher No. field), the one container both pages already use for the whole voucher view.
+
+**Verified live** against `wentox_db` for both voucher types: created a voucher, deleted it,
+confirmed it appears in `deleted_document_numbers`; created a second voucher and confirmed it
+reused the SAME voucher_no (intended reuse behavior, unlike the other four types) AND that doing so
+correctly cleared the stale deleted-log row via `unrecord()`. Cleaned up all test vouchers/log rows
+afterward.
+
+**Files:** `backend/src/repositories/deletedDocumentNumbers.repository.js` (new `unrecord`),
+`backend/src/services/receiptVouchers.service.js`, `backend/src/ipc/receiptVouchers.ipc.js`,
+`backend/src/services/expenseVouchers.service.js`, `backend/src/ipc/expenseVouchers.ipc.js`,
+`frontend/src/lib/api.ts` (new `listDeletedNumbers` on both voucher features),
+`frontend/src/pages/ReceiptsPage.tsx`, `frontend/src/pages/ExpensesPage.tsx`.
+`node --check` passes on all touched backend files; `npx tsc -b` passes clean.
+
+## Payments' Done button no longer resets to a blank voucher
+
+Reported by the user 2026-09-07: "when i enter a entry and click done button then it disappears i
+have to go to unposted and navigate to it then post it." Traced to `ExpensesPage.tsx#handleDoneButton`
+calling `startNewVoucher()` unconditionally after committing the entry — this was itself a prior,
+deliberate request (2026-08-30, per the removed comment), not a bug, but the user now finds the
+resulting round-trip (Unposted → find it → Post) more hassle than it's worth.
+
+Checked `ReceiptsPage.tsx` (the mirrored page) first, since the two are built as a matched pair
+throughout this codebase — it does NOT reset after Done; it stays on the just-saved voucher and only
+clears to a fresh one after a successful Post. So Payments had drifted from Receipts' own pattern,
+not the other way around. Fixed by removing the `startNewVoucher()` call from `handleDoneButton` —
+it now does the same commit-then-`clearEntryRow()` as Enter (`handleEntrySubmit`) and as editing an
+existing line, staying on the voucher with Post immediately available in the toolbar. Updated the
+now-stale comments/tooltip that described the old "starts a new one" behavior. New/blank voucher is
+still reachable via the toolbar's New button, unaffected.
+
+**Files:** `frontend/src/pages/ExpensesPage.tsx`. `npx tsc -b` passes clean.
+
+## Removed the "(pending)" suffix from every System No./C.Book No./Voucher No. preview field
+
+Requested by the user, 2026-09-07. Grepped every page for `(pending)` and found 7 occurrences: 6 were
+the System/C.Book/Voucher No. preview shown before saving (`SaleBillPage.tsx`, `SaleReturnPage.tsx`,
+`PurchasePage.tsx`, `PurchaseReturnPage.tsx`, `ExpensesPage.tsx`'s "System Voucher No. (C.Book No)",
+`JournalVoucherPage.tsx`) — all fixed, now showing just `#N`. The 7th, `ProductSetupPage.tsx`'s
+"Batch No." preview, is a different kind of field (a product batch number, not a document System
+No.) — left as-is rather than assumed into scope; flagged to the user for a decision.
+
+**Files:** `frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/SaleReturnPage.tsx`,
+`frontend/src/pages/PurchasePage.tsx`, `frontend/src/pages/PurchaseReturnPage.tsx`,
+`frontend/src/pages/ExpensesPage.tsx`, `frontend/src/pages/JournalVoucherPage.tsx`.
+`npx tsc -b` passes clean.
+
+Follow-up: user asked for the 7th (`ProductSetupPage.tsx` Batch No.) too — removed. `grep -rn
+"(pending)"` across `pages/`/`components/` now returns nothing anywhere in the app.
+`frontend/src/pages/ProductSetupPage.tsx`. `npx tsc -b` passes clean.
+
+## New windows cascade instead of appearing to minimize the previous one
+
+Reported by the user, 2026-09-07, with a reference screenshot of the legacy app's own floating
+document windows (several overlapping, all visible, none minimized): opening a page that spawns a
+new window (windows:open) made the previous window disappear as if minimized — not simply sit
+behind the new one.
+
+Searched the whole repo for `.minimize(`/`show: false` — nothing calls either, in this codebase or
+anywhere reachable from window creation. Root cause is more mundane: `createAppWindow()`
+(`electron/windowManager.js`) never set an explicit `x`/`y`, so Electron placed every new
+`BrowserWindow` at roughly the same default spot — a second window lands almost exactly on top of
+the first with nothing peeking out from behind it, which looks identical to the first having been
+minimized even though it's still a normal, restored window sitting right there in the taskbar.
+
+Fixed with `nextCascadePosition()`: each new window offsets 32px further down-right than the last
+(counting `childWindows.size` + the main window), reading the actual work-area bounds from
+`screen.getPrimaryDisplay()` and wrapping back to the top-left once a cascade would run off-screen.
+Matches the reference screenshot's stacked-but-all-visible look. Could not verify visually in this
+sandbox (no display) — syntax-checked only; ask the user to confirm after restarting the app.
+
+**Files:** `backend/electron/windowManager.js`. `node --check` passes.
+
+**Follow-up, same session**: the cascade fix above wasn't it — the user clarified the window still
+shows as the ACTIVE taskbar entry (not a real minimize) but stops rendering entirely the instant it
+loses focus to ANY other window, even a click completely unrelated to opening a new one. That
+symptom shape (active-but-invisible, triggered broadly by any focus loss) is a known Chromium-on-
+Windows GPU compositor bug on certain graphics drivers — a hardware-accelerated window failing to
+repaint after losing focus. Standard mitigation: `app.disableHardwareAcceleration()`, added to
+`electron/main.js` before `app.whenReady()` (alongside `app.setName()`/the `lang` switch, which have
+the same ordering requirement). Not verifiable in this sandbox (no display, no Windows machine) —
+flagged to the user as the standard fix for this exact symptom shape, pending their confirmation.
+
+**Files:** `backend/electron/main.js`. `node --check` passes.
+
+## Fixed: action buttons stayed live for the stale record while a "Deleted" placeholder was showing
+
+The user asked for a general check of action-button logic across every page — while explaining it, I
+self-caught a real bug in my own earlier "Deleted" placeholder work: `deletedPlaceholder` is set when
+First/Prev/Next/Last lands on a deleted number, and `DeletedDocumentOverlay` covers the form, but no
+toolbar button's `disabled` condition ever checked it. `mode`/`billId`/`voucher` etc. were left exactly
+as they were from whatever record was loaded BEFORE navigating to the placeholder — so Edit/Delete/
+Save/Done/Post/Un Post/Print/PDF/Excel could all still be enabled, reflecting that stale hidden
+record. Clicking one would have silently acted on it, not on anything related to the placeholder,
+with no visual cue why (the overlay makes it look like nothing is loaded at all).
+
+Fixed by adding a `deletedPlaceholder != null` guard to every record-scoped button's `disabled`
+condition (or, for the conditionally-*rendered* Done/Update button on the two voucher pages, to its
+render condition instead) across all 6 pages that have the feature: `SaleBillPage.tsx`,
+`SaleReturnPage.tsx`, `PurchasePage.tsx`, `PurchaseReturnPage.tsx`, `ReceiptsPage.tsx`,
+`ExpensesPage.tsx`. Left untouched: New, First/Prev/Next/Last, Find, Exit, Post All — these don't act
+on "the current record" so the placeholder doesn't affect them. Confirmed the overlay itself has no
+`pointer-events: none`, so the underlying entry-strip inputs were already correctly unclickable
+underneath it (only the toolbar, rendered outside the overlaid card, needed this fix).
+
+Also launched a broader Explore-agent audit (read-only) of every data-entry page's button logic —
+result pending.
+
+**Files:** `frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/SaleReturnPage.tsx`,
+`frontend/src/pages/PurchasePage.tsx`, `frontend/src/pages/PurchaseReturnPage.tsx`,
+`frontend/src/pages/ReceiptsPage.tsx`, `frontend/src/pages/ExpensesPage.tsx`.
+`npx tsc -b` passes clean.
+
+**Audit results, same session**: the background Explore agent found 2 more instances of the exact
+same `deletedPlaceholder` gap, both fixed:
+- `PurchasePage.tsx`/`PurchaseReturnPage.tsx`'s line-item Delete button (`deleteSelectedArticle`)
+  only checked `isViewMode`/`editingUid` — missed since it's a different button shape (deletes a
+  selected article row, not the whole document) than the ones patched earlier.
+- `ReceiptsPage.tsx`'s endorsement Post/Unpost buttons (docKind === 'SETTLEMENT') had NO disabled
+  check at all — a conditionally-rendered block the earlier pass didn't touch. Fixed by adding
+  `deletedPlaceholder == null` to its render condition, same as the Done/Update button pattern.
+
+The agent also flagged several PRE-EXISTING cross-page inconsistencies unrelated to this session's
+System No. work — reported to the user, not changed without confirmation:
+- Purchase/Purchase Return's Delete button only removes a line item, never the whole unposted
+  document (the Pending Posting panel it used to route through was removed 2026-09-03) — Sale
+  Bill/Sale Return's Delete is dual-purpose (whole-document when nothing's selected).
+- Purchase/Purchase Return have no Print/Find/PDF/Excel toolbar buttons at all (Sale Bill/Sale
+  Return do).
+- JournalVoucherPage.tsx/StockVoucherPage.tsx still gate Un Post on `browseFilter === 'posted'` —
+  every other page removed that exact gate as backwards once the dropdown started genuinely
+  filtering (2026-09-04-era comment on the other 6 pages).
+- JournalVoucherPage.tsx/StockVoucherPage.tsx's First/Prev/Next/Last only ever browse the POSTED
+  list (`canBrowse = browseFilter === 'posted' && ...`) — switching to "Unposted" disables all four
+  nav buttons entirely, unlike every other page where the list swaps with the dropdown. These two
+  pages don't have `deletedPlaceholder`/`mergeWithDeleted` either — they never received several
+  upgrades the other six pages got.
+- Purchase/Purchase Return's First/Last are tied to `canNavPrevious`/`canNavNext` (disabled right at
+  the boundary) rather than `canBrowse` (list non-empty) like Sale Bill/Sale Return — a minor,
+  probably harmless behavioral divergence at the first/last record.
+
+**Files (this fix batch):** `frontend/src/pages/PurchasePage.tsx`,
+`frontend/src/pages/PurchaseReturnPage.tsx`, `frontend/src/pages/ReceiptsPage.tsx`.
+`npx tsc -b` passes clean.
+
+## Fixed the remaining flagged inconsistencies (user: "fix them")
+
+Four straightforward fixes plus one real feature build, all per the audit's list.
+
+**Straightforward fixes:**
+- **Purchase/Purchase Return Delete restored to dual-purpose**: the whole-document delete
+  infrastructure (`isPasswordModalOpen`/`pendingDeleteDraftId`/`handleDeletePasswordSuccess`)
+  already existed in both files but had zero callers — orphaned when the old Pending Posting panel
+  that used to trigger it was removed 2026-09-03, silently leaving no way to delete a whole unposted
+  purchase/return. Added `handleDeleteCurrentPurchase()`/`handleDeleteCurrentReturn()` and made
+  `deleteSelectedArticle` dual-purpose (row-delete when one's selected, whole-document delete when
+  not), matching Sale Bill/Sale Return's own Delete button exactly.
+- **Purchase/Purchase Return First/Last** now use a `canBrowse` (list non-empty) check instead of
+  the Prev/Next boundary check, matching Sale Bill/Sale Return.
+- **Journal Voucher/Stock Voucher Un Post** no longer requires `browseFilter === 'posted'` — removed
+  that gate (title updated to match the wording used everywhere else this gate was already removed).
+- **Journal Voucher/Stock Voucher First/Prev/Next/Last** now browse whichever list the dropdown
+  selects (added a `navUnpostedList`, made `navList`/`navIndex` dropdown-aware) instead of always
+  being locked to the Posted list — switching to "Unposted" no longer disables all four nav buttons.
+  Both pages' `loadJv()`/`loadSv()` already load either posted or unposted rows uniformly by id (a
+  single table with a status column, not a draft/real split), so no new loader was needed.
+
+**Feature build — Print/Find/PDF/Excel added to Purchase and Purchase Return**, confirmed with the
+user first since this meant writing new code with no existing pattern on these two pages to copy
+(unlike the fixes above). Mirrors Sale Bill's own implementation exactly, adapted to Purchase's
+fields (vendor instead of customer, raw-material lines — material/unit/quantity/price — instead of
+article/carton/pairs/discount):
+- **Find**: a toolbar button opening a modal that searches already-loaded posted+unposted lists by
+  System No., manual bill no., or vendor name, jumping straight to the picked record.
+- **Print/PDF**: share one `ReportPrintPreviewModal`, rendering a purchase/return invoice (logo
+  header, an info grid, an items table, a totals row, a signature footer) built from the page's own
+  live form state — same shape as `SaleBillPage.tsx`'s `renderBillPrintable()`.
+- **Excel**: exports the current item list via the existing `exportRowsToExcel()` helper.
+
+All new toolbar buttons correctly include the `deletedPlaceholder != null` guard from the earlier
+fix batch.
+
+**Files:** `frontend/src/pages/PurchasePage.tsx`, `frontend/src/pages/PurchaseReturnPage.tsx`,
+`frontend/src/pages/JournalVoucherPage.tsx`, `frontend/src/pages/StockVoucherPage.tsx`.
+`npx tsc -b` passes clean.

@@ -511,24 +511,34 @@ export default function JournalVoucherPage() {
     () => [...navVouchers].filter(v => v.status === 'CONFIRMED').reverse(),
     [navVouchers]
   );
+  // Unposted JVs are a single table with a status column (not a draft/real split), and loadJv()
+  // already loads either kind uniformly by jv_id — so browsing Unposted just needs its own list,
+  // the same shape as navPostedList. Previously First/Prev/Next/Last only ever browsed
+  // navPostedList regardless of the dropdown, so switching to "Unposted" disabled all four nav
+  // buttons entirely even though unpostedJvs was non-empty (per the user, 2026-09-07 — every other
+  // page's nav list already swaps with this dropdown).
+  const navUnpostedList = useMemo(() => [...unpostedJvs].reverse(), [unpostedJvs]);
+  const navList = browseFilter === 'posted' ? navPostedList : navUnpostedList;
 
   const navIndex = useMemo(() => {
-    if (jvId == null || !isPosted) return -1;
-    return navPostedList.findIndex(v => v.jv_id === jvId);
-  }, [jvId, isPosted, navPostedList]);
+    if (jvId == null) return -1;
+    return browseFilter === 'posted'
+      ? (isPosted ? navPostedList.findIndex(v => v.jv_id === jvId) : -1)
+      : (!isPosted ? navUnpostedList.findIndex(v => v.jv_id === jvId) : -1);
+  }, [jvId, isPosted, browseFilter, navPostedList, navUnpostedList]);
 
-  const canBrowse = browseFilter === 'posted' && navPostedList.length > 0;
+  const canBrowse = navList.length > 0;
   const canNavPrevious = canBrowse && navIndex !== 0;
-  const canNavNext = canBrowse && navIndex !== navPostedList.length - 1;
+  const canNavNext = canBrowse && navIndex !== navList.length - 1;
 
   const goToNavIndex = async (idx: number) => {
-    if (idx < 0 || idx >= navPostedList.length) return;
-    await loadJv(navPostedList[idx].jv_id);
+    if (idx < 0 || idx >= navList.length) return;
+    await loadJv(navList[idx].jv_id);
   };
   const handleFirst = () => goToNavIndex(0);
   const handlePrev = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
   const handleNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
-  const handleLast = () => goToNavIndex(navPostedList.length - 1);
+  const handleLast = () => goToNavIndex(navList.length - 1);
 
   // Switching the Posted/Unposted dropdown (per the user, 2026-08-30):
   // - To Unposted: load the most recently saved unposted JV (or a blank New one if there isn't
@@ -779,8 +789,8 @@ const nextJvNoPreview = useMemo(
             <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
 
             <button
-              type="button" onClick={handleUnpost} disabled={!isViewMode || jvId == null || !isPosted || browseFilter !== 'posted'}
-              title="Un Post — switch the dropdown to Posted first"
+              type="button" onClick={handleUnpost} disabled={!isViewMode || jvId == null || !isPosted}
+              title="Un Post — move this posted voucher back to drafts"
               className="toolbar-btn"
             >
               <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
@@ -893,7 +903,7 @@ const nextJvNoPreview = useMemo(
               <label className="block text-xs font-medium text-slate-600 mb-1">Number</label>
               <input
                 type="text"
-                value={jvId != null ? `#${jvId}` : `#${nextJvNoPreview} (pending)`}
+                value={jvId != null ? `#${jvId}` : `#${nextJvNoPreview}`}
                 disabled
                 className="soleria-input bg-gray-50 text-gray-500 border-gray-200 font-mono"
                 style={{ fontSize: '13px' }}

@@ -6,19 +6,23 @@ import SearchModal from '@/components/SearchModal';
 import * as api from '@/lib/api';
 import type {
   VendorRow, RegionRow, CityRow, PurchaseRow, PurchaseCreateInput, PurchaseItemInput,
-  DraftPurchaseRow, ConfirmAllResult
+  DraftPurchaseRow, ConfirmAllResult, DeletedNumberRow
 } from '@/lib/api';
-import { formatDate, getTodayDate, getThreeMonthsAgoDate, toDateInputValue } from '@/lib/utils';
+import { formatDate, getTodayDate, getThreeMonthsAgoDate, toDateInputValue, nextSystemNoPreview, mergeWithDeleted } from '@/lib/utils';
+import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
 import { focusNextField } from '@/lib/fieldNav';
 import {
   Plus, Trash2, Save, ShoppingBag, Edit, CheckCircle2, XCircle, Undo2, ChevronDown,
-  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight
+  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Printer, FileDown, FileSpreadsheet, Search
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
 import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
+import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { exportRowsToExcel } from '@/lib/export';
+import wentoxLogo from '@/assets/wentox_logo.png';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
 
@@ -126,7 +130,30 @@ export default function PurchasePage() {
   // re-fetch on mount" attempt was worse still — it overwrote the user's unsaved edits with the
   // last-saved copy and reopened in 'view' mode, which disables Save.
   const [purchaseId, setPurchaseId] = usePersistentField<number | null>('purchase', 'purchaseId', null);
+  // The loaded record's own System No. — display-only, kept in step with purchaseId but never
+  // used for API calls; those stay on purchaseId/draftId as before.
+  const [currentSystemNo, setCurrentSystemNo] = usePersistentField<number | null>('purchase', 'currentSystemNo', null);
   const [currentIsPosted, setCurrentIsPosted] = usePersistentField('purchase', 'currentIsPosted', false);
+
+  // Every Purchase System No. permanently retired by a delete (migration 032) — merged into the
+  // browse lists below so First/Prev/Next/Last can show "#N — Deleted" as an actual stop.
+  const [deletedNumbers, setDeletedNumbers] = useState<DeletedNumberRow[]>([]);
+  const refreshDeletedNumbers = useCallback(async () => {
+    const res = await api.draftPurchases.listDeletedNumbers();
+    if (res.ok) setDeletedNumbers(res.data);
+  }, []);
+  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
+
+  // Set when First/Prev/Next/Last lands on a deleted number — DeletedDocumentOverlay renders while
+  // this is non-null. Cleared as soon as a real document loads (see the purchaseId effect below).
+  const [deletedPlaceholder, setDeletedPlaceholder] = useState<number | null>(null);
+  // navIndex normally tracks the loaded purchase's own position via purchaseId — a deleted marker
+  // has no purchaseId to match, so this overrides it while a placeholder is on screen.
+  const [navIndexOverride, setNavIndexOverride] = useState<number | null>(null);
+  useEffect(() => {
+    setDeletedPlaceholder(null);
+    setNavIndexOverride(null);
+  }, [purchaseId]);
   // A New Purchase's own in-progress fields persist across switching pages AND an app restart
   // (usePersistentField — see src/hooks/usePersistentField.ts), so typing one up and getting
   // pulled away mid-entry never loses it. Deliberately NOT applied to mode/purchaseId/
@@ -203,18 +230,15 @@ export default function PurchasePage() {
     return vendors.find(v => v.vendor_id === Number(vendorId));
   }, [vendorId, vendors]);
 
-  // Preview of the System Bill No. a brand-new purchase will get. What Save actually assigns is
-  // the next draft_purchases.draft_id (a NEW draft is what gets created — see handleSave) — not
-  // the next real purchase_id, which is a separate IDENTITY sequence only assigned later, on Post.
-  // Computed client-side from the currently-loaded unposted list, so it's a preview, not a
-  // guarantee: correct as long as nothing else inserts a draft between now and Save (true for this
-  // app's single-admin-session model — see backend/CLAUDE.md).
-  // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
-  // Always shown, from the moment the page opens — an earlier round gated it behind pressing New,
-  // which the user reversed (2026-08-31): the number should just be there.
+  // Preview of the System No. a brand-new purchase will get. This number is now assigned once at
+  // draft-save time and carried through posting unchanged (per the user, 2026-09-05) — a real SQL
+  // Server SEQUENCE (dbo.seq_purchase_no) is the actual source of truth server-side, so this is a
+  // client-side estimate only (MAX across whatever's already loaded, +1). Always shown, from the
+  // moment the page opens — an earlier round gated it behind pressing New, which the user reversed
+  // (2026-08-31): the number should just be there.
 const nextSystemBillNo = useMemo(
-    () => Math.max(0, ...unpostedPurchases.map(d => d.draft_id)) + 1,
-    [unpostedPurchases]
+    () => nextSystemNoPreview(...unpostedPurchases.map(d => d.system_no), ...purchases.map(p => p.system_no)),
+    [unpostedPurchases, purchases]
   );
 
   // Vendor field opens a centered "find" modal (SearchModal) instead of SearchableSelect's small
@@ -392,13 +416,13 @@ const nextSystemBillNo = useMemo(
       p.vendor_id === vId && p.purchase_id !== selfPostedId && (p.bill_no || '').trim().toLowerCase() === lower
     );
     if (matchPosted) {
-      return { kind: 'posted' as const, id: matchPosted.purchase_id, date: matchPosted.purchase_date };
+      return { kind: 'posted' as const, id: matchPosted.system_no, date: matchPosted.purchase_date };
     }
     const matchDraft = unpostedPurchases.find(d =>
       d.vendor_id === vId && d.draft_id !== selfDraftId && (d.bill_no || '').trim().toLowerCase() === lower
     );
     if (matchDraft) {
-      return { kind: 'draft' as const, id: matchDraft.draft_id, date: matchDraft.purchase_date };
+      return { kind: 'draft' as const, id: matchDraft.system_no, date: matchDraft.purchase_date };
     }
     return null;
   }, [debouncedBillNo, vendorId, purchases, unpostedPurchases, purchaseId, currentIsPosted]);
@@ -427,6 +451,7 @@ const nextSystemBillNo = useMemo(
     // P-02: a blank form has nothing saved in it yet, so nothing to clear on post.
     createdInThisRun.current = false;
     setPurchaseId(null);
+    setCurrentSystemNo(null);
     setCurrentIsPosted(false);
     setDate(getTodayDate());
     setVendorId('');
@@ -546,6 +571,7 @@ const nextSystemBillNo = useMemo(
     }
 
     setPurchaseId(result.data.draft_id);
+    setCurrentSystemNo(result.data.system_no);
     setCurrentIsPosted(false);
     // P-02: only a freshly created purchase counts as "part of this run" — an edit of an existing
     // one must not clear the form out from under the user when it posts.
@@ -584,6 +610,7 @@ const nextSystemBillNo = useMemo(
     }
 
     setPurchaseId(row.purchase_id);
+    setCurrentSystemNo(row.system_no);
     setCurrentIsPosted(row.is_posted);
     setDate(toDateInputValue(row.purchase_date));
     setVendorId(String(row.vendor_id));
@@ -617,12 +644,13 @@ const nextSystemBillNo = useMemo(
       return;
     }
     setPurchaseId(res.data.purchase_id);
+    setCurrentSystemNo(res.data.system_no);
     setCurrentIsPosted(true);
     // P-02: clear for the next purchase only if this one was entered in this run — one opened
     // from the list and posted there stays on screen. The message names the document, because
     // once the form empties the clearing is otherwise the only sign anything was saved.
     if (createdInThisRun.current) {
-      setSuccessMsg(`Purchase ${postedBillNo || `#${purchaseId}`} posted. Ready for the next one.`);
+      setSuccessMsg(`Purchase ${postedBillNo || `#${res.data.system_no}`} posted. Ready for the next one.`);
       readyForNextPurchase();
     } else {
       setSuccessMsg('Purchase posted successfully.');
@@ -676,6 +704,7 @@ const nextSystemBillNo = useMemo(
       return;
     }
     setPurchaseId(res.data.draft_id);
+    setCurrentSystemNo(res.data.system_no);
     setCurrentIsPosted(false);
     setMode('edit'); // land on the editable screen straight away, not the read-only view
     setSuccessMsg('Purchase unposted successfully.');
@@ -711,6 +740,7 @@ const nextSystemBillNo = useMemo(
     }
     createdInThisRun.current = false;
     setPurchaseId(draft.draft_id);
+    setCurrentSystemNo(draft.system_no);
     setCurrentIsPosted(false);
     setDate(toDateInputValue(draft.purchase_date));
     setVendorId(String(draft.vendor_id));
@@ -755,6 +785,7 @@ const nextSystemBillNo = useMemo(
     setTimeout(() => setSuccessMsg(''), 3000);
     if (purchaseId === targetId && !currentIsPosted) handleNew();
     refreshUnposted();
+    refreshDeletedNumbers();
   };
 
   // Recorded Purchases (the tab below) shows only POSTED purchases — an unposted one hasn't
@@ -782,33 +813,184 @@ const nextSystemBillNo = useMemo(
   const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('unposted');
   const newButtonRef = useRef<HTMLButtonElement>(null);
 
-  const navPostedList = useMemo(() => [...sortedPurchases].reverse(), [sortedPurchases]);
-  const navUnpostedList = useMemo(() => [...unpostedPurchases].reverse(), [unpostedPurchases]);
+  // Sorted by system_no (creation order), NOT sortedPurchases' own date-based order (right for the
+  // "Recorded Purchases" listing below, wrong here) — a backdated purchase_date used to put that
+  // purchase next to whatever else shares its date when browsing, so First..Last could jump between
+  // unrelated system_no's (reported by the user on Sale Bill, 2026-09-07; same architecture here).
+  const navPostedList = useMemo(
+    () => mergeWithDeleted(purchases.filter(p => p.is_posted).sort((a, b) => a.system_no - b.system_no), deletedNumbers),
+    [purchases, deletedNumbers],
+  );
+  const navUnpostedList = useMemo(
+    () => mergeWithDeleted([...unpostedPurchases].sort((a, b) => a.system_no - b.system_no), deletedNumbers),
+    [unpostedPurchases, deletedNumbers],
+  );
 
   // Whichever list the dropdown selects — this is what the nav buttons page through.
   const navList = navFilter === 'posted' ? navPostedList : navUnpostedList;
 
   // -1 when the purchase on screen isn't in the ACTIVE list (unsaved, or a draft while the
   // dropdown is on Posted and vice versa); the handlers treat that as "start from the beginning".
-  const navIndex = useMemo(() => {
+  // navIndexOverride wins while a deleted-number placeholder is on screen — see SaleBillPage.tsx's
+  // navIndex for why.
+  const derivedNavIndex = useMemo(() => {
     if (purchaseId == null) return -1;
     return navFilter === 'posted'
-      ? (currentIsPosted ? navPostedList.findIndex(p => p.purchase_id === purchaseId) : -1)
-      : (!currentIsPosted ? navUnpostedList.findIndex(p => p.draft_id === purchaseId) : -1);
+      ? (currentIsPosted ? navPostedList.findIndex(e => e.kind === 'doc' && e.row.purchase_id === purchaseId) : -1)
+      : (!currentIsPosted ? navUnpostedList.findIndex(e => e.kind === 'doc' && e.row.draft_id === purchaseId) : -1);
   }, [currentIsPosted, purchaseId, navFilter, navPostedList, navUnpostedList]);
+  const navIndex = navIndexOverride ?? derivedNavIndex;
 
   const canNavPrevious = navList.length > 0 && navIndex !== 0;
   const canNavNext = navList.length > 0 && navIndex !== navList.length - 1;
+  // First/Last only need SOMETHING to browse — matching SaleBillPage/SaleReturnPage, which use this
+  // same distinction rather than tying First/Last to the boundary check Prev/Next use (per the
+  // user, 2026-09-07: flagged as an unexplained divergence between sibling pages).
+  const canBrowse = navList.length > 0;
 
   // Posted rows come from purchases, unposted ones from draft_purchases — each needs its own
-  // loader. Both open read-only; Edit stays a separate deliberate click.
+  // loader. Both open read-only; Edit stays a separate deliberate click. A 'deleted' entry shows
+  // DeletedDocumentOverlay instead of loading anything.
   const goToNavIndex = async (idx: number) => {
     if (idx < 0 || idx >= navList.length) return;
-    if (navFilter === 'posted') {
-      await loadPurchaseRow(navList[idx] as PurchaseRow);
-    } else {
-      await loadDraftIntoForm(navList[idx] as DraftPurchaseRow, { mode: 'view' });
+    const entry = navList[idx];
+    if (entry.kind === 'deleted') {
+      setNavIndexOverride(idx);
+      setDeletedPlaceholder(entry.system_no);
+      return;
     }
+    if (navFilter === 'posted') {
+      await loadPurchaseRow(entry.row as PurchaseRow);
+    } else {
+      await loadDraftIntoForm(entry.row as DraftPurchaseRow, { mode: 'view' });
+    }
+  };
+
+  // Toolbar's Find button — a quick jump to any purchase (posted or unposted) by System No.,
+  // manual bill no., or vendor name, searched client-side over the already-loaded browse lists,
+  // same pattern as SaleBillPage's own Find (per the user, 2026-09-07 — Purchase had none of this).
+  const [isFindOpen, setIsFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const findResults = useMemo(() => {
+    const q = findQuery.trim().toLowerCase();
+    if (!q) return [];
+    const matches = (p: { bill_no: string | null; vendor_id: number; system_no: number }) =>
+      String(p.system_no).includes(q) ||
+      (p.bill_no || '').toLowerCase().includes(q) ||
+      (vendors.find(v => v.vendor_id === p.vendor_id)?.name || '').toLowerCase().includes(q);
+    const posted = purchases.filter(matches).map(row => ({ filter: 'posted' as const, row }));
+    const unposted = unpostedPurchases.filter(matches).map(row => ({ filter: 'unposted' as const, row }));
+    return [...posted, ...unposted].slice(0, 30);
+  }, [findQuery, purchases, unpostedPurchases, vendors]);
+
+  const handleFindSelect = async (filter: 'posted' | 'unposted', row: PurchaseRow | DraftPurchaseRow) => {
+    setIsFindOpen(false);
+    setFindQuery('');
+    if (filter === 'posted') {
+      await loadPurchaseRow(row as PurchaseRow);
+    } else {
+      await loadDraftIntoForm(row as DraftPurchaseRow, { mode: 'view' });
+    }
+  };
+
+  // Print/PDF share one preview modal, per SaleBillPage's own pattern — opens a real preview
+  // instead of jumping straight to the OS print dialog or an unconfirmed export.
+  const [isPrintingSingle, setIsPrintingSingle] = useState(false);
+
+  // The purchase's printable document — mirrors SaleBillPage's renderBillPrintable() shape
+  // (logo header, an info grid, an items table, a totals row, signature footer) using Purchase's
+  // own fields: a vendor instead of a customer, raw-material lines (unit/quantity/price) instead
+  // of article/carton/pairs.
+  const renderPurchasePrintable = () => {
+    const vendorObj = vendors.find(v => v.vendor_id === Number(vendorId));
+    const vendorName = vendorObj ? vendorObj.name : (vendorId || 'N/A');
+    const statusLabel = currentIsPosted ? 'Posted' : 'Unposted';
+
+    return (
+      <div className="excel-print-container" style={{
+        display: 'block', margin: '0 auto', width: '210mm', padding: '10mm',
+        backgroundColor: '#ffffff', color: '#000000', fontFamily: 'Calibri, Arial, sans-serif',
+        boxSizing: 'border-box',
+      }}>
+        <div className="excel-print-header" style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '10px',
+        }}>
+          <div>
+            <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '90px', width: 'auto', objectFit: 'contain' }} />
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>PURCHASE INVOICE</h2>
+            <p style={{ margin: 0, fontSize: '11px', color: '#555555' }}>Status: {statusLabel}</p>
+          </div>
+        </div>
+
+        <div className="excel-grid-info" style={{
+          display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', border: '1px solid #000000', marginBottom: '15px',
+        }}>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>System No.</label>
+            <span>{currentSystemNo ?? 'Unsaved'}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Date</label>
+            <span>{formatDate(date)}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Vendor</label>
+            <span>{vendorName}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Manual Bill No.</label>
+            <span>{billNo || 'N/A'}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px', gridColumn: 'span 4' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Remarks</label>
+            <span>{remarks || 'N/A'}</span>
+          </div>
+        </div>
+
+        <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+          <thead>
+            <tr style={{ backgroundColor: '#f2f2f2' }}>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '40%' }}>Material</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '15%' }}>Unit</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '15%' }}>Quantity</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right', width: '12%' }}>Rate</th>
+              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right', width: '13%' }}>Total Price</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item, idx) => (
+              <tr key={item.uid}>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{item.materialName || 'N/A'}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.unit}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.quantity}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{item.pricePerUnit.toLocaleString()}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{item.totalPrice.toLocaleString()}</td>
+              </tr>
+            ))}
+            <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2', fontSize: '12px' }}>
+              <td colSpan={5} style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', textTransform: 'uppercase' }}>Net Payable Amount (PKR):</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', borderBottom: '3px double #000000' }}>{grandTotal.toLocaleString()}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '45px', fontSize: '11px' }}>
+          <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>Prepared By</div>
+          <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>Checked By</div>
+          <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>Authorized Signature</div>
+        </div>
+
+        <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
+          <div>WENTOX FOOTWEAR DISTRIBUTION</div>
+          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        </div>
+      </div>
+    );
   };
 
   // Switching the Posted/Unposted dropdown (per the user, 2026-08-30):
@@ -822,14 +1004,14 @@ const nextSystemBillNo = useMemo(
       // of state meant a draft posted or deleted since it was last loaded was still in it, so
       // switching to Unposted opened a "draft" that no longer exists (2026-09-04).
       const fresh = await refreshUnposted();
-      const list = [...(fresh ?? unpostedPurchases)].reverse();
+      const list = [...(fresh ?? unpostedPurchases)].sort((a, b) => a.system_no - b.system_no);
       const latest = list[list.length - 1];
       const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
       if (!opened) startNewPurchase();
       requestAnimationFrame(() => newButtonRef.current?.focus());
     } else {
       const fresh = await refreshPurchases();
-      const list = [...(fresh ?? purchases).filter(p => p.is_posted)].reverse();
+      const list = [...(fresh ?? purchases).filter(p => p.is_posted)].sort((a, b) => a.system_no - b.system_no);
       const latest = list[list.length - 1];
       if (latest) await loadPurchaseRow(latest);
     }
@@ -855,11 +1037,26 @@ const nextSystemBillNo = useMemo(
   const handleNavPrevious = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
   const handleNavNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
 
-  // Toolbar "Delete" now targets the selected ARTICLE (the row clicked into the entry fields
-  // below), not the whole bill — bill deletion stays where it was, password-gated in the Pending
-  // Posting panel. Disabled until a row is selected (editingUid set).
+  // Whole-purchase delete (password-gated) — the infrastructure for this (isPasswordModalOpen/
+  // pendingDeleteDraftId/handleDeletePasswordSuccess above) already existed but had no caller left:
+  // it used to be triggered from the Pending Posting panel, removed 2026-09-03, which silently
+  // orphaned this capability entirely (flagged by the user, 2026-09-07 — Purchase had no way left
+  // to delete a whole unposted purchase, unlike Sale Bill/Sale Return's dual-purpose Delete).
+  const handleDeleteCurrentPurchase = () => {
+    if (purchaseId == null || currentIsPosted) return;
+    pendingDeleteDraftId.current = purchaseId;
+    setIsPasswordModalOpen(true);
+  };
+
+  // Toolbar "Delete" is dual-purpose, matching Sale Bill/Sale Return's own Delete: with a row
+  // selected (editingUid set) it removes THAT article; with none selected, it falls back to
+  // deleting the whole unposted purchase.
   const deleteSelectedArticle = () => {
-    if (editingUid) removeItemRow(editingUid);
+    if (editingUid) {
+      removeItemRow(editingUid);
+      return;
+    }
+    handleDeleteCurrentPurchase();
   };
 
   // Recorded Purchases moved to its own tab (was inline under the entry form on the same page —
@@ -937,8 +1134,8 @@ const nextSystemBillNo = useMemo(
             <button
               type="button"
               onClick={deleteSelectedArticle}
-              disabled={isViewMode || !editingUid}
-              title="Delete selected article"
+              disabled={deletedPlaceholder != null || (editingUid ? isViewMode : (!isViewMode || purchaseId == null || currentIsPosted))}
+              title={editingUid ? 'Delete selected article' : 'Delete'}
               className="toolbar-btn"
             >
               <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
@@ -954,7 +1151,7 @@ const nextSystemBillNo = useMemo(
                   else firstFieldRef.current?.focus();
                 });
               }}
-              disabled={!isViewMode || currentIsPosted}
+              disabled={deletedPlaceholder != null || !isViewMode || currentIsPosted}
               title="Edit"
               className="toolbar-btn"
             >
@@ -964,7 +1161,7 @@ const nextSystemBillNo = useMemo(
             <button
               type="button"
               onClick={() => doSave(false)}
-              disabled={isViewMode || !isValid}
+              disabled={deletedPlaceholder != null || isViewMode || !isValid}
               title="Save — keep editing this purchase"
               className="toolbar-btn"
             >
@@ -974,7 +1171,7 @@ const nextSystemBillNo = useMemo(
             <button
               type="submit"
               form="purchase-entry-form"
-              disabled={isViewMode || !isValid}
+              disabled={deletedPlaceholder != null || isViewMode || !isValid}
               title="Done — finish this purchase, then Post it"
               className="toolbar-btn"
             >
@@ -1000,7 +1197,7 @@ const nextSystemBillNo = useMemo(
 
             {/* Record navigation — First/Previous/Next/Last, browsing whichever list `navFilter`
                 (the Posted/Unposted dropdown, far right) currently points at. */}
-            <button type="button" onClick={handleNavFirst} disabled={!canNavPrevious} title="First" className="toolbar-btn">
+            <button type="button" onClick={handleNavFirst} disabled={!canBrowse} title="First" className="toolbar-btn">
               <ChevronsLeft size={20} strokeWidth={2.5} className="text-amber-600" />
               <span>First</span>
             </button>
@@ -1012,9 +1209,31 @@ const nextSystemBillNo = useMemo(
               <ChevronRight size={20} strokeWidth={2.5} className="text-amber-600" />
               <span>Next</span>
             </button>
-            <button type="button" onClick={handleNavLast} disabled={!canNavNext} title="Last" className="toolbar-btn">
+            <button type="button" onClick={handleNavLast} disabled={!canBrowse} title="Last" className="toolbar-btn">
               <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
               <span>Last</span>
+            </button>
+
+            <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
+
+            <button
+              type="button"
+              onClick={() => setIsPrintingSingle(true)}
+              disabled={deletedPlaceholder != null || !isViewMode || purchaseId == null}
+              title="Print"
+              className="toolbar-btn"
+            >
+              <Printer size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Print</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsFindOpen(true)}
+              title="Find"
+              className="toolbar-btn"
+            >
+              <Search size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Find</span>
             </button>
 
             <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
@@ -1026,7 +1245,7 @@ const nextSystemBillNo = useMemo(
               // "I'm here to unpost". Now the dropdown genuinely filters, and its Unposted list
               // holds drafts — none of which can be unposted. Being on a posted purchase is the
               // only real precondition.
-              disabled={!isViewMode || purchaseId == null || !currentIsPosted}
+              disabled={deletedPlaceholder != null || !isViewMode || purchaseId == null || !currentIsPosted}
               title="Unpost — move this posted purchase back to drafts"
               className="toolbar-btn"
             >
@@ -1036,7 +1255,7 @@ const nextSystemBillNo = useMemo(
             <button
               type="button"
               onClick={handlePost}
-              disabled={!isViewMode || purchaseId == null || currentIsPosted}
+              disabled={deletedPlaceholder != null || !isViewMode || purchaseId == null || currentIsPosted}
               title="Post"
               className="toolbar-btn"
             >
@@ -1056,6 +1275,30 @@ const nextSystemBillNo = useMemo(
                 <span>{postAllBusy ? 'Posting…' : 'Post All'}</span>
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => setIsPrintingSingle(true)}
+              disabled={deletedPlaceholder != null || !isViewMode || purchaseId == null}
+              title="Export PDF"
+              className="toolbar-btn"
+            >
+              <FileDown size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>PDF</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const headers = ['Material', 'Unit', 'Quantity', 'Rate', 'Total Price'];
+                const rows = items.map(it => [it.materialName, it.unit, it.quantity, it.pricePerUnit, it.totalPrice]);
+                exportRowsToExcel(`purchase-${billNo || purchaseId}`, headers, rows);
+              }}
+              disabled={deletedPlaceholder != null || !isViewMode || purchaseId == null}
+              title="Export Excel"
+              className="toolbar-btn"
+            >
+              <FileSpreadsheet size={20} strokeWidth={2.5} className="text-slate-600" />
+              <span>Excel</span>
+            </button>
           </div>
 
           {/* Posted/Unposted — picks which list Previous/Next/First/Last page through. Unposted
@@ -1112,9 +1355,10 @@ const nextSystemBillNo = useMemo(
           onSubmit={handleSave}
           className="card-white p-6 bg-white border flex flex-col"
           data-edit-scope="detail"
-          style={{ height: invoiceCardHeight ?? undefined }}
+          style={{ height: invoiceCardHeight ?? undefined, position: 'relative' }}
           data-no-print
         >
+          {deletedPlaceholder != null && <DeletedDocumentOverlay systemNo={deletedPlaceholder} label="purchase" />}
           <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-5">
             <ShoppingBag size={18} className="text-[#B08D57]" />
             <h3 className="font-lora font-bold text-lg text-slate-900">Raw Material Purchase</h3>
@@ -1137,15 +1381,16 @@ const nextSystemBillNo = useMemo(
               />
             </div>
             <div>
-              {/* System Bill No. — the real purchase_id (draft_id while unposted), assigned by the
-                  database, never typed. Read-only always, matching the legacy Wentox screenshot's
-                  auto "Bill No." box. Distinct from "Vendor Bill No." below, which is the vendor's
-                  own free-text invoice number. Before a save, shows nextSystemBillNo — a PREVIEW
-                  of what Save will assign, not the assigned number itself yet. */}
+              {/* System Bill No. — a stable number assigned once at draft creation and carried
+                  through posting unchanged (see 031_document_system_numbers.sql), never typed.
+                  Read-only always, matching the legacy Wentox screenshot's auto "Bill No." box.
+                  Distinct from "Vendor Bill No." below, which is the vendor's own free-text
+                  invoice number. Before a save, shows nextSystemBillNo — a PREVIEW of what Save
+                  will assign, not the assigned number itself yet. */}
               <label className="block text-xs font-bold text-slate-900 mb-1">System Bill No.</label>
               <input
                 type="text"
-                value={purchaseId != null ? `#${purchaseId}` : `#${nextSystemBillNo} (pending)`}
+                value={currentSystemNo != null ? `#${currentSystemNo}` : `#${nextSystemBillNo}`}
                 disabled
                 readOnly
                 className="soleria-input bg-slate-100 text-slate-500 font-mono"
@@ -1608,7 +1853,59 @@ const nextSystemBillNo = useMemo(
           subtitle="Enter your password to permanently delete this unposted purchase."
         />
 
+        {/* Find Purchase Modal — jump to any posted or unposted purchase by System No., manual
+            bill no., or vendor name. */}
+        {isFindOpen && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
+              <h3 className="font-lora font-bold text-lg text-slate-800 mb-4">Find Purchase</h3>
+              <input
+                type="text"
+                value={findQuery}
+                onChange={e => setFindQuery(e.target.value)}
+                placeholder="System No., bill no., or vendor name..."
+                className="soleria-input w-full font-semibold mb-3"
+                autoFocus
+              />
+              <ul className="max-h-72 overflow-y-auto border rounded-lg divide-y" style={{ borderColor: 'var(--border-color)' }}>
+                {findResults.map(({ filter, row }) => (
+                  <li
+                    key={`${filter}-${'purchase_id' in row ? row.purchase_id : row.draft_id}`}
+                    onClick={() => handleFindSelect(filter, row)}
+                    className="px-3 py-2 text-xs cursor-pointer hover:bg-amber-50/60 flex items-center justify-between gap-2"
+                  >
+                    <span className="font-mono font-semibold text-slate-700">{row.bill_no || `#${row.system_no}`}</span>
+                    <span className="text-slate-400 truncate">{vendors.find(v => v.vendor_id === row.vendor_id)?.name || 'Unnamed Vendor'}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${filter === 'posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{filter}</span>
+                  </li>
+                ))}
+                {findQuery.trim() && findResults.length === 0 && (
+                  <li className="px-3 py-3 text-xs text-slate-400 text-center">No matching purchases.</li>
+                )}
+              </ul>
+              <div className="flex justify-end mt-4">
+                <button
+                  type="button"
+                  onClick={() => { setIsFindOpen(false); setFindQuery(''); }}
+                  className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm font-semibold"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
+
+      <ReportPrintPreviewModal
+        isOpen={isPrintingSingle}
+        onClose={() => setIsPrintingSingle(false)}
+        title={`Purchase Invoice ${billNo ? `#${billNo}` : currentSystemNo != null ? `#${currentSystemNo}` : ''}`}
+        orientation="portrait"
+      >
+        {renderPurchasePrintable()}
+      </ReportPrintPreviewModal>
     </AppLayout>
   );
 }

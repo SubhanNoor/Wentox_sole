@@ -1,6 +1,7 @@
 // Service layer: business logic, validation, transactions.
 // Throw ApiError for expected failures; use withTransaction for multi-write ops.
 const repository = require('../repositories/draftSaleReturns.repository');
+const deletedNumbersRepository = require('../repositories/deletedDocumentNumbers.repository');
 const saleReturnsService = require('./saleReturns.service');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
@@ -145,7 +146,10 @@ async function update(draftId, payload) {
 // Deleting a draft deducts the stock it restored back out (a negative reversing ADJUSTMENT — the
 // original restore row is never deleted, matching the schema's reverse-never-erase pattern
 // elsewhere), as if the return never happened.
-async function remove(draftId) {
+//
+// Also records the draft's system_no as permanently deleted (migration 032) — see
+// draftSaleBills.service.js#remove()'s comment.
+async function remove(draftId, userId) {
   const draft = await getById(draftId);
 
   await withTransaction(async (transaction) => {
@@ -161,6 +165,7 @@ async function remove(draftId) {
       })),
     );
     await repository.deleteDraft(transaction, draftId);
+    await deletedNumbersRepository.record(transaction, 'SALE_RETURN', draft.system_no, userId);
   });
 
   return { ok: true };
@@ -204,6 +209,9 @@ async function confirm(draftId, userId) {
     gross_value: draft.gross_value,
     net_value: draft.net_value,
     created_by: userId,
+    // Carries the draft's own System No. forward — never regenerated on posting, per the user,
+    // 2026-09-05: the number stays identical whether the document is a draft or posted.
+    system_no: draft.system_no,
   };
 
   const returnId = await withTransaction(async (transaction) => {
@@ -267,4 +275,8 @@ async function confirmAll(ids, userId) {
   return { posted, failed, attempted: targets.length };
 }
 
-module.exports = { create, getById, list, update, remove, confirm, confirmAll };
+function listDeletedNumbers() {
+  return deletedNumbersRepository.listByType('SALE_RETURN');
+}
+
+module.exports = { create, getById, list, update, remove, confirm, confirmAll, listDeletedNumbers };

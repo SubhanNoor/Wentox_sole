@@ -1,8 +1,12 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, nextSequenceValue } = require('../db/pool');
 
 async function insertDraft(transaction, draft) {
+  // A genuinely new draft gets the next number from the shared sequence; confirm/unconfirm supply
+  // their own carried-over value instead. Deleted numbers are NOT reused (per the user, 2026-09-07).
+  const systemNo = draft.system_no
+    ?? await nextSequenceValue(transaction, 'dbo.seq_purchase_return_no');
   const request = requestWithParams(transaction, {
     returnDate: { type: sql.Date, value: draft.return_date },
     vendorId: { type: sql.Int, value: draft.vendor_id },
@@ -10,12 +14,16 @@ async function insertDraft(transaction, draft) {
     remarks: { type: sql.NVarChar(500), value: draft.remarks ?? null },
     totalValue: { type: sql.Decimal(14, 2), value: draft.total_value },
     createdBy: { type: sql.Int, value: draft.created_by ?? null },
+    // A genuinely new draft has none, so it gets the next number from the shared sequence;
+    // unposting a return back into a draft (purchaseReturns.service.js#unconfirm) supplies the
+    // return's own existing number here instead, so it survives the round trip unchanged.
+    systemNo: { type: sql.Int, value: systemNo },
   });
 
   const result = await request.query(`
-    INSERT INTO dbo.draft_purchase_returns (return_date, vendor_id, bill_no, remarks, total_value, created_by)
+    INSERT INTO dbo.draft_purchase_returns (return_date, vendor_id, bill_no, remarks, total_value, created_by, system_no)
     OUTPUT inserted.draft_id
-    VALUES (@returnDate, @vendorId, @billNo, @remarks, @totalValue, @createdBy)
+    VALUES (@returnDate, @vendorId, @billNo, @remarks, @totalValue, @createdBy, @systemNo)
   `);
   return result.recordset[0].draft_id;
 }

@@ -12,6 +12,7 @@ const receiptsService = require('./receipts.service');
 // receipts.unconfirm() (real -> draft); the per-line isolation and reporting below are unchanged.
 const draftReceiptsService = require('./draftReceipts.service');
 const draftReceiptsRepository = require('../repositories/draftReceipts.repository');
+const deletedNumbersRepository = require('../repositories/deletedDocumentNumbers.repository');
 const { withTransaction } = require('../db/pool');
 const ApiError = require('../errors/ApiError');
 const { today } = require('../utils/dates');
@@ -76,6 +77,10 @@ async function create(payload, userId) {
   validateHeader(payload);
   const voucherId = await withTransaction(async (transaction) => {
     const voucherNo = await repository.nextVoucherNo(transaction);
+    // voucher_no is MAX+1, not a sequence — it CAN reuse a number a deleted voucher left behind
+    // (per the user, 2026-09-07, unlike Sale Bill/Purchase). Clear any stale "deleted" log row for
+    // it so a live voucher never also shows as a deleted placeholder when browsing.
+    await deletedNumbersRepository.unrecord(transaction, 'RECEIPT_VOUCHER', voucherNo);
     return repository.insert(transaction, {
       voucher_no: voucherNo,
       voucher_date: payload.voucher_date || today(),
@@ -194,7 +199,13 @@ async function unpost(voucherId, session) {
 // receipts.repository so there is one definition of how a receipt row is deleted; the FK on
 // receipts.voucher_id is deliberately NOT ON DELETE CASCADE, because a cascade would silently
 // delete posted lines too.
-async function remove(voucherId) {
+// Records the deleted voucher_no (migration 032's table, extended per the user 2026-09-07) so
+// browsing can show "#N — Deleted" instead of silently skipping the gap — matching Sale Bill/
+// Purchase, but WITHOUT their "never reused" guarantee: voucher_no can still come back on a later
+// voucher (see create()'s unrecord() call), same reuse behavior as today, just now visible while
+// it lasts. Only whole-voucher deletion touches voucher_no — deleting one line out of a multi-line
+// voucher (draftReceipts.service.js#remove()/receipts.service.js#remove()) never reaches here.
+async function remove(voucherId, userId) {
   const voucher = await getById(voucherId);
   if (voucher.status !== 'UNPOSTED') {
     throw ApiError.conflict('Unpost this voucher before deleting it', 'POSTED_LOCK');
@@ -211,9 +222,17 @@ async function remove(voucherId) {
       }
     }
     await repository.remove(transaction, voucherId);
+    await deletedNumbersRepository.record(transaction, 'RECEIPT_VOUCHER', voucher.voucher_no, userId);
   });
 }
 
+// For the browse UI: every voucher_no currently sitting as a gap because its voucher was deleted
+// and hasn't since been reused (see unrecord() in create()) — so First/Prev/Next/Last can show
+// "#N — Deleted" instead of silently skipping it.
+function listDeletedNumbers() {
+  return deletedNumbersRepository.listByType('RECEIPT_VOUCHER');
+}
+
 module.exports = {
-  list, getById, create, update, post, unpost, remove, deriveStatus,
+  list, getById, create, update, post, unpost, remove, deriveStatus, listDeletedNumbers,
 };

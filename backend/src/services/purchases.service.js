@@ -200,6 +200,9 @@ async function unconfirm(id) {
       remarks: purchase.remarks,
       total_value: purchase.total_value,
       created_by: purchase.created_by,
+      // Same number the purchase has had since it was first created — unposting must not hand it
+      // a new one (per the user, 2026-09-05).
+      system_no: purchase.system_no,
     };
     const lines = purchase.items.map((item) => ({
       material_id: item.material_id,

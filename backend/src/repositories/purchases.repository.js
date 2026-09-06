@@ -1,8 +1,12 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, nextSequenceValue } = require('../db/pool');
 
 async function insert(transaction, purchase) {
+  // confirm() supplies its own carried-over number; the direct-create path has none and gets a
+  // fresh one from the shared sequence. Deleted numbers are NOT reused (per the user, 2026-09-07).
+  const systemNo = purchase.system_no
+    ?? await nextSequenceValue(transaction, 'dbo.seq_purchase_no');
   const request = requestWithParams(transaction, {
     purchaseDate: { type: sql.Date, value: purchase.purchase_date },
     vendorId: { type: sql.Int, value: purchase.vendor_id },
@@ -10,12 +14,15 @@ async function insert(transaction, purchase) {
     remarks: { type: sql.NVarChar(500), value: purchase.remarks ?? null },
     totalValue: { type: sql.Decimal(14, 2), value: purchase.total_value },
     createdBy: { type: sql.Int, value: purchase.created_by ?? null },
+    // Confirming a draft carries its own system_no forward (see draftPurchases.service.js#
+    // confirm); the direct-create path has none and gets a fresh one.
+    systemNo: { type: sql.Int, value: systemNo },
   });
 
   const result = await request.query(`
-    INSERT INTO dbo.purchases (purchase_date, vendor_id, bill_no, remarks, total_value, created_by)
+    INSERT INTO dbo.purchases (purchase_date, vendor_id, bill_no, remarks, total_value, created_by, system_no)
     OUTPUT inserted.purchase_id
-    VALUES (@purchaseDate, @vendorId, @billNo, @remarks, @totalValue, @createdBy)
+    VALUES (@purchaseDate, @vendorId, @billNo, @remarks, @totalValue, @createdBy, @systemNo)
   `);
   return result.recordset[0].purchase_id;
 }

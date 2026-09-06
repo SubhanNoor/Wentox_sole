@@ -18,6 +18,11 @@ module.exports = function register() {
     return service.getById(payload.id);
   }));
 
+  ipcMain.handle('receipt-vouchers:listDeletedNumbers', wrap(() => {
+    requireSession();
+    return service.listDeletedNumbers();
+  }));
+
   // Opens an empty voucher and allocates its C.Book No. Lines are added afterwards.
   ipcMain.handle('receipt-vouchers:create', wrap((payload) => {
     const session = requireSession();
@@ -49,6 +54,6 @@ module.exports = function register() {
   ipcMain.handle('receipt-vouchers:remove', wrap(async (payload) => {
     const session = requireSession();
     await authService.verifyPassword(session.userId, payload.password);
-    return service.remove(payload.id);
+    return service.remove(payload.id, session.userId);
   }));
 };

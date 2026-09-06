@@ -1,6 +1,6 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, nextSequenceValue } = require('../db/pool');
 
 // Effective packing per variant is COALESCE(article_colors.packing, articles.packing) — schema.sql §5.
 // Kept as its own copy (same shape as saleBills.repository.getVariantPackings) rather than a
@@ -24,6 +24,12 @@ async function getVariantPackings(variantIds) {
 }
 
 async function insertDraft(transaction, draft) {
+  // A genuinely new draft gets the next number from the shared sequence; confirm/unconfirm supply
+  // their own carried-over value instead. Deleted numbers are NOT reused (per the user, 2026-09-07
+  // — gaps are acceptable, a reassigned number is not) — see deletedDocumentNumbers.repository.js
+  // for how a deleted number's gap is still shown when browsing.
+  const systemNo = draft.system_no
+    ?? await nextSequenceValue(transaction, 'dbo.seq_sale_bill_no');
   const request = requestWithParams(transaction, {
     billDate: { type: sql.Date, value: draft.bill_date },
     storeId: { type: sql.Int, value: draft.store_id ?? null },
@@ -43,19 +49,23 @@ async function insertDraft(transaction, draft) {
     grossValue: { type: sql.Decimal(14, 2), value: draft.gross_value },
     netValue: { type: sql.Decimal(14, 2), value: draft.net_value },
     createdBy: { type: sql.Int, value: draft.created_by ?? null },
+    // A genuinely new draft has none, so it gets the next number from the shared sequence;
+    // unposting a bill back into a draft (saleBills.service.js#unconfirm) supplies the bill's own
+    // existing number here instead, so it survives the round trip unchanged.
+    systemNo: { type: sql.Int, value: systemNo },
   });
 
   const result = await request.query(`
     INSERT INTO dbo.draft_sale_bills (
       bill_date, store_id, customer_id, sub_customer_id, main_ac_id, delivery_type,
       delivery_address, bill_no, gp_no, bilty_no, adda_id, remarks, invoice_discount,
-      total_cartons, total_pairs, gross_value, net_value, created_by
+      total_cartons, total_pairs, gross_value, net_value, created_by, system_no
     )
     OUTPUT inserted.draft_id
     VALUES (
       @billDate, @storeId, @customerId, @subCustomerId, @mainAcId, @deliveryType,
       @deliveryAddress, @billNo, @gpNo, @biltyNo, @addaId, @remarks, @invoiceDiscount,
-      @totalCartons, @totalPairs, @grossValue, @netValue, @createdBy
+      @totalCartons, @totalPairs, @grossValue, @netValue, @createdBy, @systemNo
     )
   `);
   return result.recordset[0].draft_id;

@@ -6,7 +6,7 @@ import * as api from '@/lib/api';
 import type {
   VendorRow, BankAccountRow, BusinessAccountRow, ChequeRow, ChequeAllocationRow,
   ExpenseCreateInput, ExpensePaymentMode,
-  ExpenseVoucherRow, VoucherActionResult
+  ExpenseVoucherRow, VoucherActionResult, DeletedNumberRow
 } from '@/lib/api';
 import { focusNextField } from '@/lib/fieldNav';
 import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
@@ -21,7 +21,8 @@ import OverallExpensesTab from '@/components/OverallExpensesTab';
 import AccountBalanceTooltip from '@/components/AccountBalanceTooltip';
 import ConfirmModal from '@/components/ConfirmModal';
 import PageToasts from '@/components/PageToasts';
-import { toDateInputValue, formatDate } from '@/lib/utils';
+import { toDateInputValue, formatDate, mergeWithDeleted } from '@/lib/utils';
+import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 
@@ -85,6 +86,17 @@ export default function ExpensesPage() {
     refreshCheques();
   }, [refreshAllVouchers, refreshCheques]);
 
+  // Every Payment voucher_no currently sitting as a deleted gap — merged into the browse lists
+  // below so First/Prev/Next/Last can show "#N — Deleted" as an actual stop. Unlike Sale Bill etc.,
+  // a deleted voucher_no CAN be reused by a later voucher (see expenseVouchers.service.js#create()'s
+  // unrecord() call), so this list can shrink again on its own, not just grow.
+  const [deletedNumbers, setDeletedNumbers] = useState<DeletedNumberRow[]>([]);
+  const refreshDeletedNumbers = useCallback(async () => {
+    const res = await api.expenseVouchers.listDeletedNumbers();
+    if (res.ok) setDeletedNumbers(res.data);
+  }, []);
+  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
+
   // ── Real-expense form (mirrors ReceiptsPage.tsx's mode structure) ──
   // Persisted with the rest of the draft (2026-08-31): if the strip was mid-correction of an
   // existing line when the page was left, coming back with mode reset to 'new' would commit that
@@ -146,6 +158,8 @@ export default function ExpensesPage() {
     if (!res.ok) return fail('Failed to delete: ' + res.error.message);
     flash(deleteTarget.kind === 'voucher' ? 'Voucher deleted.' : 'Expense deleted.');
     refreshAllVouchers();
+    // Only a whole-voucher delete touches voucher_no — a single line's deletion never does.
+    if (deleteTarget.kind === 'voucher') refreshDeletedNumbers();
     setBalanceRefreshKey(k => k + 1);
     if (deleteTarget.kind === 'voucher' && voucher?.voucher_id === deleteTarget.id) startNewVoucher();
     else if (voucher) await refreshVoucher(voucher.voucher_id);
@@ -192,6 +206,17 @@ export default function ExpensesPage() {
   // the real voucher from it.
   const [openVoucherId, setOpenVoucherId] = usePersistentField<number | null>('expenses', 'openVoucherId', null);
   useEffect(() => { setOpenVoucherId(voucher?.voucher_id ?? null); }, [voucher, setOpenVoucherId]);
+
+  // Set when First/Prev/Next/Last lands on a deleted number — DeletedDocumentOverlay renders while
+  // this is non-null. Cleared as soon as a real voucher loads.
+  const [deletedPlaceholder, setDeletedPlaceholder] = useState<number | null>(null);
+  // navIndex normally tracks the loaded voucher's own position via voucher_id — a deleted marker
+  // has no voucher_id to match, so this overrides it while a placeholder is on screen.
+  const [navIndexOverride, setNavIndexOverride] = useState<number | null>(null);
+  useEffect(() => {
+    setDeletedPlaceholder(null);
+    setNavIndexOverride(null);
+  }, [voucher?.voucher_id]);
 
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
@@ -593,18 +618,21 @@ export default function ExpensesPage() {
   };
 
   // PN-01: Enter on any entry field submits the form — commits the line and re-arms the strip for
-  // the NEXT entry on the SAME voucher. Only the toolbar's Done button finishes the voucher (per
-  // the user, 2026-08-30 follow-up: Enter keeps adding to this voucher; Done is the one that closes
-  // it and starts a new one).
+  // the NEXT entry on the SAME voucher. The toolbar's Done button (handleDoneButton) does the same
+  // commit-and-clear, just with its own "nothing to finish" guard when the strip is empty and no
+  // voucher is open yet — neither one starts a fresh voucher any more (see Done's own comment).
   const handleEntrySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!(await commitEntryLine())) return;
     clearEntryRow();
   };
 
-  // Toolbar's Done button — finishes the OPEN voucher (still unposted/pending, ready to Post
-  // later) and opens a fresh blank one for the next voucher, committing whatever's in the entry
-  // strip first if it's been filled in (per the user, 2026-08-30 follow-up).
+  // Toolbar's Done button — commits whatever's in the entry strip (if it's been filled in) as a
+  // line of the OPEN voucher, then clears the strip for another line. STAYS on the voucher just
+  // saved (Post is right there in the toolbar) rather than jumping to a blank new one — per the
+  // user, 2026-09-07: the earlier "opens a fresh blank one" behavior (2026-08-30) meant every
+  // voucher required a separate trip through Unposted to find and post it. Use New (or navigate
+  // away) to start an actually-blank voucher instead.
   const handleDoneButton = async () => {
     const hasEntryContent = !!baId || amount > 0;
     if (hasEntryContent) {
@@ -613,7 +641,7 @@ export default function ExpensesPage() {
       setErrorMsg('Nothing to finish — fill in a payment first.');
       return;
     }
-    startNewVoucher();
+    clearEntryRow();
   };
 
   // PN-01: post every line of the voucher in one action. Each line posts in its own transaction on
@@ -735,12 +763,27 @@ export default function ExpensesPage() {
       .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no),
     [allVouchers]
   );
-  const navList = navFilter === 'posted' ? navPostedVouchers : navUnpostedVouchers;
+  // Merged with deleted voucher_no's for browsing only — navPostedVouchers/navUnpostedVouchers
+  // above stay real-only (Post All, dropdown counts, Find all still use those unaffected).
+  // mergeWithDeleted re-sorts by its numeric key regardless of input order, so the date-based sort
+  // above doesn't need to change for this to come out in the right voucher_no order.
+  const navPostedList = useMemo(
+    () => mergeWithDeleted(navPostedVouchers.map(v => ({ ...v, system_no: v.voucher_no })), deletedNumbers),
+    [navPostedVouchers, deletedNumbers],
+  );
+  const navUnpostedList = useMemo(
+    () => mergeWithDeleted(navUnpostedVouchers.map(v => ({ ...v, system_no: v.voucher_no })), deletedNumbers),
+    [navUnpostedVouchers, deletedNumbers],
+  );
+  const navList = navFilter === 'posted' ? navPostedList : navUnpostedList;
 
   // -1 when the voucher on screen isn't in the ACTIVE list — handlers treat that as "start over".
-  const navIndex = voucher == null
+  // navIndexOverride wins while a deleted-number placeholder is on screen — see SaleBillPage.tsx's
+  // navIndex for why.
+  const derivedNavIndex = voucher == null
     ? -1
-    : navList.findIndex(v => v.voucher_id === voucher.voucher_id);
+    : navList.findIndex(e => e.kind === 'doc' && e.row.voucher_id === voucher.voucher_id);
+  const navIndex = navIndexOverride ?? derivedNavIndex;
 
   const canNavPrevious = navList.length > 0 && navIndex !== 0;
   const canNavNext = navList.length > 0 && navIndex !== navList.length - 1;
@@ -748,10 +791,17 @@ export default function ExpensesPage() {
 
   // Opens whichever VOUCHER sits at `idx` of the active list, with all of its lines — the entries
   // grid below the form is what shows them, which is why the left-hand Pending Posting panel could
-  // be dropped entirely (per the user, 2026-08-27).
+  // be dropped entirely (per the user, 2026-08-27). A 'deleted' entry shows DeletedDocumentOverlay
+  // instead of loading anything.
   const goToNavIndex = (idx: number) => {
     if (idx < 0 || idx >= navList.length) return;
-    openVoucherInEntry(navList[idx].voucher_id);
+    const entry = navList[idx];
+    if (entry.kind === 'deleted') {
+      setNavIndexOverride(idx);
+      setDeletedPlaceholder(entry.system_no);
+      return;
+    }
+    openVoucherInEntry(entry.row.voucher_id);
   };
 
   // Toolbar "Find" — jump straight to any voucher (posted or not) by C.Book No, date or remarks,
@@ -1021,11 +1071,12 @@ export default function ExpensesPage() {
                 own onSubmit) and Done diverge on purpose, see their own comments above. */}
             <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
               <div className="flex flex-wrap items-center gap-0.5">
-                {/* Update (editing a line, or the header via Edit + Master scope) just commits
-                    that one correction and stays on the open voucher, same as Enter — only Done
-                    (a fresh line) finishes the whole voucher and starts a new one (per the user,
-                    2026-08-30/2026-08-31 follow-ups). */}
-                {!isViewMode && (
+                {/* Update (editing a line, or the header via Edit + Master scope) and Done (a fresh
+                    line) both just commit and stay on the open voucher now — Done no longer starts
+                    a new one (per the user, 2026-09-07: that meant every voucher needed a separate
+                    trip through Unposted to find and post it). Use New to start an actually-blank
+                    voucher. */}
+                {!isViewMode && deletedPlaceholder == null && (
                   <button
                     type="button"
                     onClick={async () => {
@@ -1037,7 +1088,7 @@ export default function ExpensesPage() {
                         await handleDoneButton();
                       }
                     }}
-                    title={isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done — finish this voucher and start a new one'}
+                    title={isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done — save this entry, ready to Post'}
                     className="toolbar-btn"
                   >
                     <Save size={20} strokeWidth={2.5} className="text-blue-600" />
@@ -1054,7 +1105,7 @@ export default function ExpensesPage() {
                 <button
                   type="button"
                   onClick={handleDeleteVoucherClick}
-                  disabled={selectedLineId != null ? false : (!voucher || voucher.status !== 'UNPOSTED')}
+                  disabled={deletedPlaceholder != null || (selectedLineId != null ? false : (!voucher || voucher.status !== 'UNPOSTED'))}
                   title={selectedLineId != null
                     ? 'Delete the selected entry (asks for your password)'
                     : 'Delete this voucher (asks for your password)'}
@@ -1081,7 +1132,7 @@ export default function ExpensesPage() {
                     if (editScope === 'detail') focusFirstEntryField();
                     else requestAnimationFrame(() => firstFieldRef.current?.focus());
                   }}
-                  disabled={!voucher || voucher.status === 'POSTED'}
+                  disabled={deletedPlaceholder != null || !voucher || voucher.status === 'POSTED'}
                   title="Edit — unlock the voucher header or entry strip, per the Edit Scope selected"
                   className="toolbar-btn"
                 >
@@ -1122,7 +1173,7 @@ export default function ExpensesPage() {
                 <button
                   type="button"
                   onClick={handleUnpostVoucher}
-                  disabled={!voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy}
+                  disabled={deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy}
                   title="Unpost Voucher"
                   className="toolbar-btn"
                 >
@@ -1132,7 +1183,7 @@ export default function ExpensesPage() {
                 <button
                   type="button"
                   onClick={handlePostVoucher}
-                  disabled={!voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy}
+                  disabled={deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy}
                   title={voucherBusy ? 'Posting…' : `Post Voucher${voucherLines.length ? ` (${voucherLines.length})` : ''}`}
                   className="toolbar-btn"
                 >
@@ -1201,7 +1252,8 @@ export default function ExpensesPage() {
 
 
             {/* Entry Form Card */}
-            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print data-edit-scope="detail">
+            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print data-edit-scope="detail" style={{ position: 'relative' }}>
+              {deletedPlaceholder != null && <DeletedDocumentOverlay systemNo={deletedPlaceholder} label="voucher" />}
 
               <form id="expense-entry-form" onSubmit={handleEntrySubmit} className="flex flex-col gap-4">
                 {/* Hidden submit target for the app-wide G-01 rule (see fieldNav.ts#findSubmitButton)
@@ -1228,7 +1280,7 @@ export default function ExpensesPage() {
                     <label className="block text-xs font-bold text-slate-900 mb-1">System Voucher No. (C.Book No)</label>
                     <input
                       type="text"
-                      value={voucher ? `#${voucher.voucher_no}` : `#${nextVoucherNo} (pending)`}
+                      value={voucher ? `#${voucher.voucher_no}` : `#${nextVoucherNo}`}
                       disabled
                       readOnly
                       className="soleria-input py-1.5 text-xs bg-slate-100 text-slate-500 font-mono"

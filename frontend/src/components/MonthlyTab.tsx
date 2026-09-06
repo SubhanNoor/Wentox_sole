@@ -188,7 +188,7 @@ export default function MonthlyTab({ onEditBill, onPrintBill }: MonthlyTabProps)
                     <td className="p-3.5 pl-4 font-mono text-slate-600">{formatDate(bill.bill_date)}</td>
                     <td className="p-3.5 text-center">
                       <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
-                        {bill.bill_id}
+                        {bill.system_no}
                       </span>
                     </td>
                     <td className="p-3.5 text-center font-mono font-bold text-slate-800">{bill.bill_no}</td>

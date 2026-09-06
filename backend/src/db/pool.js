@@ -82,6 +82,25 @@ function requestWithParams(poolOrTransaction, params = {}) {
   return request;
 }
 
+// Next value from a SQL Server SEQUENCE, inside an in-flight transaction. `sequenceName` is always
+// a hardcoded literal from the calling repository (e.g. 'dbo.seq_sale_bill_no'), never user input.
+//
+// Exists because `NEXT VALUE FOR` cannot appear inside ISNULL/COALESCE/CASE/IIF/NULLIF — SQL Server
+// rejects it outright ("NEXT VALUE FOR function cannot be used within CASE, CHOOSE, COALESCE, IIF,
+// ISNULL and NULLIF"). The system_no columns (migration 031) need exactly that shape — a genuinely
+// new draft gets a fresh sequence value, one carried over from confirm/unconfirm does not — so the
+// choice is made here in JS instead: resolve the value first, then bind it as a plain parameter.
+//
+// Deliberately never reused once issued (per the user, 2026-09-07: gaps from a deleted document are
+// acceptable, but a deleted number being handed to a DIFFERENT later document is not — a number a
+// customer was quoted must stay retired). A brief gap-reuse version existed for one iteration and
+// was reverted; deletedDocumentNumbers.repository.js instead records a deleted number so the gap can
+// still be shown (not silently skipped) when browsing.
+async function nextSequenceValue(transaction, sequenceName) {
+  const result = await requestWithParams(transaction).query(`SELECT NEXT VALUE FOR ${sequenceName} AS n`);
+  return result.recordset[0].n;
+}
+
 function applyParams(request, params) {
   for (const [name, value] of Object.entries(params)) {
     if (value && typeof value === 'object' && 'type' in value && 'value' in value) {
@@ -92,4 +111,7 @@ function applyParams(request, params) {
   }
 }
 
-module.exports = { sql, getPool, closePool, query, withTransaction, requestWithParams, consumeDirty, isDirty };
+module.exports = {
+  sql, getPool, closePool, query, withTransaction, requestWithParams, nextSequenceValue,
+  consumeDirty, isDirty,
+};

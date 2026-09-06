@@ -851,24 +851,34 @@ export default function StockVoucherPage() {
     () => [...navVouchers].filter(v => v.status === 'CONFIRMED').reverse(),
     [navVouchers]
   );
+  // Unposted stock vouchers are a single table with a status column (not a draft/real split), and
+  // loadSv() already loads either kind uniformly by stock_voucher_id — so browsing Unposted just
+  // needs its own list, the same shape as navPostedList. Previously First/Prev/Next/Last only ever
+  // browsed navPostedList regardless of the dropdown, so switching to "Unposted" disabled all four
+  // nav buttons entirely even though unpostedSvs was non-empty (per the user, 2026-09-07 — every
+  // other page's nav list already swaps with this dropdown).
+  const navUnpostedList = useMemo(() => [...unpostedSvs].reverse(), [unpostedSvs]);
+  const navList = browseFilter === 'posted' ? navPostedList : navUnpostedList;
 
   const navIndex = useMemo(() => {
-    if (svId == null || !isPosted) return -1;
-    return navPostedList.findIndex(v => v.stock_voucher_id === svId);
-  }, [svId, isPosted, navPostedList]);
+    if (svId == null) return -1;
+    return browseFilter === 'posted'
+      ? (isPosted ? navPostedList.findIndex(v => v.stock_voucher_id === svId) : -1)
+      : (!isPosted ? navUnpostedList.findIndex(v => v.stock_voucher_id === svId) : -1);
+  }, [svId, isPosted, browseFilter, navPostedList, navUnpostedList]);
 
-  const canBrowse = browseFilter === 'posted' && navPostedList.length > 0;
+  const canBrowse = navList.length > 0;
   const canNavPrevious = canBrowse && navIndex !== 0;
-  const canNavNext = canBrowse && navIndex !== navPostedList.length - 1;
+  const canNavNext = canBrowse && navIndex !== navList.length - 1;
 
   const goToNavIndex = async (idx: number) => {
-    if (idx < 0 || idx >= navPostedList.length) return;
-    await loadSv(navPostedList[idx].stock_voucher_id);
+    if (idx < 0 || idx >= navList.length) return;
+    await loadSv(navList[idx].stock_voucher_id);
   };
   const handleFirst = () => goToNavIndex(0);
   const handlePrev = () => goToNavIndex(navIndex === -1 ? 0 : navIndex - 1);
   const handleNext = () => goToNavIndex(navIndex === -1 ? 0 : navIndex + 1);
-  const handleLast = () => goToNavIndex(navPostedList.length - 1);
+  const handleLast = () => goToNavIndex(navList.length - 1);
 
   // Switching the Posted/Unposted dropdown (per the user, 2026-08-30):
   // - To Unposted: load the most recently saved unposted voucher (or a blank New one if there
@@ -1132,8 +1142,8 @@ export default function StockVoucherPage() {
             <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
 
             <button
-              type="button" onClick={handleUnpost} disabled={!isViewMode || svId == null || !isPosted || browseFilter !== 'posted'}
-              title="Un Post — switch the dropdown to Posted first"
+              type="button" onClick={handleUnpost} disabled={!isViewMode || svId == null || !isPosted}
+              title="Un Post — move this posted voucher back to drafts"
               className="toolbar-btn"
             >
               <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />

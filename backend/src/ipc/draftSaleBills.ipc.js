@@ -23,6 +23,14 @@ module.exports = function register() {
   );
 
   ipcMain.handle(
+    'draft-sale-bills:listDeletedNumbers',
+    wrap(() => {
+      requireSession();
+      return service.listDeletedNumbers();
+    }),
+  );
+
+  ipcMain.handle(
     'draft-sale-bills:get',
     wrap((payload) => {
       requireSession();
@@ -38,7 +46,7 @@ module.exports = function register() {
     wrap(async (payload) => {
       const session = requireSession();
       await authService.verifyPassword(session.userId, payload.password);
-      return service.remove(payload.id);
+      return service.remove(payload.id, session.userId);
     }),
   );
 

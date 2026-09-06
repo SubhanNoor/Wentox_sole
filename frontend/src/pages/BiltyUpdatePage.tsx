@@ -117,7 +117,7 @@ export default function BiltyUpdatePage() {
   const handleExportExcel = () => {
     const headers = ['Invoice Date', 'Inv. No (Sys)', 'Manual No.', 'Customer Name', 'Sub Customer Name', 'Bilty No.', 'Transport Adda', 'Adda Code'];
     const rows = filteredInvoices.map(bill => [
-      formatDate(bill.bill_date), bill.bill_id, bill.bill_no,
+      formatDate(bill.bill_date), bill.system_no, bill.bill_no,
       bill.customer_name || '-',
       bill.sub_customer_name || 'SAME (Direct)',
       bill.bilty_no || '-',
@@ -148,7 +148,7 @@ export default function BiltyUpdatePage() {
 
     if (systemBillNoQuery.trim()) {
       const q = systemBillNoQuery.trim();
-      result = result.filter(b => String(b.bill_id).includes(q));
+      result = result.filter(b => String(b.system_no).includes(q));
     }
 
     if (biltyNoQuery.trim()) {
@@ -165,7 +165,7 @@ export default function BiltyUpdatePage() {
     }
 
     result.sort((a, b) => {
-      if (sortBy === 'inv-no') return a.bill_id - b.bill_id;
+      if (sortBy === 'inv-no') return a.system_no - b.system_no;
       // numeric: true, or the digits inside a bill number sort as text and BILL-10 lands before
       // BILL-9 — wrong for any customer past their ninth bill. Same options ChartAcSetupPage and
       // BusinessAcSetupPage already use for account codes.
@@ -245,7 +245,7 @@ export default function BiltyUpdatePage() {
             return (
               <tr key={bill.bill_id} style={{ backgroundColor: rowBg }}>
                 <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace' }}>{formatDate(bill.bill_date)}</td>
-                <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', textAlign: 'center' }}>{bill.bill_id}</td>
+                <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', textAlign: 'center' }}>{bill.system_no}</td>
                 <td style={{ border: '1px solid #000', padding: '4px 7px', fontFamily: 'monospace', textAlign: 'center', fontWeight: 'bold' }}>{bill.bill_no}</td>
                 <td style={{ border: '1px solid #000', padding: '4px 7px', fontWeight: 'bold' }}>{bill.customer_name || '-'}</td>
                 <td style={{ border: '1px solid #000', padding: '4px 7px' }}>{bill.sub_customer_name || 'SAME (Direct)'}</td>
@@ -540,7 +540,7 @@ export default function BiltyUpdatePage() {
                       style={{ borderColor: 'var(--border-table)' }}
                     >
                       <td className="p-3 pl-4 font-mono">{formatDate(bill.bill_date)}</td>
-                      <td className="p-3 text-center font-mono">{bill.bill_id}</td>
+                      <td className="p-3 text-center font-mono">{bill.system_no}</td>
                       <td className="p-3 text-center font-mono font-semibold">{bill.bill_no}</td>
                       <td className="p-3 font-semibold text-slate-700">{bill.customer_name || '-'}</td>
                       <td className="p-3 text-slate-600">{bill.sub_customer_name || 'SAME (Direct)'}</td>

@@ -348,6 +348,9 @@ async function unconfirm(id) {
       gross_value: bill.gross_value,
       net_value: bill.net_value,
       created_by: bill.created_by,
+      // Same number the bill has had since it was first created — unposting must not hand it a
+      // new one (per the user, 2026-09-05: the number never changes for this document's life).
+      system_no: bill.system_no,
     };
     const lines = bill.items.map((item) => ({
       variant_id: item.variant_id,
