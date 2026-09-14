@@ -935,6 +935,13 @@ const nextSystemReturnNo = useMemo(
 
   const handlePostCurrentReturn = async () => {
     if (returnId == null) return;
+    // GP No. is optional while the return is a draft, but posting commits it to the ledger/stock —
+    // require it here too so the user sees the reason before the round-trip to the backend, which
+    // enforces the same rule (GP_NO_REQUIRED).
+    if (!gpNo.trim()) {
+      setErrorMsg('GP No. is required to post the return.');
+      return;
+    }
     const res = await api.draftSaleReturns.confirm(returnId);
     if (!res.ok) {
       setErrorMsg('Failed to post return: ' + res.error.message);
