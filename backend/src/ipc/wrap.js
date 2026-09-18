@@ -8,6 +8,18 @@
 // not an Error instance.
 const ApiError = require('../errors/ApiError');
 
+// A packaged install keeps no log file, so a bare "Internal error" on a production screenshot was
+// untraceable (2026-09-18, the external-backup folder picker). Append a SHORT, safe reference: the
+// error's type and code, plus — for a file-system error only — the operation and path. Never the
+// message itself, which for a driver error can carry host/port/connection details (see below).
+function internalMessage(err) {
+  const parts = [];
+  if (err && err.name && err.name !== 'Error') parts.push(err.name);
+  if (err && typeof err.code === 'string') parts.push(err.code);
+  if (err && err.syscall && err.path) parts.push(`${err.syscall} ${err.path}`);
+  return parts.length ? `Internal error (${parts.join(' · ')})` : 'Internal error';
+}
+
 function wrap(handler) {
   return async (event, payload) => {
     try {
@@ -21,7 +33,7 @@ function wrap(handler) {
       // full detail here, but never let it reach the renderer: driver errors carry their own .code
       // (ESOCKET, ETIMEOUT, ELOGIN...) and messages with host/port/driver internals in them.
       console.error(err);
-      return { ok: false, error: { message: 'Internal error', code: 'INTERNAL' } };
+      return { ok: false, error: { message: internalMessage(err), code: 'INTERNAL' } };
     }
   };
 }

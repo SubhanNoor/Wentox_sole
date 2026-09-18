@@ -49,11 +49,58 @@ function readAppConfig() {
   return {};
 }
 
+// Windows refusing the write is the expected failure here, not a bug: the installer creates
+// %ProgramData%\Wentox\app-config.json ELEVATED, and a normal user can read that file but not change
+// it. Surfaced as a plain-language ApiError instead of escaping as a bare "Internal error" (which is
+// exactly what production showed on the external-backup folder picker, 2026-09-18).
+function writeJson(configPath, data) {
+  try {
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(data, null, 2));
+  } catch (err) {
+    if (err && (err.code === 'EPERM' || err.code === 'EACCES')) {
+      // Required lazily: this module is also loaded by standalone scripts before anything else.
+      const ApiError = require('../errors/ApiError');
+      throw ApiError.conflict(
+        `Windows did not allow Wentox to save this setting (${configPath}). Run Wentox as administrator once and try again, or ask whoever installed it to give users write access to that folder.`,
+        'CONFIG_NOT_WRITABLE',
+      );
+    }
+    throw err;
+  }
+}
+
 function writeAppConfig(partial) {
   const configPath = getConfigPath();
   const merged = { ...readAppConfig(), ...partial };
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(merged, null, 2));
+  writeJson(configPath, merged);
+  return merged;
+}
+
+// Per-user settings — for choices that belong to whoever is using the app and must ALWAYS be
+// savable without admin rights (Electron's userData is the user's own profile folder). Machine-wide
+// app-config.json above stays admin-only on purpose: it holds the SQL Server password.
+const USER_SETTINGS_FILENAME = 'user-settings.json';
+function getUserSettingsPath() {
+  try {
+    return path.join(require('electron').app.getPath('userData'), USER_SETTINGS_FILENAME);
+  } catch {
+    return path.join(process.cwd(), USER_SETTINGS_FILENAME);
+  }
+}
+function readUserSettings() {
+  const p = getUserSettingsPath();
+  if (!fs.existsSync(p)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch (err) {
+    console.error(`Failed to read user settings at ${p}, ignoring:`, err);
+    return {};
+  }
+}
+function writeUserSettings(partial) {
+  const merged = { ...readUserSettings(), ...partial };
+  writeJson(getUserSettingsPath(), merged);
   return merged;
 }
 
@@ -71,12 +118,16 @@ function setBackupDbFolder(folderPath) {
 // that one holds a LIVE mirror database SQL Server keeps attached, so it must always be present —
 // this one is a plain file on a drive that is expected to come and go, and is chosen from Settings
 // rather than by the installer (the drive usually isn't plugged in at install time).
+//
+// Saved PER USER now (2026-09-18): choosing it wrote to the admin-only app-config.json, which a
+// normal user cannot change — the folder picker failed with "Internal error" in production. A value
+// saved there by an older version is still honoured until a new folder is picked.
 function getExternalBackupFolder() {
-  return readAppConfig().externalBackupFolder || null;
+  return readUserSettings().externalBackupFolder || readAppConfig().externalBackupFolder || null;
 }
 
 function setExternalBackupFolder(folderPath) {
-  return writeAppConfig({ externalBackupFolder: folderPath });
+  return writeUserSettings({ externalBackupFolder: folderPath });
 }
 
 // Main DB connection — only present when the NSIS installer's DB-connection page wrote it (a
