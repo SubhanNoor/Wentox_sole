@@ -72,4 +72,61 @@ async function setActive(bankId, isActive) {
   );
 }
 
-module.exports = { list, findById, findByNameAndAccountNo, insert, update, setActive };
+// ACC-02 (changes-14-09-26.md, 2026-09-15): "carries transactions" — a bank account never carries
+// ledger_entries directly (there's no bank_id column on that table); every payment/receipt/
+// transfer through it posts against its LINKED business_accounts row instead (bank_accounts.ba_id
+// — see schema.sql's own comment). So "does this bank have activity" means the linked ba_id's own
+// ledger activity plus its own opening balance, same two checks businessAccounts.service.js#remove
+// applies to any other business account.
+async function hasLedgerActivity(bankId) {
+  const result = await query(
+    `SELECT TOP 1 1 AS found
+     FROM dbo.bank_accounts ba
+     JOIN dbo.ledger_entries le ON le.ba_id = ba.ba_id
+     WHERE ba.bank_id = @bankId`,
+    { bankId: { type: sql.Int, value: bankId } },
+  );
+  return result.recordset.length > 0;
+}
+
+async function findLinkedOpeningBalance(bankId) {
+  const result = await query(
+    `SELECT b.opening_balance
+     FROM dbo.bank_accounts ba
+     JOIN dbo.business_accounts b ON b.ba_id = ba.ba_id
+     WHERE ba.bank_id = @bankId`,
+    { bankId: { type: sql.Int, value: bankId } },
+  );
+  return result.recordset[0]?.opening_balance ?? null;
+}
+
+// Permanent delete (per the user, 2026-09-17 — added on top of the existing soft-close, not
+// instead of it). Scoped the same way remove() is: only this bank_accounts row is ever hard-
+// deleted, never its linked business_accounts row (that stays intact for ledger/history integrity,
+// same reasoning as remove()'s own comment). So this only needs to cover every FK that points at
+// bank_id itself — cheques.bank_id, receipts/draft_receipts.bank_id, expenses/draft_expenses.
+// bank_id — not the linked ba_id's own references (businessAccounts.repository.js#hasAnyReference
+// already covers that row separately, if it's ever hard-deleted on its own).
+async function hasAnyReference(bankId) {
+  const result = await query(
+    `SELECT
+       (SELECT TOP 1 1 FROM dbo.cheques WHERE bank_id = @bankId) AS cheque,
+       (SELECT TOP 1 1 FROM dbo.receipts WHERE bank_id = @bankId) AS receipt,
+       (SELECT TOP 1 1 FROM dbo.draft_receipts WHERE bank_id = @bankId) AS draftReceipt,
+       (SELECT TOP 1 1 FROM dbo.expenses WHERE bank_id = @bankId) AS expense,
+       (SELECT TOP 1 1 FROM dbo.draft_expenses WHERE bank_id = @bankId) AS draftExpense`,
+    { bankId: { type: sql.Int, value: bankId } },
+  );
+  const row = result.recordset[0];
+  return Object.values(row).some((v) => v != null);
+}
+
+async function hardDelete(transaction, bankId) {
+  const request = requestWithParams(transaction, { bankId: { type: sql.Int, value: bankId } });
+  await request.query('DELETE FROM dbo.bank_accounts WHERE bank_id = @bankId');
+}
+
+module.exports = {
+  list, findById, findByNameAndAccountNo, insert, update, setActive,
+  hasLedgerActivity, findLinkedOpeningBalance, hasAnyReference, hardDelete,
+};

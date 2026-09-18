@@ -9,6 +9,7 @@ import * as api from '@/lib/api';
 import type { ChequeRow, ChequeAllocationRow, ChequeStatus, ChequeDispositionType, VendorRow, BankAccountRow, BusinessAccountRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 const STATUS_STYLES: Record<ChequeStatus, string> = {
@@ -40,12 +41,15 @@ export default function ChequesTab() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | ChequeStatus>(() => (getWindowParam('statusFilter') as 'all' | 'open' | ChequeStatus) || 'open');
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
-  // "Open" = still outstanding, i.e. not yet CLEARED and not BOUNCED/RETURNED. DEPOSITED belongs
-  // here: banking a cheque does not settle it — the bank has not confirmed it yet, and Mark Cleared
-  // is the next thing someone has to do to it. Leaving DEPOSITED out meant a cheque vanished from
-  // the default view the moment it was deposited, and since Mark Cleared only renders on a
-  // DEPOSITED row, the button was unreachable until the operator changed the filter by hand.
-  const OPEN_STATUSES: ChequeStatus[] = ['PENDING', 'PARTIALLY_ENDORSED', 'DEPOSITED'];
+  // "Open" = still outstanding, i.e. not yet CLEARED and not BOUNCED/RETURNED. DEPOSITED and
+  // ENDORSED both belong here: neither settles the cheque on its own — the bank hasn't confirmed a
+  // deposit yet, and an endorsement just hands the cheque to someone else who still has to bank it
+  // — Mark Cleared is the next thing someone has to do either way. Leaving a status out here means
+  // a cheque vanishes from the default view the moment it reaches that status, and since Mark
+  // Cleared only renders on a DEPOSITED/ENDORSED row, the button becomes unreachable until the
+  // operator changes the filter by hand (this exact gap already happened once for DEPOSITED;
+  // ENDORSED had the same gap until CHQ-02, changes-14-09-26.md, 2026-09-15).
+  const OPEN_STATUSES: ChequeStatus[] = ['PENDING', 'PARTIALLY_ENDORSED', 'DEPOSITED', 'ENDORSED'];
 
   const statusOptionsList: { value: 'all' | 'open' | ChequeStatus; label: string }[] = [
     { value: 'open', label: 'Open (not yet cleared)' },
@@ -81,6 +85,12 @@ export default function ChequesTab() {
   // Return-to-sender confirmation state
   const [returningCheque, setReturningCheque] = useState<ChequeRow | null>(null);
   const [returnDate, setReturnDate] = useState(todayISO());
+
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog — these three build their own
+  // inline modals rather than going through a shared component, so each needs its own hook call.
+  useEscapeToClose(disposingCheque != null, () => setDisposingCheque(null));
+  useEscapeToClose(bouncingCheque != null, () => setBouncingCheque(null));
+  useEscapeToClose(returningCheque != null, () => setReturningCheque(null));
 
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -269,9 +279,12 @@ export default function ChequesTab() {
   );
   const businessAccountOptions = useMemo(
     // Business accounts show their PARENT chart account inline, appended to the same field with an em-dash rather than in a field of its own (2026-08-30, per the user). Matches how ReceiptsPage's own account picker already reads. `ac_name` is joined in by businessAccounts.repository.js's list().
+    // searchText excludes the parent chart account name (changes-14-09-26.md G-09, per the client
+    // 2026-09-14 — typing the parent's name must not surface every account under it).
     () => businessAccounts.map(b => ({
       value: String(b.ba_id),
       label: `${b.name}${b.ac_name ? ` — ${b.ac_name}` : ''}`,
+      searchText: b.name,
     })),
     [businessAccounts]
   );
@@ -521,7 +534,7 @@ export default function ChequesTab() {
                                 Receipt not posted
                               </span>
                             )}
-                            {receiptPosted && row.status === 'DEPOSITED' && (
+                            {receiptPosted && (row.status === 'DEPOSITED' || row.status === 'ENDORSED') && (
                               <button
                                 onClick={() => markCleared(row.cheque)}
                                 className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 transition-colors"
@@ -658,6 +671,7 @@ export default function ChequesTab() {
                       onChange={setDepositBankId}
                       placeholder="Select bank account..."
                       searchPlaceholder="Type to search..."
+                      required
                     />
                   )}
                   <p className="text-[10px] text-slate-400 mt-1">

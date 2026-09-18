@@ -178,10 +178,18 @@ async function remove(draftId, userId) {
 async function confirm(draftId, userId) {
   const draft = await getById(draftId);
 
+  // gp_no/bilty_no/adda_id used to be required here too, but that was never true of Sale Bill's
+  // own equivalent (saleBills.service.js's validateHeader only ever required bill_no — see its own
+  // comment: "dispatch details filled in [later]") and directly contradicted both this page's own
+  // UI (every one of those fields is labeled "— optional", no red asterisk) and
+  // saleReturns.service.js#validateHeader's own comment on the very same three fields: "dispatch
+  // details that are often unknown when the return is [posted]". Reported directly by the user
+  // (2026-09-16, screenshot of "Failed to post return: gp_no is required" despite the field
+  // reading optional) — dropped to match every other document type's actual convention. Unlike
+  // Sale Bill, Sale Return has no BiltyUpdatePage-equivalent to fill these in after posting; that
+  // gap is real but pre-existing, and not something this fix should paper over by keeping a
+  // requirement the UI never told the user about.
   if (!draft.bill_no) throw ApiError.badRequest('bill_no is required before confirming');
-  if (!draft.gp_no) throw ApiError.badRequest('gp_no is required before confirming');
-  if (!draft.bilty_no) throw ApiError.badRequest('bilty_no is required before confirming');
-  if (!draft.adda_id) throw ApiError.badRequest('adda_id is required before confirming');
 
   const lines = draft.items.map((item) => ({
     variant_id: item.variant_id,

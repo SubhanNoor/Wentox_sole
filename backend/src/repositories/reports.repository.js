@@ -169,7 +169,53 @@ async function ledgerRows(filters = {}) {
        wr.wage_run_id AS wr_id, wr.stage_key AS wr_stage_key, wr_emp.name AS wr_employee_name,
        sar.salary_run_id AS sar_id, sar.period_month AS sar_period_month,
        tr.transfer_id AS tr_id, tr.remarks AS tr_remarks,
-       tr_from.name AS tr_from_name, tr_to.name AS tr_to_name
+       tr_from.name AS tr_from_name, tr_to.name AS tr_to_name,
+       -- LED-01 (changes-14-09-26.md, 2026-09-15): the purchase ledger shows one row per item,
+       -- grouped under its voucher — display only (see this migration-free item's own note: "do
+       -- not restructure the posting model... the item lines are already stored and joinable").
+       -- One JSON array per ledger row, never a join straight onto purchase_items — that would
+       -- multiply this row once per item and double-count its debit/credit in the running
+       -- balance every other caller of ledgerRows() relies on. Guarded on source_type inside the
+       -- correlated subquery (not just the outer WHERE) because source_id is only a purchase_id
+       -- when source_type = 'PURCHASE' — for every other type it's some other table's own PK, and
+       -- an unguarded correlation could spuriously match an unrelated purchase_items row that
+       -- happens to share that numeric id.
+       (
+         SELECT pi.material_id, m.name AS material_name, pi.unit, pi.quantity, pi.price_per_unit, pi.total_price
+         FROM dbo.purchase_items pi
+         JOIN dbo.materials m ON m.material_id = pi.material_id
+         WHERE le.source_type = 'PURCHASE' AND pi.purchase_id = le.source_id
+         ORDER BY pi.line_no
+         FOR JSON PATH
+       ) AS pur_items_json,
+       -- Same LED-01 treatment, per the user (2026-09-17): the purchase RETURN ledger gets the
+       -- identical one-row-per-item grouping the purchase ledger above already has. Same guard
+       -- shape (source_type checked inside the subquery too, not just the outer WHERE) for the
+       -- same reason — source_id is only a return_id when source_type = 'PURCHASE_RETURN'.
+       (
+         SELECT pri.material_id, m2.name AS material_name, pri.unit, pri.quantity, pri.price_per_unit, pri.total_price
+         FROM dbo.purchase_return_items pri
+         JOIN dbo.materials m2 ON m2.material_id = pri.material_id
+         WHERE le.source_type = 'PURCHASE_RETURN' AND pri.return_id = le.source_id
+         ORDER BY pri.line_no
+         FOR JSON PATH
+       ) AS pur_return_items_json,
+       -- LED-02 (changes-14-09-26.md, 2026-09-15): "default account" = the counter-account of the
+       -- posting, the other side of the same transaction. source_type+source_id normally identifies
+       -- exactly two ledger_entries rows (one debit, one credit); this picks whichever OTHER row
+       -- comes first by entry_id. For a multi-line Journal Voucher (3+ rows sharing one source_id)
+       -- that's a deliberate simplification, confirmed with the client: show the first other line
+       -- only, not every one of them — matches the "one counter-account" shape every other document
+       -- type already has.
+       (
+         SELECT TOP 1 COALESCE(ba2.name, ca2.name)
+         FROM dbo.ledger_entries le2
+         LEFT JOIN dbo.business_accounts ba2 ON ba2.ba_id = le2.ba_id
+         LEFT JOIN dbo.chart_of_accounts ca2 ON ca2.ac_id = le2.ac_id
+         WHERE le2.source_type = le.source_type AND le2.source_id = le.source_id
+           AND le2.entry_id <> le.entry_id
+         ORDER BY le2.entry_id
+       ) AS counter_account_name
      FROM dbo.ledger_entries le
      LEFT JOIN dbo.sale_bills sb    ON le.source_type = 'SALE_BILL'    AND sb.bill_id = le.source_id
      LEFT JOIN dbo.sale_returns sr  ON le.source_type = 'SALE_RETURN'  AND sr.return_id = le.source_id

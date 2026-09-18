@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import { formatDate } from '@/lib/utils';
 import { Search, Wallet } from 'lucide-react';
@@ -20,6 +20,12 @@ export function ChequeInHandContent({ onGoToDisposal }: { onGoToDisposal?: () =>
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  // G-03 (changes-14-09-26.md): this pane mounts fresh on every tab switch (ChequePage's
+  // `activeTab === 'in-hand' && <ChequeInHandContent .../>`), so a mount-only effect is enough to
+  // cover both "page opens on this tab" and "user switches to this tab".
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => searchRef.current?.focus()); }, []);
 
   const loadInHand = useCallback(async () => {
     setLoading(true);
@@ -86,6 +92,7 @@ export function ChequeInHandContent({ onGoToDisposal }: { onGoToDisposal?: () =>
         </div>
         <div className="relative min-w-[240px]">
           <input
+            ref={searchRef}
             type="text"
             placeholder="Cheque no. or customer..."
             value={search}

@@ -1,8 +1,9 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { EmployeeRow, SalaryRunRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import AppLayout from '@/components/AppLayout';
 import { Save, BadgeDollarSign, History, Edit2, Undo2, AlertTriangle, RotateCcw, X } from 'lucide-react';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
@@ -46,6 +47,10 @@ export default function SalaryRunPage() {
   // being lost for good.
   const clearSalaryRunDraft = useClearPageDraft('salary-run');
   const [periodMonth, setPeriodMonth] = usePersistentField('salary-run', 'periodMonth', thisMonth());
+
+  // G-03 (changes-14-09-26.md): the cursor lands in the first field (Month) on open.
+  const monthFieldRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => monthFieldRef.current?.focus()); }, []);
 
   // A new run's lines are DERIVED from the current roster, never stored — so
   // adding a salaried employee shows up immediately without an effect syncing
@@ -206,6 +211,8 @@ export default function SalaryRunPage() {
   // read-only instead of loading it into the editable entry form. Works for CONFIRMED rows too,
   // unlike editRun, which refuses to touch a posted run.
   const [viewingRun, setViewingRun] = useState<SalaryRunRow | null>(null);
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(viewingRun != null, () => setViewingRun(null));
   const [viewLoading, setViewLoading] = useState(false);
   const viewRun = async (run: SalaryRunRow) => {
     setViewLoading(true);
@@ -300,6 +307,7 @@ export default function SalaryRunPage() {
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Month</label>
                 <input
+                  ref={monthFieldRef}
                   type="month"
                   value={periodMonth}
                   onChange={e => { setPeriodMonth(e.target.value); setOverrides({}); }}

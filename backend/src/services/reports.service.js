@@ -105,6 +105,23 @@ function vendorStock() {
   return repository.vendorStock();
 }
 
+// LED-02 (changes-14-09-26.md, 2026-09-15): "mode of payment" — confirmed with the client to apply
+// only to document types that actually record cash/cheque/bank AT POSTING TIME: Receipt, Expense,
+// and Cheque Endorsement/Return (always a cheque, by definition — cheque_allocations carries no
+// payment_mode column of its own, there's nothing else it could be). Every other document type
+// (Sale Bill, Purchase, Transfer, Journal Voucher, Wage/Salary Run, Opening Balance, Direct
+// Settlement) is on-account or has no such concept — omitted cleanly, per the item's own rule,
+// rather than printing an empty label.
+const PAYMENT_MODE_LABELS = {
+  CASH: 'Cash', CHEQUE: 'Cheque', ONLINE: 'Bank Transfer', CHEQUE_ENDORSED: 'Cheque', CHEQUE_ISSUED: 'Cheque',
+};
+function paymentModeLabelFor(r) {
+  if (r.source_type === 'RECEIPT' && r.rc_payment_mode) return PAYMENT_MODE_LABELS[r.rc_payment_mode] || null;
+  if (r.source_type === 'EXPENSE' && r.ex_payment_mode) return PAYMENT_MODE_LABELS[r.ex_payment_mode] || null;
+  if (r.source_type === 'CHEQUE_ALLOCATION') return 'Cheque';
+  return null;
+}
+
 // ── Shared ledger + balance helpers ─────────────────────────────────────────────────────────
 // UC-35 Khaata row shape — reused by account-ledger, business-ledger's detail view, and the two
 // new reports (overall-trail drill-down, overall-search drill-down).
@@ -165,6 +182,10 @@ function formatLedgerRow(r) {
       type = 'Journal Voucher';
       break;
     case 'PURCHASE':
+      // LED-01 (changes-14-09-26.md, corrected 2026-09-15 per the client): a single-item purchase
+      // must render exactly as it always did — type + the original combined narration, untouched.
+      // Only a MORE-THAN-ONE-item purchase gets the per-item row treatment, entirely on the
+      // frontend from `purchase_items` below; this case intentionally does nothing extra.
       type = 'Purchase';
       break;
     case 'PURCHASE_RETURN':
@@ -188,6 +209,41 @@ function formatLedgerRow(r) {
       break;
   }
 
+  // LED-02 (changes-14-09-26.md, 2026-09-15): append the counter-account name — and, for a
+  // Receipt/Expense/Cheque Endorsement or Return, the mode of payment — to whatever narration the
+  // switch above produced. Always appended, never substituted: a user's own typed text (or an
+  // already-descriptive stored narration) is never overwritten, only extended. Skipped when the
+  // narration already names the counter account (Transfer's own fallback already does, e.g. "HBL
+  // Bank → Cash in Hand") so the same account name is never shown twice on one line.
+  const counterAccountName = r.counter_account_name || null;
+  if (counterAccountName && !(narration || '').toLowerCase().includes(counterAccountName.toLowerCase())) {
+    narration = narration ? `${narration} — ${counterAccountName}` : counterAccountName;
+  }
+  const paymentModeLabel = paymentModeLabelFor(r);
+  if (paymentModeLabel) {
+    narration = narration ? `${narration} (${paymentModeLabel})` : `(${paymentModeLabel})`;
+  }
+
+  // LED-01: parsed once here (not left as a raw JSON string) so every caller of formatLedgerRow —
+  // account-ledger, business-ledger, vendor-ledger, since all three go through accountLedger() —
+  // gets the same shape for free. Undefined (not null/[]) when this isn't a purchase (or, per the
+  // user 2026-09-17, a purchase return) row at all, so the frontend can tell "not applicable" apart
+  // from "zero item lines". One shared field/shape for both source types — the frontend's own
+  // per-item row expansion only needs `type` (already "Purchase" vs "Purchase Return") to label
+  // each row correctly, not a second field name to check.
+  const itemsJson = r.source_type === 'PURCHASE' ? r.pur_items_json
+    : r.source_type === 'PURCHASE_RETURN' ? r.pur_return_items_json
+      : undefined;
+  const purchase_items = itemsJson !== undefined
+    ? (itemsJson ? JSON.parse(itemsJson) : []).map((it) => ({
+      material_name: it.material_name,
+      unit: it.unit,
+      quantity: Number(it.quantity),
+      price_per_unit: Number(it.price_per_unit),
+      total_price: Number(it.total_price),
+    }))
+    : undefined;
+
   return {
     entry_id: r.entry_id,
     date: r.entry_date,
@@ -201,6 +257,7 @@ function formatLedgerRow(r) {
     pairs: r.pairs,
     debit: Number(r.debit),
     credit: Number(r.credit),
+    purchase_items,
     is_payment_row: r.source_type === 'RECEIPT' || r.source_type === 'COMMISSION',
   };
 }

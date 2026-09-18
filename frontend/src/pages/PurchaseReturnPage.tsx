@@ -16,9 +16,10 @@ import {
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
-import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { exportRowsToExcel } from '@/lib/export';
 import wentoxLogo from '@/assets/wentox_logo.png';
@@ -90,12 +91,28 @@ export default function PurchaseReturnPage() {
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
     refreshReturns();
-    refreshUnposted();
+    // G-06 (changes-14-09-26.md, 2026-09-15): zero unposted returns on open must land on a fresh
+    // blank entry, not wherever the session that closed the window left the screen pointed.
+    // Originally gated on `mode === 'view'`, which misses a real case reported by the user
+    // (2026-09-16, found on SaleBillPage's own equivalent bug): an edit-on-a-posted-record flow can
+    // leave `mode: 'edit'` while the loaded record is still posted, so `mode === 'view'` alone
+    // under-triggers. `currentIsPosted` (persisted) is the direct, unambiguous signal — true iff an
+    // actual posted record is loaded, in EITHER 'view' or 'edit' mode; only `handleNew()` ever sets
+    // it false, so it can never be true while there's genuine unsaved new-document work to protect.
+    refreshUnposted().then(data => {
+      if (data && data.length === 0 && currentIsPosted) handleNew();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshReturns, refreshUnposted]);
 
   // Mode: 'view' | 'edit' | 'new'. Persisted with the rest of the draft (2026-08-31) — a page
   // restored into 'view' has Save disabled, so the state it was left in has to survive too.
   const [mode, setMode] = usePersistentField<'view' | 'edit' | 'new'>('purchase-return', 'mode', 'new');
+  // The posted/unposted/System No. rule (per the user, 2026-09-18) — see useNewDocGate for all of
+  // it. hasPageDraftAtMount gates the auto-open further down (only genuine unsaved typing skips
+  // it); hasClickedNew gates the No. preview and the awaitingNew lock; only New calls markNewClicked.
+  const { hasRealDraftAtMount: hasPageDraftAtMount, hasClickedNew, setHasClickedNew, markNewClicked } =
+    useNewDocGate('purchase-return', ['vendorId', 'billNo', 'items', 'remarks', 'copyFromPurchaseId']);
   // Master/Detail edit-scope radio (left-side widget, below) — which half of the form Edit
   // actually unlocks. Per the user, 2026-08-31: Edit used to unlock the whole document at once;
   // now Master unlocks only the header fields, Detail only the entry strip + grid. Reset to
@@ -157,6 +174,23 @@ export default function PurchaseReturnPage() {
   // Set while re-editing an existing grid row (clicked from the list below) — commit updates that
   // row in place instead of appending a new one. null means the entry fields are building a new row.
   const [editingUid, setEditingUid] = useState<string | null>(null);
+  // G-08 (changes-14-09-26.md, 2026-09-15): a click on a detail row must produce no visible change
+  // at all — no edit load, no highlight. It only records which row Delete/Edit Row will act on
+  // internally; `editingUid` (the actually-loaded-for-editing row, and the only thing that drives
+  // the blue highlight) is set exclusively by the Edit Row button now, never by a row click
+  // directly. Cleared whenever `editingUid` takes over so the two never point at different rows.
+  const [selectedUid, setSelectedUid] = useState<string | null>(null);
+  // G-05 (changes-14-09-26.md, 2026-09-15): the row most recently ADDED or UPDATED via the entry
+  // fields — a pure position indicator (the ▶ gutter marker below), never a selection. Deliberately
+  // separate from `selectedUid`/`editingUid` above: G-05's own text is explicit that the pointer
+  // "must not look like, or behave as, the highlight described in G-08" — a click never moves it,
+  // only committing a row does. Keyed by uid (not array index) since this grid's own rows already
+  // key by uid, which survives a mid-list merge/edit without drifting the way an index would.
+  const [lastEnteredUid, setLastEnteredUid] = useState<string | null>(null);
+  const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+  useEffect(() => {
+    if (lastEnteredUid != null) rowRefs.current[lastEnteredUid]?.scrollIntoView({ block: 'nearest' });
+  }, [lastEnteredUid]);
   const [isCustomUnit, setIsCustomUnit] = useState(false);
   // Which prior purchase this in-progress return is being built against — real not-yet-saved
   // entry state (drives which articles/prices are valid to type), so persisted alongside the
@@ -323,6 +357,8 @@ const nextSystemBillNo = useMemo(
     }
     setCurrentRow(emptyCurrentRow());
     setEditingUid(null);
+    setSelectedUid(null);
+    setLastEnteredUid(null);
     setIsCustomUnit(false);
   };
 
@@ -533,6 +569,10 @@ const nextSystemBillNo = useMemo(
       it.materialName.trim().toLowerCase() === materialName.toLowerCase() &&
       it.unit.trim().toLowerCase() === unit.toLowerCase()
     );
+    // G-05: the new row's own uid is generated here (not inline in the append branch below) so it
+    // can double as the pointer target — a functional `setItems` updater can't hand a value back
+    // out to set as the pointer afterward.
+    const newUid = newItemUid();
     if (dup) {
       setItems(prev => {
         const withoutEditing = editingUid ? prev.filter(it => it.uid !== editingUid) : prev;
@@ -546,12 +586,14 @@ const nextSystemBillNo = useMemo(
         : it));
     } else {
       setItems(prev => [...prev, {
-        uid: newItemUid(), materialName, unit,
+        uid: newUid, materialName, unit,
         quantity: currentRow.quantity, pricePerUnit: currentRow.pricePerUnit, totalPrice
       }]);
     }
+    setLastEnteredUid(dup ? dup.uid : editingUid ? editingUid : newUid);
     setCurrentRow(emptyCurrentRow());
     setEditingUid(null);
+    setSelectedUid(null);
     setIsCustomUnit(false);
     requestAnimationFrame(() => materialNameRef.current?.focus());
   };
@@ -567,6 +609,8 @@ const nextSystemBillNo = useMemo(
   // stays in the grid (not pulled out) until the edit is committed, so it never looks "missing".
   // PR-01: priming lastResolvedNameRef to this row's own name means reopening it for edit doesn't
   // immediately re-fetch and clobber a hand-edited or copied-from-purchase rate on the first blur.
+  // G-08: now the Edit Row toolbar button's handler, not the row's own onClick — a row click just
+  // records `selectedUid` (see the grid below), and this only runs once the user presses Edit Row.
   const handleEditRow = (item: UiItem) => {
     if (isViewMode) return;
     // Detail scope only — clicking a row to re-edit it is a detail-section interaction, so it
@@ -574,20 +618,29 @@ const nextSystemBillNo = useMemo(
     if (detailFieldsLocked) return;
     setCurrentRow({ materialName: item.materialName, unit: item.unit, quantity: item.quantity, pricePerUnit: item.pricePerUnit });
     setEditingUid(item.uid);
+    setSelectedUid(null);
     setIsCustomUnit(!UNIT_PRESETS.includes(item.unit));
     lastResolvedNameRef.current = item.materialName.trim();
     requestAnimationFrame(() => materialNameRef.current?.focus());
   };
 
+  const handleEditSelectedRow = () => {
+    const item = items.find(it => it.uid === selectedUid);
+    if (item) handleEditRow(item);
+  };
+
   const cancelEditRow = () => {
     setCurrentRow(emptyCurrentRow());
     setEditingUid(null);
+    setSelectedUid(null);
     setIsCustomUnit(false);
   };
 
   const removeItemRow = (uid: string) => {
     setItems(prev => prev.filter(it => it.uid !== uid));
     if (editingUid === uid) cancelEditRow(); // was mid-edit on the row just deleted
+    setSelectedUid(null);
+    if (lastEnteredUid === uid) setLastEnteredUid(null);
   };
 
   // Whole-return delete (password-gated) — the infrastructure for this (isPasswordModalOpen/
@@ -601,12 +654,16 @@ const nextSystemBillNo = useMemo(
     setIsPasswordModalOpen(true);
   };
 
-  // Toolbar "Delete" is dual-purpose, matching Sale Bill/Sale Return's own Delete: with a row
-  // selected (editingUid set) it removes THAT article; with none selected, it falls back to
-  // deleting the whole unposted return.
+  // Toolbar "Delete" is dual-purpose, matching Sale Bill/Sale Return's own Delete: a row loaded
+  // for editing (editingUid) takes priority; otherwise a merely-clicked row (selectedUid, G-08) is
+  // the target; with neither, it falls back to deleting the whole unposted return.
   const deleteSelectedArticle = () => {
     if (editingUid) {
       removeItemRow(editingUid);
+      return;
+    }
+    if (selectedUid) {
+      removeItemRow(selectedUid);
       return;
     }
     handleDeleteCurrentReturn();
@@ -637,20 +694,25 @@ const nextSystemBillNo = useMemo(
 
   const grandTotal = useMemo(() => items.reduce((s, it) => s + it.totalPrice, 0), [items]);
 
+  // A blank return reached any way other than New (first open with nothing unposted, after Post,
+  // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
+  const awaitingNew = mode === 'new' && currentSystemNo == null && !hasClickedNew;
   const isValid = useMemo(() => {
+    if (awaitingNew) return false;
     if (!vendorId || !date) return false;
     return items.length > 0;
-  }, [vendorId, date, items]);
+  }, [awaitingNew, vendorId, date, items]);
 
   const isViewMode = mode === 'view';
   // Edit-scope split (per the user, 2026-08-31): while actually editing, Master unlocks only the
   // header fields and Detail only the entry strip + grid — each stays locked whenever the OTHER
   // scope is selected. Both are false outside edit mode (view/new behave exactly as before).
-  const masterFieldsLocked = mode === 'edit' && editScope !== 'master';
-  const detailFieldsLocked = mode === 'edit' && editScope !== 'detail';
+  const masterFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
+  const detailFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
 
   const handleNew = () => {
     setMode('new');
+    setHasClickedNew(false);
     setReturnId(null);
     setCurrentSystemNo(null);
     setCurrentIsPosted(false);
@@ -661,6 +723,8 @@ const nextSystemBillNo = useMemo(
     setItems([]);
     setCurrentRow(emptyCurrentRow());
     setEditingUid(null);
+    setSelectedUid(null);
+    setLastEnteredUid(null);
     setIsCustomUnit(false);
     setCopyFromPurchaseId('');
     setSourcePurchaseItems([]);
@@ -709,6 +773,8 @@ const nextSystemBillNo = useMemo(
   // Mirrors PurchasePage's own doSave — see its comment for why the non-finalize path flips mode
   // to 'edit' rather than leaving it 'new' (otherwise the next Save creates a duplicate draft).
   const doSave = async (finalize: boolean) => {
+    // Backstop for the awaitingNew lock.
+    if (awaitingNew) { setErrorMsg('Click New to start a return first.'); return; }
     const payload = buildPayload();
     if (!payload) return;
 
@@ -773,6 +839,8 @@ const nextSystemBillNo = useMemo(
     })));
     setCurrentRow(emptyCurrentRow());
     setEditingUid(null);
+    setSelectedUid(null);
+    setLastEnteredUid(null);
     setIsCustomUnit(false);
     // PR-01: an existing return's saved rates are the record — never re-priced on open/edit.
     lastResolvedNameRef.current = '';
@@ -897,6 +965,8 @@ const nextSystemBillNo = useMemo(
     })));
     setCurrentRow(emptyCurrentRow());
     setEditingUid(null);
+    setSelectedUid(null);
+    setLastEnteredUid(null);
     setIsCustomUnit(false);
     lastResolvedNameRef.current = '';
     setErrorMsg('');
@@ -1004,6 +1074,9 @@ const nextSystemBillNo = useMemo(
   // Purchase Return had none of this).
   const [isFindOpen, setIsFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
+  const closeFindReturn = () => { setIsFindOpen(false); setFindQuery(''); };
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(isFindOpen, closeFindReturn);
   const findResults = useMemo(() => {
     const q = findQuery.trim().toLowerCase();
     if (!q) return [];
@@ -1156,7 +1229,15 @@ const nextSystemBillNo = useMemo(
   // Unposted from the dropdown does (per the user, 2026-09-04). Skipped when a draft was
   // restored — that is real in-progress work and must not be overwritten. Runs once; the ref
   // keeps a later state change from re-opening a record over whatever is being typed by then.
-  const hasPageDraftAtMount = useHasPageDraft('purchase-return');
+  // Per the user, 2026-09-16 (corrected same day — the first version also revealed the preview
+  // after G-06's own automatic reset-to-blank, which the user does not consider a "New" press):
+  // the System No. preview must not appear until an actual New button/tab is DELIBERATELY clicked
+  // — a restored in-progress draft still counts, but every other path that resets to blank
+  // (`handleNavFilterChange`'s own fallback when Unposted has nothing to show, G-06's auto-open,
+  // Post's "ready for the next one", etc.) must leave it blank. So `handleNew()` itself always
+  // resets this to false; only the toolbar's New button and the "New Return" tab button set it
+  // true, right after calling `startNewReturn()`/`handleNew()`.
+  // (hasClickedNew/hasPageDraftAtMount come from useNewDocGate, declared right after `mode`.)
   const didAutoOpenRef = useRef(false);
   useEffect(() => {
     if (hasPageDraftAtMount || didAutoOpenRef.current) return;
@@ -1184,7 +1265,7 @@ const nextSystemBillNo = useMemo(
   const tabBar = (
     <div className="flex gap-1.5" data-no-print>
       <button
-        onClick={() => { setActiveTab('entry'); startNewReturn(); }}
+        onClick={() => { setActiveTab('entry'); startNewReturn(); markNewClicked(); }}
         className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
@@ -1229,19 +1310,32 @@ const nextSystemBillNo = useMemo(
             {/* ref-pics/batch2/sale bill.png toolbar style: small square buttons, icon on top,
                 label underneath, tightly packed — see frontend/pages_design.md §1. */}
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={startNewReturn} disabled={navFilter === 'posted'} title="New Return" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { startNewReturn(); markNewClicked(); }} disabled={navFilter === 'posted'} title="New Return" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
             <button
               type="button"
               onClick={deleteSelectedArticle}
-              disabled={deletedPlaceholder != null || (editingUid ? isViewMode : (!isViewMode || returnId == null || currentIsPosted))}
-              title={editingUid ? 'Delete selected article' : 'Delete'}
+              disabled={deletedPlaceholder != null || ((editingUid || selectedUid) ? isViewMode : (!isViewMode || returnId == null || currentIsPosted))}
+              title={(editingUid || selectedUid) ? 'Delete selected article' : 'Delete'}
               className="toolbar-btn"
             >
               <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
               <span>Delete</span>
+            </button>
+            {/* G-08 (changes-14-09-26.md, 2026-09-15): editing a detail row is now deliberate —
+                click a row (no visible change), then press Edit Row to actually load it into the
+                entry fields and apply the highlight. */}
+            <button
+              type="button"
+              onClick={handleEditSelectedRow}
+              disabled={selectedUid == null || editingUid != null || isViewMode || detailFieldsLocked}
+              title="Edit selected article"
+              className="toolbar-btn"
+            >
+              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
+              <span>Edit Row</span>
             </button>
             <button
               type="button"
@@ -1470,6 +1564,7 @@ const nextSystemBillNo = useMemo(
               <input
                 ref={firstFieldRef}
                 type="date"
+                required
                 value={date}
                 disabled={isViewMode || masterFieldsLocked}
                 onChange={e => setDate(e.target.value)}
@@ -1531,7 +1626,7 @@ const nextSystemBillNo = useMemo(
               <label className="block text-xs font-bold text-slate-900 mb-1">System Bill No.</label>
               <input
                 type="text"
-                value={currentSystemNo != null ? `#${currentSystemNo}` : `#${nextSystemBillNo}`}
+                value={currentSystemNo != null ? `#${currentSystemNo}` : hasClickedNew ? `#${nextSystemBillNo}` : ''}
                 disabled
                 readOnly
                 className="soleria-input bg-slate-100 text-slate-500 font-mono"
@@ -1567,6 +1662,7 @@ const nextSystemBillNo = useMemo(
                   ref={vendorTriggerRef}
                   type="text"
                   data-field-nav="true"
+                  required
                   disabled={isViewMode || isCopiedFromPurchase || masterFieldsLocked}
                   title={isCopiedFromPurchase ? 'Set by the purchase you picked above — switch to Manual entry to change it' : undefined}
                   value={vendorSearchText}
@@ -1636,6 +1732,7 @@ const nextSystemBillNo = useMemo(
                   <input
                     type="text"
                     ref={materialNameRef}
+                    required
                     disabled={detailFieldsLocked}
                     value={currentRow.materialName}
                     onChange={e => updateCurrentField('materialName', e.target.value)}
@@ -1654,6 +1751,7 @@ const nextSystemBillNo = useMemo(
                   {isCustomUnit ? (
                     <input
                       type="text"
+                      required
                       disabled={detailFieldsLocked}
                       value={currentRow.unit}
                       onChange={e => updateCurrentField('unit', e.target.value)}
@@ -1670,6 +1768,7 @@ const nextSystemBillNo = useMemo(
                     />
                   ) : (
                     <select
+                      required
                       disabled={detailFieldsLocked}
                       value={UNIT_PRESETS.includes(currentRow.unit) ? currentRow.unit : '__other__'}
                       onChange={e => {
@@ -1699,6 +1798,7 @@ const nextSystemBillNo = useMemo(
                   <input
                     type="number"
                     min={0}
+                    required
                     disabled={detailFieldsLocked}
                     value={currentRow.quantity || ''}
                     onChange={e => updateCurrentField('quantity', Number(e.target.value))}
@@ -1719,6 +1819,7 @@ const nextSystemBillNo = useMemo(
                   <input
                     type="number"
                     min={0}
+                    required
                     disabled={detailFieldsLocked}
                     value={currentRow.pricePerUnit || ''}
                     readOnly={isCopiedFromPurchase}
@@ -1775,6 +1876,9 @@ const nextSystemBillNo = useMemo(
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                  {/* G-05 (changes-14-09-26.md, 2026-09-15): narrow gutter for the ▶ row pointer —
+                      unlabeled, matching the ref pic (ref-pics/batch2/jv2.0.jpeg). */}
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1" style={{ width: '18px' }} />
                   <th className="sticky top-0 z-10 bg-slate-50 p-3 pl-4" style={{ minWidth: '200px' }}>Material / Product Name</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3" style={{ width: '160px' }}>Unit</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '110px' }}>Quantity</th>
@@ -1785,20 +1889,33 @@ const nextSystemBillNo = useMemo(
               <tbody>
                 {items.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="p-6 text-center text-slate-400 text-sm">
+                    <td colSpan={6} className="p-6 text-center text-slate-400 text-sm">
                       No articles added yet — fill the fields above and press Enter.
                     </td>
                   </tr>
                 ) : items.map(item => (
                   <tr
                     key={item.uid}
-                    onClick={() => handleEditRow(item)}
+                    ref={el => { rowRefs.current[item.uid] = el; }}
+                    onClick={() => {
+                      // G-08: a click must produce no visible change — it only records which row
+                      // the Delete/Edit Row toolbar buttons act on next. Inert entirely while
+                      // another row is actually loaded for editing.
+                      if (editingUid != null) return;
+                      if (isViewMode || detailFieldsLocked) return;
+                      setSelectedUid(prev => prev === item.uid ? null : item.uid);
+                    }}
                     title={!isViewMode && !detailFieldsLocked ? 'Click to select this article — Delete (toolbar) removes it' : undefined}
                     className={`border-b transition-colors ${
                       item.uid === editingUid ? 'bg-blue-50' : 'hover:bg-slate-50/55'
                     } ${!isViewMode && !detailFieldsLocked ? 'cursor-pointer' : ''}`}
                     style={{ borderColor: 'var(--border-table)' }}
                   >
+                    {/* G-05: a pure position indicator — never a background/highlight, so it can
+                        never be confused with G-08's edit highlight above. */}
+                    <td className="p-1 text-center text-emerald-600" aria-hidden="true">
+                      {item.uid === lastEnteredUid && '▶'}
+                    </td>
                     <td className="p-3 pl-4 font-semibold text-slate-800">{item.materialName}</td>
                     <td className="p-3 text-slate-600">{item.unit}</td>
                     <td className="p-3 text-center font-semibold text-slate-700">{item.quantity}</td>
@@ -1809,7 +1926,7 @@ const nextSystemBillNo = useMemo(
               </tbody>
               <tfoot>
                 <tr className="bg-slate-50 border-t-2 font-bold text-slate-800" style={{ borderColor: 'var(--border-color)' }}>
-                  <td className="p-3 pl-4" colSpan={4}>Grand Total</td>
+                  <td className="p-3 pl-4" colSpan={5}>Grand Total</td>
                   <td className="p-3 text-right">{formatCurrency(grandTotal)}</td>
                 </tr>
               </tfoot>
@@ -1940,7 +2057,7 @@ const nextSystemBillNo = useMemo(
               <div className="flex justify-end mt-4">
                 <button
                   type="button"
-                  onClick={() => { setIsFindOpen(false); setFindQuery(''); }}
+                  onClick={closeFindReturn}
                   className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm font-semibold"
                 >
                   Close

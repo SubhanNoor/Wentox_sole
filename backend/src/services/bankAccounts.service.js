@@ -95,8 +95,27 @@ async function update(bankId, payload) {
 
 // Soft delete — is_active = 0, never a hard DELETE (receipts/expenses/cheques.bank_id reference
 // this row historically). The linked business_accounts row stays ACTIVE for ledger/history integrity.
+//
+// ACC-02 (changes-14-09-26.md, 2026-09-15): blocked while the linked business account carries
+// transactions — a bank account never posts ledger rows against its OWN bank_id, only against its
+// linked ba_id (see repository.hasLedgerActivity's own comment), so both checks read that linked
+// account instead.
 async function remove(bankId) {
-  await getById(bankId);
+  const bankAccount = await getById(bankId);
+  const openingBalance = bankAccount.ba_id ? await repository.findLinkedOpeningBalance(bankId) : null;
+  if (openingBalance != null && Number(openingBalance) !== 0) {
+    throw ApiError.conflict(
+      `${bankAccount.name} has a non-zero opening balance — clear it before deleting the account`,
+      'ACCOUNT_HAS_TRANSACTIONS',
+    );
+  }
+  const hasActivity = await repository.hasLedgerActivity(bankId);
+  if (hasActivity) {
+    throw ApiError.conflict(
+      `${bankAccount.name} has posted ledger transactions and cannot be deleted`,
+      'ACCOUNT_HAS_TRANSACTIONS',
+    );
+  }
   await repository.setActive(bankId, false);
   return { ok: true };
 }
@@ -110,4 +129,28 @@ async function reactivate(bankId) {
   return repository.findById(bankId);
 }
 
-module.exports = { list, getById, create, update, remove, reactivate };
+// Permanent delete — per the user, 2026-09-17, added on top of remove() above, not instead of it:
+// closing stays the normal, reversible action; this is separate, stricter, and irreversible, only
+// reachable for a bank account already closed. Scoped like remove() itself — only this
+// bank_accounts row is ever hard-deleted; the linked business_accounts row is left untouched
+// (same reasoning as remove()'s own comment: ledger/history integrity).
+async function permanentDelete(bankId) {
+  const bankAccount = await getById(bankId);
+  if (bankAccount.is_active) {
+    throw ApiError.conflict(
+      `${bankAccount.name} must be closed (deleted) first — permanent delete is only for an already-closed account`,
+      'ACCOUNT_NOT_CLOSED',
+    );
+  }
+  const referenced = await repository.hasAnyReference(bankId);
+  if (referenced) {
+    throw ApiError.conflict(
+      `${bankAccount.name} is still referenced elsewhere (a cheque, receipt, or expense that deposits to or draws from it) and cannot be permanently deleted`,
+      'ACCOUNT_STILL_REFERENCED',
+    );
+  }
+  await withTransaction((transaction) => repository.hardDelete(transaction, bankId));
+  return { ok: true };
+}
+
+module.exports = { list, getById, create, update, remove, reactivate, permanentDelete };

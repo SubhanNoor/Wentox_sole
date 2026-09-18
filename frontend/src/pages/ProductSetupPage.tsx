@@ -672,6 +672,7 @@ export default function ProductSetupPage() {
               <input
                 ref={categoryTriggerRef}
                 type="text"
+                required
                 disabled={isViewMode}
                 value={categorySearchText}
                 onChange={e => setCategorySearchText(e.target.value)}

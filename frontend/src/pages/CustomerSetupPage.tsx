@@ -14,6 +14,7 @@ import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 export default function CustomerSetupPage() {
   // Directory view state
@@ -140,6 +141,9 @@ export default function CustomerSetupPage() {
     setErrorMsg('');
     clearCustomerDraft();
   };
+
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(isModalOpen, handleCloseModal);
 
   // G-06: after a successful create, the window stays open and clears — ready for the next
   // customer — instead of closing. G-04: the opening date is deliberately NOT reset here; it
@@ -592,7 +596,7 @@ export default function CustomerSetupPage() {
         {/* Modal Dialogue Box Pop-up */}
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}
-            onKeyDown={e => { if (e.key === 'Escape') { (handleCloseModal)(); } }}
+           
             tabIndex={-1}>
             <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
@@ -637,6 +641,7 @@ export default function CustomerSetupPage() {
                     value={newCustomerRegionId}
                     onChange={setNewCustomerRegionId}
                     placeholder="Select Region..."
+                    required
                   />
                 </div>
 

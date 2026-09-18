@@ -4,6 +4,7 @@
 // channel name changes case. Action segments stay camelCase (untouched by that conversion).
 const { ipcMain } = require('electron');
 const service = require('../services/businessAccounts.service');
+const authService = require('../services/auth.service');
 const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
 
@@ -35,14 +36,28 @@ module.exports = function register() {
   }));
 
   // "Remove" = close (status CLOSED) — see businessAccounts.service.js#remove(); no hard delete.
-  ipcMain.handle('business-accounts:remove', wrap((payload) => {
+  // Password-gated per the user (2026-09-17) — same discipline as expenses:remove/draftSaleBills:
+  // remove and every other irreversible-looking delete in the app, even though this one is a soft
+  // close rather than a hard delete (still needs to be deliberate, and Reactivate is not obvious
+  // enough on its own to skip the gate).
+  ipcMain.handle('business-accounts:remove', wrap(async (payload) => {
     const session = requireSession();
+    await authService.verifyPassword(session.userId, payload.password);
     return service.remove(payload.id, session);
   }));
 
   ipcMain.handle('business-accounts:reactivate', wrap((payload) => {
     const session = requireSession();
     return service.reactivate(payload.id, session);
+  }));
+
+  // True hard delete — added on top of (never instead of) the soft-close above, per the user
+  // (2026-09-17). Password-gated the same way remove() is; the service itself enforces the
+  // stricter "already closed, and referenced nowhere at all" guard.
+  ipcMain.handle('business-accounts:permanentDelete', wrap(async (payload) => {
+    const session = requireSession();
+    await authService.verifyPassword(session.userId, payload.password);
+    return service.permanentDelete(payload.id, session);
   }));
 
   // Transfer screen's "Cash" option — the one business account seeded for cash, resolved by

@@ -12,14 +12,14 @@ import {
 } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
-import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, cartonsAndPairs, nextSystemNoPreview, mergeWithDeleted } from '@/lib/utils';
+import { SaleBillPrintable, type SaleBillPrintModel } from '@/components/reports/SaleBillPrintable';
+import { getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, cartonsAndPairs, nextSystemNoPreview, mergeWithDeleted } from '@/lib/utils';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
-import SearchModal from '@/components/SearchModal';
-import wentoxLogo from '@/assets/wentox_logo.png';
+import SearchModal, { findDirectMatch } from '@/components/SearchModal';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
-import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
 import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
@@ -28,6 +28,7 @@ import type {
 } from '@/lib/api';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import CartonsInput from '@/components/CartonsInput';
 import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
 import { getWindowParam } from '@/lib/windowParams';
@@ -180,8 +181,12 @@ export default function SaleBillPage() {
   // persisted; which EXISTING record is loaded (billId/currentBillIsPosted/mode) is deliberately
   // left as plain useState, same as StockVoucherPage.
   const clearSaleBillDraft = useClearPageDraft('sale-bill');
-  // Captured at mount — gates the auto-initialize effect below. See its comment.
-  const hasSaleBillDraft = useHasPageDraft('sale-bill');
+  // The posted/unposted/System No. rule — see useNewDocGate for the whole of it. hasSaleBillDraft gates the
+  // auto-open below (only genuine unsaved typing skips it); hasClickedNew gates the No. preview and
+  // the awaitingNew lock, and only the New button/tab sets it (pressNew).
+  const { hasRealDraftAtMount: hasSaleBillDraft, hasClickedNew, setHasClickedNew, markNewClicked } =
+    useNewDocGate('sale-bill', ['customerId', 'billNo', 'items']);
+  const pressNew = () => { handleNew(); markNewClicked(); };
 
   // Form State
   //
@@ -201,6 +206,11 @@ export default function SaleBillPage() {
   // The loaded record's own System No. — display-only, kept in step with billId (see that field's
   // own comment) but never used for API calls; those stay on billId/draftId as before.
   const [currentSystemNo, setCurrentSystemNo] = usePersistentField<number | null>('sale-bill', 'currentSystemNo', null);
+  // Per the user, 2026-09-18: no System No. may be generated unless New was DELIBERATELY clicked.
+  // Hiding the preview (hasClickedNew above) wasn't enough — a blank page reached any other way
+  // (first open, after Post, Post All, a deleted bill) could still be typed into and saved, and
+  // the backend assigned it a number anyway. So such a page stays fully locked until New.
+  const awaitingNew = mode === 'new' && currentSystemNo == null && !hasClickedNew;
   const [currentBillIsPosted, setCurrentBillIsPosted] = usePersistentField('sale-bill', 'currentBillIsPosted', false);
   const [date, setDate] = usePersistentField('sale-bill', 'date', getTodayDate());
   const [storeId, setStoreId] = usePersistentField('sale-bill', 'storeId', '');
@@ -247,12 +257,28 @@ export default function SaleBillPage() {
   const [newSubCustomerRegionId, setNewSubCustomerRegionId] = useState('');
   const [newSubCustomerCityId, setNewSubCustomerCityId] = useState('');
   const [isPrintingSingle, setIsPrintingSingle] = useState(false);
+  const closeAddSubCustomer = () => {
+    setIsAddSubCustomerOpen(false);
+    setNewSubCustomerName('');
+    setNewSubCustomerRegionId('');
+    setNewSubCustomerCityId('');
+  };
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog — this page builds its own inline
+  // modals rather than going through a shared component, so each needs its own hook call.
+  useEscapeToClose(isAddSubCustomerOpen, closeAddSubCustomer);
 
   // Add new customer modal state
   const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerRegionId, setNewCustomerRegionId] = useState('');
   const [newCustomerCityId, setNewCustomerCityId] = useState('');
+  const closeAddCustomer = () => {
+    setIsAddCustomerOpen(false);
+    setNewCustomerName('');
+    setNewCustomerRegionId('');
+    setNewCustomerCityId('');
+  };
+  useEscapeToClose(isAddCustomerOpen, closeAddCustomer);
 
   // SB-06 (revised): every saved-unposted bill now lives in draft_sale_bills — the real
   // sale_bills table strictly never holds an unposted document. This one list replaces what used
@@ -272,7 +298,23 @@ export default function SaleBillPage() {
     return res.ok ? res.data : null;
   }, []);
 
-  useEffect(() => { refreshUnposted(); }, [refreshUnposted]);
+  // G-06 (changes-14-09-26.md, 2026-09-15): a window opening with zero unposted bills must land on
+  // a fresh blank entry, not wherever the session that closed it left the screen pointed.
+  // Originally gated on `mode === 'view'`, which turned out to miss a real case reported by the
+  // user (2026-09-16): the bilty/adda-on-a-posted-bill edit flow leaves `mode: 'edit'` (Master/
+  // Detail scope) while `currentBillIsPosted` is still true — closing the window there and
+  // reopening kept showing that posted bill (dropdown defaulting to "Unposted" above it, per
+  // `browseFilter`'s own always-fresh `useState`, made the mismatch obvious). `currentBillIsPosted`
+  // is itself persisted and is the direct, unambiguous signal: it is true if and only if an actual
+  // posted record is loaded, in EITHER 'view' or 'edit' mode — `handleNew()` is the only thing that
+  // ever sets it false, so it can never be true while there's genuine unsaved new-document work to
+  // protect.
+  useEffect(() => {
+    refreshUnposted().then(data => {
+      if (data && data.length === 0 && currentBillIsPosted) handleNew();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshUnposted]);
 
   // Every Sale Bill System No. permanently retired by a delete (migration 032) — merged into the
   // browse lists below so First/Prev/Next/Last can show "#N — Deleted" as an actual stop.
@@ -413,7 +455,23 @@ const nextSystemBillNo = useMemo(
   // every one of this page's own typable trigger fields below too.
   function handleCustomerTriggerKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); openCustomerModal(); }
-    else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); setCustomerModalSeed(customerSearchText); setIsCustomerModalOpen(true); }
+    else if (e.key === 'Enter') {
+      e.preventDefault(); e.stopPropagation();
+      // One Enter is enough when the typed text already names exactly one customer.
+      const direct = findDirectMatch(customerOptions, customerSearchText);
+      if (direct) { selectCustomer(direct); return; }
+      setCustomerModalSeed(customerSearchText); setIsCustomerModalOpen(true);
+    }
+  }
+  // Shared by the modal's own pick and the direct-match Enter above.
+  function selectCustomer(val: string) {
+    setCustomerId(val);
+    setDeliveryType('1');
+    setDeliveryCode('1');
+    setSubCustomerId('');
+    setCustomAddress('');
+    setIsCustomerModalOpen(false);
+    requestAnimationFrame(() => focusNextField(customerTriggerRef.current));
   }
 
   const [isStoreModalOpen, setIsStoreModalOpen] = useState(false);
@@ -510,6 +568,7 @@ const nextSystemBillNo = useMemo(
   const hasStockExceeded = useMemo(() => Object.keys(stockExceededRows).length > 0, [stockExceededRows]);
 
   const isNecessaryFieldsFilled = useMemo(() => {
+    if (awaitingNew) return false;
     if (!customerId) return false;
     if (!date) return false;
     if (!storeId) return false;
@@ -519,7 +578,7 @@ const nextSystemBillNo = useMemo(
     if (isCustomDelivery && !subCustomerId) return false;
     if (hasStockExceeded) return false;
     return true;
-  }, [customerId, date, storeId, billNo, items, isCustomDelivery, subCustomerId, hasStockExceeded]);
+  }, [awaitingNew, customerId, date, storeId, billNo, items, isCustomDelivery, subCustomerId, hasStockExceeded]);
 
   // Repairs the one field a restored draft can come back missing.
   //
@@ -609,6 +668,8 @@ const nextSystemBillNo = useMemo(
     setItems(loadedItems);
     setEntry(newUiItem());
     setEditingIndex(null);
+    setSelectedIndex(null);
+    setLastEnteredIndex(null);
 
     // Pre-warm the variant cache for each loaded item's article so the picker works immediately if edited
     loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
@@ -679,6 +740,8 @@ const nextSystemBillNo = useMemo(
     setItems(loadedItems);
     setEntry(newUiItem());
     setEditingIndex(null);
+    setSelectedIndex(null);
+    setLastEnteredIndex(null);
     loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
 
     setMode(opts.mode ?? 'edit');
@@ -804,6 +867,9 @@ const nextSystemBillNo = useMemo(
   // round-trip, since both lists are small enough to already be in memory for First/Pre/Next/Last.
   const [isFindOpen, setIsFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
+  const closeFindBill = () => { setIsFindOpen(false); setFindQuery(''); };
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(isFindOpen, closeFindBill);
   const findResults = useMemo(() => {
     const q = findQuery.trim().toLowerCase();
     if (!q) return [];
@@ -837,12 +903,16 @@ const nextSystemBillNo = useMemo(
   };
 
   // Delete is dual-purpose per pages_design.md §4: "no per-row delete button [in the grid] —
-  // deleting a line item is a toolbar action, enabled only while a row is selected (editingIndex
-  // set)". With a row selected, Delete removes THAT line item; with none selected, it falls back
-  // to this page's own whole-bill delete (a capability the reference build didn't need to cover).
+  // deleting a line item is a toolbar action, enabled only while a row is selected". A row loaded
+  // for editing (editingIndex) takes priority; otherwise a merely-clicked row (selectedIndex, G-08)
+  // is the target; with neither, it falls back to this page's own whole-bill delete.
   const handleDeleteAction = () => {
     if (editingIndex != null) {
       handleRemoveItemRow(editingIndex);
+      return;
+    }
+    if (selectedIndex != null) {
+      handleRemoveItemRow(selectedIndex);
       return;
     }
     handleDeleteCurrentBill();
@@ -881,6 +951,7 @@ const nextSystemBillNo = useMemo(
   const handleNew = () => {
     clearSaleBillDraft();
     setMode('new');
+    setHasClickedNew(false);
     // SB-05: a blank form has nothing saved in it yet, so nothing to clear on post.
     createdInThisRun.current = false;
     setEditScope('master');
@@ -907,6 +978,8 @@ const nextSystemBillNo = useMemo(
     setItems([]);
     setEntry(newUiItem());
     setEditingIndex(null);
+    setSelectedIndex(null);
+    setLastEnteredIndex(null);
     setErrorMsg('');
     // Explicit focus, not just the G-01 mode-change effect above: clicking New while already on
     // a blank/new bill (mode is already 'new') doesn't change `mode`, so that effect's dependency
@@ -1002,6 +1075,8 @@ const nextSystemBillNo = useMemo(
   // update() off `mode === 'edit' && billId != null`, so leaving a just-created bill in 'new' mode
   // would make the NEXT Save create a second, duplicate bill instead of updating this one.
   const executeSave = async (password?: string, finalize: boolean = true): Promise<SaleBillRow | DraftSaleBillRow | null> => {
+    // Backstop for the awaitingNew lock — every save path funnels through here.
+    if (awaitingNew) { setErrorMsg('Click New to start a bill first.'); return null; }
     const payload = buildPayload();
     if (!payload) return null;
 
@@ -1230,6 +1305,23 @@ const nextSystemBillNo = useMemo(
   // null while the strip is adding a brand-new row; the table index being replaced once a
   // committed row has been clicked back open for editing (see handleRowClick below).
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  // G-08 (changes-14-09-26.md, 2026-09-15): a click on a detail row must produce no visible change
+  // at all — no edit load, no highlight. It only records which row Delete/Edit will act on
+  // internally; `editingIndex` (the actually-loaded-for-editing row, and the only thing that
+  // drives the blue highlight) is set exclusively by the Edit button now, never by a row click
+  // directly. Cleared whenever `editingIndex` takes over (Edit pressed) so the two never point at
+  // different rows at once.
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  // G-05 (changes-14-09-26.md, 2026-09-15): the row most recently ADDED or UPDATED via the entry
+  // strip — a pure position indicator (the ▶ gutter marker below), never a selection. Deliberately
+  // separate from `selectedIndex`/`editingIndex` above: G-05's own text is explicit that the
+  // pointer "must not look like, or behave as, the highlight described in G-08" — a click never
+  // moves it, only committing a row does.
+  const [lastEnteredIndex, setLastEnteredIndex] = useState<number | null>(null);
+  const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
+  useEffect(() => {
+    if (lastEnteredIndex != null) rowRefs.current[lastEnteredIndex]?.scrollIntoView({ block: 'nearest' });
+  }, [lastEnteredIndex]);
   const entryProductCellRef = useRef<HTMLDivElement>(null);
 
   // Declared down here, after every piece of state the loaders below touch: placing it
@@ -1243,7 +1335,8 @@ const nextSystemBillNo = useMemo(
   const didAutoOpenRef = useRef(false);
   useEffect(() => {
     if (hasSaleBillDraft || didAutoOpenRef.current) return;
-    if (mode === 'new' && billId === null && stores.length > 0) {
+    // No mode/billId check: a restored view of an older record must be replaced too (2026-09-18).
+    if (stores.length > 0) {
       didAutoOpenRef.current = true;
       handleBrowseFilterChange('unposted');
     }
@@ -1258,6 +1351,18 @@ const nextSystemBillNo = useMemo(
   // `entry.label` (the committed selection) so the field can keep showing free-typed text right
   // up until Enter opens the modal with it as the initial filter.
   const [productSearchText, setProductSearchText] = useState('');
+  // Code is part of the label AND the search text: the field shows the picked article's code, so
+  // typing a code and pressing Enter must find it (it only matched names before — typing "P-111"
+  // opened an empty "No matches found" popup, reported by the user 2026-09-18).
+  const productOptions = useMemo(() => products.map(p => {
+    const agg = getStockInfo(p.article_id, null);
+    return {
+      value: String(p.article_id),
+      label: p.code ? `${p.code} — ${p.name}` : p.name,
+      sublabel: agg ? `Stock: ${formatCartons(agg.cartons)} ctn / ${agg.pairs} prs` : undefined,
+      searchText: `${p.code ?? ''} ${p.name}`,
+    };
+  }), [products, getStockInfo]);
 
   const handleEntryArticleChange = async (articleIdStr: string) => {
     const articleId = articleIdStr ? Number(articleIdStr) : null;
@@ -1363,6 +1468,17 @@ const nextSystemBillNo = useMemo(
     // duplicate row (per the user, 2026-08-30). Excludes the row being edited itself, so
     // re-committing an unchanged row doesn't fold it into a copy of itself.
     const dupIdx = items.findIndex((it, i) => it.variantId === entry.variantId && i !== editingIndex);
+    // G-05: computed BEFORE `setItems` below (whose functional updater can't hand a value back
+    // out here) from the exact same index arithmetic each branch already performs.
+    let pointerIdx: number;
+    if (dupIdx !== -1) {
+      const withoutEditing = editingIndex != null ? items.filter((_, i) => i !== editingIndex) : items;
+      pointerIdx = withoutEditing.findIndex(it => it.variantId === entry.variantId);
+    } else if (editingIndex != null) {
+      pointerIdx = editingIndex;
+    } else {
+      pointerIdx = items.length;
+    }
     if (dupIdx !== -1) {
       setItems(prev => {
         const withoutEditing = editingIndex != null ? prev.filter((_, i) => i !== editingIndex) : prev;
@@ -1379,7 +1495,9 @@ const nextSystemBillNo = useMemo(
     } else {
       setItems(prev => [...prev, entry]);
     }
+    setLastEnteredIndex(pointerIdx);
     setEditingIndex(null);
+    setSelectedIndex(null);
     setEntry(newUiItem());
     requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
   };
@@ -1402,10 +1520,13 @@ const nextSystemBillNo = useMemo(
     const row = items[idx];
     setEntry(row);
     setEditingIndex(idx);
+    setSelectedIndex(null);
     if (row.articleId != null) fetchVariants(row.articleId);
     requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
   };
 
+  // G-08: now the Edit toolbar button's handler, not the row's own onClick — a row click just
+  // records `selectedIndex` (see the grid below), and this only runs once the user presses Edit.
   const handleRowClick = (idx: number) => {
     // Master/Detail edit-scope split (per the user, 2026-08-31): a row click is how the detail
     // grid re-opens a committed line for editing — a no-op while scope is Master, so master-only
@@ -1419,14 +1540,22 @@ const nextSystemBillNo = useMemo(
     loadRowIntoEntry(idx);
   };
 
+  const handleEditSelectedRow = () => {
+    if (selectedIndex != null) handleRowClick(selectedIndex);
+  };
+
   const handleRemoveItemRow = (idx: number) => {
     setItems(prev => prev.filter((_, i) => i !== idx));
     if (editingIndex === idx) {
       setEditingIndex(null);
+      setSelectedIndex(null);
       setEntry(newUiItem());
     } else if (editingIndex != null && idx < editingIndex) {
       setEditingIndex(editingIndex - 1);
     }
+    setSelectedIndex(null);
+    if (lastEnteredIndex === idx) setLastEnteredIndex(null);
+    else if (lastEnteredIndex != null && idx < lastEnteredIndex) setLastEnteredIndex(lastEnteredIndex - 1);
   };
 
   // Invoice card fills whatever vertical space is left in the viewport below it, so the item
@@ -1460,8 +1589,8 @@ const nextSystemBillNo = useMemo(
   // (isViewMode false, mode 'edit'), the radio narrows WHICH half actually unlocks — this does not
   // weaken the existing isPosted gate on the Edit button itself, it only adds a further split on
   // top of it. A brand-new bill (mode 'new') is unaffected — everything stays editable there.
-  const masterFieldsLocked = mode === 'edit' && editScope !== 'master';
-  const detailFieldsLocked = mode === 'edit' && editScope !== 'detail';
+  const masterFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
+  const detailFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
 
   // Backend has no real-time stock IPC channel wired up yet (stock.service.js#currentStock
   // exists server-side but isn't exposed over ipc) — Stock column just shows a placeholder.
@@ -1525,6 +1654,11 @@ const nextSystemBillNo = useMemo(
   // a DIFFERENT bill than whatever was last open on screen, with nothing shown first to confirm it
   // loaded the right one. Reported by the user, 2026-09-04: "print previw" not shown there. Routing
   // through the same modal every report page already uses gives every entry point a real preview.
+  // Builds the shared print model (BA-01, changes-14-09-26.md, 2026-09-15) from this page's own
+  // live form state — may be an unsaved bill, so names are resolved from the loaded lookups rather
+  // than trusting any *_name columns. The actual invoice markup lives in the one shared
+  // <SaleBillPrintable> component; BiltyUpdatePage builds the same model shape from a fetched
+  // SaleBillRow to print a bill without opening this page at all.
   const renderBillPrintable = () => {
     const customerObj = customers.find(c => c.customer_id === Number(customerId));
     const customerName = customerObj ? customerObj.name : (customerId || 'N/A');
@@ -1538,181 +1672,39 @@ const nextSystemBillNo = useMemo(
       : 'SAME (Direct)';
     const statusLabel = currentBillIsPosted ? 'Posted' : 'Unposted';
 
-    return (
-      <div className="excel-print-container" style={{
-        display: 'block',
-        margin: '0 auto',
-        width: '210mm',
-        padding: '10mm',
-        backgroundColor: '#ffffff',
-        color: '#000000',
-        fontFamily: 'Calibri, Arial, sans-serif',
-        boxSizing: 'border-box'
-      }}>
-        {/* Header Section */}
-        <div className="excel-print-header" style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          borderBottom: '2px solid #000000',
-          marginBottom: '15px',
-          paddingBottom: '10px'
-        }}>
-          <div>
-            <img
-              src={wentoxLogo}
-              alt="Wentox Logo"
-              style={{ height: '90px', width: 'auto', objectFit: 'contain' }}
-            />
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>SALE INVOICE</h2>
-            <p style={{ margin: 0, fontSize: '11px', color: '#555555' }}>Status: {statusLabel}</p>
-          </div>
-        </div>
+    const model: SaleBillPrintModel = {
+      statusLabel,
+      systemNo: currentSystemNo ?? 'Unsaved',
+      date,
+      storeName,
+      billNo,
+      customerName,
+      subCustomerName,
+      isCustomDelivery,
+      customAddress,
+      addaName,
+      gpNo,
+      biltyNo,
+      remarks,
+      items: items.map(item => ({
+        uid: item.uid,
+        label: item.label,
+        packing: item.packing,
+        cartons: item.cartons,
+        pairs: item.pairs,
+        rate: item.rate,
+        discountPercent: item.discountPercent,
+        discountValue: item.discountValue,
+        value: item.value,
+      })),
+      totalCartons,
+      totalPairs,
+      itemsTotalValue,
+      invoiceDiscount,
+      finalTotalValue,
+    };
 
-        {/* Excel Grid Info */}
-        <div className="excel-grid-info" style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(4, 1fr)',
-          border: '1px solid #000000',
-          marginBottom: '15px'
-        }}>
-          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>System ID</label>
-            <span>{currentSystemNo ?? 'Unsaved'}</span>
-          </div>
-          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Date</label>
-            <span>{formatDate(date)}</span>
-          </div>
-          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>From Store</label>
-            <span>{storeName}</span>
-          </div>
-          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Manual Bill No.</label>
-            <span>{billNo}</span>
-          </div>
-
-          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Customer Name</label>
-            <span>{customerName}</span>
-          </div>
-          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Delivery Destination</label>
-            <span>{subCustomerName}</span>
-          </div>
-          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Custom Address</label>
-            <span>{isCustomDelivery ? (customAddress || 'N/A') : 'N/A'}</span>
-          </div>
-          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Transport Adda</label>
-            <span>{addaName}</span>
-          </div>
-
-          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Gate Pass (GP) No.</label>
-            <span>{gpNo || 'N/A'}</span>
-          </div>
-          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
-            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Bilty No.</label>
-            <span>{biltyNo || 'N/A'}</span>
-          </div>
-          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px', gridColumn: 'span 2' }}>
-            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Remarks</label>
-            <span>{remarks || 'N/A'}</span>
-          </div>
-        </div>
-
-        {/* Excel Items Table */}
-        <table className="excel-print-table" style={{
-          width: '100%',
-          borderCollapse: 'collapse',
-          marginBottom: '15px'
-        }}>
-          <thead>
-            <tr style={{ backgroundColor: '#f2f2f2' }}>
-              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
-              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'left', width: '40%' }}>Article / Product Description</th>
-              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '8%' }}>Packing</th>
-              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '10%' }}>Cartons</th>
-              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '10%' }}>Pairs</th>
-              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right', width: '12%' }}>Rate</th>
-              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center', width: '10%' }}>Discount</th>
-              <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right', width: '15%' }}>Net Value</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((item, idx) => {
-              const discountText = item.discountPercent > 0
-                ? `${item.discountPercent}%`
-                : item.discountValue > 0
-                  ? `${item.discountValue.toLocaleString()}`
-                  : '-';
-
-              return (
-                <tr key={item.uid}>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{idx + 1}</td>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>{item.label || 'N/A'}</td>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.packing}</td>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{formatCartons(item.cartons)}</td>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.pairs}</td>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{item.rate.toLocaleString()}</td>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{discountText}</td>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{item.value.toLocaleString()}</td>
-                </tr>
-              );
-            })}
-
-            {/* Total Row */}
-            <tr style={{ fontWeight: 'bold', backgroundColor: '#fafafa' }}>
-              <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>Total Sum:</td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>-</td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{formatCartons(totalCartons)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{totalPairs}</td>
-              <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>Gross Value:</td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{itemsTotalValue.toLocaleString()}</td>
-            </tr>
-
-            {invoiceDiscount > 0 && (
-              <tr style={{ fontWeight: 'bold' }}>
-                <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>Invoice Discount:</td>
-                <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', color: 'red' }}>-{invoiceDiscount.toLocaleString()}</td>
-              </tr>
-            )}
-
-            <tr className="excel-print-total-row excel-print-double-bottom" style={{
-              fontWeight: 'bold',
-              backgroundColor: '#f2f2f2',
-              fontSize: '12px'
-            }}>
-              <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', textTransform: 'uppercase' }}>Net Payable Amount (PKR):</td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', borderBottom: '3px double #000000' }}>{finalTotalValue.toLocaleString()}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        {/* Signatures & Print Info footer */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '45px', fontSize: '11px' }}>
-          <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>
-            Prepared By
-          </div>
-          <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>
-            Checked By
-          </div>
-          <div style={{ borderTop: '1px solid #000000', width: '180px', textAlign: 'center', paddingTop: '5px' }}>
-            Authorized Signature
-          </div>
-        </div>
-
-        <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
-          <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-          <div>Printed: {formatDate(new Date())} {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
-        </div>
-      </div>
-    );
+    return <SaleBillPrintable model={model} />;
   };
 
   // Sub-tab switcher — lives in the top header bar next to the page title (AppLayout's
@@ -1721,7 +1713,7 @@ const nextSystemBillNo = useMemo(
   const tabBar = (
     <div className="flex gap-1.5" data-no-print>
       <button
-        onClick={() => { setActiveTab('bill'); handleNew(); }}
+        onClick={() => { setActiveTab('bill'); pressNew(); }}
         className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'bill' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
@@ -1811,19 +1803,32 @@ const nextSystemBillNo = useMemo(
                 Posted, so both are disabled there rather than acting on whichever draft happened
                 to be on screen before the switch (per the user, 2026-09-04). */}
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={pressNew} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
             <button
               type="button"
               onClick={handleDeleteAction}
-              disabled={deletedPlaceholder != null || (editingIndex != null ? isViewMode : (mode !== 'view' || billId == null || currentBillIsPosted))}
-              title={editingIndex != null ? 'Delete selected article' : 'Delete'}
+              disabled={deletedPlaceholder != null || ((editingIndex != null || selectedIndex != null) ? isViewMode : (mode !== 'view' || billId == null || currentBillIsPosted))}
+              title={(editingIndex != null || selectedIndex != null) ? 'Delete selected article' : 'Delete'}
               className="toolbar-btn"
             >
               <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
               <span>Delete</span>
+            </button>
+            {/* G-08 (changes-14-09-26.md, 2026-09-15): editing a detail row is now deliberate —
+                click a row (no visible change), then press Edit to actually load it into the
+                entry strip and apply the highlight. */}
+            <button
+              type="button"
+              onClick={handleEditSelectedRow}
+              disabled={selectedIndex == null || editingIndex != null || isViewMode || currentBillIsPosted || (mode === 'edit' && editScope !== 'detail')}
+              title="Edit selected article"
+              className="toolbar-btn"
+            >
+              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
+              <span>Edit Row</span>
             </button>
             <button
               type="button"
@@ -2141,7 +2146,7 @@ const nextSystemBillNo = useMemo(
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
-              <input type="date" ref={firstFieldRef}
+              <input type="date" ref={firstFieldRef} required
             value={date} disabled={isViewMode || masterFieldsLocked} onChange={e => setDate(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
             <div className="flex items-center gap-1.5" style={{ gridArea: 'store' }}>
@@ -2203,6 +2208,7 @@ const nextSystemBillNo = useMemo(
                   ref={customerTriggerRef}
                   type="text"
                   data-field-nav="true"
+                  required
                   disabled={isViewMode || masterFieldsLocked}
                   value={customerSearchText}
                   onChange={e => setCustomerSearchText(e.target.value)}
@@ -2225,15 +2231,7 @@ const nextSystemBillNo = useMemo(
                   title="Select Customer"
                   options={customerOptions}
                   value={customerId}
-                  onSelect={(val) => {
-                    setCustomerId(val);
-                    setDeliveryType('1');
-                    setDeliveryCode('1');
-                    setSubCustomerId('');
-                    setCustomAddress('');
-                    setIsCustomerModalOpen(false);
-                    requestAnimationFrame(() => focusNextField(customerTriggerRef.current));
-                  }}
+                  onSelect={selectCustomer}
                   onClose={() => setIsCustomerModalOpen(false)}
                   searchPlaceholder="Search customer by name..."
                   initialSearch={customerModalSeed}
@@ -2349,7 +2347,7 @@ const nextSystemBillNo = useMemo(
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Bill No. <span className="text-red-500 font-bold">*</span>
               </label>
-              <input type="text" value={billNo} disabled={isViewMode || masterFieldsLocked} onChange={e => setBillNo(e.target.value)} className="soleria-input soleria-input-compact" />
+              <input type="text" required value={billNo} disabled={isViewMode || masterFieldsLocked} onChange={e => setBillNo(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
             <div className="flex items-center gap-1.5" style={{ gridArea: 'gpno' }}>
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
@@ -2422,12 +2420,15 @@ const nextSystemBillNo = useMemo(
 
             {/* System No. — the auto-generated internal bill number. Before Save there's no real
                 id yet, so this previews the number Save will actually assign (same pattern as
-                Purchase's own System Bill No.) instead of just saying "Unsaved". */}
+                Purchase's own System Bill No.) instead of just saying "Unsaved" — but only once
+                New has actually been pressed (or effectively already has — `hasClickedNew`, per
+                the user 2026-09-16): blank on a genuinely untouched page, not a live-updating
+                preview nobody asked for yet. */}
             <div className="flex items-center gap-1.5" style={{ gridArea: 'sysno' }}>
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 No. &gt;&gt;&gt;&gt;
               </label>
-              <input type="text" value={currentSystemNo != null ? `#${currentSystemNo}` : `#${nextSystemBillNo}`} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
+              <input type="text" value={currentSystemNo != null ? `#${currentSystemNo}` : hasClickedNew ? `#${nextSystemBillNo}` : ''} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
           </div>
 
@@ -2469,6 +2470,7 @@ const nextSystemBillNo = useMemo(
                   <input
                     ref={productTriggerRef}
                     type="text"
+                    required
                     disabled={detailFieldsLocked}
                     value={productSearchText}
                     onChange={e => setProductSearchText(e.target.value)}
@@ -2476,6 +2478,12 @@ const nextSystemBillNo = useMemo(
                       if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                         e.preventDefault();
                         e.stopPropagation();
+                        const direct = e.key === 'Enter' ? findDirectMatch(productOptions, productSearchText) : null;
+                        if (direct) {
+                          handleEntryArticleChange(direct);
+                          requestAnimationFrame(() => focusNextField(productTriggerRef.current));
+                          return;
+                        }
                         setIsProductModalOpen(true);
                       }
                     }}
@@ -2485,14 +2493,7 @@ const nextSystemBillNo = useMemo(
                   <SearchModal
                     isOpen={isProductModalOpen}
                     title="Select Article"
-                    options={products.map(p => {
-                      const agg = getStockInfo(p.article_id, null);
-                      return {
-                        value: String(p.article_id),
-                        label: p.name,
-                        sublabel: agg ? `Stock: ${formatCartons(agg.cartons)} ctn / ${agg.pairs} prs` : undefined
-                      };
-                    })}
+                    options={productOptions}
                     value={entry.articleId != null ? String(entry.articleId) : ''}
                     initialSearch={productSearchText}
                     onSelect={(val) => {
@@ -2518,6 +2519,7 @@ const nextSystemBillNo = useMemo(
                     placeholder="Color..."
                     searchPlaceholder="Search colors..."
                     disabled={entry.articleId == null || detailFieldsLocked}
+                    required
                   />
                 </div>
               </div>
@@ -2541,6 +2543,7 @@ const nextSystemBillNo = useMemo(
                 <CartonsInput
                   value={entry.cartons}
                   min={0.1}
+                  required
                   disabled={detailFieldsLocked}
                   onChange={v => updateEntryNumericField('cartons', v)}
                   className={`soleria-input soleria-input-compact text-center font-mono ${entryStockCheck ? 'border-2 border-red-500 bg-rose-50 text-red-700 font-bold' : ''}`}
@@ -2554,6 +2557,7 @@ const nextSystemBillNo = useMemo(
                 <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Rate <span className="text-red-500 font-bold">*</span></label>
                 <input
                   type="number"
+                  required
                   value={entry.rate || ''}
                   min={0}
                   disabled={detailFieldsLocked}
@@ -2625,6 +2629,9 @@ const nextSystemBillNo = useMemo(
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b text-[11px] font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                  {/* G-05 (changes-14-09-26.md, 2026-09-15): narrow gutter for the ▶ row pointer —
+                      unlabeled, matching the ref pic (ref-pics/batch2/jv2.0.jpeg). */}
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1" style={{ width: '18px' }} />
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 pl-3" style={{ minWidth: '190px' }}>Product Name</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '80px' }}>Packing</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px' }}>Cartons</th>
@@ -2637,10 +2644,23 @@ const nextSystemBillNo = useMemo(
                 {items.map((item, idx) => (
                   <tr
                     key={item.uid}
-                    onClick={() => handleRowClick(idx)}
+                    ref={el => { rowRefs.current[idx] = el; }}
+                    onClick={() => {
+                      // G-08: a click must produce no visible change — it only records which row
+                      // the Delete/Edit Row toolbar buttons act on next. Inert entirely while
+                      // another row is actually loaded for editing (see the file-level comment on
+                      // `selectedIndex`).
+                      if (editingIndex != null) return;
+                      setSelectedIndex(prev => prev === idx ? null : idx);
+                    }}
                     className={`border-b cursor-pointer hover:bg-slate-50/50 ${idx === editingIndex ? 'bg-blue-50' : ''}`}
                     style={{ borderColor: 'var(--border-table)' }}
                   >
+                    {/* G-05: a pure position indicator — never a background/highlight, so it can
+                        never be confused with G-08's edit highlight above. */}
+                    <td className="p-1 text-center text-emerald-600" aria-hidden="true">
+                      {idx === lastEnteredIndex && '▶'}
+                    </td>
                     <td className="p-1 pl-3 font-semibold text-slate-800 text-[13px]">{item.label || 'N/A'}</td>
                     <td className="p-1 text-center font-mono text-sm text-slate-600">{item.packing || '-'}</td>
                     <td className="p-1 text-center font-mono text-sm text-slate-700">{formatCartons(item.cartons)}</td>
@@ -2651,7 +2671,7 @@ const nextSystemBillNo = useMemo(
                 ))}
                 {items.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="p-3 text-center text-xs text-slate-400">
+                    <td colSpan={7} className="p-3 text-center text-xs text-slate-400">
                       No articles added yet.
                     </td>
                   </tr>
@@ -2754,7 +2774,7 @@ const nextSystemBillNo = useMemo(
             <div className="flex justify-end mt-4">
               <button
                 type="button"
-                onClick={() => { setIsFindOpen(false); setFindQuery(''); }}
+                onClick={closeFindBill}
                 className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm font-semibold"
               >
                 Close
@@ -2776,7 +2796,7 @@ const nextSystemBillNo = useMemo(
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                 Sub-Customer Name <span className="text-red-500 font-bold">*</span>
               </label>
-              <input type="text" value={newSubCustomerName} onChange={e => setNewSubCustomerName(e.target.value)} placeholder="Enter sub-customer name..." className="soleria-input font-semibold" autoFocus />
+              <input type="text" required value={newSubCustomerName} onChange={e => setNewSubCustomerName(e.target.value)} placeholder="Enter sub-customer name..." className="soleria-input font-semibold" autoFocus />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
@@ -2790,6 +2810,7 @@ const nextSystemBillNo = useMemo(
                   onChange={val => { setNewSubCustomerRegionId(val); setNewSubCustomerCityId(''); }}
                   placeholder="Select Region..."
                   searchPlaceholder="Search regions..."
+                  required
                 />
               </div>
 
@@ -2810,12 +2831,7 @@ const nextSystemBillNo = useMemo(
             <div className="flex justify-end gap-2 text-sm font-semibold">
               <button
                 type="button"
-                onClick={() => {
-                  setIsAddSubCustomerOpen(false);
-                  setNewSubCustomerName('');
-                  setNewSubCustomerRegionId('');
-                  setNewSubCustomerCityId('');
-                }}
+                onClick={closeAddSubCustomer}
                 className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
               >
                 Cancel
@@ -2858,6 +2874,7 @@ const nextSystemBillNo = useMemo(
                   onChange={val => { setNewCustomerRegionId(val); setNewCustomerCityId(''); }}
                   placeholder="Select Region..."
                   searchPlaceholder="Search regions..."
+                  required
                 />
               </div>
 
@@ -2878,12 +2895,7 @@ const nextSystemBillNo = useMemo(
             <div className="flex justify-end gap-2 text-sm font-semibold">
               <button
                 type="button"
-                onClick={() => {
-                  setIsAddCustomerOpen(false);
-                  setNewCustomerName('');
-                  setNewCustomerRegionId('');
-                  setNewCustomerCityId('');
-                }}
+                onClick={closeAddCustomer}
                 className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
               >
                 Cancel

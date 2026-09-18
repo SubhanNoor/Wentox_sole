@@ -3,9 +3,11 @@ import { useApp, formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
 import type { BankAccountRow } from '@/lib/api';
-import { Plus, Save, Edit2, Ban, RotateCcw, Landmark, Search, AlertTriangle, X } from 'lucide-react';
+import { Plus, Save, Edit2, Ban, RotateCcw, Landmark, Search, AlertTriangle, X, XOctagon } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
+import PasswordPromptModal from '@/components/PasswordPromptModal';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 export default function BankSetupPage() {
   const { state } = useApp();
@@ -86,6 +88,14 @@ export default function BankSetupPage() {
     clearDraft();
   };
 
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(isModalOpen, handleCloseModal);
+  // ACC-02/G-07: the Deactivate and reactivate-prompt dialogs were missed by the original G-07
+  // sweep (neither matched the `isModalOpen`/`handleCloseModal` naming that batch script searched
+  // for) — closing over Escape now too.
+  useEscapeToClose(!!deactivatingBank, () => setDeactivatingBank(null));
+  useEscapeToClose(!!reactivatePrompt, () => setReactivatePrompt(null));
+
   // G-06: after a successful create, the window stays open and clears — ready for the next bank
   // account — instead of closing. G-04: openingDate is deliberately NOT reset here; it stays
   // selected for the rest of this window's session and only resets (to today) on handleCloseModal.
@@ -140,9 +150,10 @@ export default function BankSetupPage() {
     }
   };
 
-  const confirmDeactivate = async () => {
+  // Password-gated per the user (2026-09-17), same as every other account type's delete.
+  const confirmDeactivate = async (password: string) => {
     if (!deactivatingBank) return;
-    const res = await api.bankAccounts.remove(deactivatingBank.bank_id);
+    const res = await api.bankAccounts.remove(deactivatingBank.bank_id, password);
     if (!res.ok) { fail('Failed to deactivate: ' + res.error.message); setDeactivatingBank(null); return; }
     flash('Bank account deactivated.');
     setDeactivatingBank(null);
@@ -153,6 +164,19 @@ export default function BankSetupPage() {
     const res = await api.bankAccounts.reactivate(bankId);
     if (!res.ok) return fail('Failed to reactivate: ' + res.error.message);
     flash('Bank account reactivated.');
+    loadBanks(showInactive);
+  };
+
+  // Permanent delete — added on top of the deactivate/reactivate cycle above, per the user
+  // (2026-09-17). Only reachable for an already-deactivated bank account; the backend's
+  // hasAnyReference() check is the real guard.
+  const [permDeletingBank, setPermDeletingBank] = useState<BankAccountRow | null>(null);
+  const confirmPermanentDeleteBank = async (password: string) => {
+    if (!permDeletingBank) return;
+    const res = await api.bankAccounts.permanentDelete(permDeletingBank.bank_id, password);
+    if (!res.ok) { fail('Failed to permanently delete: ' + res.error.message); setPermDeletingBank(null); return; }
+    flash('Bank account permanently deleted.');
+    setPermDeletingBank(null);
     loadBanks(showInactive);
   };
 
@@ -289,7 +313,7 @@ export default function BankSetupPage() {
                       className="font-mono text-xs font-bold"
                       style={{ color: balanceColor(bal) }}
                     >
-                      {formatCurrency(Math.abs(bal))}
+                      {formatCurrency(bal)}
                       <span className="ml-1.5 text-[10px] font-semibold uppercase">{bal < 0 ? 'Cr' : 'Dr'}</span>
                     </span>
                   );
@@ -317,9 +341,14 @@ export default function BankSetupPage() {
                   </button>
                 </>
               ) : (
-                <button onClick={() => reactivate(b.bank_id)} title="Reactivate" className="p-1.5 rounded hover:bg-emerald-50 text-slate-400 hover:text-emerald-600">
-                  <RotateCcw size={15} />
-                </button>
+                <>
+                  <button onClick={() => reactivate(b.bank_id)} title="Reactivate" className="p-1.5 rounded hover:bg-emerald-50 text-slate-400 hover:text-emerald-600">
+                    <RotateCcw size={15} />
+                  </button>
+                  <button onClick={() => setPermDeletingBank(b)} title="Permanently Delete — cannot be undone" className="p-1.5 rounded hover:bg-rose-100 text-slate-400 hover:text-rose-700">
+                    <XOctagon size={15} />
+                  </button>
+                </>
               )
             )}
           />
@@ -328,7 +357,7 @@ export default function BankSetupPage() {
         {/* Add/Edit Bank Account — Modal Dialogue Box Pop-up */}
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}
-            onKeyDown={e => { if (e.key === 'Escape') { (handleCloseModal)(); } }}
+           
             tabIndex={-1}>
             <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
@@ -358,7 +387,7 @@ export default function BankSetupPage() {
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">
                       Account Name <span className="text-rose-500">*</span>
                     </label>
-                    <input ref={nameInputRef} type="text" value={name} onChange={e => setName(e.target.value)}
+                    <input ref={nameInputRef} type="text" required value={name} onChange={e => setName(e.target.value)}
                       placeholder="e.g. Bank Alfalah A/C - 0124" className="soleria-input w-full font-semibold" autoFocus />
                   </div>
 
@@ -422,35 +451,23 @@ export default function BankSetupPage() {
           </div>
         )}
 
-        {/* ── Deactivate confirmation ── */}
-        {deactivatingBank && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
-            <div className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp max-h-[90vh] overflow-y-auto">
-              <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
-                <AlertTriangle size={18} className="text-rose-600" /> Deactivate Bank Account
-              </h3>
-              <p className="text-xs text-slate-600 mb-4 leading-relaxed">
-                <strong>{deactivatingBank.name}</strong> will be hidden from selection on new payments
-                and receipts. Its ledger account and history stay intact — this can be undone any time
-                with Reactivate.
-              </p>
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => setDeactivatingBank(null)}
-                  className="px-4 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmDeactivate}
-                  className="px-4 py-2 text-sm rounded-lg bg-rose-600 text-white hover:bg-rose-700"
-                >
-                  Confirm Deactivate
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* ── Deactivate confirmation — password-gated, per the user (2026-09-17) ── */}
+        <PasswordPromptModal
+          isOpen={!!deactivatingBank}
+          onClose={() => setDeactivatingBank(null)}
+          onSuccess={confirmDeactivate}
+          title="Deactivate Bank Account"
+          subtitle={deactivatingBank ? `Confirm your password to deactivate "${deactivatingBank.name}". It will be hidden from selection on new payments and receipts — its ledger account and history stay intact, and this can be undone any time with Reactivate.` : undefined}
+        />
+
+        {/* ── Permanent delete — irreversible, only reachable once already deactivated ── */}
+        <PasswordPromptModal
+          isOpen={!!permDeletingBank}
+          onClose={() => setPermDeletingBank(null)}
+          onSuccess={confirmPermanentDeleteBank}
+          title="Permanently Delete Bank Account"
+          subtitle={permDeletingBank ? `Confirm your password to PERMANENTLY delete "${permDeletingBank.name}". This cannot be undone — the record itself is removed, not just deactivated. It will be refused if this bank account is still referenced anywhere (a cheque, receipt, or expense that deposits to or draws from it).` : undefined}
+        />
 
         {/* ── Reactivate-instead-of-create prompt ── */}
         {reactivatePrompt && (

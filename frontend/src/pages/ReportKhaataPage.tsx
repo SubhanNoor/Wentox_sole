@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Search, Eye } from 'lucide-react';
@@ -24,6 +24,15 @@ interface KhaataRow {
   debit: number;
   credit: number;
   balance: number;
+  // LED-01 (changes-14-09-26.md, corrected 2026-09-15): a Purchase voucher with more than one
+  // item expands into exactly N+1 rows — one per item (the first also carrying the voucher's own
+  // date/type/inv#/bill#), plus a trailing total row — display only, the underlying ledger
+  // entry/balance is still exactly one row's worth of money movement. `showBalance: false` hides
+  // the Balance cell on the item rows (only the total row's balance is real — repeating it on
+  // every row would look like N separate balance changes for what is one). `isSubRow` marks the
+  // compact item/total rows for tighter row height.
+  showBalance?: boolean;
+  isSubRow?: boolean;
 }
 
 // Category badge — one constant style regardless of which category it is (matches the
@@ -50,6 +59,13 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
   const [isClosing, setIsClosing] = useState(false);
   const [accountSearch, setAccountSearch] = useState('');
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  // G-03 (changes-14-09-26.md): the cursor lands in the account search box whenever the directory
+  // view is showing — on first open, and again on returning to it from a drilled-into account.
+  const accountSearchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!accountBaId) requestAnimationFrame(() => accountSearchRef.current?.focus());
+  }, [accountBaId]);
 
   const handleCloseDetail = () => {
     setIsClosing(true);
@@ -128,16 +144,44 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
   }, [directory, accountSearch, isAllScope]);
 
   // Opening Balance synthetic row + running balance — the backend already computes both.
+  // LED-01 (changes-14-09-26.md, corrected 2026-09-15 per the client): a Purchase row with MORE
+  // THAN ONE item expands into exactly N+1 rows — one per item, plus a trailing total row — no
+  // separate header row. A single-item (or item-less) purchase renders exactly as it always did,
+  // one plain row. Same treatment for Purchase Return, per the user (2026-09-17) — the backend's
+  // `purchase_items` field is now populated for both `type`s identically.
   const runningKhaata = useMemo<KhaataRow[]>(() => {
     if (!ledger) return [];
-    return [
+    const rows: KhaataRow[] = [
       { date: fromDate ? `Before ${formatDate(fromDate)}` : '---', type: 'Opening Balance', invNo: '-', billNo: '-', narration: fromDate ? `Opening balance before ${formatDate(fromDate)}` : 'Opening Balance brought forward', chequeNo: undefined, chequeDate: undefined, pairs: 0, debit: 0, credit: 0, balance: ledger.opening_balance },
-      ...ledger.rows.map(r => ({
-        date: formatDate(r.date), type: r.type, invNo: r.inv_no != null ? String(r.inv_no) : String(r.entry_id), billNo: r.bill_no || '-', narration: r.narration || '',
+    ];
+    for (const r of ledger.rows) {
+      const invNo = r.inv_no != null ? String(r.inv_no) : String(r.entry_id);
+      if ((r.type === 'Purchase' || r.type === 'Purchase Return') && r.purchase_items && r.purchase_items.length > 1) {
+        r.purchase_items.forEach((item, i) => {
+          rows.push({
+            // Date/Type/Inv#/Bill# only on the first item row — that IS the voucher's own row,
+            // just narrating one item at a time instead of all of them crammed into one cell.
+            date: i === 0 ? formatDate(r.date) : '', type: i === 0 ? r.type : '',
+            invNo: i === 0 ? invNo : '', billNo: i === 0 ? (r.bill_no || '-') : '',
+            narration: `${item.material_name} — ${item.quantity} ${item.unit} @ ${formatCurrency(item.price_per_unit)} = ${formatCurrency(item.total_price)}`,
+            chequeNo: undefined, chequeDate: undefined,
+            pairs: 0, debit: 0, credit: 0, balance: r.balance, showBalance: false, isSubRow: true,
+          });
+        });
+        rows.push({
+          date: '', type: '', invNo: '', billNo: '',
+          narration: 'Voucher Total',
+          pairs: r.pairs || 0, debit: r.debit, credit: r.credit, balance: r.balance, isSubRow: true,
+        });
+        continue;
+      }
+      rows.push({
+        date: formatDate(r.date), type: r.type, invNo, billNo: r.bill_no || '-', narration: r.narration || '',
         chequeNo: r.cheque_no, chequeDate: r.cheque_date ? formatDate(r.cheque_date) : undefined,
         pairs: r.pairs || 0, debit: r.debit, credit: r.credit, balance: r.balance,
-      })),
-    ];
+      });
+    }
+    return rows;
   }, [ledger, fromDate]);
 
   const handleExportExcel = () => {
@@ -185,13 +229,15 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
           </tr>
         </thead>
         <tbody>
-          {runningKhaata.map((row, idx) => (
-            <tr key={idx} style={{ fontWeight: row.type === 'Opening Balance' ? 'bold' : 'normal', backgroundColor: row.type === 'Opening Balance' ? '#f9f9f9' : '#ffffff' }}>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{formatDate(row.date)}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{row.type}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{row.invNo}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center' }}>{row.billNo}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>
+          {runningKhaata.map((row, idx) => {
+            const cellPad = row.isSubRow ? '2px 6px' : '5px 6px';
+            return (
+            <tr key={idx} style={{ fontWeight: row.type === 'Opening Balance' ? 'bold' : 'normal', backgroundColor: row.type === 'Opening Balance' ? '#f9f9f9' : row.isSubRow ? '#fafafa' : '#ffffff' }}>
+              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px' }}>{row.date ? formatDate(row.date) : ''}</td>
+              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px' }}>{row.type}</td>
+              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{row.invNo}</td>
+              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'center' }}>{row.billNo}</td>
+              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', color: '#000000' }}>
                 {row.chequeNo ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', lineHeight: '1.5' }}>
                     <span><span style={{ color: '#888888', fontWeight: 'bold' }}>Cheque No:</span> {row.chequeNo}</span>
@@ -199,17 +245,18 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                   </div>
                 ) : row.narration}
               </td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right' }}>{row.pairs > 0 ? row.pairs : '-'}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>{row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: balanceColor(row.balance) }}>{formatCurrency(Math.abs(row.balance))}</td>
+              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'right' }}>{row.pairs > 0 ? row.pairs : '-'}</td>
+              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
+              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>{row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}</td>
+              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: balanceColor(row.balance) }}>{row.showBalance === false ? '' : formatCurrency(row.balance)}</td>
             </tr>
-          ))}
+            );
+          })}
           <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
             <td colSpan={6} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>GRAND TOTAL</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{formatCurrency(ledger?.total_debit || 0)}</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>({formatCurrency(ledger?.total_credit || 0)})</td>
-            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: balanceColor(runningKhaata[runningKhaata.length - 1]?.balance || 0) }}>{formatCurrency(Math.abs(runningKhaata[runningKhaata.length - 1]?.balance || 0))}</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: balanceColor(runningKhaata[runningKhaata.length - 1]?.balance || 0) }}>{formatCurrency(runningKhaata[runningKhaata.length - 1]?.balance || 0)}</td>
           </tr>
         </tbody>
       </table>
@@ -249,6 +296,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                 <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search Account:</span>
                 <div className="relative">
                   <input
+                    ref={accountSearchRef}
                     type="text"
                     placeholder={`Search by Code, Description, Main Account${isAllScope ? ', Category' : ''} or City...`}
                     value={accountSearch}
@@ -358,7 +406,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                           className="text-xs font-mono font-bold"
                           style={{ color: balanceColor(c.closing_balance) }}
                         >
-                          {formatCurrency(Math.abs(c.closing_balance))}
+                          {formatCurrency(c.closing_balance)}
                         </span>
                       ),
                     },
@@ -405,7 +453,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                 <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
                   <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Opening Balance:</span>
                   <span className="font-bold font-mono text-sm" style={{ color: balanceColor(runningKhaata[0]?.balance || 0) }}>
-                    {formatCurrency(Math.abs(runningKhaata[0]?.balance || 0))}
+                    {formatCurrency(runningKhaata[0]?.balance || 0)}
                   </span>
                 </div>
               </div>
@@ -510,24 +558,27 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                       </tr>
                     ) : (
                       runningKhaata.map((row, idx) => {
-                        const displayBal = Math.abs(row.balance);
+                        const displayBal = row.balance;
                         const isRed = row.credit > 0;
+                        const cellV = row.isSubRow ? 'py-1' : 'py-3';
 
                         return (
                           <tr
                             key={idx}
-                            className={`border-b ${row.type === 'Opening Balance' ? 'bg-slate-50 font-medium text-slate-700' : isRed ? 'text-rose-700 hover:bg-rose-50/30' : 'text-slate-700 hover:bg-slate-50/30'}`}
+                            className={`border-b ${row.type === 'Opening Balance' ? 'bg-slate-50 font-medium text-slate-700' : row.isSubRow ? 'bg-slate-50/40' : isRed ? 'text-rose-700 hover:bg-rose-50/30' : 'text-slate-700 hover:bg-slate-50/30'}`}
                             style={{ borderColor: 'var(--border-table)' }}
                           >
-                            <td className="p-3 pl-4 font-semibold">{formatDate(row.date)}</td>
-                            <td className="p-3">
-                              <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${row.type === 'Sale Bill' ? 'bg-rose-50 text-rose-700' : row.type === 'Receipt (Jamma)' ? 'bg-emerald-50 text-emerald-700' : row.type === 'Sale Return' ? 'bg-blue-50 text-blue-700' : row.type === 'Commission' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-700'}`}>
-                                {row.type}
-                              </span>
+                            <td className={`px-3 pl-4 font-semibold ${cellV}`}>{row.date ? formatDate(row.date) : ''}</td>
+                            <td className={`px-3 ${cellV}`}>
+                              {row.type && (
+                                <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${row.type === 'Sale Bill' ? 'bg-rose-50 text-rose-700' : row.type === 'Receipt (Jamma)' ? 'bg-emerald-50 text-emerald-700' : row.type === 'Sale Return' ? 'bg-blue-50 text-blue-700' : row.type === 'Commission' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-700'}`}>
+                                  {row.type}
+                                </span>
+                              )}
                             </td>
-                            <td className="p-3 text-center font-mono text-xs">{row.invNo}</td>
-                            <td className="p-3 text-center font-medium">{row.billNo}</td>
-                            <td className="p-3 text-xs font-medium">
+                            <td className={`px-3 text-center font-mono text-xs ${cellV}`}>{row.invNo}</td>
+                            <td className={`px-3 text-center font-medium ${cellV}`}>{row.billNo}</td>
+                            <td className={`px-3 text-xs font-medium text-slate-900 ${cellV}`}>
                               {row.chequeNo ? (
                                 <div className="flex flex-col gap-0.5">
                                   <span><span className="text-slate-400">Cheque No:</span> {row.chequeNo}</span>
@@ -537,15 +588,15 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                                 row.narration
                               )}
                             </td>
-                            <td className="p-3 text-center text-slate-600 font-medium">{row.pairs > 0 ? row.pairs : '-'}</td>
-                            <td className="p-3 text-right text-emerald-700 font-bold">
+                            <td className={`px-3 text-center text-slate-600 font-medium ${cellV}`}>{row.pairs > 0 ? row.pairs : '-'}</td>
+                            <td className={`px-3 text-right text-emerald-700 font-bold ${cellV}`}>
                               {row.debit > 0 ? formatCurrency(row.debit) : '-'}
                             </td>
-                            <td className="p-3 text-right text-rose-700 font-bold">
+                            <td className={`px-3 text-right text-rose-700 font-bold ${cellV}`}>
                               {row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}
                             </td>
-                            <td className="p-3 text-right font-bold font-mono" style={{ color: balanceColor(row.balance) }}>
-                              {formatCurrency(displayBal)}
+                            <td className={`px-3 text-right font-bold font-mono ${cellV}`} style={{ color: balanceColor(row.balance) }}>
+                              {row.showBalance === false ? '' : formatCurrency(displayBal)}
                             </td>
                           </tr>
                         );
@@ -558,7 +609,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                       <td className="p-4 text-right text-emerald-800">{formatCurrency(ledger?.total_debit || 0)}</td>
                       <td className="p-4 text-right text-rose-800">({formatCurrency(ledger?.total_credit || 0)})</td>
                       <td className="p-4 text-right" style={{ color: balanceColor(runningKhaata[runningKhaata.length - 1]?.balance || 0) }}>
-                        {formatCurrency(Math.abs(runningKhaata[runningKhaata.length - 1]?.balance || 0))}
+                        {formatCurrency(runningKhaata[runningKhaata.length - 1]?.balance || 0)}
                       </td>
                     </tr>
                   </tfoot>

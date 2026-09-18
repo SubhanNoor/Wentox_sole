@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Eye } from 'lucide-react';
@@ -26,6 +26,11 @@ export default function ProductLedgerContent() {
   const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
   const [vendorFilter, setVendorFilter] = useState(() => getWindowParam('vendorFilter') || 'all');
+
+  // G-03 (changes-14-09-26.md): mounts fresh whenever this Reports Hub tab becomes active, so a
+  // mount-only effect covers both "page opens here" and "user switches to this tab".
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => searchRef.current?.focus()); }, []);
 
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [vendors, setVendors] = useState<VendorRow[]>([]);
@@ -157,6 +162,7 @@ export default function ProductLedgerContent() {
       <div className="flex flex-col gap-4 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }} data-no-print>
         <div className="flex flex-wrap items-center gap-3">
           <input
+            ref={searchRef}
             type="text"
             placeholder="Search by article code or name..."
             value={searchQuery}

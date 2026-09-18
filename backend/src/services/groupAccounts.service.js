@@ -93,4 +93,28 @@ async function reactivate(groupId) {
   return repository.findById(groupId);
 }
 
-module.exports = { list, getById, create, update, remove, reactivate };
+// Permanent delete — per the user, 2026-09-17, added on top of remove() above, not instead of it:
+// deactivating stays the normal, reversible action; this is separate, stricter, and irreversible,
+// only reachable for a group already deactivated. `hasAnyReference` is broader than isReferenced()
+// (which only ever needed to cover a directly-filed chart account) — it also catches a business
+// account resolved transitively through this group's chart accounts.
+async function permanentDelete(groupId) {
+  const group = await getById(groupId);
+  if (group.is_active) {
+    throw ApiError.conflict(
+      `${group.name} must be closed (deleted) first — permanent delete is only for an already-closed group`,
+      'ACCOUNT_NOT_CLOSED',
+    );
+  }
+  const referenced = await repository.hasAnyReference(groupId);
+  if (referenced) {
+    throw ApiError.conflict(
+      `${group.name} is still referenced elsewhere (a chart account or business account filed under it) and cannot be permanently deleted`,
+      'ACCOUNT_STILL_REFERENCED',
+    );
+  }
+  await withTransaction((transaction) => repository.hardDelete(transaction, groupId));
+  return { ok: true };
+}
+
+module.exports = { list, getById, create, update, remove, reactivate, permanentDelete };

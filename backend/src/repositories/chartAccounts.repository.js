@@ -28,7 +28,9 @@ async function list(filters = {}) {
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
     `SELECT ca.*, ga.code AS group_code, ga.name AS group_name, ga.class_id,
-            acl.code AS class_code, acl.name AS class_name
+            acl.code AS class_code, acl.name AS class_name,
+            CAST(CASE WHEN EXISTS (SELECT 1 FROM dbo.business_accounts ba WHERE ba.ac_id = ca.ac_id)
+                 THEN 1 ELSE 0 END AS BIT) AS has_children
      FROM dbo.chart_of_accounts ca
      JOIN dbo.group_accounts ga    ON ga.group_id = ca.group_id
      JOIN dbo.account_classes acl  ON acl.class_id = ga.class_id
@@ -111,6 +113,52 @@ async function setStatus(acId, status) {
   );
 }
 
+// ACC-02 (changes-14-09-26.md, 2026-09-15): "carries transactions" — any posted ledger row
+// against this chart account directly (ac_id), regardless of source type.
+async function hasLedgerActivity(acId) {
+  const result = await query(
+    'SELECT TOP 1 1 AS found FROM dbo.ledger_entries WHERE ac_id = @acId',
+    { acId: { type: sql.Int, value: acId } },
+  );
+  return result.recordset.length > 0;
+}
+
+// ACC-02's "child accounts" check for this level of the hierarchy: any business account filed
+// under this chart account (ba.ac_id is its parent — see schema.sql's own comment on the column),
+// active or closed — unconditional, same as groupAccounts.repository.js#isReferenced.
+async function hasChildren(acId) {
+  const result = await query(
+    'SELECT TOP 1 1 AS found FROM dbo.business_accounts WHERE ac_id = @acId',
+    { acId: { type: sql.Int, value: acId } },
+  );
+  return result.recordset.length > 0;
+}
+
+// Permanent delete (per the user, 2026-09-17 — added on top of the existing soft-close, not
+// instead of it). `hasChildren`/`hasLedgerActivity` above only ever needed to cover what blocks a
+// reversible close; a real `DELETE FROM` has to survive every foreign key in the schema, so this
+// also covers `main_ac_id` on sale_bills/draft_sale_bills/stock_vouchers, which neither existing
+// guard touches.
+async function hasAnyReference(acId) {
+  const result = await query(
+    `SELECT
+       (SELECT TOP 1 1 FROM dbo.business_accounts WHERE ac_id = @acId) AS businessAccount,
+       (SELECT TOP 1 1 FROM dbo.ledger_entries WHERE ac_id = @acId) AS ledger,
+       (SELECT TOP 1 1 FROM dbo.draft_sale_bills WHERE main_ac_id = @acId) AS draftSaleBill,
+       (SELECT TOP 1 1 FROM dbo.sale_bills WHERE main_ac_id = @acId) AS saleBill,
+       (SELECT TOP 1 1 FROM dbo.stock_vouchers WHERE main_ac_id = @acId) AS stockVoucher`,
+    { acId: { type: sql.Int, value: acId } },
+  );
+  const row = result.recordset[0];
+  return Object.values(row).some((v) => v != null);
+}
+
+async function hardDelete(transaction, acId) {
+  const request = requestWithParams(transaction, { acId: { type: sql.Int, value: acId } });
+  await request.query('DELETE FROM dbo.chart_of_accounts WHERE ac_id = @acId');
+}
+
 module.exports = {
   findByCode, list, findById, findByGroupAndName, nextSerial, insert, update, setStatus,
+  hasLedgerActivity, hasChildren, hasAnyReference, hardDelete,
 };

@@ -1,9 +1,10 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import SearchableSelect from '@/components/SearchableSelect';
 import AppLayout from '@/components/AppLayout';
-import { Plus, Search, Settings, Save, Edit2, X, ListCollapse } from 'lucide-react';
+import { Plus, Search, Settings, Save, Edit2, RotateCcw, Trash2, X, ListCollapse, XOctagon } from 'lucide-react';
 import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/DuplicateNamePromptModal';
 import DataListTable from '@/components/DataListTable';
+import PasswordPromptModal from '@/components/PasswordPromptModal';
 import {
   groupAccounts as groupAccountsApi,
   chartAccounts as chartAccountsApi,
@@ -13,6 +14,7 @@ import {
   type ChartOfAccountRow,
 } from '@/lib/api';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 export default function GroupAcSetupPage() {
   const [groups, setGroups] = useState<GroupAccountRow[]>([]);
@@ -22,6 +24,10 @@ export default function GroupAcSetupPage() {
   // Search & Sort State
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'code' | 'name'>('code');
+  // Per the user, 2026-09-17: a deleted (closed) account must not show up anywhere by default —
+  // off by default, matching BankSetupPage's own convention — Reactivate is still reachable by
+  // switching it on.
+  const [showInactive, setShowInactive] = useState(false);
 
   // Modal State
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -86,6 +92,9 @@ export default function GroupAcSetupPage() {
     clearDraft();
   };
 
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(isModalOpen, handleCloseModal);
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const typed = name.trim();
@@ -141,10 +150,70 @@ export default function GroupAcSetupPage() {
     requestAnimationFrame(() => nameInputRef.current?.focus());
   };
 
+  const handleReactivateGroup = async (grp: GroupAccountRow) => {
+    const res = await groupAccountsApi.reactivate(grp.group_id);
+    if (!res.ok) {
+      setErrorMsg(res.error.message);
+      setTimeout(() => setErrorMsg(''), 4000);
+      return;
+    }
+    setSuccessMsg('Group Account reactivated successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    await loadData();
+  };
+
+  // ACC-02 (changes-14-09-26.md): Delete — soft, via the existing Close mechanism
+  // (groupAccounts.service.js#remove already enforces the has-children guard; this is just the
+  // confirmation UI in front of it). Groups don't carry ledger transactions of their own — only
+  // the chart accounts filed under them do — so the "carries transactions" case never applies
+  // here directly; the has-children check covers the meaningful case for this level.
+  const [deletingGroup, setDeletingGroup] = useState<GroupAccountRow | null>(null);
+  // Password-gated per the user (2026-09-17), same as every other account type's delete —
+  // PasswordPromptModal IS the confirmation step now, replacing the old plain ConfirmModal.
+  const confirmDeleteGroup = async (password: string) => {
+    if (!deletingGroup) return;
+    const res = await groupAccountsApi.remove(deletingGroup.group_id, password);
+    if (!res.ok) {
+      setErrorMsg(res.error.message);
+      setTimeout(() => setErrorMsg(''), 5000);
+      setDeletingGroup(null);
+      return;
+    }
+    setSuccessMsg('Group Account deleted.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    setDeletingGroup(null);
+    await loadData();
+  };
+
+  // Permanent delete — added on top of the close/reactivate cycle above, per the user
+  // (2026-09-17). Only reachable for an already-closed group; the backend's hasAnyReference()
+  // check is the real guard.
+  const [permDeletingGroup, setPermDeletingGroup] = useState<GroupAccountRow | null>(null);
+  const confirmPermanentDeleteGroup = async (password: string) => {
+    if (!permDeletingGroup) return;
+    const res = await groupAccountsApi.permanentDelete(permDeletingGroup.group_id, password);
+    if (!res.ok) {
+      setErrorMsg(res.error.message);
+      setTimeout(() => setErrorMsg(''), 5000);
+      setPermDeletingGroup(null);
+      return;
+    }
+    setSuccessMsg('Group Account permanently deleted.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+    setPermDeletingGroup(null);
+    await loadData();
+  };
 
 
+  // ACC-02 (changes-14-09-26.md) originally showed every status, badged, unconditionally. Per the
+  // user (2026-09-17): a deleted (closed) account must not show up anywhere by default — hidden
+  // now unless "Show closed" is switched on, same convention as BusinessAcSetupPage/
+  // ChartAcSetupPage/BankSetupPage. Reactivate is still reachable by switching it on.
   const filteredAndSortedGroups = useMemo(() => {
-    let list = groups.filter(g => g.is_active);
+    let list = groups;
+    if (!showInactive) {
+      list = list.filter(g => g.is_active);
+    }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       list = list.filter(g =>
@@ -160,7 +229,7 @@ export default function GroupAcSetupPage() {
         return a.name.localeCompare(b.name);
       }
     });
-  }, [groups, searchQuery, sortBy]);
+  }, [groups, searchQuery, sortBy, showInactive]);
 
   const viewingGroup = useMemo(() => groups.find(g => g.group_id === viewingGroupId), [viewingGroupId, groups]);
 
@@ -174,10 +243,12 @@ export default function GroupAcSetupPage() {
       setViewingChildCharts([]);
       return;
     }
-    chartAccountsApi.list({ group_id: viewingGroupId, includeInactive: true }).then(res => {
+    // Per the user, 2026-09-17: respects the same page-level "Show closed" toggle as the main
+    // list — a closed chart account under this group stays hidden here too by default.
+    chartAccountsApi.list({ group_id: viewingGroupId, includeInactive: showInactive }).then(res => {
       if (res.ok) setViewingChildCharts(res.data);
     });
-  }, [viewingGroupId]);
+  }, [viewingGroupId, showInactive]);
 
   return (
     <AppLayout pageTitle="Group Accounts Setup">
@@ -209,21 +280,27 @@ export default function GroupAcSetupPage() {
           </div>
 
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-            <div className="flex bg-slate-100 p-0.5 rounded-xl text-xs font-semibold border border-slate-200 self-start">
-              <button
-                type="button"
-                onClick={() => setSortBy('code')}
-                className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${sortBy === 'code' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold' : 'text-slate-500 hover:text-slate-800'}`}
-              >
-                Sort by Code
-              </button>
-              <button
-                type="button"
-                onClick={() => setSortBy('name')}
-                className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${sortBy === 'name' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold' : 'text-slate-500 hover:text-slate-800'}`}
-              >
-                Sort by Name
-              </button>
+            <div className="flex items-center gap-3">
+              <div className="flex bg-slate-100 p-0.5 rounded-xl text-xs font-semibold border border-slate-200 self-start">
+                <button
+                  type="button"
+                  onClick={() => setSortBy('code')}
+                  className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${sortBy === 'code' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                  Sort by Code
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSortBy('name')}
+                  className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${sortBy === 'name' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm font-bold' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                  Sort by Name
+                </button>
+              </div>
+              <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 cursor-pointer">
+                <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
+                Show closed
+              </label>
             </div>
 
             <div className="relative flex-1 min-w-[270px] sm:max-w-sm">
@@ -279,6 +356,21 @@ export default function GroupAcSetupPage() {
                   <span className="font-mono text-xs text-slate-500">{grp.sorting ?? '—'}</span>
                 ),
               },
+              {
+                key: 'status',
+                header: 'Status',
+                width: '110px',
+                align: 'center',
+                render: grp => (
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${
+                    grp.is_active
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-rose-50 text-rose-700 border-rose-200'
+                  }`}>
+                    {grp.is_active ? 'Active' : 'Closed'}
+                  </span>
+                ),
+              },
             ]}
             actions={grp => (
               <>
@@ -289,6 +381,32 @@ export default function GroupAcSetupPage() {
                 >
                   <Edit2 size={15} />
                 </button>
+                {!grp.is_active ? (
+                  <>
+                    <button
+                      onClick={() => handleReactivateGroup(grp)}
+                      className="p-1.5 rounded-lg hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer"
+                      title="Reactivate Group Account"
+                    >
+                      <RotateCcw size={15} />
+                    </button>
+                    <button
+                      onClick={() => setPermDeletingGroup(grp)}
+                      className="p-1.5 rounded-lg hover:bg-rose-100 text-slate-400 hover:text-rose-700 transition-colors cursor-pointer"
+                      title="Permanently Delete — cannot be undone"
+                    >
+                      <XOctagon size={15} />
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => setDeletingGroup(grp)}
+                    className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                    title="Delete Group Account"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                )}
               </>
             )}
           />
@@ -365,7 +483,7 @@ export default function GroupAcSetupPage() {
         {/* Modal Dialogue Box Pop-up */}
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}
-            onKeyDown={e => { if (e.key === 'Escape') { (handleCloseModal)(); } }}
+           
             tabIndex={-1}>
             <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-md max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
@@ -407,6 +525,7 @@ export default function GroupAcSetupPage() {
                   <input
                     ref={nameInputRef}
                     type="text"
+                    required
                     value={name}
                     onChange={e => setName(e.target.value)}
                     placeholder="e.g. Current Assets"
@@ -428,6 +547,7 @@ export default function GroupAcSetupPage() {
                     placeholder="Select account class..."
                     searchPlaceholder="Search classes..."
                     disabled={!!selectedId}
+                    required
                   />
                 </div>
 
@@ -463,6 +583,22 @@ export default function GroupAcSetupPage() {
             setIsDupModalOpen(false);
             setDupMatch(null);
           }}
+        />
+
+        <PasswordPromptModal
+          isOpen={!!deletingGroup}
+          onClose={() => setDeletingGroup(null)}
+          onSuccess={confirmDeleteGroup}
+          title="Delete Group Account"
+          subtitle={deletingGroup ? `Confirm your password to delete "${deletingGroup.name}". It will be hidden from selection everywhere — this can be undone any time with Reactivate.` : undefined}
+        />
+
+        <PasswordPromptModal
+          isOpen={!!permDeletingGroup}
+          onClose={() => setPermDeletingGroup(null)}
+          onSuccess={confirmPermanentDeleteGroup}
+          title="Permanently Delete Group Account"
+          subtitle={permDeletingGroup ? `Confirm your password to PERMANENTLY delete "${permDeletingGroup.name}". This cannot be undone — the record itself is removed, not just closed. It will be refused if any chart account (or business account beneath it) is still filed under this group.` : undefined}
         />
 
       </div>

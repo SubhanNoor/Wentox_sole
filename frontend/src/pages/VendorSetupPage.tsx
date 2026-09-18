@@ -9,6 +9,7 @@ import * as api from '@/lib/api';
 import type { VendorRow, RegionRow, CityRow, ProductRow, PurchaseRow } from '@/lib/api';
 import { formatDate, getTodayDate } from '@/lib/utils';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 export default function VendorSetupPage() {
   const [vendorSearch, setVendorSearch] = useState('');
@@ -99,6 +100,9 @@ export default function VendorSetupPage() {
     setErrorMsg('');
     clearVendorDraft();
   };
+
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(isModalOpen, handleCloseModal);
 
   // G-06: after a successful create, the window stays open and clears — ready for the next
   // vendor — instead of closing. G-04: the opening date is deliberately NOT reset here; it stays
@@ -355,7 +359,7 @@ export default function VendorSetupPage() {
         {/* Modal Dialogue Box Pop-up */}
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}
-            onKeyDown={e => { if (e.key === 'Escape') { (handleCloseModal)(); } }}
+           
             tabIndex={-1}>
             <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">
@@ -384,6 +388,7 @@ export default function VendorSetupPage() {
                     <input
                       ref={nameInputRef}
                       type="text"
+                      required
                       value={vendorName}
                       onChange={e => setVendorName(e.target.value)}
                       placeholder="e.g. Decent Polyurethane"

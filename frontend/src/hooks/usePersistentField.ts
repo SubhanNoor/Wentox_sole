@@ -105,3 +105,46 @@ export function useClearPageDraft(pageKey: string) {
     setTimeout(() => suppressedPages.delete(pageKey), 0);
   };
 }
+
+function isFilled(v: unknown): boolean {
+  if (Array.isArray(v)) return v.length > 0;
+  if (typeof v === 'string') return v.trim() !== '';
+  if (typeof v === 'number') return v !== 0;
+  return v === true;
+}
+
+/**
+ * The one "posted / unposted / System No." rule every numbered document page follows (per the
+ * user, 2026-09-18 — their "hard and fast rule"):
+ *
+ *   - Opening the window shows the newest UNPOSTED document when there is one; when there is none
+ *     it shows a blank form with the No. field EMPTY.
+ *   - A System No. is only ever previewed, and a new document only ever created, after New was
+ *     deliberately clicked. Until then the blank form is locked (`awaitingNew` on each page).
+ *   - The only thing allowed to override the auto-open is GENUINE unsaved typing — `workKeys` are
+ *     the page's own persisted fields that count as that (party, bill no., lines…). Leftover state
+ *     (a record that was merely being viewed, defaults like date/store, a bare New click) does not.
+ *
+ * `hasRealDraftAtMount` gates the page's auto-open effect. `hasClickedNew` gates the No. preview
+ * and the lock; the page's own handleNew() resets it to false, and only a New button/tab calls
+ * `markNewClicked()` — which also records the click in the draft store so it survives a page
+ * switch. That write is queued on a 0ms timeout because handleNew() has just cleared the draft,
+ * and write-through stays suppressed until the clear's own 0ms timeout releases (queued first).
+ */
+export function useNewDocGate(pageKey: string, workKeys: string[]) {
+  const { state, dispatch } = useApp();
+  const [hasRealDraftAtMount] = useState(() => {
+    const d = state.pageDrafts[pageKey] as Record<string, unknown> | undefined;
+    if (!d || d.mode === 'view') return false;
+    return workKeys.some(k => isFilled(d[k]));
+  });
+  const [hasClickedNew, setHasClickedNew] = useState(() => {
+    const d = state.pageDrafts[pageKey] as Record<string, unknown> | undefined;
+    return hasRealDraftAtMount || d?.hasClickedNew === true;
+  });
+  const markNewClicked = () => {
+    setHasClickedNew(true);
+    setTimeout(() => dispatch({ type: 'SET_PAGE_DRAFT_FIELD', page: pageKey, field: 'hasClickedNew', value: true }), 0);
+  };
+  return { hasRealDraftAtMount, hasClickedNew, setHasClickedNew, markNewClicked };
+}

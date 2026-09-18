@@ -822,10 +822,10 @@ export interface JournalVoucherLineRow extends JournalVoucherLineInput {
 export interface JournalVoucherRow {
   jv_id: number;
   jv_date: string;
-  /** Manual voucher number (office cross-referencing), matching the legacy Journal Entry
-   *  screen's "Number" field — optional, never validated, distinct from jv_id. */
+  /** System-generated, sequential, read-only (JV-01, changes-14-09-26.md) — assigned once at
+   *  creation and never reused, distinct from jv_id (the internal identity). */
   voucher_no: string | null;
-  reason: string;
+  reason: string | null;
   remarks: string | null;
   status: 'CONFIRMED' | 'DRAFT';
   /** Only present on get()/create()/update()/post()/unpost() — list() returns the rolled-up
@@ -838,8 +838,10 @@ export interface JournalVoucherRow {
 
 export interface JournalVoucherCreateInput {
   jv_date: string;
-  voucher_no?: string;
-  reason: string;
+  // No voucher_no field — it's system-generated (JV-01, changes-14-09-26.md), never client-supplied.
+  // Optional per the client, 2026-09-14 (changes-14-09-26.md JV-03) — a JV no longer requires an
+  // explanation up front.
+  reason?: string;
   remarks?: string;
   lines: JournalVoucherLineInput[];
 }
@@ -859,7 +861,7 @@ export interface UnpostedJournalVoucherRow {
   jv_id: number;
   jv_date: string;
   voucher_no: string | null;
-  reason: string;
+  reason: string | null;
   total_debit: number;
 }
 
@@ -1178,6 +1180,10 @@ export interface BusinessAccountRow {
   /** Cash in Hand / Journal Voucher — the posting engine resolves these by their parent's code, so
    *  they cannot be closed. Derived server-side; there is no column for it. */
   is_reserved?: boolean;
+  /** A vendor/customer/employee/bank account is linked to this row — deleting it (soft or
+   *  permanent) is refused server-side and must happen from that party's own setup screen instead.
+   *  Derived server-side (businessAccounts.repository.js#list's EXISTS check). */
+  is_party_linked?: boolean;
   region_name?: string;
   city_name?: string;
 }
@@ -1233,6 +1239,10 @@ export interface GroupAccountRow {
   is_active: boolean;
   class_code?: string;
   class_name?: string;
+  /** A chart account is still filed under this group — deleting it (soft or permanent) is refused
+   *  server-side until that's moved or closed. Derived server-side (groupAccounts.repository.js
+   *  #list's EXISTS check). */
+  has_children?: boolean;
 }
 
 export interface GroupAccountCreateInput {
@@ -1259,6 +1269,10 @@ export interface ChartOfAccountRow {
   class_id?: number;
   class_code?: string;
   class_name?: string;
+  /** A business account is still filed under this chart account — deleting it (soft or permanent)
+   *  is refused server-side until that's moved or closed. Derived server-side (chartAccounts.
+   *  repository.js#list's EXISTS check). */
+  has_children?: boolean;
 }
 
 export interface ChartAccountCreateInput {
@@ -1667,6 +1681,14 @@ export interface ReduceVendorStockInput {
 
 // Shared "Khaata" row shape — backs account-ledger, business-ledger's detail view, cash-book, and
 // overall-search-ledger's drill-down, all via the same reports.service.js#formatLedgerRow().
+export interface LedgerPurchaseItem {
+  material_name: string;
+  unit: string;
+  quantity: number;
+  price_per_unit: number;
+  total_price: number;
+}
+
 export interface LedgerRow {
   entry_id: number;
   date: string;
@@ -1680,6 +1702,9 @@ export interface LedgerRow {
   pairs: number | null;
   debit: number;
   credit: number;
+  // Only present (an array, possibly empty) when type === 'Purchase' — one row per purchased
+  // item, for LED-01's grouped display (changes-14-09-26.md). Undefined for every other row type.
+  purchase_items?: LedgerPurchaseItem[];
   is_payment_row: boolean;
   balance: number;
 }
@@ -2105,8 +2130,9 @@ declare global {
         get: (payload: { id: number }) => Promise<ApiResult<BankAccountRow>>;
         create: (payload: BankAccountCreateInput) => Promise<ApiResult<BankAccountRow>>;
         update: (payload: { id: number } & BankAccountUpdateInput) => Promise<ApiResult<BankAccountRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         reactivate: (payload: { id: number }) => Promise<ApiResult<BankAccountRow>>;
+        permanentDelete: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
       };
       journalVouchers: {
         list: (payload?: JournalVoucherListFilters) => Promise<ApiResult<JournalVoucherRow[]>>;
@@ -2209,8 +2235,9 @@ declare global {
         create: (payload: BusinessAccountCreateInput) => Promise<ApiResult<BusinessAccountRow>>;
         createBatch: (payload: BusinessAccountBatchCreateInput) => Promise<ApiResult<BusinessAccountRow[]>>;
         update: (payload: { id: number } & BusinessAccountUpdateInput) => Promise<ApiResult<BusinessAccountRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         reactivate: (payload: { id: number }) => Promise<ApiResult<BusinessAccountRow>>;
+        permanentDelete: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         getCashAccount: () => Promise<ApiResult<BusinessAccountRow>>;
       };
       accountClasses: {
@@ -2222,16 +2249,18 @@ declare global {
         get: (payload: { id: number }) => Promise<ApiResult<GroupAccountRow>>;
         create: (payload: GroupAccountCreateInput) => Promise<ApiResult<GroupAccountRow>>;
         update: (payload: { id: number } & GroupAccountUpdateInput) => Promise<ApiResult<GroupAccountRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         reactivate: (payload: { id: number }) => Promise<ApiResult<GroupAccountRow>>;
+        permanentDelete: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
       };
       chartAccounts: {
         list: (payload?: { includeInactive?: boolean; group_id?: number }) => Promise<ApiResult<ChartOfAccountRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<ChartOfAccountRow>>;
         create: (payload: ChartAccountCreateInput) => Promise<ApiResult<ChartOfAccountRow>>;
         update: (payload: { id: number } & ChartAccountUpdateInput) => Promise<ApiResult<ChartOfAccountRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         reactivate: (payload: { id: number }) => Promise<ApiResult<ChartOfAccountRow>>;
+        permanentDelete: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
       };
       expenses: {
         list: (payload?: ExpenseListFilters) => Promise<ApiResult<ExpenseRow[]>>;
@@ -2970,8 +2999,11 @@ export const bankAccounts = {
   create: (payload: BankAccountCreateInput) => window.api ? window.api.bankAccounts.create(payload) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: BankAccountUpdateInput) =>
     window.api ? window.api.bankAccounts.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.bankAccounts.remove({ id }) : Promise.resolve(NO_BRIDGE),
-  reactivate: (id: number) => window.api ? window.api.bankAccounts.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+  remove: (id: number, password: string) =>
+    window.api ? window.api.bankAccounts.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
+  reactivate: (id: number) => window.api ? window.api.bankAccounts.reactivate({ id }) : Promise.resolve(NO_BRIDGE),
+  permanentDelete: (id: number, password: string) =>
+    window.api ? window.api.bankAccounts.permanentDelete({ id, password }) : Promise.resolve(NO_BRIDGE)
 };
 
 // ── Module 4b: Transfer & Deposit ──
@@ -3238,9 +3270,12 @@ export const businessAccounts = {
     window.api ? window.api.businessAccounts.createBatch(payload) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: BusinessAccountUpdateInput) =>
     window.api ? window.api.businessAccounts.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.businessAccounts.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.businessAccounts.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   reactivate: (id: number) =>
     window.api ? window.api.businessAccounts.reactivate({ id }) : Promise.resolve(NO_BRIDGE),
+  permanentDelete: (id: number, password: string) =>
+    window.api ? window.api.businessAccounts.permanentDelete({ id, password }) : Promise.resolve(NO_BRIDGE),
   getCashAccount: () => window.api ? window.api.businessAccounts.getCashAccount() : Promise.resolve(NO_BRIDGE)
 };
 
@@ -3260,9 +3295,12 @@ export const groupAccounts = {
     window.api ? window.api.groupAccounts.create(payload) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: GroupAccountUpdateInput) =>
     window.api ? window.api.groupAccounts.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.groupAccounts.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.groupAccounts.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   reactivate: (id: number) =>
-    window.api ? window.api.groupAccounts.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.groupAccounts.reactivate({ id }) : Promise.resolve(NO_BRIDGE),
+  permanentDelete: (id: number, password: string) =>
+    window.api ? window.api.groupAccounts.permanentDelete({ id, password }) : Promise.resolve(NO_BRIDGE)
 };
 
 export const chartAccounts = {
@@ -3274,9 +3312,12 @@ export const chartAccounts = {
     window.api ? window.api.chartAccounts.create(payload) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: ChartAccountUpdateInput) =>
     window.api ? window.api.chartAccounts.update({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.chartAccounts.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) =>
+    window.api ? window.api.chartAccounts.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   reactivate: (id: number) =>
-    window.api ? window.api.chartAccounts.reactivate({ id }) : Promise.resolve(NO_BRIDGE)
+    window.api ? window.api.chartAccounts.reactivate({ id }) : Promise.resolve(NO_BRIDGE),
+  permanentDelete: (id: number, password: string) =>
+    window.api ? window.api.chartAccounts.permanentDelete({ id, password }) : Promise.resolve(NO_BRIDGE)
 };
 
 function normalizeExpenseRow(row: ExpenseRow): ExpenseRow {

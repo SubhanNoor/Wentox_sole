@@ -8,6 +8,7 @@
 const repository = require('../repositories/journalVouchers.repository');
 const businessAccountsService = require('./businessAccounts.service');
 const chartAccountsRepository = require('../repositories/chartAccounts.repository');
+const deletedNumbersRepository = require('../repositories/deletedDocumentNumbers.repository');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 const { buildLines, validateBalance } = require('./journalVouchers.math');
@@ -26,9 +27,9 @@ async function getCounterAccount() {
 
 function validateHeader(payload) {
   if (!payload.jv_date) throw ApiError.badRequest('jv_date is required');
-  // Required, not optional: an unexplained write-off against a party's balance is precisely the
-  // entry someone will question later, so it must carry its reason from the start.
-  if (!payload.reason || !payload.reason.trim()) throw ApiError.badRequest('reason is required');
+  // Optional per the client, 2026-09-14 (changes-14-09-26.md JV-03) — was required, on the
+  // reasoning that an unexplained write-off is exactly what gets questioned later; the client
+  // decided that's not worth blocking every JV on.
 }
 
 async function resolveLines(payload, session) {
@@ -48,11 +49,10 @@ async function resolveLines(payload, session) {
 function buildHeaderFields(payload) {
   return {
     jv_date: payload.jv_date,
-    // Optional, unvalidated — a manual voucher number for the office's own cross-referencing,
-    // matching the legacy Journal Entry screen's "Number" field. Nothing downstream depends on
-    // it being present or unique (jv_id is the real identity, same as bilty_no/gp_no elsewhere).
-    voucher_no: payload.voucher_no ? payload.voucher_no.trim() : null,
-    reason: payload.reason.trim(),
+    // voucher_no is system-generated (JV-01, changes-14-09-26.md) — never taken from the
+    // payload; insert() resolves it from dbo.seq_journal_voucher_no, updateHeader() never
+    // touches it.
+    reason: payload.reason && payload.reason.trim() ? payload.reason.trim() : null,
     remarks: payload.remarks,
   };
 }
@@ -94,12 +94,17 @@ async function update(jvId, payload, session) {
 }
 
 // DRAFT-only hard delete — journal_vouchers is a transaction table, never soft-deleted.
-async function remove(jvId) {
+async function remove(jvId, userId) {
   const existing = await getById(jvId);
   if (existing.status === 'CONFIRMED') {
     throw ApiError.conflict('Unpost the Journal Voucher before deleting', 'POSTED_LOCK');
   }
-  await repository.remove(jvId);
+  await withTransaction(async (transaction) => {
+    await repository.remove(transaction, jvId);
+    // The number is retired for good (JV-01) — logged so browsing can still show the gap,
+    // same convention as SALE_BILL/PURCHASE/etc.
+    await deletedNumbersRepository.record(transaction, 'JOURNAL_VOUCHER', Number(existing.voucher_no), userId);
+  });
   return { ok: true };
 }
 

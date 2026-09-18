@@ -9,7 +9,7 @@ import type {
   ExpenseVoucherRow, VoucherActionResult, DeletedNumberRow
 } from '@/lib/api';
 import { focusNextField } from '@/lib/fieldNav';
-import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
 import {
   Save, Edit, Trash2, Plus, CheckCircle2, Undo2, ChevronDown,
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, PackageCheck, Search
@@ -25,6 +25,7 @@ import { toDateInputValue, formatDate, mergeWithDeleted } from '@/lib/utils';
 import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 const today = () => new Date().toISOString().split('T')[0];
 
@@ -73,8 +74,10 @@ export default function ExpensesPage() {
 
   useEffect(() => {
     (async () => {
+      // excludeClosed per the user (2026-09-17): a deleted (closed) account must not be
+      // selectable when picking who to pay, on top of no longer appearing in Setup's own list.
       const [v, ba, bk] = await Promise.all([
-        api.listVendors(), api.listBusinessAccounts(), api.bankAccounts.list()
+        api.listVendors(), api.listBusinessAccounts({ excludeClosed: true }), api.bankAccounts.list()
       ]);
       const failures: string[] = [];
       if (v.ok) setVendors(v.data); else failures.push(v.error.message);
@@ -82,8 +85,15 @@ export default function ExpensesPage() {
       if (bk.ok) setBanks(bk.data); else failures.push(bk.error.message);
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
-    refreshAllVouchers();
+    // G-06 (changes-14-09-26.md, 2026-09-15): zero unposted vouchers on open must land on a fresh
+    // blank entry, not wherever `mode` was left persisted from the session that closed the window.
+    // Only 'view' (browsing a posted record) is stale in that sense — 'new'/'edit' is genuine
+    // unsaved in-progress work and must survive a reopen exactly as today.
+    refreshAllVouchers().then(data => {
+      if (data && data.every(v => v.status === 'POSTED') && mode === 'view') handleNew();
+    });
     refreshCheques();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshAllVouchers, refreshCheques]);
 
   // Every Payment voucher_no currently sitting as a deleted gap — merged into the browse lists
@@ -103,6 +113,11 @@ export default function ExpensesPage() {
   // correction as a SECOND line instead of updating the original (commitEntryLine routes on
   // mode/expenseId/entryIsDraft together), and a page restored into 'view' hides Done entirely.
   const [mode, setMode] = usePersistentField<'new' | 'edit' | 'view'>('expenses', 'mode', 'new');
+  // The posted/unposted/System No. rule (per the user, 2026-09-18) — see useNewDocGate for all of
+  // it. hasPageDraftAtMount gates the auto-open further down (only genuine unsaved typing skips
+  // it); hasClickedNew gates the No. preview and the awaitingNew lock; only New calls markNewClicked.
+  const { hasRealDraftAtMount: hasPageDraftAtMount, hasClickedNew, setHasClickedNew, markNewClicked } =
+    useNewDocGate('expenses', ['baId', 'amount', 'details', 'remarks', 'voucherRemarks', 'issuedChequeNo', 'chequeId']);
   // Master/Detail edit-scope radio (left-side widget, below), mirroring ReceiptsPage's own —
   // which half becomes editable while an existing (unposted) line is pulled back into the strip
   // via handleEditLine: Master unlocks only the voucher header (Date/Remarks), Detail unlocks
@@ -147,6 +162,17 @@ export default function ExpensesPage() {
   // PN-01/RJ-06: delete an expense entry, password-gated.
   type PendingDelete = { kind: 'draft' | 'expense' | 'voucher'; id: number; amount: number };
   const [deleteTarget, setDeleteTarget] = useState<PendingDelete | null>(null);
+  // G-05 (changes-14-09-26.md, 2026-09-15): the line most recently ADDED or UPDATED via Done — a
+  // pure position indicator (the ▶ gutter marker below), never a selection. Keyed by
+  // `line.draft_id` (this grid's own row identity for an unposted line), not an array index —
+  // `commitEntryLine`'s result hands back the committed line's own id, and this grid's row order
+  // isn't append-only the way the other pages' local arrays are (voucherLines comes back fresh
+  // from the server on every refresh).
+  const [lastEnteredLineId, setLastEnteredLineId] = useState<number | null>(null);
+  const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({});
+  useEffect(() => {
+    if (lastEnteredLineId != null) rowRefs.current[lastEnteredLineId]?.scrollIntoView({ block: 'nearest' });
+  }, [lastEnteredLineId]);
   const handleDeleteConfirmed = async (password: string) => {
     if (!deleteTarget) return;
     const res = deleteTarget.kind === 'draft'
@@ -163,6 +189,9 @@ export default function ExpensesPage() {
     setBalanceRefreshKey(k => k + 1);
     if (deleteTarget.kind === 'voucher' && voucher?.voucher_id === deleteTarget.id) startNewVoucher();
     else if (voucher) await refreshVoucher(voucher.voucher_id);
+    // G-05: the deleted line may have been the pointer — startNewVoucher (above) already clears it
+    // via handleNew, this covers the single-line-delete path.
+    if (deleteTarget.kind !== 'voucher' && deleteTarget.id === lastEnteredLineId) setLastEnteredLineId(null);
   };
   // Bumped after anything that posts, so the balance panel re-reads instead of showing a stale figure.
   const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
@@ -232,8 +261,11 @@ export default function ExpensesPage() {
   // a voucher existed at all (`!!voucher`, regardless of mode/scope) — a genuine bug, since it left
   // no way to ever unlock them again. Fixed alongside adding the toolbar Edit button (2026-08-31):
   // now locked only while viewing, or while mode is 'edit' with Detail scope picked.
-  const masterFieldsLocked = isViewMode || (mode === 'edit' && editScope !== 'master');
-  const detailFieldsLocked = mode === 'edit' && editScope !== 'detail';
+  // A blank voucher reached any way other than New (first open with nothing unposted, after Post,
+  // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
+  const awaitingNew = mode === 'new' && voucher == null && openVoucherId == null && !hasClickedNew;
+  const masterFieldsLocked = awaitingNew || (isViewMode || (mode === 'edit' && editScope !== 'master'));
+  const detailFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
   // True only in the narrow window the Edit button (Master scope) opens — display of Date/Remarks
   // switches from the loaded voucher's own fields to the local editable ones only here, so typing
   // is actually visible while unlocked; committed via commitHeaderEdit() (expenseVouchers.update()),
@@ -279,9 +311,12 @@ export default function ExpensesPage() {
   // ONLINE can settle against ANY business account (migration 028, per the user 2026-08-30).
   // Keyed by ba_id and sent as online_ba_id; bank_id is untouched on rows already recorded.
   const onlineAccountOptions = useMemo(
+    // searchText excludes the parent chart account name (changes-14-09-26.md G-09, per the client
+    // 2026-09-14 — typing the parent's name must not surface every account under it).
     () => businessAccounts.map(b => ({
       value: String(b.ba_id),
       label: `${b.name} (${b.code})${b.ac_name ? ` — ${b.ac_name}` : ''}`,
+      searchText: `${b.name} (${b.code})`,
     })),
     [businessAccounts]
   );
@@ -297,11 +332,14 @@ export default function ExpensesPage() {
   const accountOptions = useMemo(() => {
     return businessAccounts.map(ba => {
       const vendor = vendors.find(v => v.ba_id === ba.ba_id);
+      const ownName = vendor ? `${vendor.name} (Vendor)` : `${ba.name} (${ba.code})`;
       return {
         value: String(ba.ba_id),
         // Business accounts show their PARENT chart account inline, appended to the same field with an em-dash rather than in a field of its own (2026-08-30, per the user). Matches how ReceiptsPage's own account picker already reads. `ac_name` is joined in by businessAccounts.repository.js's list().
-        label: (vendor ? `${vendor.name} (Vendor)` : `${ba.name} (${ba.code})`)
-          + (ba.ac_name ? ` — ${ba.ac_name}` : '')
+        // searchText excludes the parent chart account name (changes-14-09-26.md G-09, per the
+        // client 2026-09-14 — typing the parent's name must not surface every account under it).
+        label: ownName + (ba.ac_name ? ` — ${ba.ac_name}` : ''),
+        searchText: ownName,
       };
     });
   }, [businessAccounts, vendors]);
@@ -484,6 +522,7 @@ export default function ExpensesPage() {
 
   const handleNew = () => {
     setMode('new');
+    setHasClickedNew(false);
     setEditScope('master'); // a blank voucher starts scoped to Master, same as any freshly loaded one
     setExpenseId(null);
     setEntryIsDraft(false);
@@ -497,6 +536,7 @@ export default function ExpensesPage() {
     setRemarks('');
     setErrorMsg('');
     clearExpensesDraft();
+    setLastEnteredLineId(null);
   };
 
   // "New Voucher" focuses Date, matching PurchasePage's startNewPurchase (frontend/pages_design.md §2).
@@ -584,6 +624,8 @@ export default function ExpensesPage() {
     const payload = buildPayload();
     if (!payload) return false;
 
+    // Backstop for the awaitingNew lock — a new voucher (and its number) only after New.
+    if (!voucher && !hasClickedNew) { setErrorMsg('Click New Voucher to start a voucher first.'); return false; }
     let openVoucher = voucher;
     if (!openVoucher) {
       const created = await api.expenseVouchers.create({ voucher_date: date, remarks: voucherRemarks.trim() || undefined });
@@ -606,6 +648,9 @@ export default function ExpensesPage() {
     const wasEdit = mode === 'edit';
     const paidVendor = isVendorPayment ? linkedVendor?.name : null;
     await refreshVoucher(openVoucher.voucher_id);
+    // G-05: set once the committed line is actually visible in the refreshed grid, so the ▶ and
+    // the scroll-into-view land together.
+    setLastEnteredLineId(result.data.draft_id);
     refreshAllVouchers(); // a first line on a fresh entry just created a new voucher
     flash(
       wasEdit ? 'Entry updated.'
@@ -811,6 +856,9 @@ export default function ExpensesPage() {
   // pending voucher by eye) was removed.
   const [isFindOpen, setIsFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
+  const closeFindVoucher = () => { setIsFindOpen(false); setFindQuery(''); };
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(isFindOpen, closeFindVoucher);
   const findResults = useMemo(() => {
     const q = findQuery.trim().toLowerCase();
     if (!q) return [];
@@ -894,7 +942,16 @@ export default function ExpensesPage() {
   // Unposted from the dropdown does (per the user, 2026-09-04). Skipped when a draft was
   // restored — that is real in-progress work and must not be overwritten. Runs once; the ref
   // keeps a later state change from re-opening a record over whatever is being typed by then.
-  const hasPageDraftAtMount = useHasPageDraft('expenses');
+  // Per the user, 2026-09-16 (corrected same day — the first version also revealed the preview
+  // after G-06's own automatic reset-to-blank, which the user does not consider a "New" press):
+  // the System No. preview must not appear until the toolbar's own New Voucher button is
+  // deliberately clicked — a restored in-progress draft still counts (same as `hasPageDraftAtMount`
+  // already distinguishes elsewhere), but every other path that resets to blank (G-06's auto-open,
+  // Post/Post All's "ready for the next one", the Unposted dropdown's own empty-list fallback,
+  // loading a specific voucher, etc.) must leave it blank. `handleNew()` itself always resets this
+  // to false; only the New Voucher button's own onClick sets it true, right after calling
+  // `startNewVoucher()` (which itself calls `handleNew()`).
+  // (hasClickedNew/hasPageDraftAtMount come from useNewDocGate, declared right after `mode`.)
   const didAutoOpenRef = useRef(false);
   useEffect(() => {
     if (hasPageDraftAtMount || didAutoOpenRef.current) return;
@@ -1024,6 +1081,27 @@ export default function ExpensesPage() {
     </div>
   );
 
+  // G-04 (changes-14-09-26.md, 2026-09-15): the entry card fills whatever vertical space is left
+  // in the viewport below it (mirrors SaleBillPage/ReceiptsPage) — the entries table (flex-1
+  // inside it) grows into that space and the outer app window never scrolls, only the table does.
+  // Measured via getBoundingClientRect rather than a CSS calc() of fixed chrome heights, since the
+  // banners/tab bar above this card change height dynamically.
+  const entryCardRef = useRef<HTMLDivElement>(null);
+  const [entryCardHeight, setEntryCardHeight] = useState<number | null>(null);
+  useEffect(() => {
+    function recompute() {
+      const el = entryCardRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      // AppLayout's <main> (the only scroll container in the app) adds 32px of its own
+      // padding-bottom below whatever height we claim here.
+      setEntryCardHeight(Math.max(320, window.innerHeight - top - 32));
+    }
+    recompute();
+    window.addEventListener('resize', recompute);
+    return () => window.removeEventListener('resize', recompute);
+  }, [activeTab, mode, lookupError, errorMsg, successMsg]);
+
   return (
     <AppLayout pageTitle="Expenses / Kharch Entry" headerAction={tabBar}>
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
@@ -1096,7 +1174,7 @@ export default function ExpensesPage() {
                   </button>
                 )}
                 <button
-                  data-new-action="true" ref={newButtonRef} type="button" onClick={startNewVoucher} disabled={navFilter === 'posted'} title="New Voucher" className="toolbar-btn">
+                  data-new-action="true" ref={newButtonRef} type="button" onClick={() => { startNewVoucher(); markNewClicked(); }} disabled={navFilter === 'posted'} title="New Voucher" className="toolbar-btn">
                   <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
                   <span>New</span>
                 </button>
@@ -1252,10 +1330,16 @@ export default function ExpensesPage() {
 
 
             {/* Entry Form Card */}
-            <div className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print data-edit-scope="detail" style={{ position: 'relative' }}>
+            <div
+              ref={entryCardRef}
+              className="card-white p-6 md:p-8 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col"
+              data-no-print
+              data-edit-scope="detail"
+              style={{ position: 'relative', height: entryCardHeight ?? undefined }}
+            >
               {deletedPlaceholder != null && <DeletedDocumentOverlay systemNo={deletedPlaceholder} label="voucher" />}
 
-              <form id="expense-entry-form" onSubmit={handleEntrySubmit} className="flex flex-col gap-4">
+              <form id="expense-entry-form" onSubmit={handleEntrySubmit} className="flex flex-col gap-4 shrink-0">
                 {/* Hidden submit target for the app-wide G-01 rule (see fieldNav.ts#findSubmitButton)
                     — it looks for a type="submit" button to click when Enter lands on the form's
                     last field, so Enter can commit-this-line-and-stay-open (handleEntrySubmit) even
@@ -1280,7 +1364,7 @@ export default function ExpensesPage() {
                     <label className="block text-xs font-bold text-slate-900 mb-1">System Voucher No. (C.Book No)</label>
                     <input
                       type="text"
-                      value={voucher ? `#${voucher.voucher_no}` : `#${nextVoucherNo}`}
+                      value={voucher ? `#${voucher.voucher_no}` : hasClickedNew ? `#${nextVoucherNo}` : ''}
                       disabled
                       readOnly
                       className="soleria-input py-1.5 text-xs bg-slate-100 text-slate-500 font-mono"
@@ -1380,6 +1464,7 @@ export default function ExpensesPage() {
                     </label>
                     <input
                       type="text"
+                      required={paymentMode === 'CHEQUE_ISSUED' || paymentMode === 'CHEQUE_ENDORSED'}
                       value={issuedChequeNo}
                       disabled={isViewMode || detailFieldsLocked || (paymentMode !== 'CHEQUE_ISSUED' && paymentMode !== 'CHEQUE_ENDORSED')}
                       onChange={e => setIssuedChequeNo(e.target.value)}
@@ -1394,6 +1479,7 @@ export default function ExpensesPage() {
                     </label>
                     <input
                       type="date"
+                      required={paymentMode === 'CHEQUE_ISSUED' || paymentMode === 'CHEQUE_ENDORSED'}
                       value={issuedChequeDate}
                       disabled={isViewMode || detailFieldsLocked || (paymentMode !== 'CHEQUE_ISSUED' && paymentMode !== 'CHEQUE_ENDORSED')}
                       onChange={e => setIssuedChequeDate(e.target.value)}
@@ -1402,8 +1488,16 @@ export default function ExpensesPage() {
                   </div>
 
                   <div>
+                    {/* Required per the client, 2026-09-14 (changes-14-09-26.md RP-02: "confirm
+                        the same on the payment page") — zero and blank were already rejected at
+                        save time (buildPayload's own `amount <= 0` check); this adds the visible
+                        marker matching every other required field's convention. `min={1}` (not the
+                        usual `min={0}`) is deliberate: G-02's keyboard focus-trap
+                        (`lib/fieldNav.ts#isRequiredAndEmpty`) reads native `ValidityState.valid`,
+                        and a typed "0" only fails that check via `rangeUnderflow` — `min={0}` would
+                        let it through the trap even though save-time validation still rejects it. */}
                     <div className="flex items-center justify-between gap-1 mb-1">
-                      <label className="block text-xs font-bold text-slate-900 truncate">Amount Paid (PKR)</label>
+                      <label className="block text-xs font-bold text-slate-900 truncate">Amount Paid (PKR) <span className="text-red-500 font-bold">*</span></label>
                       {baId && (
                         <div className="flex items-center gap-1 text-[11px] font-medium text-slate-500 shrink-0">
                           <AccountBalanceTooltip baId={previewBaId ?? Number(baId)} refreshKey={balanceRefreshKey} hideLabel className="py-0 px-1 text-[10px] shadow-none border-none bg-transparent" />
@@ -1412,7 +1506,8 @@ export default function ExpensesPage() {
                     </div>
                     <input
                       type="number"
-                      min={0}
+                      min={1}
+                      required
                       value={amount || ''}
                       disabled={isViewMode || detailFieldsLocked}
                       onChange={e => setAmount(Math.max(0, parseInt(e.target.value) || 0))}
@@ -1512,32 +1607,38 @@ export default function ExpensesPage() {
                   room to actually show entries. Always rendered — even with zero lines — matching
                   Purchase's own articles box, which shows its empty state ("No articles added
                   yet...") rather than disappearing entirely (per the user, 2026-08-26). */}
-              <div className="mt-6 pt-5 border-t" style={{ borderColor: 'var(--border-color)' }}>
-                <h4 className="font-lora font-semibold text-slate-800 mb-3">
+              <div className="mt-6 pt-5 border-t flex-1 min-h-0 flex flex-col" style={{ borderColor: 'var(--border-color)' }}>
+                <h4 className="font-lora font-semibold text-slate-800 mb-3 shrink-0">
                   Entries in this Voucher
                   <span className="ml-2 text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
                     {voucherLines.length}
                   </span>
                 </h4>
 
-                <div className="overflow-x-auto">
+                {/* G-04 (changes-14-09-26.md, 2026-09-15): only this table scrolls — everything
+                    above (header, entry form) and below (totals footer) stays fixed, per the
+                    client's own reference screenshot. */}
+                <div className="overflow-auto flex-1 min-h-0">
                   <table className="w-full text-left border-collapse text-sm">
                     <thead>
                       <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                        <th className="p-2.5 pl-3">A/C Code</th>
-                        <th className="p-2.5">Account Description</th>
-                        <th className="p-2.5">Narration</th>
-                        <th className="p-2.5">Cheque No</th>
-                        <th className="p-2.5 text-center">Type</th>
-                        <th className="p-2.5 text-right">Rs. (Naam)</th>
-                        <th className="p-2.5 text-center">Status</th>
-                        <th className="p-2.5 text-center" data-no-print>Actions</th>
+                        {/* G-05 (changes-14-09-26.md, 2026-09-15): narrow gutter for the ▶ row
+                            pointer — unlabeled, matching the ref pic (ref-pics/batch2/jv2.0.jpeg). */}
+                        <th className="sticky top-0 z-10 bg-slate-50 p-1" style={{ width: '18px' }} />
+                        <th className="sticky top-0 z-10 bg-slate-50 p-2.5 pl-3">A/C Code</th>
+                        <th className="sticky top-0 z-10 bg-slate-50 p-2.5">Account Description</th>
+                        <th className="sticky top-0 z-10 bg-slate-50 p-2.5">Narration</th>
+                        <th className="sticky top-0 z-10 bg-slate-50 p-2.5">Cheque No</th>
+                        <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-center">Type</th>
+                        <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-right">Rs. (Naam)</th>
+                        <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-center">Status</th>
+                        <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-center" data-no-print>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {voucherLines.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="p-6 text-center text-slate-400 text-sm">
+                          <td colSpan={9} className="p-6 text-center text-slate-400 text-sm">
                             No payments added yet — fill the fields above and press Enter.
                           </td>
                         </tr>
@@ -1546,19 +1647,24 @@ export default function ExpensesPage() {
                         // piece of state to drift out of step with the form.
                         const isSelected = mode === 'edit' && entryIsDraft
                           && line.draft_id != null && expenseId === line.draft_id;
-                        const selectable = line.status !== 'CONFIRMED' && line.draft_id != null && !detailFieldsLocked;
                         return (
                         <tr
                           key={line.expense_id}
-                          // Row click selects the line and pulls it into the form, so the toolbar
-                          // acts on it — matching Purchase/Sale Bill/Stock Voucher (2026-09-01).
-                          onClick={() => { if (selectable) handleEditLine(line); }}
-                          title={selectable
-                            ? 'Click to select this entry — Edit and Delete in the toolbar act on it'
-                            : (line.status === 'CONFIRMED' ? 'Unpost this voucher before editing that entry' : undefined)}
-                          className={`border-b transition-colors ${isSelected ? 'bg-blue-50' : 'hover:bg-slate-50/60'} ${selectable ? 'cursor-pointer' : ''}`}
+                          ref={el => { if (line.draft_id != null) rowRefs.current[line.draft_id] = el; }}
+                          // G-08 (changes-14-09-26.md, 2026-09-15): a click on a detail row must
+                          // produce no visible change at all — no edit load, no highlight.
+                          // Editing a line is already a deliberate, separate action here (the
+                          // per-row pencil icon below, with its own stopPropagation), so the row
+                          // itself no longer loads the line into the form on click.
+                          title={line.status === 'CONFIRMED' ? 'Unpost this voucher before editing that entry' : undefined}
+                          className={`border-b transition-colors ${isSelected ? 'bg-blue-50' : 'hover:bg-slate-50/60'}`}
                           style={{ borderColor: 'var(--border-table)' }}
                         >
+                          {/* G-05: a pure position indicator — never a background/highlight, so
+                              it can never be confused with G-08's edit highlight above. */}
+                          <td className="p-1 text-center text-emerald-600" aria-hidden="true">
+                            {line.draft_id != null && line.draft_id === lastEnteredLineId && '▶'}
+                          </td>
                           <td className="p-2.5 pl-3 font-mono text-xs text-slate-600">{line.account_code || '—'}</td>
                           <td className="p-2.5 font-semibold text-slate-800">{line.account_name || accountName(line.ba_id)}</td>
                           <td className="p-2.5 text-slate-600 text-xs">{line.remarks || '—'}</td>
@@ -1620,7 +1726,7 @@ export default function ExpensesPage() {
                 {/* PN-03: ref-pic's small boxed totals — Total Cheque/Online/Cash on the bottom
                       right plus a Total Amount field, matching Sale Bill's totals-row style
                       instead of the old inline footer text. */}
-                <div className="flex flex-wrap items-end justify-end gap-3 mt-3 pt-3 border-t" style={{ borderColor: 'var(--border-table)' }}>
+                <div className="flex flex-wrap items-end justify-end gap-3 mt-3 pt-3 border-t shrink-0" style={{ borderColor: 'var(--border-table)' }}>
                   <div className="flex flex-col gap-0.5">
                     <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cheque</label>
                     <input type="text" value={formatCurrency(Number(voucher?.total_cheque ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
@@ -1648,7 +1754,7 @@ export default function ExpensesPage() {
                 </div>
 
                 {voucherResult && voucherResult.data.failed.length > 0 && (
-                  <div className="mt-4 p-3 rounded-lg bg-rose-50 border border-rose-200">
+                  <div className="mt-4 p-3 rounded-lg bg-rose-50 border border-rose-200 shrink-0">
                     <p className="text-xs font-bold text-rose-900">
                       {/* Verb from the action that actually ran, and the "rest went through"
                           clause only when some entries really did — it read "could not be posted
@@ -1753,7 +1859,7 @@ export default function ExpensesPage() {
             <div className="flex justify-end mt-4">
               <button
                 type="button"
-                onClick={() => { setIsFindOpen(false); setFindQuery(''); }}
+                onClick={closeFindVoucher}
                 className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm font-semibold"
               >
                 Close

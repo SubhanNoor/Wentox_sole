@@ -167,6 +167,7 @@ export default function UserManagementPage() {
                 </label>
                 <input
                   type="text"
+                  required
                   value={username}
                   onChange={e => setUsername(e.target.value)}
                   placeholder="e.g. worker1"
@@ -195,6 +196,7 @@ export default function UserManagementPage() {
                 </label>
                 <input
                   type="password"
+                  required
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   className="soleria-input w-full font-semibold"
@@ -206,6 +208,7 @@ export default function UserManagementPage() {
                 </label>
                 <input
                   type="password"
+                  required
                   value={confirmPassword}
                   onChange={e => setConfirmPassword(e.target.value)}
                   className="soleria-input w-full font-semibold"
@@ -334,6 +337,7 @@ export default function UserManagementPage() {
                   </label>
                   <input
                     type="password"
+                    required
                     value={newPassword}
                     onChange={e => setNewPassword(e.target.value)}
                     className="soleria-input w-full font-semibold"
@@ -347,6 +351,7 @@ export default function UserManagementPage() {
                   </label>
                   <input
                     type="password"
+                    required
                     value={confirmNewPassword}
                     onChange={e => setConfirmNewPassword(e.target.value)}
                     className="soleria-input w-full font-semibold"

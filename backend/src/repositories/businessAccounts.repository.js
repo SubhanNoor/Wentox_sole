@@ -78,7 +78,12 @@ async function list(filters = {}) {
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
     `SELECT ba.*, ca.code AS ac_code, ca.name AS ac_name, ca.is_restricted, r.name AS region_name,
-            ci.name AS city_name
+            ci.name AS city_name,
+            CAST(CASE WHEN EXISTS (SELECT 1 FROM dbo.vendors v WHERE v.ba_id = ba.ba_id)
+                   OR EXISTS (SELECT 1 FROM dbo.customers c WHERE c.ba_id = ba.ba_id)
+                   OR EXISTS (SELECT 1 FROM dbo.employees e WHERE e.ba_id = ba.ba_id)
+                   OR EXISTS (SELECT 1 FROM dbo.bank_accounts b WHERE b.ba_id = ba.ba_id)
+                 THEN 1 ELSE 0 END AS BIT) AS is_party_linked
      FROM dbo.business_accounts ba
      JOIN dbo.chart_of_accounts ca ON ca.ac_id = ba.ac_id
      LEFT JOIN dbo.regions r       ON r.region_id = ba.region_id
@@ -191,6 +196,16 @@ async function setStatus(baId, status) {
 // each auto-create their own via createUnderChartCode — see UC-08/09) — closing one of those out
 // from under its owning party here would silently break that party's own accounting, so it's
 // blocked in favor of the owning entity's own setup screen.
+// ACC-02 (changes-14-09-26.md, 2026-09-15): "carries transactions" is checked before a Close is
+// allowed — any posted ledger row against this account, regardless of source type.
+async function hasLedgerActivity(baId) {
+  const result = await query(
+    'SELECT TOP 1 1 AS found FROM dbo.ledger_entries WHERE ba_id = @baId',
+    { baId: { type: sql.Int, value: baId } },
+  );
+  return result.recordset.length > 0;
+}
+
 async function isPartyLinked(baId) {
   const result = await query(
     `SELECT
@@ -204,7 +219,46 @@ async function isPartyLinked(baId) {
   return Boolean(row.v || row.c || row.e || row.b);
 }
 
+// Permanent delete (per the user, 2026-09-17 — added on top of the existing soft-close, not
+// instead of it): a business account is a foreign key target from FAR more tables than
+// hasLedgerActivity/isPartyLinked above ever needed to check, because those two only ever gated
+// closing it (a reversible, non-destructive action) — a real `DELETE FROM` has to survive every
+// FK in the schema or SQL Server rejects it outright. Every table with a ba_id/online_ba_id/
+// target_ba_id/to_ba_id/from_ba_id/on_account_ba_id column pointing at business_accounts is
+// covered here, including ones the soft-close guards above never needed to know about (drafts,
+// settlements, transfers, deposits, stock vouchers, cheque allocations, journal voucher lines).
+// Returns true the moment ANY one of them has a matching row — the caller refuses the delete
+// entirely rather than trying to figure out which references are "safe" to ignore.
+async function hasAnyReference(baId) {
+  const result = await query(
+    `SELECT
+       (SELECT TOP 1 1 FROM dbo.vendors WHERE ba_id = @baId) AS vendor,
+       (SELECT TOP 1 1 FROM dbo.customers WHERE ba_id = @baId) AS customer,
+       (SELECT TOP 1 1 FROM dbo.employees WHERE ba_id = @baId) AS employee,
+       (SELECT TOP 1 1 FROM dbo.bank_accounts WHERE ba_id = @baId) AS bank,
+       (SELECT TOP 1 1 FROM dbo.ledger_entries WHERE ba_id = @baId) AS ledger,
+       (SELECT TOP 1 1 FROM dbo.cheque_allocations WHERE target_ba_id = @baId) AS chequeAllocation,
+       (SELECT TOP 1 1 FROM dbo.deposits WHERE to_ba_id = @baId) AS deposit,
+       (SELECT TOP 1 1 FROM dbo.draft_expenses WHERE ba_id = @baId OR online_ba_id = @baId) AS draftExpense,
+       (SELECT TOP 1 1 FROM dbo.draft_receipts WHERE ba_id = @baId OR online_ba_id = @baId) AS draftReceipt,
+       (SELECT TOP 1 1 FROM dbo.expenses WHERE ba_id = @baId OR online_ba_id = @baId) AS expense,
+       (SELECT TOP 1 1 FROM dbo.receipts WHERE ba_id = @baId OR online_ba_id = @baId) AS receipt,
+       (SELECT TOP 1 1 FROM dbo.journal_voucher_lines WHERE ba_id = @baId) AS journalLine,
+       (SELECT TOP 1 1 FROM dbo.settlements WHERE from_ba_id = @baId OR to_ba_id = @baId) AS settlement,
+       (SELECT TOP 1 1 FROM dbo.stock_vouchers WHERE on_account_ba_id = @baId) AS stockVoucher,
+       (SELECT TOP 1 1 FROM dbo.transfers WHERE from_ba_id = @baId OR to_ba_id = @baId) AS transfer`,
+    { baId: { type: sql.Int, value: baId } },
+  );
+  const row = result.recordset[0];
+  return Object.values(row).some((v) => v != null);
+}
+
+async function hardDelete(transaction, baId) {
+  const request = requestWithParams(transaction, { baId: { type: sql.Int, value: baId } });
+  await request.query('DELETE FROM dbo.business_accounts WHERE ba_id = @baId');
+}
+
 module.exports = {
   nextSerial, insert, updateName, findById, findByAcId, list, findByIdWithRestriction, update, updateOpening,
-  setStatus, isPartyLinked, replaceOpeningEntries, allWithOpening,
+  setStatus, isPartyLinked, hasLedgerActivity, hasAnyReference, hardDelete, replaceOpeningEntries, allWithOpening,
 };

@@ -214,6 +214,7 @@ export default function SearchCustomerPage() {
                 onChange={setCustomerId}
                 placeholder="Select customer..."
                 searchPlaceholder="Search customers..."
+                autoFocus
               />
             </div>
             <div>

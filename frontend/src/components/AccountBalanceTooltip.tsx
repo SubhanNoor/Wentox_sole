@@ -55,7 +55,7 @@ export default function AccountBalanceTooltip({ baId, className = '', refreshKey
       className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg border bg-white text-xs font-bold font-mono shadow-2xs ${className}`}
       style={{ color: tone.color, borderColor: 'var(--border-color)' }}
     >
-      {formatCurrency(Math.abs(current))}
+      {formatCurrency(current)}
       {!hideLabel && <span className="text-[9px] font-semibold uppercase tracking-wider">{tone.label}</span>}
     </span>
   );

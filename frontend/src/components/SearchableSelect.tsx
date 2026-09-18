@@ -1,12 +1,18 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, ChevronDown } from 'lucide-react';
-import { focusNextField } from '@/lib/fieldNav';
+import { focusNextField, REQUIRED_BLOCKED_EVENT } from '@/lib/fieldNav';
 import { isTypeAheadKey, isBlankOpenKey } from '@/lib/keyboard';
 
 interface Option {
   value: string;
   label: string;
+  /** What the search box actually matches against, when `label` shows more than just the option's
+   * own identity — e.g. an account picker's label displaying "NAME (CODE) — PARENT ACCOUNT" for
+   * context, where typing the PARENT's name must not surface every account under it
+   * (changes-14-09-26.md G-09, per the client 2026-09-14). Defaults to `label` when omitted, so
+   * existing callers are unaffected. */
+  searchText?: string;
 }
 
 interface SearchableSelectProps {
@@ -29,6 +35,11 @@ interface SearchableSelectProps {
    * leaving it enabled and clickable — for a field a workflow normally skips past (once a value's
    * been chosen for the session) but the user can still reach and change with a deliberate click. */
   excludeFromNav?: boolean;
+  /** G-02 (changes-14-09-26.md, 2026-09-15): marks this picker required for the keyboard-advance
+   * trap (`lib/fieldNav.ts#isRequiredAndEmpty`/`blockIfRequiredEmpty`) — a `<button>` trigger has
+   * no native `required`/validity of its own, so this is read via `data-required`/
+   * `data-value-missing` attributes on the trigger instead of the DOM's own validation API. */
+  required?: boolean;
 }
 
 /** Roughly the tallest the panel gets: search row + max-h-60 list. */
@@ -43,7 +54,8 @@ export default function SearchableSelect({
   disabled = false,
   onHighlightChange,
   autoFocus,
-  excludeFromNav
+  excludeFromNav,
+  required
 }: SearchableSelectProps) {
   // Starting `isOpen` open (instead of opening it via a focus event fired by the native
   // `autoFocus` attribute) sidesteps a real race: AppLayout's own G-01 "focus the form's first
@@ -145,7 +157,7 @@ export default function SearchableSelect({
   const selectedOption = options.find(opt => opt.value === value);
 
   const filteredOptions = options.filter(opt =>
-    opt.label.toLowerCase().includes(search.toLowerCase()) ||
+    (opt.searchText ?? opt.label).toLowerCase().includes(search.toLowerCase()) ||
     opt.value.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -162,6 +174,23 @@ export default function SearchableSelect({
   useEffect(() => {
     optionRefs.current[highlightedIndex]?.scrollIntoView({ block: 'nearest' });
   }, [highlightedIndex]);
+
+  // G-02: the inline "required" message shown under the trigger, mirroring what a native field's
+  // own `reportValidity()` bubble does for everything else. `blockIfRequiredEmpty` dispatches
+  // REQUIRED_BLOCKED_EVENT at the trigger instead of calling `.reportValidity()` (buttons don't
+  // have one) — this just listens for it. Clears itself the moment a value is picked, same as a
+  // native bubble disappears once the field's value satisfies it.
+  const [showRequiredMsg, setShowRequiredMsg] = useState(false);
+  useEffect(() => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const onBlocked = () => setShowRequiredMsg(true);
+    el.addEventListener(REQUIRED_BLOCKED_EVENT, onBlocked);
+    return () => el.removeEventListener(REQUIRED_BLOCKED_EVENT, onBlocked);
+  }, []);
+  useEffect(() => {
+    if (value) setShowRequiredMsg(false);
+  }, [value]);
 
   useEffect(() => {
     if (!onHighlightChange) return;
@@ -258,9 +287,11 @@ export default function SearchableSelect({
         ref={triggerRef}
         type="button"
         data-field-nav={excludeFromNav ? undefined : 'true'}
+        data-required={required ? 'true' : undefined}
+        data-value-missing={required && !value ? 'true' : undefined}
         tabIndex={excludeFromNav ? -1 : undefined}
         disabled={disabled}
-        onClick={toggle}
+        onClick={() => { setShowRequiredMsg(false); toggle(); }}
         onKeyDown={handleTriggerKeyDown}
         onMouseDown={() => { focusFromMouseRef.current = true; }}
         onFocus={() => {
@@ -280,6 +311,10 @@ export default function SearchableSelect({
         </span>
         <ChevronDown size={16} className={`text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180 text-[var(--brand-gold)]' : ''}`} />
       </button>
+
+      {showRequiredMsg && !isOpen && (
+        <p className="mt-1 text-xs text-red-600">Please select an option.</p>
+      )}
 
       {isOpen && pos && createPortal(
         <div

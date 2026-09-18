@@ -8,7 +8,7 @@ import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
 import ZoomControl from '@/components/ZoomControl';
 import MenuBar from '@/components/MenuBar';
-import { FIELD_SELECTOR, fieldsIn, findSubmitButton } from '@/lib/fieldNav';
+import { FIELD_SELECTOR, fieldsIn, findSubmitButton, blockIfRequiredEmpty } from '@/lib/fieldNav';
 import * as api from '@/lib/api';
 
 // Navigation moved out of this file entirely: the five hover menus and their page mapping live in
@@ -255,6 +255,18 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     function onKeyDown(e: KeyboardEvent) {
       const target = e.target;
       if (!(target instanceof HTMLElement)) return;
+
+      // G-02 (changes-14-09-26.md, 2026-09-15): forward Tab is named in the item alongside
+      // Enter/arrows as a path this trap must cover. Unlike those, Tab's own field-to-field
+      // movement is entirely native browser behavior — this app has no JS driving it (fieldsIn()
+      // is scoped to one <form>, but Tab order isn't) — so the trap here is just "prevent the key"
+      // rather than "compute and focus the next field" the way the other branches below do.
+      // Shift+Tab (backward) is left alone, same "only forward is trapped" rule as Left/Up below.
+      if (e.key === 'Tab' && !e.shiftKey && blockIfRequiredEmpty(target)) {
+        e.preventDefault();
+        return;
+      }
+
       const isTextarea = target.tagName === 'TEXTAREA';
       // A textarea's Left/Right/Up/Down keep their native meaning unconditionally — cursor
       // movement is meaningful at every position in multi-line text, not just at a line's start or
@@ -275,6 +287,11 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
         const idx = fields.indexOf(target);
         if (idx === -1) return;
         e.preventDefault();
+        // G-02 (changes-14-09-26.md, 2026-09-15): an empty required field traps Enter — it must
+        // not carry the user onto the next field, or (on the last field) straight to Save/Post.
+        // blockIfRequiredEmpty already shows the field's own validation message via the browser's
+        // native bubble before returning true.
+        if (blockIfRequiredEmpty(target)) return;
         if (idx < fields.length - 1) {
           fields[idx + 1].focus();
         } else {
@@ -296,9 +313,14 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
         const fields = fieldsIn(form);
         const idx = fields.indexOf(target);
         if (idx === -1) return;
-        const nextIdx = e.key === 'ArrowRight' ? idx + 1 : idx - 1;
+        const movingForward = e.key === 'ArrowRight';
+        const nextIdx = movingForward ? idx + 1 : idx - 1;
         if (nextIdx >= 0 && nextIdx < fields.length) {
           e.preventDefault();
+          // G-02: only the forward direction is trapped — Left/Up always retreat freely to an
+          // earlier field (including to go fix the very one that's blocking), only Right/Down
+          // carry the user past an empty required field.
+          if (movingForward && blockIfRequiredEmpty(target)) return;
           fields[nextIdx].focus();
         }
         return;
@@ -313,11 +335,14 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
         const fields = fieldsIn(form);
         const idx = fields.indexOf(target);
         if (idx === -1) return;
-        const nextIdx = e.key === 'ArrowDown' ? idx + 1 : idx - 1;
+        const movingForward = e.key === 'ArrowDown';
+        const nextIdx = movingForward ? idx + 1 : idx - 1;
         if (nextIdx >= 0 && nextIdx < fields.length) {
           // Always prevented here (unlike Left/Right) — a number input's native Up/Down spinner
           // would otherwise silently increment/decrement a price/quantity instead of navigating.
           e.preventDefault();
+          // G-02: same forward-only trap as ArrowRight above.
+          if (movingForward && blockIfRequiredEmpty(target)) return;
           fields[nextIdx].focus();
         }
       }

@@ -201,12 +201,17 @@ async function endorseToExpense(chequeId, payload, userId, session) {
   return getById(chequeId);
 }
 
-// A DEPOSITED cheque only, marking that the bank has actually confirmed it — pure status flip, no
-// ledger effect (the money was already counted in the derived bank balance at deposit time).
+// A DEPOSITED or fully ENDORSED cheque only, marking that it has actually cleared — pure status
+// flip, no ledger effect. For a DEPOSITED cheque the money was already counted in the derived bank
+// balance at deposit time; for an ENDORSED one the vendor/expense account was already debited and
+// CHEQUES IN HAND already credited at endorsement time (cheques.service.js#endorseToVendor/
+// endorseToExpense) — Mark Cleared is the same status-only transition either way, never a second
+// posting (CHQ-02, changes-14-09-26.md, 2026-09-15: "a new entry point into an existing
+// transition, not a new transition").
 async function markCleared(chequeId) {
   const cheque = await getById(chequeId);
-  if (cheque.cheque_status !== 'DEPOSITED') {
-    throw ApiError.conflict('Only a fully deposited cheque can be marked cleared', 'NOT_DEPOSITED');
+  if (cheque.cheque_status !== 'DEPOSITED' && cheque.cheque_status !== 'ENDORSED') {
+    throw ApiError.conflict('Only a fully deposited or fully endorsed cheque can be marked cleared', 'NOT_CLEARABLE');
   }
   await withTransaction((transaction) => repository.setStatus(transaction, chequeId, 'CLEARED'));
   return getById(chequeId);

@@ -15,11 +15,11 @@ import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreview
 import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, nextSystemNoPreview, mergeWithDeleted } from '@/lib/utils';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
-import SearchModal from '@/components/SearchModal';
+import SearchModal, { findDirectMatch } from '@/components/SearchModal';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
-import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
 import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
@@ -28,6 +28,7 @@ import type {
 } from '@/lib/api';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import CartonsInput from '@/components/CartonsInput';
 import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
 import { getWindowParam } from '@/lib/windowParams';
@@ -137,8 +138,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // persisted; which EXISTING record is loaded (returnId/currentReturnIsPosted/mode) is
   // deliberately left as plain useState, same as StockVoucherPage/SaleBillPage.
   const clearSaleReturnDraft = useClearPageDraft('sale-return');
-  // Captured at mount — gates the auto-initialize effect below. See its comment.
-  const hasSaleReturnDraft = useHasPageDraft('sale-return');
+  // The posted/unposted/System No. rule — see useNewDocGate for the whole of it. hasSaleReturnDraft gates the
+  // auto-open below (only genuine unsaved typing skips it); hasClickedNew gates the No. preview and
+  // the awaitingNew lock, and only the New button/tab sets it (pressNew).
+  const { hasRealDraftAtMount: hasSaleReturnDraft, hasClickedNew, setHasClickedNew, markNewClicked } =
+    useNewDocGate('sale-return', ['customerId', 'billNo', 'items']);
+  const pressNew = () => { handleNew(); markNewClicked(); };
 
   // Form State
   //
@@ -151,6 +156,11 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // The loaded record's own System No. — display-only, kept in step with returnId but never used
   // for API calls; those stay on returnId/draftId as before.
   const [currentSystemNo, setCurrentSystemNo] = usePersistentField<number | null>('sale-return', 'currentSystemNo', null);
+  // Per the user, 2026-09-18: no System No. may be generated unless New was DELIBERATELY clicked.
+  // Hiding the preview (hasClickedNew above) wasn't enough — a blank page reached any other way
+  // (first open, after Post, Post All, a deleted return) could still be typed into and saved, and
+  // the backend assigned it a number anyway. So such a page stays fully locked until New.
+  const awaitingNew = mode === 'new' && currentSystemNo == null && !hasClickedNew;
   const [currentReturnIsPosted, setCurrentReturnIsPosted] = usePersistentField('sale-return', 'currentReturnIsPosted', false);
   const [date, setDate] = usePersistentField('sale-return', 'date', getTodayDate());
   const [storeId, setStoreId] = usePersistentField('sale-return', 'storeId', '');
@@ -295,7 +305,21 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     return res.ok ? res.data : null;
   }, []);
 
-  useEffect(() => { refreshDrafts(); }, [refreshDrafts]);
+  // G-06 (changes-14-09-26.md, 2026-09-15): zero unposted returns on open must land on a fresh
+  // blank entry, not wherever the session that closed the window left the screen pointed.
+  // Originally gated on `mode === 'view'`, which misses a real case reported by the user
+  // (2026-09-16, found on SaleBillPage's own equivalent bug): an edit-on-a-posted-record flow can
+  // leave `mode: 'edit'` while the loaded record is still posted, so `mode === 'view'` alone
+  // under-triggers. `currentReturnIsPosted` (persisted) is the direct, unambiguous signal — true
+  // iff an actual posted record is loaded, in EITHER 'view' or 'edit' mode; only `handleNew()` ever
+  // sets it false, so it can never be true while there's genuine unsaved new-document work to
+  // protect.
+  useEffect(() => {
+    refreshDrafts().then(data => {
+      if (data && data.length === 0 && currentReturnIsPosted) handleNew();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshDrafts]);
 
   // Every Sale Return System No. permanently retired by a delete (migration 032) — merged into the
   // browse lists below so First/Prev/Next/Last can show "#N — Deleted" as an actual stop.
@@ -363,6 +387,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setItems(loadedItems);
     setEntry(newUiItem());
     setEditingIndex(null);
+    setSelectedIndex(null);
+    setLastEnteredIndex(null);
     loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
     // Same reasoning as loadDraftIntoForm below — a saved return carries no record of which
     // original bill it might have been linked to, so reopening it is always unlocked/manual.
@@ -473,6 +499,9 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // customer name, searched client-side over the already-loaded browse lists.
   const [isFindOpen, setIsFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
+  const closeFindReturn = () => { setIsFindOpen(false); setFindQuery(''); };
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(isFindOpen, closeFindReturn);
   const findResults = useMemo(() => {
     const q = findQuery.trim().toLowerCase();
     if (!q) return [];
@@ -586,6 +615,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     }
     setEntry(newUiItem());
     setEditingIndex(null);
+    setSelectedIndex(null);
+    setLastEnteredIndex(null);
     setSuccessMsg(`Linked to Sale Bill No. ${bill.bill_no}${copyItems ? ' — items copied' : ' — master fields filled, add articles below'}`);
     setTimeout(() => setSuccessMsg(''), 3000);
   };
@@ -719,6 +750,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   };
 
   const isNecessaryFieldsFilled = useMemo(() => {
+    if (awaitingNew) return false;
     if (!customerId) return false;
     if (!date) return false;
     if (!storeId) return false;
@@ -728,7 +760,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     // Linked to an original bill — every row also has to actually be returnable against it.
     if (isCopiedFromBill && items.some(it => articleAgainstBillError(it.variantId, it.cartons, it.rate, it.uid))) return false;
     return true;
-  }, [customerId, date, storeId, billNo, items, isCopiedFromBill, sourceBillItems]);
+  }, [awaitingNew, customerId, date, storeId, billNo, items, isCopiedFromBill, sourceBillItems]);
 
   // Preview of the Return No. a brand-new return will get. This number is now assigned once at
   // draft-save time and carried through posting unchanged (per the user, 2026-09-05) — a real SQL
@@ -781,6 +813,7 @@ const nextSystemReturnNo = useMemo(
   // Toolbar Actions
   const handleNew = () => {
     setMode('new');
+    setHasClickedNew(false);
     setEditScope('master');
     setReturnId(null);
     setCurrentSystemNo(null);
@@ -801,6 +834,8 @@ const nextSystemReturnNo = useMemo(
     setItems([]);
     setEntry(newUiItem());
     setEditingIndex(null);
+    setSelectedIndex(null);
+    setLastEnteredIndex(null);
     setCopyFromBillId('');
     setSourceBillItems([]);
     setErrorMsg('');
@@ -868,6 +903,8 @@ const nextSystemReturnNo = useMemo(
   // Mirrors SaleBillPage's own executeSave — see its comment for why the non-finalize path flips
   // mode to 'edit' rather than leaving it 'new' (otherwise the next Save creates a duplicate).
   const executeSave = async (password?: string, finalize: boolean = true): Promise<SaleReturnRow | DraftSaleReturnRow | null> => {
+    // Backstop for the awaitingNew lock — every save path funnels through here.
+    if (awaitingNew) { setErrorMsg('Click New to start a return first.'); return null; }
     const payload = buildPayload();
     if (!payload) return null;
 
@@ -935,13 +972,6 @@ const nextSystemReturnNo = useMemo(
 
   const handlePostCurrentReturn = async () => {
     if (returnId == null) return;
-    // GP No. is optional while the return is a draft, but posting commits it to the ledger/stock —
-    // require it here too so the user sees the reason before the round-trip to the backend, which
-    // enforces the same rule (GP_NO_REQUIRED).
-    if (!gpNo.trim()) {
-      setErrorMsg('GP No. is required to post the return.');
-      return;
-    }
     const res = await api.draftSaleReturns.confirm(returnId);
     if (!res.ok) {
       setErrorMsg('Failed to post return: ' + res.error.message);
@@ -1107,6 +1137,8 @@ const nextSystemReturnNo = useMemo(
     setItems(loadedItems);
     setEntry(newUiItem());
     setEditingIndex(null);
+    setSelectedIndex(null);
+    setLastEnteredIndex(null);
     loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
     // A draft carries no record of which original bill it might have been linked to when saved
     // (not a stored column) — always reopens fully unlocked/manual, same as loadReturnRow below.
@@ -1169,6 +1201,22 @@ const nextSystemReturnNo = useMemo(
   // null while the strip is adding a brand-new row; the table index being replaced once a
   // committed row has been clicked back open for editing (see handleRowClick below).
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  // G-08 (changes-14-09-26.md, 2026-09-15): a click on a detail row must produce no visible change
+  // at all — no edit load, no highlight. It only records which row Delete/Edit Row will act on
+  // internally; `editingIndex` (the actually-loaded-for-editing row, and the only thing that
+  // drives the blue highlight) is set exclusively by the Edit Row button now, never by a row click
+  // directly. Cleared whenever `editingIndex` takes over so the two never point at different rows.
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  // G-05 (changes-14-09-26.md, 2026-09-15): the row most recently ADDED or UPDATED via the entry
+  // strip — a pure position indicator (the ▶ gutter marker below), never a selection. Deliberately
+  // separate from `selectedIndex`/`editingIndex` above: G-05's own text is explicit that the
+  // pointer "must not look like, or behave as, the highlight described in G-08" — a click never
+  // moves it, only committing a row does.
+  const [lastEnteredIndex, setLastEnteredIndex] = useState<number | null>(null);
+  const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
+  useEffect(() => {
+    if (lastEnteredIndex != null) rowRefs.current[lastEnteredIndex]?.scrollIntoView({ block: 'nearest' });
+  }, [lastEnteredIndex]);
   const entryProductCellRef = useRef<HTMLDivElement>(null);
 
   // Declared down here, after every piece of state the loaders below touch: placing it
@@ -1182,7 +1230,8 @@ const nextSystemReturnNo = useMemo(
   const didAutoOpenRef = useRef(false);
   useEffect(() => {
     if (hasSaleReturnDraft || didAutoOpenRef.current) return;
-    if (activeTab === 'return' && mode === 'new' && returnId === null && stores.length > 0 && addas.length > 0) {
+    // No mode/returnId check: a restored view of an older record must be replaced too (2026-09-18).
+    if (activeTab === 'return' && stores.length > 0 && addas.length > 0) {
       didAutoOpenRef.current = true;
       handleBrowseFilterChange('unposted');
     }
@@ -1197,6 +1246,12 @@ const nextSystemReturnNo = useMemo(
   // `entry.label` (the committed selection) so the field can keep showing free-typed text right
   // up until Enter opens the modal with it as the initial filter.
   const [productSearchText, setProductSearchText] = useState('');
+  // Code in both label and search text — the field shows the picked article's code, so typing a
+  // code must find it (same fix as SaleBillPage, 2026-09-18).
+  const productOptions = useMemo(
+    () => products.map(p => ({ value: String(p.article_id), label: p.code ? `${p.code} — ${p.name}` : p.name, searchText: `${p.code ?? ''} ${p.name}` })),
+    [products]
+  );
 
   const handleEntryArticleChange = async (articleIdStr: string) => {
     const articleId = articleIdStr ? Number(articleIdStr) : null;
@@ -1293,6 +1348,17 @@ const nextSystemReturnNo = useMemo(
     // duplicate row (per the user, 2026-08-30). Excludes the row being edited itself, so
     // re-committing an unchanged row doesn't fold it into a copy of itself.
     const dupIdx = items.findIndex((it, i) => it.variantId === entry.variantId && i !== editingIndex);
+    // G-05: computed BEFORE `setItems` below (whose functional updater can't hand a value back
+    // out here) from the exact same index arithmetic each branch already performs.
+    let pointerIdx: number;
+    if (dupIdx !== -1) {
+      const withoutEditing = editingIndex != null ? items.filter((_, i) => i !== editingIndex) : items;
+      pointerIdx = withoutEditing.findIndex(it => it.variantId === entry.variantId);
+    } else if (editingIndex != null) {
+      pointerIdx = editingIndex;
+    } else {
+      pointerIdx = items.length;
+    }
     if (dupIdx !== -1) {
       setItems(prev => {
         const withoutEditing = editingIndex != null ? prev.filter((_, i) => i !== editingIndex) : prev;
@@ -1308,7 +1374,9 @@ const nextSystemReturnNo = useMemo(
     } else {
       setItems(prev => [...prev, entry]);
     }
+    setLastEnteredIndex(pointerIdx);
     setEditingIndex(null);
+    setSelectedIndex(null);
     setEntry(newUiItem());
     requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
   };
@@ -1331,10 +1399,13 @@ const nextSystemReturnNo = useMemo(
     const row = items[idx];
     setEntry(row);
     setEditingIndex(idx);
+    setSelectedIndex(null);
     if (row.articleId != null) fetchVariants(row.articleId);
     requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
   };
 
+  // G-08: now the Edit Row toolbar button's handler, not the row's own onClick — a row click just
+  // records `selectedIndex` (see the grid below), and this only runs once the user presses Edit Row.
   const handleRowClick = (idx: number) => {
     // Master/Detail edit-scope split (per the user, 2026-08-31): a row click is how the detail
     // grid re-opens a committed line for editing — a no-op while scope is Master, so master-only
@@ -1348,6 +1419,10 @@ const nextSystemReturnNo = useMemo(
     loadRowIntoEntry(idx);
   };
 
+  const handleEditSelectedRow = () => {
+    if (selectedIndex != null) handleRowClick(selectedIndex);
+  };
+
   // A return always needs at least one row to type into once anything's committed, but the entry
   // strip itself can sit empty (unlike the old always-editable table) — so this only has to handle
   // actually removing a committed row, no more "clear the last one instead" special case.
@@ -1355,18 +1430,26 @@ const nextSystemReturnNo = useMemo(
     setItems(prev => prev.filter((_, i) => i !== idx));
     if (editingIndex === idx) {
       setEditingIndex(null);
+      setSelectedIndex(null);
       setEntry(newUiItem());
     } else if (editingIndex != null && idx < editingIndex) {
       setEditingIndex(editingIndex - 1);
     }
+    setSelectedIndex(null);
+    if (lastEnteredIndex === idx) setLastEnteredIndex(null);
+    else if (lastEnteredIndex != null && idx < lastEnteredIndex) setLastEnteredIndex(lastEnteredIndex - 1);
   };
 
-  // Delete is dual-purpose, same as SaleBillPage's own toolbar Delete: with a row loaded into the
-  // strip for editing (editingIndex set), it removes THAT row; otherwise it's the whole-return
-  // delete (currently-open unposted return).
+  // Delete is dual-purpose, same as SaleBillPage's own toolbar Delete: a row loaded for editing
+  // (editingIndex) takes priority; otherwise a merely-clicked row (selectedIndex, G-08) is the
+  // target; with neither, it's the whole-return delete (currently-open unposted return).
   const handleDeleteAction = () => {
     if (editingIndex != null) {
       handleRemoveItemRow(editingIndex);
+      return;
+    }
+    if (selectedIndex != null) {
+      handleRemoveItemRow(selectedIndex);
       return;
     }
     handleDeleteCurrentReturn();
@@ -1405,8 +1488,8 @@ const nextSystemReturnNo = useMemo(
   // (isViewMode false, mode 'edit'), the radio narrows WHICH half actually unlocks — this does not
   // weaken the existing isPosted gate on the Edit button itself, it only adds a further split on
   // top of it. A brand-new return (mode 'new') is unaffected — everything stays editable there.
-  const masterFieldsLocked = mode === 'edit' && editScope !== 'master';
-  const detailFieldsLocked = mode === 'edit' && editScope !== 'detail';
+  const masterFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
+  const detailFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
 
   const handleCreateSubCustomer = async () => {
     if (!newSubCustomerName.trim()) { setErrorMsg('Sub-customer name is required.'); return; }
@@ -1457,6 +1540,13 @@ const nextSystemReturnNo = useMemo(
   const [newSubCustomerName, setNewSubCustomerName] = useState('');
   const [newSubCustomerRegionId, setNewSubCustomerRegionId] = useState('');
   const [newSubCustomerCityId, setNewSubCustomerCityId] = useState('');
+  const closeAddSubCustomer = () => {
+    setIsAddSubCustomerOpen(false);
+    setNewSubCustomerName('');
+    setNewSubCustomerRegionId('');
+    setNewSubCustomerCityId('');
+  };
+  useEscapeToClose(isAddSubCustomerOpen, closeAddSubCustomer);
 
   // Same reasoning as SaleBillPage's own renderBillPrintable: this used to be the WHOLE page's
   // early-return content, swapped in then printed with a raw window.print() — no on-screen preview
@@ -1573,7 +1663,7 @@ const nextSystemReturnNo = useMemo(
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{item.pairs}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{item.rate.toLocaleString()}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{discountText}</td>
-                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{item.value.toLocaleString()}</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{`(${item.value.toLocaleString()})`}</td>
                 </tr>
               );
             })}
@@ -1585,7 +1675,7 @@ const nextSystemReturnNo = useMemo(
               <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{formatCartons(totalCartons)}</td>
               <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'center' }}>{totalPairs}</td>
               <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>Gross Total Credit:</td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{itemsTotalValue.toLocaleString()}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right' }}>{`(${itemsTotalValue.toLocaleString()})`}</td>
             </tr>
 
             {invoiceDiscount > 0 && (
@@ -1601,7 +1691,7 @@ const nextSystemReturnNo = useMemo(
               fontSize: '12px'
             }}>
               <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', textTransform: 'uppercase' }}>Net Credited Amount (PKR):</td>
-              <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', borderBottom: '3px double #000000' }}>{finalTotalValue.toLocaleString()}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', borderBottom: '3px double #000000' }}>{`(${finalTotalValue.toLocaleString()})`}</td>
             </tr>
           </tbody>
         </table>
@@ -1633,7 +1723,7 @@ const nextSystemReturnNo = useMemo(
   const tabBar = (
     <div className="flex gap-1.5" data-no-print>
       <button
-        onClick={() => { setActiveTab('return'); handleNew(); }}
+        onClick={() => { setActiveTab('return'); pressNew(); }}
         className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'return' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
@@ -1711,19 +1801,32 @@ const nextSystemReturnNo = useMemo(
           <div className="flex flex-wrap items-center gap-2">
           <div className="flex flex-wrap items-center gap-0.5">
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={pressNew} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
             <button
               type="button"
               onClick={handleDeleteAction}
-              disabled={deletedPlaceholder != null || (editingIndex != null ? isViewMode : (mode !== 'view' || returnId == null || currentReturnIsPosted))}
-              title={editingIndex != null ? 'Delete selected article' : 'Delete'}
+              disabled={deletedPlaceholder != null || ((editingIndex != null || selectedIndex != null) ? isViewMode : (mode !== 'view' || returnId == null || currentReturnIsPosted))}
+              title={(editingIndex != null || selectedIndex != null) ? 'Delete selected article' : 'Delete'}
               className="toolbar-btn"
             >
               <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
               <span>Delete</span>
+            </button>
+            {/* G-08 (changes-14-09-26.md, 2026-09-15): editing a detail row is now deliberate —
+                click a row (no visible change), then press Edit Row to actually load it into the
+                entry strip and apply the highlight. */}
+            <button
+              type="button"
+              onClick={handleEditSelectedRow}
+              disabled={selectedIndex == null || editingIndex != null || isViewMode || currentReturnIsPosted || (mode === 'edit' && editScope !== 'detail')}
+              title="Edit selected article"
+              className="toolbar-btn"
+            >
+              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
+              <span>Edit Row</span>
             </button>
             <button
               type="button"
@@ -1963,13 +2066,13 @@ const nextSystemReturnNo = useMemo(
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Return No.
               </label>
-              <input type="text" value={currentSystemNo != null ? `#${currentSystemNo}` : `#${nextSystemReturnNo}`} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
+              <input type="text" value={currentSystemNo != null ? `#${currentSystemNo}` : hasClickedNew ? `#${nextSystemReturnNo}` : ''} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
             <div className="flex items-center gap-1.5">
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
-              <input type="date" ref={firstFieldRef}
+              <input type="date" ref={firstFieldRef} required
             value={date} disabled={isViewMode || masterFieldsLocked} onChange={e => setDate(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
 
@@ -2041,6 +2144,7 @@ const nextSystemReturnNo = useMemo(
                 <input
                   ref={storeTriggerRef}
                   type="text"
+                  required
                   disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
                   title={isCopiedFromBill ? 'Set by the bill you picked above — Clear Link to change it' : undefined}
                   value={storeSearchText}
@@ -2081,6 +2185,7 @@ const nextSystemReturnNo = useMemo(
               </label>
               <input
                 type="text"
+                required
                 value={billNo}
                 disabled={isViewMode || masterFieldsLocked}
                 title={isCopiedFromBill ? 'Linked to this bill — type a different one to switch, or clear it to go fully manual' : undefined}
@@ -2119,6 +2224,7 @@ const nextSystemReturnNo = useMemo(
                   placeholder="Select customer..."
                   searchPlaceholder="Search customers..."
                   disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
+                  required
                 />
                 {selectedCustomer && selectedCustomer.ba_id == null && (
                   <p className="text-[10px] text-amber-600 mt-0.5 font-semibold">
@@ -2261,6 +2367,7 @@ const nextSystemReturnNo = useMemo(
                   <input
                     ref={productTriggerRef}
                     type="text"
+                    required
                     disabled={detailFieldsLocked}
                     value={productSearchText}
                     onChange={e => setProductSearchText(e.target.value)}
@@ -2268,6 +2375,13 @@ const nextSystemReturnNo = useMemo(
                       if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                         e.preventDefault();
                         e.stopPropagation();
+                        // One Enter picks it when the typed code/name means exactly one article.
+                        const direct = e.key === 'Enter' ? findDirectMatch(productOptions, productSearchText) : null;
+                        if (direct) {
+                          handleEntryArticleChange(direct);
+                          requestAnimationFrame(() => focusNextField(productTriggerRef.current));
+                          return;
+                        }
                         setIsProductModalOpen(true);
                       }
                     }}
@@ -2277,7 +2391,7 @@ const nextSystemReturnNo = useMemo(
                   <SearchModal
                     isOpen={isProductModalOpen}
                     title="Select Article"
-                    options={products.map(p => ({ value: String(p.article_id), label: p.name }))}
+                    options={productOptions}
                     value={entry.articleId != null ? String(entry.articleId) : ''}
                     initialSearch={productSearchText}
                     onSelect={(val) => {
@@ -2303,6 +2417,7 @@ const nextSystemReturnNo = useMemo(
                     placeholder="Color..."
                     searchPlaceholder="Search colors..."
                     disabled={entry.articleId == null || detailFieldsLocked}
+                    required
                   />
                 </div>
               </div>
@@ -2319,6 +2434,7 @@ const nextSystemReturnNo = useMemo(
                 <CartonsInput
                   value={entry.cartons}
                   min={0.1}
+                  required
                   disabled={detailFieldsLocked}
                   onChange={v => updateEntryNumericField('cartons', v)}
                   className={`soleria-input soleria-input-compact text-center font-mono ${entryBillError ? 'border-2 border-red-500 bg-rose-50 text-red-700 font-bold' : ''}`}
@@ -2336,6 +2452,7 @@ const nextSystemReturnNo = useMemo(
                 <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Rate <span className="text-red-500 font-bold">*</span></label>
                 <input
                   type="number"
+                  required
                   value={entry.rate || ''}
                   disabled={isCopiedFromBill || detailFieldsLocked}
                   title={isCopiedFromBill ? 'Locked to the original bill\'s own rate for this article/color' : undefined}
@@ -2408,6 +2525,9 @@ const nextSystemReturnNo = useMemo(
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b text-[11px] font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                  {/* G-05 (changes-14-09-26.md, 2026-09-15): narrow gutter for the ▶ row pointer —
+                      unlabeled, matching the ref pic (ref-pics/batch2/jv2.0.jpeg). */}
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1" style={{ width: '18px' }} />
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 pl-3" style={{ minWidth: '190px' }}>Returned Article</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '80px' }}>Packing</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px' }}>Cartons</th>
@@ -2420,21 +2540,33 @@ const nextSystemReturnNo = useMemo(
                 {items.map((item, idx) => (
                   <tr
                     key={item.uid}
-                    onClick={() => handleRowClick(idx)}
+                    ref={el => { rowRefs.current[idx] = el; }}
+                    onClick={() => {
+                      // G-08: a click must produce no visible change — it only records which row
+                      // the Delete/Edit Row toolbar buttons act on next. Inert entirely while
+                      // another row is actually loaded for editing.
+                      if (editingIndex != null) return;
+                      setSelectedIndex(prev => prev === idx ? null : idx);
+                    }}
                     className={`border-b cursor-pointer hover:bg-slate-50/50 ${idx === editingIndex ? 'bg-blue-50' : ''}`}
                     style={{ borderColor: 'var(--border-table)' }}
                   >
+                    {/* G-05: a pure position indicator — never a background/highlight, so it can
+                        never be confused with G-08's edit highlight above. */}
+                    <td className="p-1 text-center text-emerald-600" aria-hidden="true">
+                      {idx === lastEnteredIndex && '▶'}
+                    </td>
                     <td className="p-1 pl-3 font-semibold text-slate-800 text-[13px]">{item.label || 'N/A'}</td>
                     <td className="p-1 text-center font-mono text-sm text-slate-600">{item.packing || '-'}</td>
                     <td className="p-1 text-center font-mono text-sm text-slate-700">{formatCartons(item.cartons)}</td>
                     <td className="p-1 text-center font-mono text-sm font-semibold text-slate-700">{item.pairs || '-'}</td>
                     <td className="p-1 text-right font-mono text-sm text-slate-700">{item.rate.toLocaleString()}</td>
-                    <td className="p-1 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(item.value)}</td>
+                    <td className="p-1 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>{`(${formatCurrency(item.value)})`}</td>
                   </tr>
                 ))}
                 {items.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="p-3 text-center text-xs text-slate-400">
+                    <td colSpan={7} className="p-3 text-center text-xs text-slate-400">
                       No articles added yet.
                     </td>
                   </tr>
@@ -2540,7 +2672,7 @@ const nextSystemReturnNo = useMemo(
             <div className="flex justify-end mt-4">
               <button
                 type="button"
-                onClick={() => { setIsFindOpen(false); setFindQuery(''); }}
+                onClick={closeFindReturn}
                 className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm font-semibold"
               >
                 Close
@@ -2562,7 +2694,7 @@ const nextSystemReturnNo = useMemo(
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                 Sub-Customer Name <span className="text-red-500 font-bold">*</span>
               </label>
-              <input type="text" value={newSubCustomerName} onChange={e => setNewSubCustomerName(e.target.value)} placeholder="Enter sub-customer name..." className="soleria-input font-semibold" autoFocus />
+              <input type="text" required value={newSubCustomerName} onChange={e => setNewSubCustomerName(e.target.value)} placeholder="Enter sub-customer name..." className="soleria-input font-semibold" autoFocus />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
@@ -2576,6 +2708,7 @@ const nextSystemReturnNo = useMemo(
                   onChange={val => { setNewSubCustomerRegionId(val); setNewSubCustomerCityId(''); }}
                   placeholder="Select Region..."
                   searchPlaceholder="Search regions..."
+                  required
                 />
               </div>
 
@@ -2596,12 +2729,7 @@ const nextSystemReturnNo = useMemo(
             <div className="flex justify-end gap-2 text-sm font-semibold">
               <button
                 type="button"
-                onClick={() => {
-                  setIsAddSubCustomerOpen(false);
-                  setNewSubCustomerName('');
-                  setNewSubCustomerRegionId('');
-                  setNewSubCustomerCityId('');
-                }}
+                onClick={closeAddSubCustomer}
                 className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
               >
                 Cancel

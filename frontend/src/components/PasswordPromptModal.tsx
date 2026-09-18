@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Lock, Eye, EyeOff, X, KeyRound, ShieldAlert } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import * as api from '@/lib/api';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 interface PasswordPromptModalProps {
   isOpen: boolean;
@@ -23,6 +24,15 @@ export default function PasswordPromptModal({
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const handleClose = () => {
+    setPassword('');
+    setErrorMsg('');
+    onClose();
+  };
+
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog, one layer at a time.
+  useEscapeToClose(isOpen, handleClose);
 
   if (!isOpen) return null;
 
@@ -52,13 +62,6 @@ export default function PasswordPromptModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
-      onKeyDown={e => {
-        if (e.key === 'Escape') {
-          setPassword('');
-          setErrorMsg('');
-          onClose();
-        }
-      }}
       tabIndex={-1}
     >
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden">
@@ -77,11 +80,7 @@ export default function PasswordPromptModal({
           </div>
           <button
             type="button"
-            onClick={() => {
-              setPassword('');
-              setErrorMsg('');
-              onClose();
-            }}
+            onClick={handleClose}
             className="text-slate-400 hover:text-white transition-colors p-1 rounded-lg"
           >
             <X size={18} />
@@ -130,11 +129,7 @@ export default function PasswordPromptModal({
           <div className="flex items-center justify-end gap-2.5">
             <button
               type="button"
-              onClick={() => {
-                setPassword('');
-                setErrorMsg('');
-                onClose();
-              }}
+              onClick={handleClose}
               className="px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-all"
             >
               Cancel

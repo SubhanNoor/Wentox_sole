@@ -12,7 +12,9 @@ async function list(filters = {}) {
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT ga.*, ac.code AS class_code, ac.name AS class_name
+    `SELECT ga.*, ac.code AS class_code, ac.name AS class_name,
+            CAST(CASE WHEN EXISTS (SELECT 1 FROM dbo.chart_of_accounts ca WHERE ca.group_id = ga.group_id)
+                 THEN 1 ELSE 0 END AS BIT) AS has_children
      FROM dbo.group_accounts ga
      JOIN dbo.account_classes ac ON ac.class_id = ga.class_id
      ${where}
@@ -98,4 +100,30 @@ async function isReferenced(groupId) {
   return result.recordset.length > 0;
 }
 
-module.exports = { list, findById, findByName, nextSerial, insert, update, setActive, isReferenced };
+// Permanent delete (per the user, 2026-09-17 — added on top of the existing soft-close, not
+// instead of it). `isReferenced` above only ever needed to cover what blocks a reversible
+// deactivate (chart accounts filed directly under this group); a real `DELETE FROM` also has to
+// survive any business account resolved transitively through those chart accounts, so this checks
+// both levels.
+async function hasAnyReference(groupId) {
+  const result = await query(
+    `SELECT
+       (SELECT TOP 1 1 FROM dbo.chart_of_accounts WHERE group_id = @groupId) AS chartAccount,
+       (SELECT TOP 1 1 FROM dbo.business_accounts ba
+          JOIN dbo.chart_of_accounts ca ON ca.ac_id = ba.ac_id
+          WHERE ca.group_id = @groupId) AS businessAccount`,
+    { groupId: { type: sql.Int, value: groupId } },
+  );
+  const row = result.recordset[0];
+  return Object.values(row).some((v) => v != null);
+}
+
+async function hardDelete(transaction, groupId) {
+  const request = requestWithParams(transaction, { groupId: { type: sql.Int, value: groupId } });
+  await request.query('DELETE FROM dbo.group_accounts WHERE group_id = @groupId');
+}
+
+module.exports = {
+  list, findById, findByName, nextSerial, insert, update, setActive, isReferenced,
+  hasAnyReference, hardDelete,
+};

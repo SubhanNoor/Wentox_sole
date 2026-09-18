@@ -309,6 +309,24 @@ async function remove(baId, session) {
       'PARTY_LINKED_ACCOUNT',
     );
   }
+  // ACC-02: blocked while the account carries transactions — any ledger entry, or a non-zero
+  // opening balance (an opening balance is itself a real posted OPENING ledger row against this
+  // account — see syncOpeningEntries — so in practice hasLedgerActivity alone would already catch
+  // it, but checking the stored value directly is the more direct statement of the rule and stays
+  // correct even if that changes).
+  if (account && Number(account.opening_balance) !== 0) {
+    throw ApiError.conflict(
+      `${account.name} has a non-zero opening balance — clear it before closing the account`,
+      'ACCOUNT_HAS_TRANSACTIONS',
+    );
+  }
+  const hasActivity = await repository.hasLedgerActivity(baId);
+  if (hasActivity) {
+    throw ApiError.conflict(
+      `${account.name} has posted ledger transactions and cannot be deleted`,
+      'ACCOUNT_HAS_TRANSACTIONS',
+    );
+  }
   await repository.setStatus(baId, 'CLOSED');
   return { ok: true };
 }
@@ -319,9 +337,43 @@ async function reactivate(baId, session) {
   return repository.findById(baId);
 }
 
+// Permanent delete — per the user, 2026-09-17, added ON TOP OF `remove()` above, not instead of
+// it: closing (remove) stays the normal, reversible "delete" action; this is a separate, stricter,
+// irreversible action only reachable for an account that is ALREADY closed. Requiring that first
+// step means an operator can never permanently destroy an account they haven't already lived with
+// as closed for at least a moment — there is no single click that skips straight from Active to
+// gone. `hasAnyReference` is deliberately broader than `remove()`'s own guards (which only ever
+// needed to cover what blocks a reversible close) — it also catches drafts, settlements,
+// transfers, deposits, stock vouchers, and cheque allocations, since a hard `DELETE FROM` has to
+// survive every foreign key in the schema, not just the ones a soft close cared about.
+async function permanentDelete(baId, session) {
+  const account = await getForSetup(baId, session);
+  if (STRUCTURAL_ACCOUNT_HEADS.has(account.ac_code)) {
+    throw ApiError.conflict(
+      `${account.name} is a reserved account the posting engine depends on and cannot be deleted`,
+      'RESERVED_ACCOUNT',
+    );
+  }
+  if (account.status !== 'CLOSED') {
+    throw ApiError.conflict(
+      `${account.name} must be closed (deleted) first — permanent delete is only for an already-closed account`,
+      'ACCOUNT_NOT_CLOSED',
+    );
+  }
+  const referenced = await repository.hasAnyReference(baId);
+  if (referenced) {
+    throw ApiError.conflict(
+      `${account.name} is still referenced elsewhere (a vendor/customer/employee/bank link, a posted or draft document, a settlement, transfer, or cheque allocation) and cannot be permanently deleted`,
+      'ACCOUNT_STILL_REFERENCED',
+    );
+  }
+  await withTransaction((transaction) => repository.hardDelete(transaction, baId));
+  return { ok: true };
+}
+
 module.exports = {
   createUnderChartCode, renameLinked, getById, getCashAccount, getByAcId, setOpening, validateOpeningPair,
   createBatch,
   syncOpeningEntries,
-  list, getForSetup, assertAccessible, create, update, remove, reactivate,
+  list, getForSetup, assertAccessible, create, update, remove, reactivate, permanentDelete,
 };

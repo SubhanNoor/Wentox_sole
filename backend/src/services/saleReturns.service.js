@@ -138,12 +138,9 @@ async function post(id) {
   if (ret.is_posted) {
     throw ApiError.conflict('Return is already posted', 'ALREADY_POSTED');
   }
-  // gp_no is optional while the return is a draft/unposted record (see validateHeader above), but
-  // posting commits it to the ledger/stock — require it at that point, same spirit as the
-  // already-posted-edit password guard in saleReturns.ipc.js.
-  if (!ret.gp_no) {
-    throw ApiError.badRequest('gp_no is required to post', 'GP_NO_REQUIRED');
-  }
+  // GP No. is NOT required to post (per the user, 2026-09-18 — same as Sale Bill, and as
+  // draftSaleReturns.service.js#confirm() already decided 2026-09-16). Commit 25b94d13 briefly
+  // required it here; removed.
 
   await withTransaction(async (transaction) => {
     await postLedgerAndStock(transaction, {

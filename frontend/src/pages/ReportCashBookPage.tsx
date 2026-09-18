@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -44,6 +44,11 @@ export function ReportCashBookContent() {
   const [loading, setLoading] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  // G-03 (changes-14-09-26.md): mounts fresh whenever this Reports Hub tab becomes active, so a
+  // mount-only effect covers both "page opens here" and "user switches to this tab".
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => searchRef.current?.focus()); }, []);
 
   // formatDate, not the raw value: specificDate is the ISO string the <input type="date"> holds,
   // so the printed header read "Period: 2026-08-31" while every other date on the page is
@@ -292,6 +297,7 @@ export function ReportCashBookContent() {
               <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search Particulars:</span>
               <div className="relative">
                 <input
+                  ref={searchRef}
                   type="text"
                   placeholder="Search by account, remarks, cheque no..."
                   value={searchQuery}

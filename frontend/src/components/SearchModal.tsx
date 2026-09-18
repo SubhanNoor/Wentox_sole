@@ -1,11 +1,41 @@
 import { useState, useRef, useEffect } from 'react';
 import { Search, X } from 'lucide-react';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 export interface SearchModalOption {
   value: string;
   label: string;
   /** Small right-aligned hint (city, phone, code, ...) — also matched by the search box. */
   sublabel?: string;
+  /** What the search box actually matches against, when `label`/`sublabel` show more than just the
+   * option's own identity — e.g. an account picker's label displaying "NAME (CODE) — PARENT
+   * ACCOUNT" for context, where typing the PARENT's name must not surface every account under it
+   * (changes-14-09-26.md G-09, per the client 2026-09-14: "the filter must match only the
+   * account's own name/code, never the name of its parent, group, control or chart account").
+   * Defaults to `label` + `sublabel` when omitted, so existing callers are unaffected. */
+  searchText?: string;
+}
+
+function haystackOf(opt: SearchModalOption): string {
+  return (opt.searchText ?? `${opt.label} ${opt.sublabel ?? ''}`).toLowerCase();
+}
+
+/**
+ * For a trigger field's Enter: the one option the typed text unambiguously means, or null (→ open
+ * the modal as usual). Unambiguous = the text equals an option's label or one of its searchText
+ * words (e.g. an article code) exactly, or it matches exactly one option at all. Lets a user type
+ * a full code/name and press Enter ONCE instead of Enter-to-open then Enter-to-pick (per the user,
+ * 2026-09-18).
+ */
+export function findDirectMatch(options: SearchModalOption[], text: string): string | null {
+  const q = text.trim().toLowerCase();
+  if (!q) return null;
+  const exact = options.filter(opt =>
+    opt.label.trim().toLowerCase() === q
+    || (opt.searchText ?? '').toLowerCase().split(/\s+/).includes(q));
+  if (exact.length === 1) return exact[0].value;
+  const partial = options.filter(opt => haystackOf(opt).includes(q));
+  return partial.length === 1 ? partial[0].value : null;
 }
 
 interface SearchModalProps {
@@ -58,10 +88,7 @@ export default function SearchModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  const filtered = options.filter(opt =>
-    opt.label.toLowerCase().includes(search.toLowerCase()) ||
-    (opt.sublabel ?? '').toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = options.filter(opt => haystackOf(opt).includes(search.toLowerCase()));
 
   // Highlight starts on the currently-selected option (if it's in the filtered list) so reopening
   // the modal on an already-picked field lands the highlight somewhere meaningful, same as
@@ -84,6 +111,11 @@ export default function SearchModal({
     onHighlightChange(isOpen ? filtered[highlightedIndex]?.value ?? null : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, highlightedIndex, filtered.length]);
+
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog, one layer at a time — handled by
+  // the shared hook now rather than as a branch below, so it works via the document-level stack
+  // instead of depending on the search box still having focus (see the hook's own comment).
+  useEscapeToClose(isOpen, onClose);
 
   if (!isOpen) return null;
 
@@ -108,10 +140,6 @@ export default function SearchModal({
       e.stopPropagation();
       const opt = filtered[highlightedIndex];
       if (opt) onSelect(opt.value);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
     }
   }
 

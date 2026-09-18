@@ -3,7 +3,7 @@ import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchModal from '@/components/SearchModal';
 import { focusNextField } from '@/lib/fieldNav';
-import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
 import * as api from '@/lib/api';
 import type {
   ProductRow, ProductVariantRow, StoreRow, StockVoucherRow, StockVoucherLineInput,
@@ -18,6 +18,7 @@ import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import CartonsInput from '@/components/CartonsInput';
 
 /**
@@ -179,7 +180,19 @@ export default function StockVoucherPage() {
       if (ba.ok) setBusinessAccounts(ba.data); else setLookupError('Failed to load accounts: ' + ba.error.message);
       if (stock.ok) setStockRows(stock.data); else setLookupError('Failed to load stock: ' + stock.error.message);
     })();
-    refreshUnposted();
+    // G-06 (changes-14-09-26.md, 2026-09-15): zero unposted vouchers on open must land on a fresh
+    // blank entry, not wherever the session that closed the window left the screen pointed.
+    // Originally gated on `mode === 'view'`, which misses a real case reported by the user
+    // (2026-09-16, found on SaleBillPage's own equivalent bug): an edit-on-a-posted-record flow can
+    // leave `mode: 'edit'` while the loaded record is still posted, so `mode === 'view'` alone
+    // under-triggers. `isPosted` (derived from the persisted `status`) is the direct, unambiguous
+    // signal — true iff an actual posted record is loaded, in EITHER 'view' or 'edit' mode; only
+    // `handleNew()` ever resets `status` to 'DRAFT', so it can never be true while there's genuine
+    // unsaved new-document work to protect.
+    refreshUnposted().then(data => {
+      if (data && data.length === 0 && isPosted) handleNew();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshUnposted]);
 
   useEffect(() => {
@@ -213,6 +226,11 @@ export default function StockVoucherPage() {
   // the id and re-fetch on mount" attempt was worse still — it overwrote the user's unsaved edits
   // with the last-saved copy and reopened in 'view' mode, which disables Save.
   const [mode, setMode] = usePersistentField<'new' | 'edit' | 'view'>('stock-voucher', 'mode', 'new');
+  // The posted/unposted/System No. rule (per the user, 2026-09-18) — see useNewDocGate for all of
+  // it. hasPageDraftAtMount gates the auto-open further down (only genuine unsaved typing skips
+  // it); hasClickedNew gates the No. preview and the awaitingNew lock; only New calls markNewClicked.
+  const { hasRealDraftAtMount: hasPageDraftAtMount, hasClickedNew, setHasClickedNew, markNewClicked } =
+    useNewDocGate('stock-voucher', ['lines', 'remarks', 'accountBaId']);
   const [svId, setSvId] = usePersistentField<number | null>('stock-voucher', 'svId', null);
   const [status, setStatus] = usePersistentField<'CONFIRMED' | 'DRAFT'>('stock-voucher', 'status', 'DRAFT');
   // Refetches whenever the open voucher changes (New/loading a different one) — this voucher's own
@@ -254,8 +272,11 @@ export default function StockVoucherPage() {
   const isViewMode = mode === 'view';
   const isPosted = status === 'CONFIRMED';
   // Derived from editScope — applied to every master/detail field's `disabled` below (2026-08-31).
-  const masterLocked = mode === 'edit' && editScope !== 'master';
-  const detailLocked = mode === 'edit' && editScope !== 'detail';
+  // A blank voucher reached any way other than New (first open with nothing unposted, after Post,
+  // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
+  const awaitingNew = mode === 'new' && svId == null && !hasClickedNew;
+  const masterLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
+  const detailLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
 
   const storeOptions = useMemo(
     () => stores.map(s => ({ value: String(s.store_id), label: s.name })),
@@ -263,7 +284,7 @@ export default function StockVoucherPage() {
   );
 
   const handleNew = () => {
-    setMode('new'); setSvId(null); setStatus('DRAFT');
+    setMode('new'); setHasClickedNew(false); setSvId(null); setStatus('DRAFT');
     setDate(getTodayDate()); setStoreId(''); setRemarks('');
     // Fixed to STOCK TRANSFER, never blank — the auto-populate effect above also covers this once
     // businessAccounts finishes loading, but setting it here too means it's already right the
@@ -272,6 +293,8 @@ export default function StockVoucherPage() {
     setLines([]);
     setEntry(emptyEntry());
     setEditingIndex(null);
+    setSelectedIndex(null);
+    setLastEnteredIndex(null);
     setErrorMsg('');
     setEditScope('master');
     clearStockVoucherDraft();
@@ -347,6 +370,22 @@ export default function StockVoucherPage() {
   // Date/Store/Remarks above are never touched by this.
   const [entry, setEntry] = usePersistentField<EntryLine>('stock-voucher', 'entry', emptyEntry());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  // G-08 (changes-14-09-26.md, 2026-09-15): a click on a detail row must produce no visible change
+  // at all — no edit load, no highlight. It only records which row Delete/Edit Row will act on
+  // internally; `editingIndex` (the actually-loaded-for-editing row, and the only thing that
+  // drives the blue highlight) is set exclusively by the Edit Row button now, never by a row click
+  // directly. Cleared whenever `editingIndex` takes over so the two never point at different rows.
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  // G-05 (changes-14-09-26.md, 2026-09-15): the row most recently ADDED or UPDATED via the entry
+  // strip — a pure position indicator (the ▶ gutter marker below), never a selection. Deliberately
+  // separate from `selectedIndex`/`editingIndex` above: G-05's own text is explicit that the
+  // pointer "must not look like, or behave as, the highlight described in G-08" — a click never
+  // moves it, only committing a row does.
+  const [lastEnteredIndex, setLastEnteredIndex] = useState<number | null>(null);
+  const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
+  useEffect(() => {
+    if (lastEnteredIndex != null) rowRefs.current[lastEnteredIndex]?.scrollIntoView({ block: 'nearest' });
+  }, [lastEnteredIndex]);
 
   // Stock in Hand — read-only readout in the entry strip (ref-pic parity), derived from the same
   // page-wide `stockRows`/getStockInfo as the Article/Color modals' own sublabels (2026-08-31),
@@ -577,6 +616,17 @@ export default function StockVoucherPage() {
     // (per the user, 2026-08-30). Excludes the row being edited itself, so re-committing an
     // unchanged line doesn't fold it into a copy of itself.
     const dupIdx = lines.findIndex((l, i) => l.variantId === committed.variantId && i !== editingIndex);
+    // G-05: computed BEFORE `setLines` below (whose functional updater can't hand a value back
+    // out here) from the exact same index arithmetic each branch already performs.
+    let pointerIdx: number;
+    if (dupIdx !== -1) {
+      const withoutEditing = editingIndex != null ? lines.filter((_, i) => i !== editingIndex) : lines;
+      pointerIdx = withoutEditing.findIndex(l => l.variantId === committed.variantId);
+    } else if (editingIndex != null) {
+      pointerIdx = editingIndex;
+    } else {
+      pointerIdx = lines.length;
+    }
     if (dupIdx !== -1) {
       setLines(prev => {
         const withoutEditing = editingIndex != null ? prev.filter((_, i) => i !== editingIndex) : prev;
@@ -591,7 +641,9 @@ export default function StockVoucherPage() {
     } else {
       setLines(prev => [...prev, committed]);
     }
+    setLastEnteredIndex(pointerIdx);
     setEditingIndex(null);
+    setSelectedIndex(null);
     setEntry(emptyEntry());
     requestAnimationFrame(() => entryArticleTriggerRef.current?.focus());
   };
@@ -616,10 +668,13 @@ export default function StockVoucherPage() {
       label: row.label, categoryName: row.categoryName, packing: row.packing, cartons: row.cartons, pairs: row.pairs,
     });
     setEditingIndex(idx);
+    setSelectedIndex(null);
     if (row.articleId != null) fetchVariants(row.articleId);
     requestAnimationFrame(() => entryArticleTriggerRef.current?.focus());
   };
 
+  // G-08: now the Edit Row toolbar button's handler, not the row's own onClick — a row click just
+  // records `selectedIndex` (see the grid below), and this only runs once the user presses Edit Row.
   const handleRowClick = (idx: number) => {
     // Detail locked (scope is Master while already editing) — grid rows stay inert, per the
     // Master/Detail edit-scope split (2026-08-31). New/view-mode behavior is untouched.
@@ -628,22 +683,35 @@ export default function StockVoucherPage() {
     loadLineIntoEntry(idx);
   };
 
+  const handleEditSelectedRow = () => {
+    if (selectedIndex != null) handleRowClick(selectedIndex);
+  };
+
   const removeLine = (idx: number) => {
     setLines(prev => prev.filter((_, i) => i !== idx));
     if (editingIndex === idx) {
       setEditingIndex(null);
+      setSelectedIndex(null);
       setEntry(emptyEntry());
     } else if (editingIndex != null && idx < editingIndex) {
       setEditingIndex(editingIndex - 1);
     }
+    setSelectedIndex(null);
+    if (lastEnteredIndex === idx) setLastEnteredIndex(null);
+    else if (lastEnteredIndex != null && idx < lastEnteredIndex) setLastEnteredIndex(lastEnteredIndex - 1);
   };
 
-  // Toolbar's Delete is dual-purpose, same convention as SaleBillPage/JournalVoucherPage: with a
-  // line loaded into the strip for editing, it removes THAT line; otherwise it's the whole-voucher
-  // delete (currently-open unposted voucher).
+  // Toolbar's Delete is dual-purpose, same convention as SaleBillPage/JournalVoucherPage: a line
+  // loaded for editing (editingIndex) takes priority; otherwise a merely-clicked row
+  // (selectedIndex, G-08) is the target; with neither, it's the whole-voucher delete
+  // (currently-open unposted voucher).
   const handleDeleteAction = () => {
     if (editingIndex != null) {
       removeLine(editingIndex);
+      return;
+    }
+    if (selectedIndex != null) {
+      removeLine(selectedIndex);
       return;
     }
     if (svId == null || isPosted) return;
@@ -658,11 +726,12 @@ export default function StockVoucherPage() {
   }, [lines]);
 
   const isValid = useMemo(() => {
+    if (awaitingNew) return false;
     if (!date || !storeId) return false;
     if (lines.length < 1) return false;
     if (!lines.every(l => l.variantId && l.cartons > 0 && l.pairs > 0)) return false;
     return true;
-  }, [date, storeId, lines]);
+  }, [awaitingNew, date, storeId, lines]);
 
   const buildPayload = (): StockVoucherCreateInput | null => {
     if (!date) { fail('Please pick a date.'); return null; }
@@ -688,6 +757,8 @@ export default function StockVoucherPage() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Backstop for the awaitingNew lock.
+    if (awaitingNew) { setErrorMsg('Click New to start a voucher first.'); return; }
     const payload = buildPayload();
     if (!payload) return;
     const result = mode === 'edit' && svId != null
@@ -768,6 +839,8 @@ export default function StockVoucherPage() {
     (sv.lines || []).forEach(l => { if (l.article_id != null) fetchVariants(l.article_id); });
     setEntry(emptyEntry());
     setEditingIndex(null);
+    setSelectedIndex(null);
+    setLastEnteredIndex(null);
     setErrorMsg('');
     setEditScope('master');
     setMode('view');
@@ -909,7 +982,16 @@ export default function StockVoucherPage() {
   // Unposted from the dropdown does (per the user, 2026-09-04). Skipped when a draft was
   // restored — that is real in-progress work and must not be overwritten. Runs once; the ref
   // keeps a later state change from re-opening a record over whatever is being typed by then.
-  const hasPageDraftAtMount = useHasPageDraft('stock-voucher');
+  // Per the user, 2026-09-16 (corrected same day — the first version also revealed the preview
+  // after G-06's own automatic reset-to-blank, which the user does not consider a "New" press):
+  // the System No. preview must not appear until the toolbar's New button (or the Records tabs'
+  // own "New Voucher" tab, an equally deliberate click) is pressed — a restored in-progress draft
+  // still counts (same as `hasPageDraftAtMount` already distinguishes elsewhere), but every other
+  // path that resets to blank (G-06's auto-open, Post's "ready for the next one", the Unposted
+  // dropdown's own empty-list fallback, etc.) must leave it blank. `handleNew()` itself always
+  // resets this to false; only the two deliberate click sites set it true, right after calling
+  // `handleNew()`.
+  // (hasClickedNew/hasPageDraftAtMount come from useNewDocGate, declared right after `mode`.)
   const didAutoOpenRef = useRef(false);
   useEffect(() => {
     if (hasPageDraftAtMount || didAutoOpenRef.current) return;
@@ -928,6 +1010,9 @@ export default function StockVoucherPage() {
   // Toolbar's Find — a quick jump to any voucher (posted or unposted) by number or remarks.
   const [isFindOpen, setIsFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
+  const closeFindSv = () => { setIsFindOpen(false); setFindQuery(''); };
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(isFindOpen, closeFindSv);
   const findResults = useMemo(() => {
     const q = findQuery.trim().toLowerCase();
     if (!q) return [];
@@ -949,7 +1034,7 @@ export default function StockVoucherPage() {
   const tabBar = (
     <div className="flex gap-1.5" data-no-print>
       <button
-        onClick={() => { setActiveTab('entry'); handleNew(); }}
+        onClick={() => { setActiveTab('entry'); handleNew(); markNewClicked(); }}
         className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
@@ -1032,7 +1117,7 @@ export default function StockVoucherPage() {
               <div className="flex justify-end mt-4">
                 <button
                   type="button"
-                  onClick={() => { setIsFindOpen(false); setFindQuery(''); }}
+                  onClick={closeFindSv}
                   className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm font-semibold"
                 >
                   Close
@@ -1063,19 +1148,32 @@ export default function StockVoucherPage() {
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-0.5">
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { handleNew(); markNewClicked(); }} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
             <button
               type="button"
               onClick={handleDeleteAction}
-              disabled={editingIndex != null ? isViewMode : (mode !== 'view' || svId == null || isPosted)}
-              title={editingIndex != null ? 'Delete selected line' : 'Delete'}
+              disabled={(editingIndex != null || selectedIndex != null) ? isViewMode : (mode !== 'view' || svId == null || isPosted)}
+              title={(editingIndex != null || selectedIndex != null) ? 'Delete selected line' : 'Delete'}
               className="toolbar-btn"
             >
               <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
               <span>Delete</span>
+            </button>
+            {/* G-08 (changes-14-09-26.md, 2026-09-15): editing a detail row is now deliberate —
+                click a row (no visible change), then press Edit Row to actually load it into the
+                entry strip and apply the highlight. */}
+            <button
+              type="button"
+              onClick={handleEditSelectedRow}
+              disabled={selectedIndex == null || editingIndex != null || (mode === 'edit' && editScope !== 'detail')}
+              title="Edit selected line"
+              className="toolbar-btn"
+            >
+              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
+              <span>Edit Row</span>
             </button>
             <button
               type="button"
@@ -1246,7 +1344,7 @@ export default function StockVoucherPage() {
             <CompactField label="No." gridArea="no">
               <input
                 type="text"
-                value={svId != null ? `#${svId}` : (navVouchersLoaded && unpostedSvsLoaded) ? `#${nextSvNoPreview}` : '…'}
+                value={svId != null ? `#${svId}` : (navVouchersLoaded && unpostedSvsLoaded) ? (hasClickedNew ? `#${nextSvNoPreview}` : '') : '…'}
                 disabled
                 className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200 font-mono text-center"
               />
@@ -1341,6 +1439,7 @@ export default function StockVoucherPage() {
                 <input
                   ref={entryArticleTriggerRef}
                   type="text"
+                  required
                   disabled={detailLocked}
                   value={entry.articleSearchText}
                   onChange={e => setEntry(prev => ({ ...prev, articleSearchText: e.target.value }))}
@@ -1365,8 +1464,9 @@ export default function StockVoucherPage() {
                     const stock = getStockInfo(p.article_id, null);
                     return {
                       value: String(p.article_id),
-                      label: p.name,
+                      label: p.code ? `${p.code} — ${p.name}` : p.name,
                       sublabel: stock ? `Stock: ${formatCartons(stock.cartons)} ctn / ${stock.pairs} prs` : undefined,
+                      searchText: `${p.code ?? ''} ${p.name}`,
                     };
                   })}
                   value={entry.articleId != null ? String(entry.articleId) : ''}
@@ -1423,6 +1523,7 @@ export default function StockVoucherPage() {
                     <input
                       ref={colorTriggerRef}
                       type="text"
+                      required
                       disabled={isViewMode || detailLocked || entry.articleId == null}
                       value={colorSearchText}
                       onChange={e => setColorSearchText(e.target.value)}
@@ -1475,6 +1576,7 @@ export default function StockVoucherPage() {
                     parseInt('0.5') was silently turning it into 0. */}
                 <CartonsInput
                   ref={cartonsInputRef}
+                  required
                   disabled={detailLocked}
                   value={entry.cartons}
                   min={0}
@@ -1522,6 +1624,9 @@ export default function StockVoucherPage() {
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
+                  {/* G-05 (changes-14-09-26.md, 2026-09-15): narrow gutter for the ▶ row pointer —
+                      unlabeled, matching the ref pic (ref-pics/batch2/jv2.0.jpeg). */}
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1" style={{ width: '18px' }} />
                   <th className="sticky top-0 z-10 bg-slate-50 p-1.5 pl-4">Article Description</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1.5" style={{ minWidth: '120px' }}>Category</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '110px' }}>Cartons</th>
@@ -1532,10 +1637,22 @@ export default function StockVoucherPage() {
                 {lines.map((line, idx) => (
                   <tr
                     key={line.uid}
-                    onClick={() => handleRowClick(idx)}
+                    ref={el => { rowRefs.current[idx] = el; }}
+                    onClick={() => {
+                      // G-08: a click must produce no visible change — it only records which row
+                      // the Delete/Edit Row toolbar buttons act on next. Inert entirely while
+                      // another row is actually loaded for editing.
+                      if (editingIndex != null) return;
+                      setSelectedIndex(prev => prev === idx ? null : idx);
+                    }}
                     className={`border-b cursor-pointer hover:bg-slate-50/55 transition-colors ${idx === editingIndex ? 'bg-blue-50' : ''}`}
                     style={{ borderColor: 'var(--border-table)' }}
                   >
+                    {/* G-05: a pure position indicator — never a background/highlight, so it can
+                        never be confused with G-08's edit highlight above. */}
+                    <td className="p-1 text-center text-emerald-600" aria-hidden="true">
+                      {idx === lastEnteredIndex && '▶'}
+                    </td>
                     <td className="py-1 px-2 pl-4 text-xs text-slate-800 font-semibold">{line.label || 'N/A'}</td>
                     <td className="py-1 px-2 text-xs text-slate-600">{line.categoryName || '—'}</td>
                     <td className="py-1 px-2 text-center font-mono text-sm text-slate-700">{formatCartons(line.cartons)}</td>
@@ -1544,7 +1661,7 @@ export default function StockVoucherPage() {
                 ))}
                 {lines.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="p-3 text-center text-xs text-slate-400">
+                    <td colSpan={5} className="p-3 text-center text-xs text-slate-400">
                       No lines added yet.
                     </td>
                   </tr>

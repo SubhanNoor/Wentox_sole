@@ -1,8 +1,10 @@
 import type { WageRunRow, ExpenseRow } from '@/lib/api';
 
 /**
- * Payroll balances — the whole balance block on both run screens and the
- * Employees list, derived here rather than stored anywhere.
+ * Payroll balances. The Wage Run screen and the Employees list now read the
+ * worker's account LEDGER (getRunBalanceBlockFromLedger / reports:account-balance);
+ * the runs+expenses rebuild below is only Wage Run's fallback when the ledger
+ * can't be read.
  *
  * That is what makes unpost safe. An earlier design snapshotted the opening
  * balance onto each run, which meant unposting run #3 quietly invalidated the
@@ -57,16 +59,6 @@ export function paidUpto(baId: number, expenses: ExpenseRow[], upto?: string): n
     .reduce((s, ex) => s + ex.amount, 0);
 }
 
-/** What an employee is owed right now: everything earned minus everything paid. */
-export function getEmployeeBalance(
-  employee: { employee_id: number; employee_type: 'WORKER' | 'SALARIED'; ba_id: number },
-  wageRuns: WageRunRow[],
-  salaryItems: FlatSalaryItem[],
-  expenses: ExpenseRow[],
-): number {
-  return accruedUpto(employee, wageRuns, salaryItems) - paidUpto(employee.ba_id, expenses);
-}
-
 function dayBefore(date: string): string {
   const d = new Date(date);
   d.setDate(d.getDate() - 1);
@@ -109,5 +101,33 @@ export function getRunBalanceBlock(
   const baqaya = earnedBefore - paidBefore;
   const banam = paidUpto(employee.ba_id, expenses) - paidBefore;
 
+  return { baqaya, banam, net: baqaya + grandTotal - banam };
+}
+
+/**
+ * The same four figures, read from the worker's own ACCOUNT LEDGER instead of rebuilt from wage
+ * runs + expenses. This is what the Wage Run screen uses now (per the user, 2026-09-18: "baqaya /
+ * banam having some issue"): the rebuilt version only ever saw WAGE_RUN and EXPENSE movements, so
+ * anything else on the worker's account — opening balance, Journal Vouchers, receipts, settlements,
+ * transfers — was silently missing and Baqaya disagreed with the worker's ledger (one worker showed
+ * -8,840 against a ledger balance of 368,562). The ledger is the single source of truth.
+ *
+ * A worker's account is a payable: credit = owed to the worker (a posted run), debit = paid to them.
+ * Same cut as getRunBalanceBlock: baqaya = net owed strictly BEFORE `date`; banam = everything paid
+ * (debited) on/after `date`. A run being edited is always DRAFT (posted runs must be unposted first)
+ * so it has no ledger rows and needs no exclusion; a posted run viewed on screen sits ON `date`, so
+ * it never lands in its own baqaya either.
+ */
+export function getRunBalanceBlockFromLedger(
+  rows: { date: string; debit: number; credit: number }[],
+  date: string,
+  grandTotal: number,
+): { baqaya: number; banam: number; net: number } {
+  let baqaya = 0;
+  let banam = 0;
+  for (const r of rows) {
+    if (r.date < date) baqaya += r.credit - r.debit;
+    else banam += r.debit;
+  }
   return { baqaya, banam, net: baqaya + grandTotal - banam };
 }

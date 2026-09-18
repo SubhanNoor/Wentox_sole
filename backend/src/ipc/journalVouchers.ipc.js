@@ -33,7 +33,7 @@ module.exports = function register() {
   ipcMain.handle('journal-vouchers:remove', wrap(async (payload) => {
     const session = requireSession();
     await authService.verifyPassword(session.userId, payload.password);
-    return service.remove(payload.id);
+    return service.remove(payload.id, session.userId);
   }));
 
   ipcMain.handle('journal-vouchers:post', wrap((payload) => {

@@ -243,7 +243,7 @@ export default function OverallReturnTab({ onEditReturn, onPrintReturn }: Overal
                           <span className="text-slate-400 block">GP: {ret.gp_no || '-'}</span>
                         </div>
                       </td>
-                      <td className="p-3.5 text-right font-mono font-bold text-amber-800 pr-4">{formatCurrency(ret.net_value)}</td>
+                      <td className="p-3.5 text-right font-mono font-bold text-amber-800 pr-4">{`(${formatCurrency(ret.net_value)})`}</td>
                       <td className="p-3.5 text-center pr-4">
                         <div className="flex justify-center items-center gap-2">
                           <button

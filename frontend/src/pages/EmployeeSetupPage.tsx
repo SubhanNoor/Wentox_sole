@@ -1,8 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
-import type { EmployeeRow, EmployeeType, StageRow, CityRow, WageRunRow, ExpenseRow } from '@/lib/api';
-import { getEmployeeBalance, type FlatSalaryItem } from '@/lib/payroll';
+import type { EmployeeRow, EmployeeType, StageRow, CityRow } from '@/lib/api';
 import { getTodayDate } from '@/lib/utils';
 import AppLayout from '@/components/AppLayout';
 import OpeningBalanceFields from '@/components/OpeningBalanceFields';
@@ -10,6 +9,7 @@ import { Plus, Search, Settings, Save, Edit2, Phone, MapPin, HardHat, BadgeDolla
 import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 type ListTab = 'workers' | 'salaried';
 
@@ -17,9 +17,12 @@ export default function EmployeeSetupPage() {
   const [employeeList, setEmployeeList] = useState<EmployeeRow[]>([]);
   const [stageList, setStageList] = useState<StageRow[]>([]);
   const [cities, setCities] = useState<CityRow[]>([]);
-  const [wageRuns, setWageRuns] = useState<WageRunRow[]>([]);
-  const [salaryItems, setSalaryItems] = useState<FlatSalaryItem[]>([]);
-  const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
+  // Current Balance per employee, keyed by employee_id — straight from each one's own account
+  // ledger (reports:account-balance), per the user 2026-09-18. It used to be rebuilt from wage runs
+  // + salary runs + expenses, which missed everything else on the account (opening balance,
+  // Journal Vouchers, receipts, settlements, transfers) and disagreed with the ledger. Stored as
+  // "owed to the employee" (the ledger's credit side), so positive = we owe them.
+  const [balances, setBalances] = useState<Record<number, number>>({});
   const [loading, setLoading] = useState(true);
 
   const [activeTab, setActiveTab] = useState<ListTab>('workers');
@@ -64,35 +67,22 @@ export default function EmployeeSetupPage() {
 
   const loadAll = useCallback(async () => {
     setLoading(true);
-    const [empRes, stageRes, cityRes, wrRes, srRes, exRes] = await Promise.all([
+    const [empRes, stageRes, cityRes] = await Promise.all([
       api.employees.list({ includeInactive: true }),
       api.stages.list(),
       api.listCities(),
-      api.wageRuns.list(),
-      api.salaryRuns.list({ status: 'CONFIRMED' }),
-      api.expenses.list({ status: 'CONFIRMED' }),
     ]);
     if (empRes.ok) setEmployeeList(empRes.data);
     if (stageRes.ok) setStageList(stageRes.data);
     if (cityRes.ok) setCities(cityRes.data);
-    if (wrRes.ok) setWageRuns(wrRes.data);
-    if (exRes.ok) setExpenses(exRes.data);
 
-    // salaryRuns:list() has no line items — flatten each CONFIRMED run's items via get()
-    // once here so getEmployeeBalance() can sum a salaried employee's accrual across runs.
-    if (srRes.ok) {
-      const details = await Promise.all(srRes.data.map(r => api.salaryRuns.get(r.salary_run_id)));
-      const flat: FlatSalaryItem[] = [];
-      details.forEach(d => {
-        if (!d.ok || !d.data.items) return;
-        d.data.items.forEach(it => flat.push({
-          employee_id: it.employee_id,
-          amount: it.amount,
-          run_date: d.data.run_date,
-          status: d.data.status,
-        }));
-      });
-      setSalaryItems(flat);
+    if (empRes.ok) {
+      const withAccount = empRes.data.filter(e => e.ba_id != null);
+      const results = await Promise.all(withAccount.map(e => api.reports.accountBalance({ ba_id: e.ba_id })));
+      const next: Record<number, number> = {};
+      // account-balance is debit-positive; an employee's account is a payable, so flip the sign.
+      withAccount.forEach((e, i) => { const r = results[i]; if (r.ok) next[e.employee_id] = -Number(r.data.balance); });
+      setBalances(next);
     }
     setLoading(false);
   }, []);
@@ -142,6 +132,9 @@ export default function EmployeeSetupPage() {
     setErrorMsg('');
     clearEmployeeDraft();
   };
+
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(isModalOpen, handleCloseModal);
 
   // G-06: after a successful create, the window stays open and clears — ready for the next
   // employee — instead of closing. G-04: openingDate is deliberately NOT reset here; it stays
@@ -243,8 +236,8 @@ export default function EmployeeSetupPage() {
   }, [activeEmployees, cityFilter, search]);
 
   const totalOutstanding = useMemo(
-    () => activeEmployees.reduce((s, e) => s + getEmployeeBalance(e, wageRuns, salaryItems, expenses), 0),
-    [activeEmployees, wageRuns, salaryItems, expenses]
+    () => activeEmployees.reduce((s, e) => s + (balances[e.employee_id] ?? 0), 0),
+    [activeEmployees, balances]
   );
 
   const formatStageLabels = (stageKeys?: string | null) => {
@@ -393,7 +386,7 @@ export default function EmployeeSetupPage() {
                   align: 'right',
                   render: emp => (
                     <span className="font-bold text-slate-800">
-                      {formatCurrency(getEmployeeBalance(emp, wageRuns, salaryItems, expenses))}
+                      {formatCurrency(balances[emp.employee_id] ?? 0)}
                     </span>
                   ),
                 },
@@ -426,7 +419,7 @@ export default function EmployeeSetupPage() {
         {/* Modal Dialogue Box Pop-up */}
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={handleCloseModal}
-            onKeyDown={e => { if (e.key === 'Escape') { (handleCloseModal)(); } }}
+           
             tabIndex={-1}>
             <div className="bg-white rounded-2xl border-2 border-[var(--brand-gold)] shadow-[0_20px_50px_rgba(176,141,87,0.28)] w-full max-w-lg max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50/50">

@@ -15,9 +15,11 @@ import {
 } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
-import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
+import AccountBalanceTooltip from '@/components/AccountBalanceTooltip';
+import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 /**
  * Journal Voucher — a real multi-line double-entry journal (legacy "Journal Entry" screen): N
@@ -96,10 +98,24 @@ export default function JournalVoucherPage() {
 
   useEffect(() => {
     (async () => {
-      const ba = await api.listBusinessAccounts();
+      // excludeClosed per the user (2026-09-17): a deleted (closed) account must not be
+      // selectable on a JV line, on top of no longer appearing in Setup's own list.
+      const ba = await api.listBusinessAccounts({ excludeClosed: true });
       if (ba.ok) setAccounts(ba.data); else setLookupError('Failed to load accounts: ' + ba.error.message);
     })();
-    refreshUnposted();
+    // G-06 (changes-14-09-26.md, 2026-09-15): zero unposted vouchers on open must land on a fresh
+    // blank entry, not wherever the session that closed the window left the screen pointed.
+    // Originally gated on `mode === 'view'`, which misses a real case reported by the user
+    // (2026-09-16, found on SaleBillPage's own equivalent bug): an edit-on-a-posted-record flow can
+    // leave `mode: 'edit'` while the loaded record is still posted, so `mode === 'view'` alone
+    // under-triggers. `isPosted` (derived from the persisted `status`) is the direct, unambiguous
+    // signal — true iff an actual posted record is loaded, in EITHER 'view' or 'edit' mode; only
+    // `handleNew()` ever resets `status` to 'DRAFT', so it can never be true while there's genuine
+    // unsaved new-document work to protect.
+    refreshUnposted().then(data => {
+      if (data && data.length === 0 && isPosted) handleNew();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshUnposted]);
 
   // Debounced so typing a search term doesn't fire a query per keystroke.
@@ -138,7 +154,15 @@ export default function JournalVoucherPage() {
   // the id and re-fetch on mount" attempt was worse still — it overwrote the user's unsaved edits
   // with the last-saved copy and reopened in 'view' mode, which disables Save.
   const [mode, setMode] = usePersistentField<'new' | 'edit' | 'view'>('journal-voucher', 'mode', 'new');
+  // The posted/unposted/System No. rule (per the user, 2026-09-18) — see useNewDocGate for all of
+  // it. hasPageDraftAtMount gates the auto-open further down (only genuine unsaved typing skips
+  // it); hasClickedNew gates the No. preview and the awaitingNew lock; only New calls markNewClicked.
+  const { hasRealDraftAtMount: hasPageDraftAtMount, hasClickedNew, setHasClickedNew, markNewClicked } =
+    useNewDocGate('journal-voucher', ['reason', 'lines']);
   const [jvId, setJvId] = usePersistentField<number | null>('journal-voucher', 'jvId', null);
+  // The system-generated Number (JV-01, changes-14-09-26.md) — distinct from jvId (the internal
+  // identity used for API calls). Persisted alongside jvId/status/mode for the same reason.
+  const [voucherNo, setVoucherNo] = usePersistentField<string | null>('journal-voucher', 'voucherNo', null);
   const [status, setStatus] = usePersistentField<'CONFIRMED' | 'DRAFT'>('journal-voucher', 'status', 'DRAFT');
   // Master/Detail edit-scope radio, per the user 2026-08-31: with a JV already unlocked via the
   // toolbar's Edit, this further splits WHICH half becomes editable — the header (Master) or the
@@ -170,24 +194,32 @@ export default function JournalVoucherPage() {
   const isViewMode = mode === 'view';
   const isPosted = status === 'CONFIRMED';
   // Derived from editScope — applied to every master/detail field's `disabled` below (2026-08-31).
-  const masterLocked = mode === 'edit' && editScope !== 'master';
-  const detailLocked = mode === 'edit' && editScope !== 'detail';
+  // A blank voucher reached any way other than New (first open with nothing unposted, after Post,
+  // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
+  const awaitingNew = mode === 'new' && voucherNo == null && !hasClickedNew;
+  const masterLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
+  const detailLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
 
   const accountOptions = useMemo(
     // Business accounts show their PARENT chart account inline, appended to the same field with an em-dash rather than in a field of its own (2026-08-30, per the user). Matches how ReceiptsPage's own account picker already reads. `ac_name` is joined in by businessAccounts.repository.js's list().
+    // searchText excludes the parent chart account name — typing it must not surface every
+    // account under it (changes-14-09-26.md G-09, per the client 2026-09-14).
     () => accounts.map(a => ({
       value: String(a.ba_id),
       label: `${a.name} (${a.code})${a.ac_name ? ` — ${a.ac_name}` : ''}`,
+      searchText: `${a.name} (${a.code})`,
     })),
     [accounts]
   );
 
   const handleNew = () => {
-    setMode('new'); setJvId(null); setStatus('DRAFT');
+    setMode('new'); setHasClickedNew(false); setJvId(null); setVoucherNo(null); setStatus('DRAFT');
     setDate(getTodayDate()); setReason('');
     setLines([]);
     setEntry(emptyEntry());
     setEditingIndex(null);
+    setSelectedIndex(null);
+    setLastEnteredIndex(null);
     setErrorMsg('');
     setEditScope('master');
     clearJournalVoucherDraft();
@@ -200,14 +232,39 @@ export default function JournalVoucherPage() {
   // ── Entry strip (ref-pic jv2.0's own bound-record pattern, 2026-08-26 per the user: "we select
   // the account... it has its own box as in the ref pic") — ONE editable A/C Code/Amount/Narration
   // row, NOT one editable row per grid line. A single signed Amount replaces separate Debit/Credit
-  // inputs: positive types a credit (JAMMA), negative types a debit (NAAM) — per the user: "if it
-  // is positive... we are doing credit and if it's negative it is debit". Enter on Narration (the
-  // strip's last field) commits the line into `lines` — appending, or replacing `editingIndex`
+  // inputs: positive types a debit (NAAM), negative types a credit (JAMMA) — ACC-01
+  // (changes-14-09-26.md, confirmed by the client 2026-09-14): "+ve -> DEBIT, -ve -> CREDIT" is the
+  // one sign rule for every account type, no exceptions — this superseded the original 2026-08-26
+  // convention (positive = credit), which this screen had implemented backwards relative to that
+  // rule. Enter on Narration (the strip's last field) commits the line into `lines` — appending,
+  // or replacing `editingIndex`
   // when a grid row was clicked to re-open it — then always clears the strip and refocuses A/C
   // Code for the next line (per the user: "it goes to the first field of account code... but the
   // master details remain same" — Date/Reason above are never touched by this).
   const [entry, setEntry] = usePersistentField<EntryLine>('journal-voucher', 'entry', emptyEntry());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  // G-08 (changes-14-09-26.md, 2026-09-15): a click on a detail row must produce no visible change
+  // at all — no edit load, no highlight. It only records which row Delete/Edit Row will act on
+  // internally; `editingIndex` (the actually-loaded-for-editing row, and the only thing that
+  // drives the blue highlight) is set exclusively by the Edit Row button now, never by a row click
+  // directly. Cleared whenever `editingIndex` takes over so the two never point at different rows.
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  // G-05 (changes-14-09-26.md, 2026-09-15): the row most recently ADDED or UPDATED via the entry
+  // strip — a pure position indicator (the ▶ gutter marker below), never a selection. Deliberately
+  // separate from `selectedIndex`/`editingIndex` above: G-05's own text is explicit that the
+  // pointer "must not look like, or behave as, the highlight described in G-08" — a click never
+  // moves it, only committing a row does.
+  const [lastEnteredIndex, setLastEnteredIndex] = useState<number | null>(null);
+  // JV-02 (changes-14-09-26.md, 2026-09-15): the entry strip's own read-only balance readout for
+  // the picked A/C Code (ref-pic jv2.0.jpeg's second boxed field, under the Amount box) — same
+  // `AccountBalanceTooltip` shared component Receipts/Expenses already use next to their own
+  // account pickers. Bumped after any mutation that can move this account's own ledger balance
+  // (save/post/unpost/delete), matching the convention those two pages already use.
+  const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
+  const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
+  useEffect(() => {
+    if (lastEnteredIndex != null) rowRefs.current[lastEnteredIndex]?.scrollIntoView({ block: 'nearest' });
+  }, [lastEnteredIndex]);
   const entryAccountTriggerRef = useRef<HTMLInputElement>(null);
   const [isEntryAccountModalOpen, setIsEntryAccountModalOpen] = useState(false);
   const [entryAccountModalSeed, setEntryAccountModalSeed] = useState('');
@@ -243,22 +300,26 @@ export default function JournalVoucherPage() {
 
   const handleCommitLine = () => {
     if (!entry.baId) { setErrorMsg('Select an account before adding the line.'); return; }
-    if (entry.amount === 0) { setErrorMsg('Amount can\'t be 0 — positive for a credit, negative for a debit.'); return; }
+    if (entry.amount === 0) { setErrorMsg('Amount can\'t be 0 — positive for a debit, negative for a credit.'); return; }
     setErrorMsg('');
     const committed: UiLine = {
       uid: editingIndex != null ? lines[editingIndex].uid : newLineUid(),
       baId: entry.baId,
       baSearchText: entry.baSearchText,
-      debit: entry.amount < 0 ? Math.abs(entry.amount) : 0,
-      credit: entry.amount > 0 ? entry.amount : 0,
+      // ACC-01: +ve -> DEBIT, -ve -> CREDIT.
+      debit: entry.amount > 0 ? entry.amount : 0,
+      credit: entry.amount < 0 ? Math.abs(entry.amount) : 0,
       narration: entry.narration,
     };
+    const pointerIdx = editingIndex != null ? editingIndex : lines.length;
     if (editingIndex != null) {
       setLines(prev => prev.map((l, i) => i === editingIndex ? committed : l));
     } else {
       setLines(prev => [...prev, committed]);
     }
+    setLastEnteredIndex(pointerIdx);
     setEditingIndex(null);
+    setSelectedIndex(null);
     setEntry(emptyEntry());
     requestAnimationFrame(() => entryAccountTriggerRef.current?.focus());
   };
@@ -271,38 +332,73 @@ export default function JournalVoucherPage() {
   }
 
   // Loads an already-committed line back into the strip for editing (grid row click) — the signed
-  // Amount is reconstructed from whichever side actually holds a value.
+  // Amount is reconstructed from whichever side actually holds a value. ACC-01: debit -> +ve,
+  // credit -> -ve (the exact inverse of handleCommitLine's own split above).
   const loadLineIntoEntry = (idx: number) => {
     const row = lines[idx];
-    setEntry({ baId: row.baId, baSearchText: row.baSearchText, amount: row.credit > 0 ? row.credit : -row.debit, narration: row.narration });
+    setEntry({ baId: row.baId, baSearchText: row.baSearchText, amount: row.debit > 0 ? row.debit : -row.credit, narration: row.narration });
     setEditingIndex(idx);
+    setSelectedIndex(null);
     requestAnimationFrame(() => entryAccountTriggerRef.current?.focus());
   };
 
+  // G-08: now the Edit Row toolbar button's handler, not the row's own onClick — a row click just
+  // records `selectedIndex` (see the grid below), and this only runs once the user presses Edit Row.
   const handleRowClick = (idx: number) => {
     // Detail locked (scope is Master while already editing) — grid rows stay inert, per the
     // Master/Detail edit-scope split (2026-08-31). New/view-mode behavior is untouched.
     if (mode === 'edit' && editScope !== 'detail') return;
-    if (isViewMode) setMode('edit');
+    // JV-04 (changes-14-09-26.md, 2026-09-15): a posted voucher must never enter edit mode from a
+    // row click — the toolbar's own Edit button is already disabled once posted
+    // (`disabled={!isViewMode || jvId == null || isPosted}`), but this bypassed that guard, so
+    // clicking a row on a POSTED JV would flip mode to 'edit', which in turn enabled the Delete
+    // and Save buttons. Deleting a row then "worked" visually but Save always failed with
+    // POSTED_LOCK ("Unpost the Journal Voucher before editing") — the reported broken delete.
+    if (isViewMode) {
+      if (isPosted) return;
+      setMode('edit');
+    }
     loadLineIntoEntry(idx);
+  };
+
+  const handleEditSelectedRow = () => {
+    if (selectedIndex != null) handleRowClick(selectedIndex);
   };
 
   const removeLine = (idx: number) => {
     setLines(prev => prev.filter((_, i) => i !== idx));
     if (editingIndex === idx) {
       setEditingIndex(null);
+      setSelectedIndex(null);
       setEntry(emptyEntry());
     } else if (editingIndex != null && idx < editingIndex) {
       setEditingIndex(editingIndex - 1);
     }
+    setSelectedIndex(null);
+    // JV-04 (changes-14-09-26.md, 2026-09-15): deleting the POINTED row repositions the G-05
+    // pointer to whatever row now takes its place — or the new last row if the deleted one was
+    // last — rather than just clearing it, per this item's own explicit acceptance detail (every
+    // other page's G-05 rollout clears the pointer here instead, since G-05's own spec didn't
+    // require a reposition; JV-04 does).
+    const newLength = lines.length - 1;
+    if (lastEnteredIndex === idx) {
+      setLastEnteredIndex(newLength === 0 ? null : Math.min(idx, newLength - 1));
+    } else if (lastEnteredIndex != null && idx < lastEnteredIndex) {
+      setLastEnteredIndex(lastEnteredIndex - 1);
+    }
   };
 
-  // Toolbar's Delete is dual-purpose, same convention as SaleBillPage/SaleReturnPage: with a line
-  // loaded into the strip for editing, it removes THAT line; otherwise it's the whole-JV delete
-  // (currently-open unposted voucher).
+  // Toolbar's Delete is dual-purpose, same convention as SaleBillPage/SaleReturnPage: a line
+  // loaded for editing (editingIndex) takes priority; otherwise a merely-clicked row
+  // (selectedIndex, G-08) is the target; with neither, it's the whole-JV delete (currently-open
+  // unposted voucher).
   const handleDeleteAction = () => {
     if (editingIndex != null) {
       removeLine(editingIndex);
+      return;
+    }
+    if (selectedIndex != null) {
+      removeLine(selectedIndex);
       return;
     }
     if (jvId == null || isPosted) return;
@@ -319,15 +415,15 @@ export default function JournalVoucherPage() {
   // Net Total must be exactly 0 before Save is even reachable — per the user: "the net total must
   // be 0 if yes we can save it otherwise not".
   const isValid = useMemo(() => {
-    if (!date || !reason.trim()) return false;
+    if (awaitingNew) return false;
+    if (!date) return false;
     if (lines.length < 2) return false;
     if (!lines.every(l => l.baId && ((Number(l.debit) || 0) > 0 || (Number(l.credit) || 0) > 0))) return false;
     return totals.difference === 0;
-  }, [date, reason, lines, totals]);
+  }, [awaitingNew, date, lines, totals]);
 
   const buildPayload = (): JournalVoucherCreateInput | null => {
     if (!date) { setErrorMsg('Please pick a date.'); return null; }
-    if (!reason.trim()) { setErrorMsg('A reason is required — a JV without one cannot be explained later.'); return null; }
     if (lines.length < 2) { setErrorMsg('A Journal Voucher needs at least 2 lines.'); return null; }
     if (!lines.every(l => l.baId)) { setErrorMsg('Every line needs an account.'); return null; }
     if (!lines.every(l => (Number(l.debit) || 0) > 0 || (Number(l.credit) || 0) > 0)) {
@@ -344,13 +440,15 @@ export default function JournalVoucherPage() {
     }));
     return {
       jv_date: date,
-      reason: reason.trim(),
+      reason: reason.trim() || undefined,
       lines: payloadLines,
     };
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Backstop for the awaitingNew lock.
+    if (awaitingNew) { setErrorMsg('Click New to start a voucher first.'); return; }
     const payload = buildPayload();
     if (!payload) return;
     const result = mode === 'edit' && jvId != null
@@ -358,6 +456,7 @@ export default function JournalVoucherPage() {
       : await api.journalVouchers.create(payload);
     if (!result.ok) { fail('Failed to save Journal Voucher: ' + result.error.message); return; }
     setJvId(result.data.jv_id);
+    setVoucherNo(result.data.voucher_no);
     setStatus(result.data.status);
     setErrorMsg('');
     flash('Journal Voucher saved — Post it to update every line\'s ledger.');
@@ -366,6 +465,7 @@ export default function JournalVoucherPage() {
     refresh();
     refreshUnposted();
     refreshNav();
+    setBalanceRefreshKey(k => k + 1);
   };
 
   // Posting finishes this JV and readies the form for the next one — same convention as Sale
@@ -382,6 +482,7 @@ export default function JournalVoucherPage() {
     refresh();
     refreshUnposted();
     refreshNav();
+    setBalanceRefreshKey(k => k + 1);
     const workingDate = date;
     handleNew();
     setDate(workingDate);
@@ -396,6 +497,7 @@ export default function JournalVoucherPage() {
     refresh();
     refreshUnposted();
     refreshNav();
+    setBalanceRefreshKey(k => k + 1);
     // It's a draft again now, so the window follows it back to the Unposted view (per the user,
     // 2026-08-30) rather than staying on Posted looking at a record that no longer belongs there.
     setBrowseFilter('unposted');
@@ -408,9 +510,10 @@ export default function JournalVoucherPage() {
     if (!res.ok) { fail('Failed to load Journal Voucher: ' + res.error.message); return; }
     const jv = res.data;
     setJvId(jv.jv_id);
+    setVoucherNo(jv.voucher_no);
     setStatus(jv.status);
     setDate(toDateInputValue(jv.jv_date));
-    setReason(jv.reason);
+    setReason(jv.reason || '');
     setLines((jv.lines || []).map(l => ({
       uid: 'jvl_' + l.line_id,
       baId: String(l.ba_id),
@@ -421,6 +524,8 @@ export default function JournalVoucherPage() {
     })));
     setEntry(emptyEntry());
     setEditingIndex(null);
+    setSelectedIndex(null);
+    setLastEnteredIndex(null);
     setErrorMsg('');
     setEditScope('master');
     setMode('view');
@@ -568,7 +673,16 @@ export default function JournalVoucherPage() {
   // Unposted from the dropdown does (per the user, 2026-09-04). Skipped when a draft was
   // restored — that is real in-progress work and must not be overwritten. Runs once; the ref
   // keeps a later state change from re-opening a record over whatever is being typed by then.
-  const hasPageDraftAtMount = useHasPageDraft('journal-voucher');
+  // Per the user, 2026-09-16 (corrected same day — the first version also revealed the preview
+  // after G-06's own automatic reset-to-blank, which the user does not consider a "New" press):
+  // the System No. preview must not appear until the toolbar's New button (or the Records tabs'
+  // own "New Voucher" tab, an equally deliberate click) is pressed — a restored in-progress draft
+  // still counts (same as `hasPageDraftAtMount` already distinguishes elsewhere), but every other
+  // path that resets to blank (G-06's auto-open, Post's "ready for the next one", the Unposted
+  // dropdown's own empty-list fallback, etc.) must leave it blank. `handleNew()` itself always
+  // resets this to false; only the two deliberate click sites set it true, right after calling
+  // `handleNew()`.
+  // (hasClickedNew/hasPageDraftAtMount come from useNewDocGate, declared right after `mode`.)
   const didAutoOpenRef = useRef(false);
   useEffect(() => {
     if (hasPageDraftAtMount || didAutoOpenRef.current) return;
@@ -577,14 +691,19 @@ export default function JournalVoucherPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Preview of the Number a brand-new JV will get — jv_id is assigned the moment Save actually
-  // creates the row (draft or posted alike), so this is a client-side preview only, correct as
-  // long as nothing else inserts a JV between now and Save.
-  // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
-  // Always shown, from the moment the page opens — an earlier round gated it behind pressing New,
-  // which the user reversed (2026-08-31): the number should just be there.
+  // Preview of the Number a brand-new JV will get — voucher_no (JV-01, changes-14-09-26.md) is
+  // system-generated from dbo.seq_journal_voucher_no the moment Save actually creates the row, so
+  // this is a client-side preview only, correct as long as nothing else inserts a JV between now
+  // and Save.
+  // The Number shown before saving is only a PREVIEW (MAX(voucher_no)+1, never reserved
+  // server-side). Always shown, from the moment the page opens — an earlier round gated it behind
+  // pressing New, which the user reversed (2026-08-31): the number should just be there.
 const nextJvNoPreview = useMemo(
-    () => Math.max(0, ...navVouchers.map(v => v.jv_id), ...unpostedJvs.map(v => v.jv_id)) + 1,
+    () => Math.max(
+      0,
+      ...navVouchers.map(v => Number(v.voucher_no) || 0),
+      ...unpostedJvs.map(v => Number(v.voucher_no) || 0),
+    ) + 1,
     [navVouchers, unpostedJvs]
   );
 
@@ -592,16 +711,19 @@ const nextJvNoPreview = useMemo(
   // client-side over the already-loaded browse/pending lists.
   const [isFindOpen, setIsFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
+  const closeFindJv = () => { setIsFindOpen(false); setFindQuery(''); };
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(isFindOpen, closeFindJv);
   const findResults = useMemo(() => {
     const q = findQuery.trim().toLowerCase();
     if (!q) return [];
-    const matches = (v: { reason: string; jv_id: number }) =>
-      v.reason.toLowerCase().includes(q) || String(v.jv_id).includes(q);
+    const matches = (v: { reason: string | null; voucher_no: string | null }) =>
+      (v.reason || '').toLowerCase().includes(q) || (v.voucher_no || '').toLowerCase().includes(q);
     const posted = navVouchers.filter(v => v.status === 'CONFIRMED' && matches(v));
     const unposted = unpostedJvs.filter(matches);
     return [
-      ...posted.map(v => ({ jv_id: v.jv_id, reason: v.reason, date: v.jv_date, status: 'posted' as const })),
-      ...unposted.map(v => ({ jv_id: v.jv_id, reason: v.reason, date: v.jv_date, status: 'unposted' as const })),
+      ...posted.map(v => ({ jv_id: v.jv_id, voucher_no: v.voucher_no, reason: v.reason, date: v.jv_date, status: 'posted' as const })),
+      ...unposted.map(v => ({ jv_id: v.jv_id, voucher_no: v.voucher_no, reason: v.reason, date: v.jv_date, status: 'unposted' as const })),
     ].slice(0, 30);
   }, [findQuery, navVouchers, unpostedJvs]);
   const handleFindSelect = async (id: number) => {
@@ -614,7 +736,7 @@ const nextJvNoPreview = useMemo(
   const tabBar = (
     <div className="flex gap-1.5" data-no-print>
       <button
-        onClick={() => { setActiveTab('entry'); handleNew(); }}
+        onClick={() => { setActiveTab('entry'); handleNew(); markNewClicked(); }}
         className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
@@ -658,7 +780,7 @@ const nextJvNoPreview = useMemo(
                 type="text"
                 value={findQuery}
                 onChange={e => setFindQuery(e.target.value)}
-                placeholder="Number or reason..."
+                placeholder="Number or remarks..."
                 className="soleria-input w-full font-semibold mb-3"
                 autoFocus
               />
@@ -669,7 +791,7 @@ const nextJvNoPreview = useMemo(
                     onClick={() => handleFindSelect(r.jv_id)}
                     className="px-3 py-2 text-xs cursor-pointer hover:bg-amber-50/60 flex items-center justify-between gap-2"
                   >
-                    <span className="font-mono font-semibold text-slate-700">#{r.jv_id}</span>
+                    <span className="font-mono font-semibold text-slate-700">#{r.voucher_no}</span>
                     <span className="text-slate-400 truncate flex-1">{r.reason}</span>
                     <span className="text-slate-400">{formatDate(r.date)}</span>
                     <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${r.status === 'posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{r.status}</span>
@@ -682,7 +804,7 @@ const nextJvNoPreview = useMemo(
               <div className="flex justify-end mt-4">
                 <button
                   type="button"
-                  onClick={() => { setIsFindOpen(false); setFindQuery(''); }}
+                  onClick={closeFindJv}
                   className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm font-semibold"
                 >
                   Close
@@ -710,19 +832,32 @@ const nextJvNoPreview = useMemo(
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-0.5">
             <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={handleNew} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { handleNew(); markNewClicked(); }} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
               <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
               <span>New</span>
             </button>
             <button
               type="button"
               onClick={handleDeleteAction}
-              disabled={editingIndex != null ? isViewMode : (mode !== 'view' || jvId == null || isPosted)}
-              title={editingIndex != null ? 'Delete selected line' : 'Delete'}
+              disabled={(editingIndex != null || selectedIndex != null) ? isViewMode : (mode !== 'view' || jvId == null || isPosted)}
+              title={(editingIndex != null || selectedIndex != null) ? 'Delete selected line' : 'Delete'}
               className="toolbar-btn"
             >
               <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
               <span>Delete</span>
+            </button>
+            {/* G-08 (changes-14-09-26.md, 2026-09-15): editing a detail row is now deliberate —
+                click a row (no visible change), then press Edit Row to actually load it into the
+                entry strip and apply the highlight. */}
+            <button
+              type="button"
+              onClick={handleEditSelectedRow}
+              disabled={selectedIndex == null || editingIndex != null || (isViewMode && isPosted) || (mode === 'edit' && editScope !== 'detail')}
+              title="Edit selected line"
+              className="toolbar-btn"
+            >
+              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
+              <span>Edit Row</span>
             </button>
             <button
               type="button"
@@ -868,25 +1003,27 @@ const nextJvNoPreview = useMemo(
             size (shrink-0) — only the table wrapper is flex-1. */}
         <form
           id="jv-entry-form" ref={entryCardRef} onSubmit={handleSave}
-          className="card-white p-6 bg-white border flex flex-col" style={{ height: entryCardHeight ?? undefined }}
+          className="card-white p-3 md:p-4 bg-white border flex flex-col" style={{ height: entryCardHeight ?? undefined }}
           data-edit-scope="detail"
         >
           {/* Header row — "JOURNAL ENTRY" title. Master/Detail radios removed (per the user,
               2026-08-26) — display-only and didn't do anything, same reason they're gone from
               SaleBillPage too. */}
-          <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-4">
+          <div className="shrink-0 flex items-center gap-2 border-b pb-2 mb-2">
             <BookText size={18} className="text-[#B08D57]" />
             <h3 className="font-lora font-bold text-lg tracking-wide text-slate-800">JOURNAL ENTRY</h3>
           </div>
 
-          {/* Date / Number / Reason — banded row (the app's gold tint standing in for the legacy
-              screen's grey bar) so the master fields read as one grouped strip, same as the
-              picture's Date/Number/Remarks bar. Number is auto-generated by the system (jv_id) —
-              per the user, 2026-08-26: "the number is auto generated by the system and must be
-              shown to us" — read-only, previewing what Save will assign, same convention as
-              SaleBillPage's own System No. */}
+          {/* Date / Number / Remarks — one row (JV-02, changes-14-09-26.md, 2026-09-15: matching
+              ref-pic jv2.0.jpeg's own Date/Number/Remarks bar exactly, labeled "Remarks" not
+              "Reason" to match — the underlying field is still `reason`/optional per JV-03, this
+              is a display label only). Number is voucher_no, system-generated from
+              dbo.seq_journal_voucher_no (JV-01) — read-only, previewing what Save will assign,
+              same convention as SaleBillPage's own System No. Density matched to
+              SaleBillPage/ReceiptsPage's own banded header row (`soleria-input-compact`, `gap-2`/
+              `p-2`, not the old `gap-4`/`p-4` — JV-02's own "strip the extra vertical whitespace"). */}
           <div
-            className="shrink-0 grid grid-cols-1 md:grid-cols-4 gap-4 mb-4 p-4 rounded-lg border"
+            className="shrink-0 grid grid-cols-1 md:grid-cols-4 gap-2 mb-2 p-2 rounded-lg border"
             data-edit-scope="master"
             style={{ background: 'rgba(176,141,87,0.06)', borderColor: 'var(--border-color)' }}
           >
@@ -895,58 +1032,69 @@ const nextJvNoPreview = useMemo(
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
               <input
-                ref={firstFieldRef} type="date" value={date} disabled={isViewMode || masterLocked}
-                onChange={e => setDate(e.target.value)} className="soleria-input" style={{ fontSize: '13px' }}
+                ref={firstFieldRef} type="date" required value={date} disabled={isViewMode || masterLocked}
+                onChange={e => setDate(e.target.value)} className="soleria-input soleria-input-compact"
               />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">Number</label>
               <input
                 type="text"
-                value={jvId != null ? `#${jvId}` : `#${nextJvNoPreview}`}
+                value={voucherNo != null ? `#${voucherNo}` : hasClickedNew ? `#${nextJvNoPreview}` : ''}
                 disabled
-                className="soleria-input bg-gray-50 text-gray-500 border-gray-200 font-mono"
-                style={{ fontSize: '13px' }}
+                className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200 font-mono"
               />
             </div>
             <div className="md:col-span-2">
+              {/* Labeled "Remarks" (ref pic), optional per the client, 2026-09-14
+                  (changes-14-09-26.md JV-03) — was required. */}
               <label className="block text-xs font-medium text-slate-600 mb-1">
-                Reason <span className="text-red-500 font-bold">*</span>
+                Remarks
               </label>
               <input
                 type="text" value={reason} disabled={isViewMode || masterLocked} onChange={e => setReason(e.target.value)}
-                placeholder="e.g. Eid compensation" className="soleria-input" style={{ fontSize: '13px' }}
+                placeholder="e.g. Eid compensation (optional)" className="soleria-input soleria-input-compact"
               />
             </div>
           </div>
 
-          {/* Entry strip (ref-pic jv2.0's own bound-record pattern) — A/C Code + Account
-              Description + a single signed Amount on one row, Narration on the next. This is the
-              ONE "current line" being typed; Enter on Narration commits it into the grid below
-              (handleCommitLine) and resets the strip back to A/C Code. Clicking a grid row loads
-              it back in here for editing. */}
+          {/* Entry strip (JV-02, changes-14-09-26.md, 2026-09-15 — ref-pic jv2.0.jpeg's own
+              bound-record pattern). Visual layout via CSS grid AREAS rather than DOM order, so the
+              field ORDER (tab/Enter walk) can differ from the visual grid the ref pic shows —
+              specifically, the client's explicit reordering: "Narration comes before the amount"
+              in tab order, even though Amount still sits visually in row 1 (matching the ref pic)
+              and Narration in row 2. DOM order below is therefore code -> desc (disabled, skipped
+              by the field walk) -> narr -> amt -> bal (no input, decorative), giving exactly that
+              tab sequence. Enter now commits the line from the AMOUNT field (the new last
+              tabbable field) instead of Narration — see the moved `onKeyDown` below. */}
           {!isViewMode && (
-          <div className="shrink-0 mb-3 p-3 rounded-lg border" style={{ background: 'rgba(176,141,87,0.06)', borderColor: 'var(--border-color)' }}>
-            <div className="grid gap-3 mb-2" style={{ gridTemplateColumns: '1fr 2fr 160px' }}>
-              <div className="relative">
+          <div className="shrink-0 mb-2 p-2 rounded-lg border" style={{ background: 'rgba(176,141,87,0.06)', borderColor: 'var(--border-color)' }}>
+            <div
+              className="grid gap-2 mb-2"
+              style={{
+                gridTemplateColumns: '1fr 2fr 160px',
+                gridTemplateAreas: `"code desc amt" "narr narr bal"`,
+              }}
+            >
+              <div className="relative" style={{ gridArea: 'code' }}>
                 <label className="block text-xs font-medium text-slate-600 mb-1">A/C Code <span className="text-red-500 font-bold">*</span></label>
                 <input
                   ref={entryAccountTriggerRef}
                   type="text"
+                  required
                   disabled={detailLocked}
                   value={entry.baSearchText}
                   onChange={e => setEntry(prev => ({ ...prev, baSearchText: e.target.value }))}
                   onKeyDown={handleEntryAccountKeyDown}
                   placeholder="Type an account name, or press Enter to search..."
-                  className="soleria-input pr-8"
-                  style={{ fontSize: '13px' }}
+                  className="soleria-input soleria-input-compact pr-8"
                 />
                 <button
                   type="button"
                   disabled={detailLocked}
                   onClick={openEntryAccountModal}
                   title="Browse all accounts"
-                  className="absolute right-2 bottom-2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="absolute right-2 bottom-1.5 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <ChevronDown size={14} />
                 </button>
@@ -961,50 +1109,62 @@ const nextJvNoPreview = useMemo(
                   initialSearch={entryAccountModalSeed}
                 />
               </div>
-              <div>
+              <div style={{ gridArea: 'desc' }}>
                 <label className="block text-xs font-medium text-slate-600 mb-1">Account Description</label>
                 <input
                   type="text"
                   value={accounts.find(a => String(a.ba_id) === entry.baId)?.name ?? ''}
                   disabled
                   placeholder="—"
-                  className="soleria-input bg-gray-100 text-gray-500"
-                  style={{ fontSize: '13px' }}
+                  className="soleria-input soleria-input-compact bg-gray-100 text-gray-500"
                 />
               </div>
-              <div>
-                {/* Single signed Amount, not separate Debit/Credit boxes — per the user
-                    (2026-08-26): "when we enter price if it is positive... we are doing credit
-                    and if it's negative it is debit". handleCommitLine splits this into the
-                    committed line's own debit/credit on Enter. */}
+              <div style={{ gridArea: 'narr' }}>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Narration</label>
+                <input
+                  type="text"
+                  disabled={detailLocked}
+                  value={entry.narration}
+                  onChange={e => setEntry(prev => ({ ...prev, narration: e.target.value }))}
+                  placeholder="Optional note for this line..."
+                  className="soleria-input soleria-input-compact"
+                />
+              </div>
+              <div style={{ gridArea: 'amt' }}>
+                {/* Single signed Amount, not separate Debit/Credit boxes. ACC-01
+                    (changes-14-09-26.md): +ve -> debit (NAAM), -ve -> credit (JAMMA) — the one
+                    sign rule for every account type. handleCommitLine splits this into the
+                    committed line's own debit/credit. Now the strip's own LAST tabbable field
+                    (JV-02's reordering) — Enter here commits the line, same role Narration's
+                    onKeyDown used to have. */}
                 <label className="block text-xs font-medium text-slate-600 mb-1">Amount <span className="text-red-500 font-bold">*</span></label>
                 <input
                   type="number"
+                  required
                   disabled={detailLocked}
                   value={entry.amount || ''}
                   onChange={e => setEntry(prev => ({ ...prev, amount: parseFloat(e.target.value) || 0 }))}
-                  placeholder="+credit / -debit"
-                  className="soleria-input font-mono text-right"
-                  style={{ fontSize: '13px' }}
+                  onKeyDown={handleEntryLastFieldKeyDown}
+                  placeholder="+debit / -credit"
+                  className="soleria-input soleria-input-compact font-mono text-right"
                 />
               </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Narration</label>
-              <input
-                type="text"
-                disabled={detailLocked}
-                value={entry.narration}
-                onChange={e => setEntry(prev => ({ ...prev, narration: e.target.value }))}
-                onKeyDown={handleEntryLastFieldKeyDown}
-                placeholder="Optional note for this line..."
-                className="soleria-input"
-                style={{ fontSize: '13px' }}
-              />
+              <div style={{ gridArea: 'bal' }} className="flex flex-col items-end justify-end">
+                {/* JV-02: ref-pic jv2.0.jpeg's second boxed field, directly under Amount — the
+                    picked account's own live balance. Read-only/informational, same shared
+                    component Receipts/Expenses already use next to their own account pickers; no
+                    new behavior, per this item's own "frontend only" scope. */}
+                {entry.baId && (
+                  <>
+                    <label className="block text-xs font-medium text-slate-600 mb-1 self-end">Balance</label>
+                    <AccountBalanceTooltip baId={Number(entry.baId)} refreshKey={balanceRefreshKey} className="w-full justify-end" />
+                  </>
+                )}
+              </div>
             </div>
             {editingIndex != null && (
               <div className="mt-2 flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-xs">
-                <span className="text-blue-700 font-semibold">Editing an existing line — commit (Enter on Narration) to save, or cancel.</span>
+                <span className="text-blue-700 font-semibold">Editing an existing line — commit (Enter on Amount) to save, or cancel.</span>
                 <button type="button" onClick={() => { setEditingIndex(null); setEntry(emptyEntry()); }} className="text-blue-600 hover:text-blue-800 font-semibold underline">
                   Cancel
                 </button>
@@ -1019,42 +1179,73 @@ const nextJvNoPreview = useMemo(
           )}
 
           {/* Committed lines — read-only grid, matching ref-pic's own columns exactly. Click a
-              row to load it back into the entry strip above for editing. No per-row delete —
-              that's the toolbar's own Delete button, enabled only while a row is selected. */}
-          <div className="flex-1 min-h-0 mb-4 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
+              row to load it back into the entry strip above for editing. A delete icon at the
+              front of every row (JV-04, changes-14-09-26.md, 2026-09-15) removes it directly —
+              active only while unposted and the page is in edit mode, same rule the entry strip
+              fields below already apply. */}
+          <div className="flex-1 min-h-0 mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 pl-4" style={{ minWidth: '160px' }}>A/C Code</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3">Account Description</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3">Narration</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: '140px' }}>Debit (NAAM)</th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: '140px' }}>Credit (JAMMA)</th>
+                  {/* G-05 (changes-14-09-26.md, 2026-09-15): narrow gutter for the ▶ row pointer —
+                      unlabeled, matching the ref pic (ref-pics/batch2/jv2.0.jpeg). Separate from
+                      the delete-icon column right after it (JV-04). */}
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1" style={{ width: '18px' }} />
+                  <th className="sticky top-0 z-10 bg-slate-50 p-2 pl-4" style={{ width: '36px' }}></th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-2" style={{ minWidth: '160px' }}>A/C Code</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-2">Account Description</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-2">Narration</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-2 text-right" style={{ width: '140px' }}>Debit (NAAM)</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-2 text-right" style={{ width: '140px' }}>Credit (JAMMA)</th>
                 </tr>
               </thead>
               <tbody>
                 {lines.map((line, idx) => {
                   const selectedAccount = accounts.find(a => a.ba_id === Number(line.baId));
+                  const canDeleteRow = !isViewMode && !isPosted && !detailLocked;
                   return (
                     <tr
                       key={line.uid}
-                      onClick={() => handleRowClick(idx)}
+                      ref={el => { rowRefs.current[idx] = el; }}
+                      onClick={() => {
+                        // G-08: a click must produce no visible change — it only records which
+                        // row the Delete/Edit Row toolbar buttons act on next. Inert entirely
+                        // while another row is actually loaded for editing.
+                        if (editingIndex != null) return;
+                        setSelectedIndex(prev => prev === idx ? null : idx);
+                      }}
                       className={`border-b cursor-pointer hover:bg-slate-50/55 transition-colors ${idx === editingIndex ? 'bg-blue-50' : ''}`}
                       style={{ borderColor: 'var(--border-table)' }}
                     >
-                      <td className="p-2 pl-4 font-mono text-xs text-slate-600">{selectedAccount?.code ?? '—'}</td>
+                      {/* G-05: a pure position indicator — never a background/highlight, so it
+                          can never be confused with G-08's edit highlight above. */}
+                      <td className="p-1 text-center text-emerald-600" aria-hidden="true">
+                        {idx === lastEnteredIndex && '▶'}
+                      </td>
+                      <td className="p-2 pl-4 text-center">
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); if (canDeleteRow) removeLine(idx); }}
+                          disabled={!canDeleteRow}
+                          title={canDeleteRow ? 'Delete this line' : 'Unpost and edit the voucher to delete lines'}
+                          className="text-rose-500 hover:text-rose-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </td>
+                      <td className="p-2 font-mono text-xs text-slate-600">{selectedAccount?.code ?? '—'}</td>
                       <td className="p-2 text-xs text-slate-800 font-semibold">
                         {selectedAccount ? selectedAccount.name : (line.baSearchText || '—')}
                       </td>
                       <td className="p-2 text-xs text-slate-600">{line.narration || '—'}</td>
                       <td className="p-2 text-right font-mono text-sm text-slate-700">{line.debit > 0 ? formatCurrency(line.debit) : '-'}</td>
-                      <td className="p-2 text-right font-mono text-sm text-slate-700">{line.credit > 0 ? formatCurrency(line.credit) : '-'}</td>
+                      <td className="p-2 text-right font-mono text-sm text-slate-700">{line.credit > 0 ? `(${formatCurrency(line.credit)})` : '-'}</td>
                     </tr>
                   );
                 })}
                 {lines.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="p-3 text-center text-xs text-slate-400">
+                    <td colSpan={7} className="p-3 text-center text-xs text-slate-400">
                       No lines added yet.
                     </td>
                   </tr>
@@ -1076,7 +1267,7 @@ const nextJvNoPreview = useMemo(
             </div>
             <div className="flex flex-col gap-0.5">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Credit</label>
-              <input type="text" value={formatCurrency(totals.totalCredit)} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '130px' }} />
+              <input type="text" value={`(${formatCurrency(totals.totalCredit)})`} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '130px' }} />
             </div>
             <div className="flex flex-col gap-0.5">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Net Total</label>
@@ -1116,7 +1307,7 @@ const nextJvNoPreview = useMemo(
                 <Search className="absolute left-3 top-2.5 text-slate-400" size={14} />
                 <input
                   type="text" value={jvSearch} onChange={e => setJvSearch(e.target.value)}
-                  placeholder="Search by account, reason, number, narration, amount..." className="soleria-input pl-8 py-1.5 text-xs w-80"
+                  placeholder="Search by account, remarks, number, narration, amount..." className="soleria-input pl-8 py-1.5 text-xs w-80"
                 />
               </div>
               <select
@@ -1141,7 +1332,7 @@ const nextJvNoPreview = useMemo(
                   <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                     <th className="p-3 pl-4">Date</th>
                     <th className="p-3">Number</th>
-                    <th className="p-3">Reason</th>
+                    <th className="p-3">Remarks</th>
                     <th className="p-3 text-center">Lines</th>
                     <th className="p-3 text-right">Total</th>
                     <th className="p-3 text-center">Status</th>

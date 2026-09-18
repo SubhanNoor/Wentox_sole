@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, toDateInputValue, formatDateTime } from '@/lib/utils';
 import { exportRowsToExcel } from '@/lib/export';
@@ -136,6 +136,11 @@ export function ChequeLedgerContent() {
   const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  // G-03 (changes-14-09-26.md): mounts fresh on every ChequePage tab switch, so a mount-only
+  // effect covers both "page opens on this tab" and "user switches to this tab".
+  const fromDateRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => fromDateRef.current?.focus()); }, []);
 
   // No date filter on the fetch itself — `cheques.list`'s date_from/date_to filter on the cheque's
   // own due date (cheque_date), not on when any particular event happened, so a post-dated cheque
@@ -320,7 +325,7 @@ export function ChequeLedgerContent() {
           </div>
           <div className="flex items-center gap-2">
             <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
-            <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
+            <input ref={fromDateRef} type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
           </div>
           <div className="flex items-center gap-2">
             <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>

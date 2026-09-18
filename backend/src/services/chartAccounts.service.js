@@ -65,15 +65,33 @@ async function update(acId, payload) {
   return repository.findById(acId);
 }
 
-// No hard delete for this table at all (UC-16: reserved accounts "must not be deleted" — there is
-// simply no delete endpoint to accidentally hit). "Removing" a chart account means closing it
-// (status = 'CLOSED', UC-16's own Active/Closed field) — excluded from selection lists from then
-// on, but its history stays intact. Reserved accounts can never be closed either: closing e.g.
-// CASH_IN_HAND would silently break every CASH receipt/expense that resolves it by code.
+// "Removing" a chart account means closing it (status = 'CLOSED', UC-16's own Active/Closed
+// field) — excluded from selection lists from then on, but its history stays intact. Reserved
+// accounts can never be closed either: closing e.g. CASH_IN_HAND would silently break every CASH
+// receipt/expense that resolves it by code. A true hard delete exists too now (per the user,
+// 2026-09-17) — see `permanentDelete` below, a separate and stricter action reachable only once a
+// chart account is already closed via this function.
 async function remove(acId) {
   const account = await getById(acId);
   if (RESERVED_CODES.has(account.code)) {
     throw ApiError.conflict('This is a reserved chart account and cannot be closed', 'RESERVED_ACCOUNT');
+  }
+  // ACC-02 (changes-14-09-26.md, 2026-09-15): "child accounts" — any business account filed under
+  // this chart account — must be dealt with first, same rule groupAccounts.service.js#remove()
+  // already applies one level up (chart accounts filed under a group).
+  const hasChildren = await repository.hasChildren(acId);
+  if (hasChildren) {
+    throw ApiError.conflict(
+      `${account.name} still has business accounts filed under it — move or close those first`,
+      'CHART_ACCOUNT_HAS_CHILDREN',
+    );
+  }
+  const hasActivity = await repository.hasLedgerActivity(acId);
+  if (hasActivity) {
+    throw ApiError.conflict(
+      `${account.name} has posted ledger transactions and cannot be deleted`,
+      'ACCOUNT_HAS_TRANSACTIONS',
+    );
   }
   await repository.setStatus(acId, 'CLOSED');
   return { ok: true };
@@ -85,4 +103,32 @@ async function reactivate(acId) {
   return repository.findById(acId);
 }
 
-module.exports = { list, getById, create, update, remove, reactivate };
+// Permanent delete — per the user, 2026-09-17, added ON TOP OF `remove()` above, not instead of
+// it: closing stays the normal, reversible action; this is separate, stricter, and irreversible,
+// only reachable for a chart account that is ALREADY closed. `hasAnyReference` is broader than
+// `remove()`'s own guards (`hasChildren`/`hasLedgerActivity`, which only ever needed to cover what
+// blocks a reversible close) — a hard `DELETE FROM` has to survive every foreign key in the
+// schema, including `main_ac_id` on sale bills/stock vouchers that neither existing guard checks.
+async function permanentDelete(acId, session) {
+  const account = await getById(acId, session);
+  if (RESERVED_CODES.has(account.code)) {
+    throw ApiError.conflict('This is a reserved chart account and cannot be deleted', 'RESERVED_ACCOUNT');
+  }
+  if (account.status !== 'CLOSED') {
+    throw ApiError.conflict(
+      `${account.name} must be closed (deleted) first — permanent delete is only for an already-closed account`,
+      'ACCOUNT_NOT_CLOSED',
+    );
+  }
+  const referenced = await repository.hasAnyReference(acId);
+  if (referenced) {
+    throw ApiError.conflict(
+      `${account.name} is still referenced elsewhere (a business account filed under it, posted or draft ledger activity) and cannot be permanently deleted`,
+      'ACCOUNT_STILL_REFERENCED',
+    );
+  }
+  await withTransaction((transaction) => repository.hardDelete(transaction, acId));
+  return { ok: true };
+}
+
+module.exports = { list, getById, create, update, remove, reactivate, permanentDelete };

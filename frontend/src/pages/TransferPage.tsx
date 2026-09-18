@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useApp, formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -42,13 +42,16 @@ export default function TransferPage() {
   // Cash stays pinned first — it's the most common side of a transfer on the shop floor — and is
   // filtered out of the tail so it can't appear twice when it's also in the business-account list.
   const accountOptions = useMemo(
+    // searchText excludes the parent chart account name (changes-14-09-26.md G-09, per the client
+    // 2026-09-14 — typing the parent's name must not surface every account under it).
     () => [
-      ...(cashAccount ? [{ value: String(cashAccount.ba_id), label: cashAccount.name }] : []),
+      ...(cashAccount ? [{ value: String(cashAccount.ba_id), label: cashAccount.name, searchText: cashAccount.name }] : []),
       ...businessAccounts
         .filter(b => b.ba_id !== cashAccount?.ba_id)
         .map(b => ({
           value: String(b.ba_id),
           label: `${b.name} (${b.code})${b.ac_name ? ` — ${b.ac_name}` : ''}`,
+          searchText: `${b.name} (${b.code})`,
         })),
     ],
     [businessAccounts, cashAccount]
@@ -89,7 +92,9 @@ export default function TransferPage() {
       else setLookupError('Failed to load bank accounts: ' + res.error.message);
     })();
     (async () => {
-      const res = await api.listBusinessAccounts();
+      // excludeClosed per the user (2026-09-17): a deleted (closed) account must not be
+      // selectable as a From/To transfer party, on top of no longer appearing in Setup's own list.
+      const res = await api.listBusinessAccounts({ excludeClosed: true });
       if (res.ok) setBusinessAccounts(res.data);
       else setLookupError('Failed to load business accounts: ' + res.error.message);
     })();
@@ -120,6 +125,13 @@ export default function TransferPage() {
 
   const isTransferViewMode = tMode === 'view';
   const isTransferPosted = transferStatus === 'CONFIRMED';
+
+  // G-03 (changes-14-09-26.md): the cursor lands in the first field (Date) whenever this page
+  // opens or the Transfer/Deposit tab switches — same convention as SaleBillPage/PurchasePage/
+  // JournalVoucherPage's own `firstFieldRef`. One shared ref: only one of the two forms below is
+  // ever mounted at a time (the `mode` ternary), so it's always attached to whichever is live.
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => firstFieldRef.current?.focus()); }, [mode]);
 
   // ── Deposit form ──
   const [dMode, setDMode] = useState<'new' | 'edit' | 'view'>('new');
@@ -471,6 +483,7 @@ export default function TransferPage() {
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
                       <input
+                        ref={firstFieldRef}
                         type="date"
                         value={date} disabled={isTransferViewMode}
                         onChange={e => setDate(e.target.value)} className="soleria-input"
@@ -482,6 +495,7 @@ export default function TransferPage() {
                       </label>
                       <input
                         type="number" min={0}
+                        required
                         value={amount || ''}
                         disabled={isTransferViewMode}
                         onChange={e => setAmount(Math.max(0, Number(e.target.value) || 0))}
@@ -502,6 +516,7 @@ export default function TransferPage() {
                         onChange={setFromBaId}
                         placeholder="Money leaves..."
                         disabled={isTransferViewMode}
+                        required
                       />
                     </div>
                     <div>
@@ -514,6 +529,7 @@ export default function TransferPage() {
                         onChange={setToBaId}
                         placeholder="Money arrives..."
                         disabled={isTransferViewMode}
+                        required
                       />
                     </div>
 
@@ -704,6 +720,7 @@ export default function TransferPage() {
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
                       <input
+                        ref={firstFieldRef}
                         type="date"
                         value={depDate} disabled={isDepositViewMode}
                         onChange={e => setDepDate(e.target.value)} className="soleria-input"
@@ -719,6 +736,7 @@ export default function TransferPage() {
                         onChange={setDepToBaId}
                         placeholder="Choose account..."
                         disabled={isDepositViewMode}
+                        required
                       />
                     </div>
                   </div>
@@ -730,6 +748,7 @@ export default function TransferPage() {
                       </label>
                       <input
                         type="number" min={0}
+                        required
                         value={depAmount || ''}
                         disabled={isDepositViewMode}
                         onChange={e => setDepAmount(Math.max(0, Number(e.target.value) || 0))}
@@ -754,7 +773,7 @@ export default function TransferPage() {
                         {depSourceLabel} <span className="text-red-500 font-bold">*</span>
                       </label>
                       <input
-                        type="text" value={depSource} disabled={isDepositViewMode}
+                        type="text" required value={depSource} disabled={isDepositViewMode}
                         onChange={e => setDepSource(e.target.value)}
                         placeholder={depDirection === 'DEBIT' ? 'e.g. Bank Charges, Correction' : 'e.g. Owner Capital, Bank Loan, Insurance Refund'}
                         className="soleria-input"

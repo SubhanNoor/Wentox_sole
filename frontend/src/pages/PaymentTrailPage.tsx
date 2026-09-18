@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Eye } from 'lucide-react';
@@ -16,6 +16,10 @@ export function PaymentTrailContent() {
   const [result, setResult] = useState<PaymentTrailResult>({ buckets: [], grand_total: 0 });
   const [loading, setLoading] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  // G-03 (changes-14-09-26.md): the cursor lands in the first field (From date) on open.
+  const fromDateRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => fromDateRef.current?.focus()); }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -113,7 +117,7 @@ export function PaymentTrailContent() {
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
               <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
-              <input type="date"
+              <input ref={fromDateRef} type="date"
             value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
             </div>
             <div className="flex items-center gap-2">

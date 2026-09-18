@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
-import type { ReceiptRow, BusinessAccountRow, ReceiptVoucherRow } from '@/lib/api';
+import type { ReceiptRow, BusinessAccountRow, ReceiptVoucherRow, SettlementRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
-import { Calendar, Search, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check, Undo2 } from 'lucide-react';
+import { Calendar, Search, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check, Undo2, ArrowLeftRight } from 'lucide-react';
 
 interface OverallReceiptsTabProps {
   /** Called after a successful Unpost here — the parent (ReceiptsPage) switches back to Receipt
@@ -12,9 +12,14 @@ interface OverallReceiptsTabProps {
    * voucher no longer belongs to (unposted lines drop out of receipts.list(), the source of this
    * tab's own data). */
   onVoucherUnposted: (voucherId: number) => void | Promise<void>;
+  /** RP-01 (changes-14-09-26.md, 2026-09-15): the equivalent callback for a direct settlement —
+   * this tab's own posted-records list originally only ever knew about receipt vouchers, so a
+   * settlement posted directly from the Receipts entry screen never showed up here at all. Mirrors
+   * `onVoucherUnposted` exactly, just for the other document shape this tab now also lists. */
+  onSettlementUnposted: (settlementId: number) => void | Promise<void>;
 }
 
-export default function OverallReceiptsTab({ onVoucherUnposted }: OverallReceiptsTabProps) {
+export default function OverallReceiptsTab({ onVoucherUnposted, onSettlementUnposted }: OverallReceiptsTabProps) {
   const [rows, setRows] = useState<ReceiptRow[]>([]);
   const [accounts, setAccounts] = useState<BusinessAccountRow[]>([]);
   // Voucher headers (voucher_no, remarks, status) — the outer table now groups by VOUCHER, not
@@ -22,17 +27,23 @@ export default function OverallReceiptsTab({ onVoucherUnposted }: OverallReceipt
   // here, an account is just one field on each of its lines). `rows` (receipts.list()) only ever
   // carries posted lines, so this is a separate fetch purely for each group's own header info.
   const [vouchers, setVouchers] = useState<ReceiptVoucherRow[]>([]);
+  // RP-01: a direct settlement has no voucher_id/lines of its own — it's a standalone
+  // `dbo.settlements` row — so it can't join the grouping above. Fetched and merged into the same
+  // records list as its own one-row "group" instead (see `recordGroups` below).
+  const [settlements, setSettlements] = useState<SettlementRow[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
 
   const refreshAll = async () => {
-    const [r, c, v] = await Promise.all([
+    const [r, c, v, s] = await Promise.all([
       api.receipts.list({ range: 'overall' }),
       api.listBusinessAccounts(),
-      api.receiptVouchers.list({})
+      api.receiptVouchers.list({}),
+      api.settlements.list({ status: 'CONFIRMED' })
     ]);
     if (r.ok) setRows(r.data);
     if (c.ok) setAccounts(c.data);
     if (v.ok) setVouchers(v.data);
+    if (s.ok) setSettlements(s.data);
   };
 
   useEffect(() => { refreshAll(); }, []);
@@ -48,8 +59,10 @@ export default function OverallReceiptsTab({ onVoucherUnposted }: OverallReceipt
   const monthDropdownRef = useRef<HTMLDivElement>(null);
   const yearDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Selected voucher for viewing its receipts
+  // Selected record for viewing its details — a voucher (many receipt lines) or a settlement
+  // (always exactly one "line", itself). Mutually exclusive; only one is ever non-null.
   const [selectedVoucherId, setSelectedVoucherId] = useState<number | null>(null);
+  const [selectedSettlementId, setSelectedSettlementId] = useState<number | null>(null);
 
   const monthsList = [
     { value: '0', label: 'January' },
@@ -130,6 +143,33 @@ export default function OverallReceiptsTab({ onVoucherUnposted }: OverallReceipt
     });
   }, [rows, accounts, selectedYear, selectedMonth, nameQuery]);
 
+  // RP-01: same year/month/name filter as receipts above, applied to settlements — kept as a
+  // separate memo rather than folded into `overallReceipts` since a settlement isn't a `ReceiptRow`
+  // and has its own two-sided name (`from_name`/`to_name`) to search against.
+  const overallSettlements = useMemo(() => {
+    return settlements.filter(s => {
+      let sYear = '';
+      let sMonth = '';
+
+      if (s.settlement_date) {
+        const parts = s.settlement_date.split('-');
+        if (parts[0]) sYear = parts[0];
+        if (parts[1]) sMonth = (parseInt(parts[1], 10) - 1).toString();
+      }
+
+      if (selectedYear !== 'all' && sYear !== selectedYear) return false;
+      if (selectedMonth !== 'all' && sMonth !== selectedMonth) return false;
+
+      if (nameQuery.trim()) {
+        const q = nameQuery.toLowerCase();
+        const matches = (s.from_name || '').toLowerCase().includes(q) || (s.to_name || '').toLowerCase().includes(q);
+        if (!matches) return false;
+      }
+
+      return true;
+    });
+  }, [settlements, selectedYear, selectedMonth, nameQuery]);
+
   const voucherCardsData = useMemo(() => {
     const groups: { [voucherId: number]: { voucherId: number; receipts: ReceiptRow[]; totalAmount: number } } = {};
 
@@ -145,10 +185,29 @@ export default function OverallReceiptsTab({ onVoucherUnposted }: OverallReceipt
     return Object.values(groups).sort((a, b) => b.totalAmount - a.totalAmount);
   }, [overallReceipts]);
 
+  // RP-01: the combined list the outer table actually renders — a voucher group and a settlement
+  // are different shapes, so this is a thin discriminated wrapper around each rather than forcing
+  // a settlement into the `{ voucherId, receipts, totalAmount }` shape it doesn't fit.
+  type RecordGroup =
+    | { kind: 'voucher'; voucherId: number; receipts: ReceiptRow[]; totalAmount: number }
+    | { kind: 'settlement'; settlement: SettlementRow; totalAmount: number };
+  const recordGroups = useMemo((): RecordGroup[] => {
+    const combined: RecordGroup[] = [
+      ...voucherCardsData.map((g): RecordGroup => ({ kind: 'voucher', ...g })),
+      ...overallSettlements.map((s): RecordGroup => ({ kind: 'settlement', settlement: s, totalAmount: s.amount })),
+    ];
+    return combined.sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [voucherCardsData, overallSettlements]);
+
   const activeVoucherDetails = useMemo(() => {
     if (selectedVoucherId == null) return null;
     return voucherCardsData.find(g => g.voucherId === selectedVoucherId);
   }, [selectedVoucherId, voucherCardsData]);
+
+  const activeSettlement = useMemo(() => {
+    if (selectedSettlementId == null) return null;
+    return overallSettlements.find(s => s.settlement_id === selectedSettlementId) ?? null;
+  }, [selectedSettlementId, overallSettlements]);
 
   const activeVoucherHeader = selectedVoucherId != null ? voucherLookup.get(selectedVoucherId) : undefined;
 
@@ -168,6 +227,99 @@ export default function OverallReceiptsTab({ onVoucherUnposted }: OverallReceipt
     await refreshAll();
     await onVoucherUnposted(voucherId);
   };
+
+  // RP-01: the settlement equivalent of `handleUnpostVoucher` above — same shape, its own status
+  // field and own list endpoint.
+  const handleUnpostSettlement = async () => {
+    if (selectedSettlementId == null) return;
+    setUnpostBusy(true);
+    const res = await api.settlements.unpost(selectedSettlementId);
+    setUnpostBusy(false);
+    if (!res.ok) { setErrorMsg('Failed to unpost settlement: ' + res.error.message); return; }
+    setErrorMsg('');
+    const settlementId = selectedSettlementId;
+    setSelectedSettlementId(null); // no longer CONFIRMED — drops out of this tab's own fetch filter
+    await refreshAll();
+    await onSettlementUnposted(settlementId);
+  };
+
+  if (selectedSettlementId != null && activeSettlement) {
+    return (
+      <div className="card-white p-6 bg-white border border-slate-200 shadow-sm rounded-xl animate-in fade-in slide-in-from-bottom-3 duration-300">
+        {errorMsg && (
+          <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
+        )}
+        <div className="flex items-center justify-between border-b pb-4 mb-4" style={{ borderColor: 'var(--border-color)' }}>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setSelectedSettlementId(null)}
+              className="bg-amber-50/80 hover:bg-amber-100/90 text-amber-900 border border-amber-200/80 rounded-xl px-4 py-2 text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs hover:shadow-xs"
+            >
+              <ArrowLeft size={16} /> Back to Receipts
+            </button>
+            <div>
+              <h3 className="font-lora font-bold text-lg text-slate-800">
+                Settlement #{activeSettlement.settlement_id} — Direct Settlement
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">
+                {activeSettlement.remarks || 'No remarks'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="text-right">
+              <span className="text-xs font-semibold text-slate-500 block uppercase">Amount:</span>
+              <span className="font-mono font-bold text-emerald-800 text-lg">{formatCurrency(activeSettlement.amount)}</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleUnpostSettlement}
+              disabled={unpostBusy}
+              title="Unpost this settlement"
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white shadow-sm transition-all"
+            >
+              <Undo2 size={14} /> {unpostBusy ? 'Working…' : 'Unpost'}
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="bg-slate-100 border-b text-slate-700 font-bold uppercase tracking-wider" style={{ borderColor: 'var(--border-color)' }}>
+                <th className="p-3.5 pl-4">Date</th>
+                <th className="p-3.5">From (Debtor)</th>
+                <th className="p-3.5">To (Creditor)</th>
+                <th className="p-3.5 text-center">Mode</th>
+                <th className="p-3.5">Remarks</th>
+                <th className="p-3.5 text-right pr-6">Amount (PKR)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              <tr className="hover:bg-slate-50/50 transition-colors">
+                <td className="p-3.5 pl-4 font-mono text-slate-600">{formatDate(activeSettlement.settlement_date)}</td>
+                <td className="p-3.5 text-slate-700 font-medium">{activeSettlement.from_name || `#${activeSettlement.from_ba_id}`}</td>
+                <td className="p-3.5 text-slate-700 font-medium">{activeSettlement.to_name || `#${activeSettlement.to_ba_id}`}</td>
+                <td className="p-3.5 text-center">
+                  {activeSettlement.payment_mode ? (
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${activeSettlement.payment_mode === 'CASH' ? 'bg-green-50 text-green-700 border border-green-200' : activeSettlement.payment_mode === 'CHEQUE' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-indigo-50 text-indigo-700 border border-indigo-200'}`}>
+                      {activeSettlement.payment_mode === 'CASH' && <DollarSign size={10} />}
+                      {activeSettlement.payment_mode === 'CHEQUE' && <Landmark size={10} />}
+                      {activeSettlement.payment_mode === 'ONLINE' && <CreditCard size={10} />}
+                      {activeSettlement.payment_mode}
+                    </span>
+                  ) : '-'}
+                </td>
+                <td className="p-3.5 text-slate-500 text-xs">{activeSettlement.remarks || '-'}</td>
+                <td className="p-3.5 text-right font-mono font-bold text-emerald-800 pr-6">{formatCurrency(activeSettlement.amount)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
 
   if (selectedVoucherId != null && activeVoucherDetails) {
     return (
@@ -370,12 +522,16 @@ export default function OverallReceiptsTab({ onVoucherUnposted }: OverallReceipt
         </div>
 
         <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-2 rounded-xl border border-slate-200">
-          {overallReceipts.length} Receipt Records
+          {overallReceipts.length} Receipt Record{overallReceipts.length === 1 ? '' : 's'}
+          {overallSettlements.length > 0 && `, ${overallSettlements.length} Settlement${overallSettlements.length === 1 ? '' : 's'}`}
         </div>
       </div>
 
       {/* RJ-05: voucher records as table rows — grouped by VOUCHER, not account (corrected per the
-          user 2026-08-26): Account/City columns removed, Date/Remarks (the voucher's own) added. */}
+          user 2026-08-26): Account/City columns removed, Date/Remarks (the voucher's own) added.
+          RP-01 (2026-09-15): a direct settlement has no voucher of its own, so it renders as its
+          own one-row "group" (`recordGroups`) mixed into the same list — see the C.Book No column,
+          which shows "Settlement #<id>" for one instead of a voucher number. */}
       <div className="card-white overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border-color)' }}>
         <table className="w-full text-left border-collapse text-sm">
           <thead>
@@ -388,7 +544,7 @@ export default function OverallReceiptsTab({ onVoucherUnposted }: OverallReceipt
             </tr>
           </thead>
           <tbody>
-            {voucherCardsData.length === 0 ? (
+            {recordGroups.length === 0 ? (
               <tr>
                 <td colSpan={5} className="text-center p-12 text-slate-400">
                   <Calendar size={40} className="text-slate-300 mb-2 mx-auto" />
@@ -397,11 +553,35 @@ export default function OverallReceiptsTab({ onVoucherUnposted }: OverallReceipt
                 </td>
               </tr>
             ) : (
-              voucherCardsData.map(data => {
+              recordGroups.map(data => {
+                if (data.kind === 'settlement') {
+                  const s = data.settlement;
+                  return (
+                    <tr
+                      key={`settlement-${s.settlement_id}`}
+                      onClick={() => setSelectedSettlementId(s.settlement_id)}
+                      className="border-b hover:bg-slate-50/60 cursor-pointer transition-colors"
+                      style={{ borderColor: 'var(--border-table)' }}
+                    >
+                      <td className="p-3 pl-4">
+                        <div className="font-lora font-bold text-slate-900">Settlement #{s.settlement_id}</div>
+                      </td>
+                      <td className="p-3 font-mono text-slate-600">{formatDate(s.settlement_date)}</td>
+                      <td className="p-3 text-slate-500 text-xs">{s.remarks || '-'}</td>
+                      <td className="p-3 text-center">
+                        <span className="inline-flex items-center gap-1.5 bg-sky-50 text-sky-900 px-2.5 py-1 rounded-full text-xs font-semibold border border-sky-200/80">
+                          <ArrowLeftRight size={13} className="text-sky-600" />
+                          Settlement
+                        </span>
+                      </td>
+                      <td className="p-3 text-right pr-6 font-mono font-bold text-emerald-700">{formatCurrency(data.totalAmount)}</td>
+                    </tr>
+                  );
+                }
                 const header = voucherLookup.get(data.voucherId);
                 return (
                   <tr
-                    key={data.voucherId}
+                    key={`voucher-${data.voucherId}`}
                     onClick={() => setSelectedVoucherId(data.voucherId)}
                     className="border-b hover:bg-slate-50/60 cursor-pointer transition-colors"
                     style={{ borderColor: 'var(--border-table)' }}

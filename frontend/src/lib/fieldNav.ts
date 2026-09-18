@@ -18,6 +18,57 @@ export const FIELD_SELECTOR =
   'input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled), button[data-field-nav]:not(:disabled)';
 
 /**
+ * G-02 (changes-14-09-26.md, 2026-09-15): true when `el` is a required field currently failing its
+ * own native constraint validation — the one condition every keyboard-advance path below must
+ * refuse to move past. Backed by the native `required` attribute + `ValidityState.valid` (not just
+ * `valueMissing` — RP-02 needs a required Amount field with `min={1}` to trap on a typed "0" too,
+ * a `rangeUnderflow`, not a missing value), not a bespoke rule, so a field only ever traps once
+ * someone actually marks it `required` — inert everywhere else, meaning this can be rolled out to
+ * more fields later without touching this function again.
+ *
+ * `button[data-field-nav]` (SearchableSelect's trigger) has no native validity to read — it
+ * carries its own `data-required`/`data-value-missing` attributes instead (set by SearchableSelect
+ * itself from its own `required` prop), checked the same way; a button has no other constraint an
+ * equivalent to `min` could ever express, so `data-value-missing` alone is still the whole story
+ * there.
+ */
+export function isRequiredAndEmpty(el: HTMLElement): boolean {
+  if (el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
+    return el.required && !el.validity.valid;
+  }
+  if (el instanceof HTMLButtonElement) {
+    return el.dataset.required === 'true' && el.dataset.valueMissing === 'true';
+  }
+  return false;
+}
+
+// The event a SearchableSelect trigger listens for on itself to show its own inline "required"
+// message — dispatched instead of calling `.reportValidity()` (which only exists on native
+// form-validatable elements, not a `<button>`). Not bubbled: only the exact trigger blocked should
+// react, never an ancestor's own listener for the same event name.
+const REQUIRED_BLOCKED_EVENT = 'g02-required-blocked';
+
+/**
+ * G-02: the one place every keyboard-advance path calls before actually moving focus. For a native
+ * field, shows its own validation message right at the field via the browser's `reportValidity()`
+ * bubble — correct positioning for free, even inside a portaled modal, no custom message UI to
+ * build or keep in sync. For a SearchableSelect trigger, dispatches `REQUIRED_BLOCKED_EVENT`
+ * instead, which the component listens for to show its own inline message underneath itself.
+ * Returns true when it blocked (caller should stop, not advance).
+ */
+export function blockIfRequiredEmpty(el: HTMLElement): boolean {
+  if (!isRequiredAndEmpty(el)) return false;
+  if (el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
+    el.reportValidity();
+  } else {
+    el.dispatchEvent(new CustomEvent(REQUIRED_BLOCKED_EVENT));
+  }
+  return true;
+}
+
+export { REQUIRED_BLOCKED_EVENT };
+
+/**
  * The first focusable field inside `container`, using the same definition of "a field" as
  * `fieldsIn()`. For a repeating row (a sale-bill line item, a wage-run row) the row's own fields
  * aren't known to the caller by name — this lets "focus the new row" mean "focus whatever its
@@ -69,6 +120,11 @@ export function focusNextField(from: HTMLElement | null | undefined): boolean {
   const fields = fieldsIn(form);
   const idx = fields.indexOf(from);
   if (idx === -1) return false;
+
+  // G-02: an empty required field traps the advance right here — the field itself already
+  // reported why via the browser's own validation bubble. `true`: the key was handled (caller
+  // shouldn't fall through to its own default behavior), even though focus didn't move.
+  if (blockIfRequiredEmpty(from)) return true;
 
   if (idx < fields.length - 1) {
     fields[idx + 1].focus();

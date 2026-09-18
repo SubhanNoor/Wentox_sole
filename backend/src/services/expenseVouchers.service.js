@@ -138,8 +138,26 @@ async function post(voucherId, session) {
   const failed = [];
 
   for (const line of voucher.lines) {
-    // Already a real (posted) row — meets the caller's intent, same as the old ALREADY_POSTED skip.
-    if (line.draft_id == null) continue;
+    // Already a real, posted row — meets the caller's intent, same as the old ALREADY_POSTED skip.
+    if (line.status === 'CONFIRMED') continue;
+    // A DRAFT-status line with no draft_id to confirm() should never happen — every unposted line
+    // is supposed to live in dbo.draft_expenses — but it did (found 2026-09-16: old data inserted
+    // straight into dbo.expenses with status='DRAFT' by an unused legacy path, expenses.service.js
+    // #create(), never migrated). The old check here (`if (line.draft_id == null) continue`)
+    // treated that exact case as "already posted" and silently skipped it — Post/Post All reported
+    // success while the line sat stuck unposted forever, with no error and no trace. Report it as
+    // a real failure instead, so it is at least visible.
+    if (line.draft_id == null) {
+      failed.push({
+        expense_id: line.expense_id,
+        draft_id: null,
+        account_name: line.account_name,
+        amount: Number(line.amount),
+        message: 'This entry has no draft row to post from — its data needs to be repaired before it can post.',
+        code: 'ORPHANED_LINE',
+      });
+      continue;
+    }
     try {
       const expense = await draftExpensesService.confirm(line.draft_id, session.userId, session);
       posted.push({ expense_id: expense.expense_id, draft_id: line.draft_id, amount: Number(line.amount) });

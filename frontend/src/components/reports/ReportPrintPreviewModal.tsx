@@ -4,6 +4,7 @@ import { X, Printer, ZoomIn, ZoomOut, RotateCcw, FileDown, FileSpreadsheet } fro
 import type { ReportOrientation } from '@/lib/reportConfig';
 import { exportToPDF } from '@/lib/export';
 import { paginateReportContent } from '@/lib/reportPagination';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 const PX_PER_MM = 96 / 25.4;
 const SHEET_PADDING_PX = 32; // matches the p-8 padding each sheet renders content with
@@ -69,6 +70,11 @@ export const ReportPrintPreviewModal: React.FC<ReportPrintPreviewModalProps> = (
     setPageCount(pages.length);
   }, [children, isLandscape, isOpen]);
 
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog, one layer at a time — a plain
+  // onKeyDown-on-the-wrapper doesn't reliably work here since this modal is rendered through
+  // createPortal (see the hook's own comment on why a document-level stack sidesteps that).
+  useEscapeToClose(isOpen, onClose);
+
   if (!isOpen) return null;
 
   const handlePrint = () => {
@@ -83,7 +89,6 @@ export const ReportPrintPreviewModal: React.FC<ReportPrintPreviewModalProps> = (
   return createPortal(
     <div
       className="fixed inset-0 z-50 flex flex-col bg-slate-900/90 backdrop-blur-sm animate-in fade-in duration-200 report-modal-container"
-      onKeyDown={e => { if (e.key === 'Escape') onClose(); }}
       tabIndex={-1}
     >
       {/* Dynamic @page orientation rule */}

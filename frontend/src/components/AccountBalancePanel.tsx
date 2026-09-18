@@ -103,7 +103,7 @@ export default function AccountBalancePanel({ baId, lines, refreshKey = 0, varia
       <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50">
         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Current Balance</span>
         <span className="text-sm font-bold font-mono" style={{ color: currentTone.color }}>
-          {formatCurrency(Math.abs(current))}
+          {formatCurrency(current)}
           <span className="ml-2 text-[10px] font-semibold uppercase tracking-wider">{currentTone.label}</span>
         </span>
       </div>
@@ -121,7 +121,7 @@ export default function AccountBalancePanel({ baId, lines, refreshKey = 0, varia
         <div className="flex items-center justify-between px-4 py-2.5 border-t-2" style={{ borderColor: 'var(--border-color)' }}>
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-700">Balance After</span>
           <span className="text-sm font-bold font-mono" style={{ color: afterTone.color }}>
-            {formatCurrency(Math.abs(after))}
+            {formatCurrency(after)}
             <span className="ml-2 text-[10px] font-semibold uppercase tracking-wider">{afterTone.label}</span>
           </span>
         </div>

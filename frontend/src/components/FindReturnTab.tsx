@@ -233,7 +233,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontFamily: 'monospace' }}>{ret.gp_no || '-'}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCartons(ret.total_cartons)}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace' }}>{ret.total_pairs}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(ret.net_value)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{`(${formatCurrency(ret.net_value)})`}</td>
                 </tr>
               );
             })
@@ -243,7 +243,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
             <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCartons(totalCartons)}</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{totalPairs.toLocaleString()}</td>
-            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(totalValue)}</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{`(${formatCurrency(totalValue)})`}</td>
           </tr>
         </tbody>
       </table>
@@ -400,7 +400,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
           <div className="group relative bg-white p-5 rounded-2xl border border-slate-200/80 cursor-pointer transition-all duration-300 transform hover:-translate-y-1.5 hover:border-[var(--brand-gold)] hover:ring-1 hover:ring-[var(--brand-gold)] hover:shadow-[0_16px_36px_rgba(176,141,87,0.18)] flex items-center justify-between">
             <div>
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider group-hover:text-[var(--brand-navy)] transition-colors">Cumulative Credit Total</span>
-              <h4 className="text-2xl font-bold font-mono text-[var(--brand-gold)] mt-1">{formatCurrency(totalValue)}</h4>
+              <h4 className="text-2xl font-bold font-mono text-[var(--brand-gold)] mt-1">{`(${formatCurrency(totalValue)})`}</h4>
             </div>
             <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center transition-transform group-hover:scale-110">
               <FileText size={22} />
@@ -480,7 +480,7 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
                         <td className="p-3.5 font-mono text-slate-700">{ret.gp_no || '-'}</td>
                         <td className="p-3.5 text-right font-mono font-semibold text-slate-700">{formatCartons(ret.total_cartons)}</td>
                         <td className="p-3.5 text-right font-mono text-slate-700">{ret.total_pairs.toLocaleString()}</td>
-                        <td className="p-3.5 text-right font-mono font-bold text-slate-900 pr-4">{formatCurrency(ret.net_value)}</td>
+                        <td className="p-3.5 text-right font-mono font-bold text-slate-900 pr-4">{`(${formatCurrency(ret.net_value)})`}</td>
                         <td className="p-3.5 text-center pr-4" onClick={e => e.stopPropagation()}>
                           <div className="flex justify-center items-center gap-1.5">
                             <button

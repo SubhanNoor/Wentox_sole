@@ -4,6 +4,7 @@ import AppLayout from '@/components/AppLayout';
 import * as api from '@/lib/api';
 import { Save, Lock, User, RefreshCw, Download, CheckCircle2, AlertTriangle, ShieldCheck, Cpu, Sparkles, Server, DatabaseBackup, HardDrive, FolderOpen, Trash2 } from 'lucide-react';
 import { formatDateTime } from '@/lib/utils';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 type SettingsTab = 'credentials' | 'backup' | 'updates' | 'danger';
 type UpdateStatus = 'idle' | 'checking' | 'no-internet' | 'error' | 'up-to-date' | 'update-available' | 'downloading' | 'installed';
@@ -261,6 +262,12 @@ export default function SettingsPage() {
     setResetBusy(false);
   };
 
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog — matches each step's own Cancel
+  // button exactly, including step 2 staying open while a reset request is in flight (resetBusy),
+  // same as its Cancel button being disabled then.
+  useEscapeToClose(resetStep === 'password1', closeResetFlow);
+  useEscapeToClose(resetStep === 'password2' && !resetBusy, closeResetFlow);
+
   const handleResetStep1Next = async () => {
     if (!resetPassword1) { setResetError('Enter your password.'); return; }
     setResetBusy(true);
@@ -353,6 +360,7 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="password"
+                    required
                     value={currentPassword}
                     onChange={e => setCurrentPassword(e.target.value)}
                     placeholder="Required to confirm any changes"
@@ -366,6 +374,7 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="text"
+                    required
                     value={username}
                     onChange={e => setUsername(e.target.value)}
                     className="soleria-input w-full font-semibold"

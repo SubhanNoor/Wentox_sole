@@ -5,10 +5,10 @@ import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
 import PageToasts from '@/components/PageToasts';
 import * as api from '@/lib/api';
-import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, SettlementCreateInput, ReceiptVoucherRow, VoucherActionResult, DeletedNumberRow } from '@/lib/api';
+import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, SettlementCreateInput, SettlementRow, ReceiptVoucherRow, VoucherActionResult, DeletedNumberRow } from '@/lib/api';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
-import { usePersistentField, useClearPageDraft, useHasPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
 import {
   Save, Edit, Trash2, Plus, CheckCircle2, Undo2, ChevronDown,
   ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, PackageCheck, Search
@@ -18,10 +18,11 @@ import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
 import AccountBalanceTooltip from '@/components/AccountBalanceTooltip';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
-import { toDateInputValue, formatDate, mergeWithDeleted } from '@/lib/utils';
+import { toDateInputValue, formatDate, mergeWithDeleted, type NavEntry } from '@/lib/utils';
 import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 // Cheque disposal (deposit/endorse/bounce/return) moved to the consolidated Cheque page's
 // Disposal tab — see ChequePage.tsx. This page keeps only receipt entry/records.
@@ -73,10 +74,24 @@ export default function ReceiptsPage() {
     return res.ok ? res.data : null;
   }, []);
 
+  // RP-01 (changes-14-09-26.md, 2026-09-15): every direct settlement made FROM this page (this
+  // page's own Endorse checkbox creates one, with no ba_id filter — same "every settlement,
+  // system-wide" scope allVouchers above already uses for receipts) — a settlement made through
+  // Receipts is filed here regardless of which accounts it touches, same as a receipt voucher.
+  const [allSettlements, setAllSettlements] = useState<SettlementRow[]>([]);
+  const refreshAllSettlements = useCallback(async () => {
+    const res = await api.settlements.list({});
+    if (res.ok) setAllSettlements(res.data);
+    return res.ok ? res.data : null;
+  }, []);
+
   useEffect(() => {
     (async () => {
+      // excludeClosed per the user (2026-09-17): a deleted (closed) account must not be
+      // selectable when picking who to receive from, on top of no longer appearing in Setup's
+      // own list.
       const [c, ba, rg, ct, bk] = await Promise.all([
-        api.listCustomers(), api.listBusinessAccounts(), api.listRegions(), api.listCities(),
+        api.listCustomers(), api.listBusinessAccounts({ excludeClosed: true }), api.listRegions(), api.listCities(),
         api.bankAccounts.list()
       ]);
       const failures: string[] = [];
@@ -87,8 +102,16 @@ export default function ReceiptsPage() {
       if (bk.ok) setBanks(bk.data); else failures.push(bk.error.message);
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
-    refreshAllVouchers();
-  }, [refreshAllVouchers]);
+    // G-06 (changes-14-09-26.md, 2026-09-15): zero unposted vouchers on open must land on a fresh
+    // blank entry, not wherever `mode` was left persisted from the session that closed the window.
+    // Only 'view' (browsing a posted record) is stale in that sense — 'new'/'edit' is genuine
+    // unsaved in-progress work and must survive a reopen exactly as today.
+    refreshAllVouchers().then(data => {
+      if (data && data.every(v => v.status === 'POSTED') && mode === 'view') handleNew();
+    });
+    refreshAllSettlements();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshAllVouchers, refreshAllSettlements]);
 
   // Every Receipt voucher_no currently sitting as a deleted gap — merged into the browse lists
   // below so First/Prev/Next/Last can show "#N — Deleted" as an actual stop. Unlike Sale Bill etc.,
@@ -107,6 +130,11 @@ export default function ReceiptsPage() {
   // correction as a SECOND line instead of updating the original (handleDone routes on
   // mode/receiptId/entryIsDraft together), and a page restored into 'view' hides Done entirely.
   const [mode, setMode] = usePersistentField<'new' | 'edit' | 'view'>('receipts', 'mode', 'new');
+  // The posted/unposted/System No. rule (per the user, 2026-09-18) — see useNewDocGate for all of
+  // it. hasPageDraftAtMount gates the auto-open further down (only genuine unsaved typing skips
+  // it); hasClickedNew gates the No. preview and the awaitingNew lock; only New calls markNewClicked.
+  const { hasRealDraftAtMount: hasPageDraftAtMount, hasClickedNew, setHasClickedNew, markNewClicked } =
+    useNewDocGate('receipts', ['baId', 'amount', 'details', 'chequeNo', 'remarks', 'voucherRemarks', 'endorseToBaId']);
   // Master/Detail edit-scope radio (left-side widget, below) — which half of the voucher becomes
   // editable while an existing (unposted) line is pulled back into the strip via handleEditLine:
   // Master unlocks only the voucher header (Date/Remarks), Detail unlocks only the entry strip and
@@ -194,6 +222,17 @@ export default function ReceiptsPage() {
   // have ledger entries).
   type PendingDelete = { kind: 'draft' | 'receipt' | 'voucher'; id: number; amount: number };
   const [deleteTarget, setDeleteTarget] = useState<PendingDelete | null>(null);
+  // G-05 (changes-14-09-26.md, 2026-09-15): the line most recently ADDED or UPDATED via Done — a
+  // pure position indicator (the ▶ gutter marker below), never a selection. Keyed by
+  // `line.receipt_id ?? line.draft_id` (this grid's own row identity), not an array index — the
+  // committed line's own id is what `handleDone`'s result actually hands back, and this grid's
+  // row order isn't append-only the way the other pages' local arrays are (voucherLines comes back
+  // fresh from the server on every refresh).
+  const [lastEnteredLineId, setLastEnteredLineId] = useState<number | null>(null);
+  const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({});
+  useEffect(() => {
+    if (lastEnteredLineId != null) rowRefs.current[lastEnteredLineId]?.scrollIntoView({ block: 'nearest' });
+  }, [lastEnteredLineId]);
   const handleDeleteConfirmed = async (password: string) => {
     if (!deleteTarget) return;
     const res = deleteTarget.kind === 'draft'
@@ -212,6 +251,9 @@ export default function ReceiptsPage() {
     // pointed at a voucher that no longer exists. Any other delete just re-reads it.
     if (deleteTarget.kind === 'voucher' && voucher?.voucher_id === deleteTarget.id) startNewVoucher();
     else if (voucher) await refreshVoucher(voucher.voucher_id);
+    // G-05: the deleted line may have been the pointer — startNewVoucher (above) already clears it
+    // via handleNew, this covers the single-line-delete path.
+    if (deleteTarget.kind !== 'voucher' && deleteTarget.id === lastEnteredLineId) setLastEnteredLineId(null);
   };
 
   // ── RJ-03: the open voucher ──────────────────────────────────────────────────────────────────
@@ -339,8 +381,11 @@ export default function ReceiptsPage() {
   // a voucher existed at all (`!!voucher`, regardless of mode/scope) — a genuine bug, since it left
   // no way to ever unlock them again. Fixed alongside adding the toolbar Edit button (2026-08-31):
   // now locked only while viewing, or while mode is 'edit' with Detail scope picked.
-  const masterFieldsLocked = isViewMode || (mode === 'edit' && editScope !== 'master');
-  const detailFieldsLocked = mode === 'edit' && editScope !== 'detail';
+  // A blank voucher reached any way other than New (first open with nothing unposted, after Post,
+  // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
+  const awaitingNew = mode === 'new' && voucher == null && openVoucherId == null && !hasClickedNew;
+  const masterFieldsLocked = awaitingNew || (isViewMode || (mode === 'edit' && editScope !== 'master'));
+  const detailFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
   // True only in the narrow window the Edit button (Master scope) opens — display of Date/Remarks
   // switches from the loaded voucher's own fields to the local editable ones only here, so typing
   // is actually visible while unlocked; handleDone routes to receiptVouchers.update() instead of
@@ -378,9 +423,15 @@ export default function ReceiptsPage() {
       })
       .map(b => {
         const place = [regionName(b.region_id), cityName(b.city_id)].filter(Boolean).join(' — ');
+        // searchText excludes the parent chart account name — typing it must not surface every
+        // account under it (changes-14-09-26.md G-09, per the client 2026-09-14). Region/city stay
+        // searchable: they're location metadata on the account itself, not a parent in the chart-
+        // of-accounts hierarchy the client's rule is about.
+        const ownName = `${b.name} (${b.code})${place ? ` — ${place}` : ''}`;
         return {
           value: String(b.ba_id),
-          label: `${b.name} (${b.code})${place ? ` — ${place}` : ''}${b.ac_name ? ` — ${b.ac_name}` : ''}`,
+          label: `${ownName}${b.ac_name ? ` — ${b.ac_name}` : ''}`,
+          searchText: ownName,
         };
       });
   }, [businessAccounts, regions, cities]);
@@ -482,9 +533,12 @@ export default function ReceiptsPage() {
   // row already recorded, and posting still resolves those through the original bank lookup.
   // Parent chart account shown inline, same as every other business-account picker.
   const bankOptions = useMemo(
+    // searchText excludes the parent chart account name (changes-14-09-26.md G-09, per the client
+    // 2026-09-14 — typing the parent's name must not surface every account under it).
     () => businessAccounts.map(b => ({
       value: String(b.ba_id),
       label: `${b.name} (${b.code})${b.ac_name ? ` — ${b.ac_name}` : ''}`,
+      searchText: `${b.name} (${b.code})`,
     })),
     [businessAccounts]
   );
@@ -501,6 +555,7 @@ export default function ReceiptsPage() {
 
   const handleNew = () => {
     setMode('new');
+    setHasClickedNew(false);
     setEditScope('master'); // a blank voucher starts scoped to Master, same as any freshly loaded one
     setReceiptId(null);
     setReceiptStatus('DRAFT');
@@ -521,6 +576,7 @@ export default function ReceiptsPage() {
     setRemarks('');
     setErrorMsg('');
     clearReceiptsDraft();
+    setLastEnteredLineId(null);
   };
 
   const buildPayload = (): ReceiptCreateInput | null => {
@@ -585,6 +641,7 @@ export default function ReceiptsPage() {
     setMode('view');
     clearReceiptsDraft();
     setBalanceRefreshKey(k => k + 1);
+    refreshAllSettlements(); // RP-01: keeps navPostedList/navUnpostedList (First/Prev/Next/Find) current
   };
 
   // RJ-03: clears the entry row only — the voucher, its committed lines and the header date all
@@ -669,6 +726,8 @@ export default function ReceiptsPage() {
     const payload = buildPayload();
     if (!payload) return;
 
+    // Backstop for the awaitingNew lock — a new voucher (and its number) only after New.
+    if (!voucher && !hasClickedNew) { setErrorMsg('Click New Voucher to start a voucher first.'); return; }
     let openVoucher = voucher;
     if (!openVoucher) {
       const created = await api.receiptVouchers.create({ voucher_date: date, remarks: voucherRemarks.trim() || undefined });
@@ -696,6 +755,11 @@ export default function ReceiptsPage() {
 
     const wasEdit = mode === 'edit';
     await refreshVoucher(openVoucher.voucher_id);
+    // G-05: after `clearEntryRow()` — that resets every entry field but has nothing to do with
+    // which line the pointer sits on, so ordering here doesn't matter, but doing it right after
+    // the line is confirmed on screen (refreshVoucher above) means the ▶ and the scroll-into-view
+    // land the instant the grid actually shows the committed row.
+    setLastEnteredLineId(result.data.draft_id);
     clearEntryRow();
     flash(wasEdit ? 'Entry updated.' : 'Entry added to the voucher.');
     setBalanceRefreshKey(k => k + 1);
@@ -797,17 +861,66 @@ const nextVoucherNo = useMemo(
       .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no),
     [allVouchers]
   );
+  // RP-01 (changes-14-09-26.md, 2026-09-15): a direct settlement has no voucher_no of its own — it
+  // isn't part of the receipt-voucher numbering sequence at all — so it can't be sorted into the
+  // SAME numeric merge as navPostedVouchers/deletedNumbers below. CONFIRMED settlements only count
+  // as "posted"; DRAFT ones as "unposted" (a settlement has no PARTIAL state — one leg, one status).
+  const navPostedSettlements = useMemo(
+    () => [...allSettlements].filter(s => s.status === 'CONFIRMED')
+      .sort((a, b) => a.settlement_date.localeCompare(b.settlement_date)),
+    [allSettlements]
+  );
+  const navUnpostedSettlements = useMemo(
+    () => [...allSettlements].filter(s => s.status !== 'CONFIRMED')
+      .sort((a, b) => a.settlement_date.localeCompare(b.settlement_date)),
+    [allSettlements]
+  );
+
   // Merged with deleted voucher_no's for browsing only — navPostedVouchers/navUnpostedVouchers
   // above stay real-only (Post All, dropdown counts, Find all still use those unaffected).
   // mergeWithDeleted re-sorts by its numeric key regardless of input order, so the date-based sort
   // above doesn't need to change for this to come out in the right voucher_no order.
+  //
+  // RP-01: settlements are then merge-inserted by date into that already-ordered sequence — a
+  // settlement's own `settlement_date` is compared only against real voucher rows (a 'deleted'
+  // marker carries no date to compare against, so a run of settlements queued behind one just
+  // flushes in front of the next real voucher; deleted markers keep their existing position
+  // exactly as before, since this item is about settlements being findable, not about the
+  // deleted-gap display's own date precision).
+  function insertSettlementsByDate<T extends { voucher_date: string }>(
+    base: NavEntry<T>[], settlementsSorted: SettlementRow[],
+  ): (NavEntry<T> | { kind: 'settlement'; row: SettlementRow })[] {
+    const merged: (NavEntry<T> | { kind: 'settlement'; row: SettlementRow })[] = [];
+    let si = 0;
+    for (const entry of base) {
+      if (entry.kind === 'doc') {
+        while (si < settlementsSorted.length && settlementsSorted[si].settlement_date <= entry.row.voucher_date) {
+          merged.push({ kind: 'settlement', row: settlementsSorted[si] });
+          si++;
+        }
+      }
+      merged.push(entry);
+    }
+    while (si < settlementsSorted.length) {
+      merged.push({ kind: 'settlement', row: settlementsSorted[si] });
+      si++;
+    }
+    return merged;
+  }
+
   const navPostedList = useMemo(
-    () => mergeWithDeleted(navPostedVouchers.map(v => ({ ...v, system_no: v.voucher_no })), deletedNumbers),
-    [navPostedVouchers, deletedNumbers],
+    () => insertSettlementsByDate(
+      mergeWithDeleted(navPostedVouchers.map(v => ({ ...v, system_no: v.voucher_no })), deletedNumbers),
+      navPostedSettlements,
+    ),
+    [navPostedVouchers, deletedNumbers, navPostedSettlements],
   );
   const navUnpostedList = useMemo(
-    () => mergeWithDeleted(navUnpostedVouchers.map(v => ({ ...v, system_no: v.voucher_no })), deletedNumbers),
-    [navUnpostedVouchers, deletedNumbers],
+    () => insertSettlementsByDate(
+      mergeWithDeleted(navUnpostedVouchers.map(v => ({ ...v, system_no: v.voucher_no })), deletedNumbers),
+      navUnpostedSettlements,
+    ),
+    [navUnpostedVouchers, deletedNumbers, navUnpostedSettlements],
   );
   const navList = navFilter === 'posted' ? navPostedList : navUnpostedList;
 
@@ -815,7 +928,11 @@ const nextVoucherNo = useMemo(
   // the dropdown says Unposted and vice versa) — handlers treat that as "start from the beginning".
   // navIndexOverride wins while a deleted-number placeholder is on screen — see SaleBillPage.tsx's
   // navIndex for why.
-  const derivedNavIndex = voucher == null
+  // RP-01: a loaded SETTLEMENT has no `voucher` (it isn't one) — found by its own settlement_id in
+  // the 'settlement' entries instead.
+  const derivedNavIndex = docKind === 'SETTLEMENT' && receiptId != null
+    ? navList.findIndex(e => e.kind === 'settlement' && e.row.settlement_id === receiptId)
+    : voucher == null
     ? -1
     : navList.findIndex(e => e.kind === 'doc' && e.row.voucher_id === voucher.voucher_id);
   const navIndex = navIndexOverride ?? derivedNavIndex;
@@ -836,6 +953,10 @@ const nextVoucherNo = useMemo(
       setDeletedPlaceholder(entry.system_no);
       return;
     }
+    if (entry.kind === 'settlement') {
+      openSettlementInEntry(entry.row.settlement_id);
+      return;
+    }
     openVoucherInEntry(entry.row.voucher_id);
   };
 
@@ -847,24 +968,55 @@ const nextVoucherNo = useMemo(
   // pending voucher by eye) was removed.
   const [isFindOpen, setIsFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState('');
-  const findResults = useMemo(() => {
+  const closeFindVoucher = () => { setIsFindOpen(false); setFindQuery(''); };
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(isFindOpen, closeFindVoucher);
+  // RP-01 (changes-14-09-26.md, 2026-09-15): Find now also searches direct settlements — one
+  // unified result shape (`FindResult`) for both, so the list/click-through doesn't need to know
+  // which kind it's showing until the user actually picks one.
+  interface FindResult {
+    key: string;
+    kind: 'voucher' | 'settlement';
+    id: number;
+    label: string;
+    date: string;
+    amount: number;
+    isPosted: boolean;
+  }
+  const findResults = useMemo<FindResult[]>(() => {
     const q = findQuery.trim().toLowerCase();
     if (!q) return [];
-    return [...navPostedVouchers, ...navUnpostedVouchers]
+    const vouchers: FindResult[] = [...navPostedVouchers, ...navUnpostedVouchers]
       .filter(v =>
         String(v.voucher_no).includes(q) ||
         v.voucher_date.toLowerCase().includes(q) ||
         (v.remarks || '').toLowerCase().includes(q))
-      .slice(0, 30);
-  }, [findQuery, navPostedVouchers, navUnpostedVouchers]);
+      .map(v => ({
+        key: `v${v.voucher_id}`, kind: 'voucher', id: v.voucher_id, label: `#${v.voucher_no}`,
+        date: v.voucher_date, amount: Number(v.total_amount), isPosted: v.status === 'POSTED',
+      }));
+    const settlements: FindResult[] = [...navPostedSettlements, ...navUnpostedSettlements]
+      .filter(s =>
+        String(s.settlement_id).includes(q) ||
+        s.settlement_date.toLowerCase().includes(q) ||
+        (s.remarks || '').toLowerCase().includes(q) ||
+        (s.from_name || '').toLowerCase().includes(q) ||
+        (s.to_name || '').toLowerCase().includes(q))
+      .map(s => ({
+        key: `s${s.settlement_id}`, kind: 'settlement', id: s.settlement_id, label: `Endorsement #${s.settlement_id}`,
+        date: s.settlement_date, amount: s.amount, isPosted: s.status === 'CONFIRMED',
+      }));
+    return [...vouchers, ...settlements].slice(0, 30);
+  }, [findQuery, navPostedVouchers, navUnpostedVouchers, navPostedSettlements, navUnpostedSettlements]);
 
-  const handleFindSelect = (v: { voucher_id: number; status: string }) => {
+  const handleFindSelect = (result: FindResult) => {
     setIsFindOpen(false);
     setFindQuery('');
-    // Point the dropdown at the list this voucher actually belongs to, so First/Prev./Next/Last
+    // Point the dropdown at the list this result actually belongs to, so First/Prev./Next/Last
     // keep working relative to where you just landed.
-    setNavFilter(v.status === 'POSTED' ? 'posted' : 'unposted');
-    openVoucherInEntry(v.voucher_id);
+    setNavFilter(result.isPosted ? 'posted' : 'unposted');
+    if (result.kind === 'settlement') openSettlementInEntry(result.id);
+    else openVoucherInEntry(result.id);
   };
 
   const handleNavFirst = () => goToNavIndex(0);
@@ -952,6 +1104,7 @@ const nextVoucherNo = useMemo(
     setReceiptStatus(res.data.status);
     flash(docKind === 'SETTLEMENT' ? 'Endorsement posted — both ledgers updated.' : 'Receipt posted successfully.');
     setBalanceRefreshKey(k => k + 1);
+    if (docKind === 'SETTLEMENT') refreshAllSettlements(); // RP-01: moves it from Unposted to Posted in the nav list
   };
 
   // unpost() can reject with CHEQUE_IN_USE when the receipt's cheque has already been endorsed or
@@ -973,6 +1126,7 @@ const nextVoucherNo = useMemo(
     }
     flash(docKind === 'SETTLEMENT' ? 'Endorsement unposted.' : 'Receipt unposted successfully.');
     setBalanceRefreshKey(k => k + 1);
+    if (docKind === 'SETTLEMENT') refreshAllSettlements(); // RP-01: moves it from Posted to Unposted in the nav list
   };
 
   // ── draftReceipts (server-side, CASH/ONLINE only) ──
@@ -1008,6 +1162,33 @@ const nextVoucherNo = useMemo(
     setMode('view');
   };
 
+  // RP-01 (changes-14-09-26.md, 2026-09-15): a direct settlement made from this page has no
+  // voucher_id/receipt lines — it's a standalone `dbo.settlements` row — so it can't go through
+  // openVoucherInEntry above. This is its own-document equivalent, mirroring the exact fields
+  // handleSaveSettlement already sets right after CREATING one, so an already-posted settlement
+  // reopens looking identical to one just saved.
+  const openSettlementInEntry = async (settlementId: number) => {
+    const res = await api.settlements.get(settlementId);
+    if (!res.ok) { fail('Failed to load settlement: ' + res.error.message); return; }
+    const s = res.data;
+    handleNew();
+    setVoucher(null);
+    setVoucherResult(null);
+    setDate(s.settlement_date);
+    setBaId(String(s.from_ba_id));
+    setIsEndorsed(true);
+    setEndorseToBaId(String(s.to_ba_id));
+    setAmount(s.amount);
+    setPaymentMode(s.payment_mode || 'CASH');
+    setChequeNo(s.cheque_no || '');
+    setChequeDate(s.cheque_date || '');
+    setRemarks(s.remarks || '');
+    setDocKind('SETTLEMENT');
+    setReceiptId(s.settlement_id);
+    setReceiptStatus(s.status);
+    setMode('view');
+  };
+
   // Declared after openVoucherInEntry, which it calls through handleNavFilterChange:
   // placing it earlier makes the React Compiler bail out ("accessed before it is
   // declared") even though the effect only ever runs after mount.
@@ -1016,7 +1197,16 @@ const nextVoucherNo = useMemo(
   // Unposted from the dropdown does (per the user, 2026-09-04). Skipped when a draft was
   // restored — that is real in-progress work and must not be overwritten. Runs once; the ref
   // keeps a later state change from re-opening a record over whatever is being typed by then.
-  const hasPageDraftAtMount = useHasPageDraft('receipts');
+  // Per the user, 2026-09-16 (corrected same day — the first version also revealed the preview
+  // after G-06's own automatic reset-to-blank, which the user does not consider a "New" press):
+  // the System No. preview must not appear until the toolbar's own New Voucher button is
+  // deliberately clicked — a restored in-progress draft still counts (same as `hasPageDraftAtMount`
+  // already distinguishes elsewhere), but every other path that resets to blank (G-06's auto-open,
+  // Post/Post All's "ready for the next one", the Unposted dropdown's own empty-list fallback,
+  // loading a specific voucher/settlement, etc.) must leave it blank. `handleNew()` itself always
+  // resets this to false; only the New Voucher button's own onClick sets it true, right after
+  // calling `startNewVoucher()` (which itself calls `handleNew()`).
+  // (hasClickedNew/hasPageDraftAtMount come from useNewDocGate, declared right after `mode`.)
   const didAutoOpenRef = useRef(false);
   useEffect(() => {
     if (hasPageDraftAtMount || didAutoOpenRef.current) return;
@@ -1031,6 +1221,15 @@ const nextVoucherNo = useMemo(
     setActiveTab('entry');
     await openVoucherInEntry(voucherId);
     await refreshAllVouchers();
+  };
+
+  // RP-01 (changes-14-09-26.md, 2026-09-15): the settlement equivalent — the Weekly/Monthly/
+  // Overall Records tabs now list direct settlements alongside receipt vouchers, and Unposting one
+  // there lands back here the same way a voucher's Unpost already does.
+  const handleSettlementUnpostedElsewhere = async (settlementId: number) => {
+    setActiveTab('entry');
+    await openSettlementInEntry(settlementId);
+    await refreshAllSettlements();
   };
 
   const [postAllVouchersBusy, setPostAllVouchersBusy] = useState(false);
@@ -1162,14 +1361,35 @@ const nextVoucherNo = useMemo(
     </div>
   );
 
+  // G-04 (changes-14-09-26.md, 2026-09-15): the entry card fills whatever vertical space is left
+  // in the viewport below it (mirrors SaleBillPage/JournalVoucherPage) — the entries table
+  // (flex-1 inside it) grows into that space and the outer app window never scrolls, only the
+  // table does. Measured via getBoundingClientRect rather than a CSS calc() of fixed chrome
+  // heights, since the banners/tab bar above this card change height dynamically.
+  const entryCardRef = useRef<HTMLDivElement>(null);
+  const [entryCardHeight, setEntryCardHeight] = useState<number | null>(null);
+  useEffect(() => {
+    function recompute() {
+      const el = entryCardRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      // AppLayout's <main> (the only scroll container in the app) adds 32px of its own
+      // padding-bottom below whatever height we claim here.
+      setEntryCardHeight(Math.max(320, window.innerHeight - top - 32));
+    }
+    recompute();
+    window.addEventListener('resize', recompute);
+    return () => window.removeEventListener('resize', recompute);
+  }, [activeTab, mode, lookupError, errorMsg, successMsg]);
+
   return (
     <AppLayout pageTitle="Receipts / Jamma Entry" subTabTitle={RECEIPT_TAB_LABELS[activeTab]} subTabId={activeTab} headerAction={tabBar}>
       <div className="mx-auto" style={{ maxWidth: 1200 }}>
 
         {/* Tab Content */}
-        {activeTab === 'weekly' && <WeeklyReceiptsTab onVoucherUnposted={handleVoucherUnpostedElsewhere} />}
-        {activeTab === 'monthly' && <MonthlyReceiptsTab onVoucherUnposted={handleVoucherUnpostedElsewhere} />}
-        {activeTab === 'overall' && <OverallReceiptsTab onVoucherUnposted={handleVoucherUnpostedElsewhere} />}
+        {activeTab === 'weekly' && <WeeklyReceiptsTab onVoucherUnposted={handleVoucherUnpostedElsewhere} onSettlementUnposted={handleSettlementUnpostedElsewhere} />}
+        {activeTab === 'monthly' && <MonthlyReceiptsTab onVoucherUnposted={handleVoucherUnpostedElsewhere} onSettlementUnposted={handleSettlementUnpostedElsewhere} />}
+        {activeTab === 'overall' && <OverallReceiptsTab onVoucherUnposted={handleVoucherUnpostedElsewhere} onSettlementUnposted={handleSettlementUnpostedElsewhere} />}
 
         {activeTab === 'entry' && (
           <div className="max-w-5xl mx-auto animate-fadeIn" {...autoEditScope}>
@@ -1221,7 +1441,7 @@ const nextVoucherNo = useMemo(
                   </button>
                 )}
                 <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={startNewVoucher} disabled={navFilter === 'posted'} title="New Voucher" className="toolbar-btn">
+              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { startNewVoucher(); markNewClicked(); }} disabled={navFilter === 'posted'} title="New Voucher" className="toolbar-btn">
                   <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
                   <span>New</span>
                 </button>
@@ -1451,7 +1671,13 @@ const nextVoucherNo = useMemo(
                 Unpost act on the whole voucher; the per-line status badge lives in the grid.
                 Padding matched to Sale Bill's own card (p-3/md:p-4, not p-6/md:p-8) — the user's
                 standing "keep it compact as the sale bill" rule. */}
-            <div className="card-white p-3 md:p-4 bg-white border border-slate-200 rounded-xl shadow-sm" data-no-print data-edit-scope="detail" style={{ position: 'relative' }}>
+            <div
+              ref={entryCardRef}
+              className="card-white p-3 md:p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col"
+              data-no-print
+              data-edit-scope="detail"
+              style={{ position: 'relative', height: entryCardHeight ?? undefined }}
+            >
               {deletedPlaceholder != null && <DeletedDocumentOverlay systemNo={deletedPlaceholder} label="voucher" />}
 
               {/* RJ-03: submitting the form is "Done" — it commits the entry row as a line of the
@@ -1477,7 +1703,7 @@ const nextVoucherNo = useMemo(
                   only for ONLINE. They are left as EMPTY grid cells rather than collapsed, so
                   Amount stays pinned to the right-hand column in every mode — the ref pic's own
                   placement — and the boxes never shift under the user as the mode changes. */}
-              <form id="receipt-entry-form" onSubmit={handleDone} className="flex flex-col gap-2">
+              <form id="receipt-entry-form" onSubmit={handleDone} className="flex flex-col gap-2 shrink-0">
                 <div
                   className="grid gap-x-2 gap-y-1.5"
                   style={{
@@ -1517,7 +1743,7 @@ const nextVoucherNo = useMemo(
                     <label className="block text-[11px] font-semibold uppercase tracking-wider mb-0.5" style={{ color: 'var(--secondary-text)' }}>C.Book No</label>
                     <input
                       type="text"
-                      value={voucher ? String(voucher.voucher_no) : String(nextVoucherNo)}
+                      value={voucher ? String(voucher.voucher_no) : hasClickedNew ? String(nextVoucherNo) : ''}
                       disabled
                       readOnly
                       className="soleria-input soleria-input-compact bg-slate-100 text-slate-600 font-mono text-center"
@@ -1676,14 +1902,26 @@ const nextVoucherNo = useMemo(
                   )}
 
                   <div style={{ gridArea: 'amt' }}>
+                    {/* Required per the client, 2026-09-14 (changes-14-09-26.md RP-02) — zero and
+                        blank were already rejected at save time (buildPayload's own `amount <= 0`
+                        check); this adds the visible marker matching every other required field's
+                        convention. `min={1}` (not the usual `min={0}`) is deliberate: G-02's
+                        keyboard focus-trap (`lib/fieldNav.ts#isRequiredAndEmpty`) reads native
+                        `ValidityState.valid`, and a typed "0" only fails that check via
+                        `rangeUnderflow` — `min={0}` would let it through the trap even though
+                        save-time validation still rejects it. */}
+                    <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-0.5">
+                      Amount <span className="text-red-500 font-bold">*</span>
+                    </label>
                     <input
                       type="number"
-                      min={0}
+                      min={1}
+                      required
                       value={amount || ''}
                       disabled={isViewMode || detailFieldsLocked}
                       onChange={e => setAmount(Math.max(0, parseInt(e.target.value) || 0))}
                       placeholder="Amount"
-                      title="Amount Received (PKR)"
+                      title="Amount Received (PKR) — required"
                       className="soleria-input soleria-input-compact font-semibold font-mono text-right"
                     />
                   </div>
@@ -1709,6 +1947,7 @@ const nextVoucherNo = useMemo(
                               ref={bankTriggerRef}
                               type="text"
                               data-field-nav="true"
+                              required
                               disabled={isViewMode || detailFieldsLocked}
                               value={bankSearchText}
                               onChange={e => setBankSearchText(e.target.value)}
@@ -1865,13 +2104,17 @@ const nextVoucherNo = useMemo(
                           options={businessAccounts.filter(a => String(a.ba_id) !== baId)
                             .map(a => ({
                               value: String(a.ba_id),
+                              // searchText excludes the parent chart account name
+                              // (changes-14-09-26.md G-09, per the client 2026-09-14).
                               label: `${a.name} (${a.code})${a.ac_name ? ` — ${a.ac_name}` : ''}`,
+                              searchText: `${a.name} (${a.code})`,
                             }))}
                           value={endorseToBaId}
                           onChange={setEndorseToBaId}
                           onHighlightChange={val => setPreviewEndorseBaId(val ? Number(val) : null)}
                           placeholder="Search account to pay..."
                           disabled={isViewMode || detailFieldsLocked}
+                          required
                         />
                       </div>
                       <AccountBalanceTooltip baId={previewEndorseBaId ?? (endorseToBaId ? Number(endorseToBaId) : null)} refreshKey={balanceRefreshKey} />
@@ -1890,8 +2133,8 @@ const nextVoucherNo = useMemo(
                   rendered — even with zero lines — matching Purchase's own articles box, which
                   shows its empty state ("No articles added yet...") rather than disappearing
                   entirely (per the user, 2026-08-26). */}
-              <div className="mt-6 pt-5 border-t" style={{ borderColor: 'var(--border-color)' }}>
-                  <div className="flex items-center justify-between mb-3">
+              <div className="mt-6 pt-5 border-t flex-1 min-h-0 flex flex-col" style={{ borderColor: 'var(--border-color)' }}>
+                  <div className="flex items-center justify-between mb-3 shrink-0">
                     <h4 className="font-lora font-semibold text-slate-800">
                       Entries in this Voucher
                       <span className="ml-2 text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
@@ -1900,24 +2143,30 @@ const nextVoucherNo = useMemo(
                     </h4>
                   </div>
 
-                  <div className="overflow-x-auto">
+                  {/* G-04: only this table scrolls — everything above (header, entry form) and
+                      below (totals footer) stays fixed, per the client's own reference screenshot
+                      (2026-09-15). */}
+                  <div className="overflow-auto flex-1 min-h-0">
                     <table className="w-full text-left border-collapse text-sm">
                       <thead>
                         <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                          <th className="p-2.5 pl-3">A/C Code</th>
-                          <th className="p-2.5">Account Description</th>
-                          <th className="p-2.5">Narration</th>
-                          <th className="p-2.5">Cheque No</th>
-                          <th className="p-2.5 text-center">Type</th>
-                          <th className="p-2.5 text-right">Rs. (Jamma)</th>
-                          <th className="p-2.5 text-center">Status</th>
-                          <th className="p-2.5 text-center" data-no-print>Actions</th>
+                          {/* G-05 (changes-14-09-26.md, 2026-09-15): narrow gutter for the ▶ row
+                              pointer — unlabeled, matching the ref pic (ref-pics/batch2/jv2.0.jpeg). */}
+                          <th className="sticky top-0 z-10 bg-slate-50 p-1" style={{ width: '18px' }} />
+                          <th className="sticky top-0 z-10 bg-slate-50 p-2.5 pl-3">A/C Code</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 p-2.5">Account Description</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 p-2.5">Narration</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 p-2.5">Cheque No</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-center">Type</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-right">Rs. (Jamma)</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-center">Status</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-center" data-no-print>Actions</th>
                         </tr>
                       </thead>
                       <tbody>
                         {voucherLines.length === 0 ? (
                           <tr>
-                            <td colSpan={8} className="p-6 text-center text-slate-400 text-sm">
+                            <td colSpan={9} className="p-6 text-center text-slate-400 text-sm">
                               No receipts added yet — fill the fields above and press Enter.
                             </td>
                           </tr>
@@ -1926,20 +2175,24 @@ const nextVoucherNo = useMemo(
                           // no second piece of state to drift out of step with the form.
                           const isSelected = mode === 'edit' && docKind === 'RECEIPT'
                             && entryIsDraft && line.draft_id != null && receiptId === line.draft_id;
-                          const selectable = line.status !== 'CONFIRMED' && line.draft_id != null && !detailFieldsLocked;
                           return (
                           <tr
                             key={line.receipt_id ?? `draft_${line.draft_id}`}
-                            // Row click selects the line and pulls it into the form, so the toolbar
-                            // acts on it — the same interaction Purchase/Sale Bill/Stock Voucher
-                            // already had, brought here for consistency (per the user, 2026-09-01).
-                            onClick={() => { if (selectable) handleEditLine(line); }}
-                            title={selectable
-                              ? 'Click to select this entry — Edit and Delete in the toolbar act on it'
-                              : (line.status === 'CONFIRMED' ? 'Unpost this voucher before editing that entry' : undefined)}
-                            className={`border-b transition-colors ${isSelected ? 'bg-blue-50' : 'hover:bg-slate-50/60'} ${selectable ? 'cursor-pointer' : ''}`}
+                            ref={el => { if (line.draft_id != null) rowRefs.current[line.draft_id] = el; }}
+                            // G-08 (changes-14-09-26.md, 2026-09-15): a click on a detail row must
+                            // produce no visible change at all — no edit load, no highlight.
+                            // Editing a line is already a deliberate, separate action here (the
+                            // per-row pencil icon below, with its own stopPropagation), so the row
+                            // itself no longer loads the line into the form on click.
+                            title={line.status === 'CONFIRMED' ? 'Unpost this voucher before editing that entry' : undefined}
+                            className={`border-b transition-colors ${isSelected ? 'bg-blue-50' : 'hover:bg-slate-50/60'}`}
                             style={{ borderColor: 'var(--border-table)' }}
                           >
+                            {/* G-05: a pure position indicator — never a background/highlight, so
+                                it can never be confused with G-08's edit highlight above. */}
+                            <td className="p-1 text-center text-emerald-600" aria-hidden="true">
+                              {line.draft_id != null && line.draft_id === lastEnteredLineId && '▶'}
+                            </td>
                             <td className="p-2.5 pl-3 font-mono text-xs text-slate-600">{line.account_code || '—'}</td>
                             <td className="p-2.5 font-semibold text-slate-800">{line.account_name}</td>
                             <td className="p-2.5 text-slate-600 text-xs">{line.remarks || '—'}</td>
@@ -2001,7 +2254,7 @@ const nextVoucherNo = useMemo(
                   {/* RJ-03: ref-pic's small boxed totals — Total Cheque/Online/Cash on the bottom
                       right plus a Total Amount field, matching Sale Bill's totals-row style
                       instead of the old inline footer text. */}
-                  <div className="flex flex-wrap items-end justify-end gap-3 mt-3 pt-3 border-t" style={{ borderColor: 'var(--border-table)' }}>
+                  <div className="flex flex-wrap items-end justify-end gap-3 mt-3 pt-3 border-t shrink-0" style={{ borderColor: 'var(--border-table)' }}>
                     <div className="flex flex-col gap-0.5">
                       <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cheque</label>
                       <input type="text" value={formatCurrency(Number(voucher?.total_cheque ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
@@ -2035,7 +2288,7 @@ const nextVoucherNo = useMemo(
                       timer like the ordinary banner: a voucher can post 8 of 10 lines, and the two
                       that failed are the entire point of the message. */}
                   {voucherResult && voucherResult.data.failed.length > 0 && (
-                    <div className="mt-4 p-3 rounded-lg bg-rose-50 border border-rose-200">
+                    <div className="mt-4 p-3 rounded-lg bg-rose-50 border border-rose-200 shrink-0">
                       <p className="text-xs font-bold text-rose-900">
                         {/* Verb from the action that ran, and "the rest went through" only when
                             some entries actually did — see ExpensesPage for the same fix. */}
@@ -2092,16 +2345,16 @@ const nextVoucherNo = useMemo(
               autoFocus
             />
             <ul className="max-h-72 overflow-y-auto border rounded-lg divide-y" style={{ borderColor: 'var(--border-color)' }}>
-              {findResults.map(v => (
+              {findResults.map(r => (
                 <li
-                  key={v.voucher_id}
-                  onClick={() => handleFindSelect(v)}
+                  key={r.key}
+                  onClick={() => handleFindSelect(r)}
                   className="px-3 py-2 text-xs cursor-pointer hover:bg-amber-50/60 flex items-center justify-between gap-2"
                 >
-                  <span className="font-mono font-semibold text-slate-700">#{v.voucher_no}</span>
-                  <span className="text-slate-400 truncate">{formatDate(v.voucher_date)} · {formatCurrency(Number(v.total_amount))}</span>
-                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${v.status === 'POSTED' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                    {v.status === 'POSTED' ? 'posted' : 'unposted'}
+                  <span className="font-mono font-semibold text-slate-700">{r.label}</span>
+                  <span className="text-slate-400 truncate">{formatDate(r.date)} · {formatCurrency(r.amount)}</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${r.isPosted ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                    {r.isPosted ? 'posted' : 'unposted'}
                   </span>
                 </li>
               ))}
@@ -2112,7 +2365,7 @@ const nextVoucherNo = useMemo(
             <div className="flex justify-end mt-4">
               <button
                 type="button"
-                onClick={() => { setIsFindOpen(false); setFindQuery(''); }}
+                onClick={closeFindVoucher}
                 className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors text-sm font-semibold"
               >
                 Close

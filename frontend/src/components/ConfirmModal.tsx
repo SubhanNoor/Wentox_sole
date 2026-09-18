@@ -1,5 +1,6 @@
 import React from 'react';
 import { AlertTriangle, X } from 'lucide-react';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 /**
  * A plain yes/no confirmation, for an action that is about to do something the operator may not
@@ -33,16 +34,18 @@ export default function ConfirmModal({
   onCancel,
   busy = false,
 }: ConfirmModalProps) {
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog, one layer at a time — see the
+  // hook's own comment for why this replaced an onKeyDown-on-the-wrapper-div handler.
+  useEscapeToClose(isOpen, onCancel);
+
   if (!isOpen) return null;
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
       onKeyDown={e => {
-        // Escape cancels; Enter confirms. Both stopPropagation for the same reason SearchModal's
-        // handler does — this modal is not portaled, so an un-stopped key keeps bubbling to the
-        // page's own window-level field-walk underneath it.
-        if (e.key === 'Escape') { e.stopPropagation(); onCancel(); }
+        // Enter confirms. stopPropagation so it doesn't keep bubbling to the page's own
+        // window-level field-walk underneath this modal (it isn't portaled).
         if (e.key === 'Enter' && !busy) { e.preventDefault(); e.stopPropagation(); onConfirm(); }
       }}
     >

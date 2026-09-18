@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Search, ArrowLeft, Users, User, Truck, HardHat, Landmark, BookOpen, Eye } from 'lucide-react';
@@ -39,6 +39,10 @@ export default function OverallSearchPage() {
   const [selectedPerson, setSelectedPerson] = useState<PersonEntity | null>(null);
   const [isClosing, setIsClosing] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  // G-03 (changes-14-09-26.md): the cursor lands in the search box as soon as the page opens.
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => searchRef.current?.focus()); }, []);
 
   const handleCloseDetail = () => {
     setIsClosing(true);
@@ -313,6 +317,7 @@ export default function OverallSearchPage() {
                 <div className="relative min-w-[260px] max-w-md flex-1">
                   <Search className="absolute left-3.5 top-2.5 text-slate-400" size={16} />
                   <input
+                    ref={searchRef}
                     type="text"
                     placeholder="Search by name, code, city, or phone..."
                     value={searchQuery}

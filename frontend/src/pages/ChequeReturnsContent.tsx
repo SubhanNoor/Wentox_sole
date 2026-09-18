@@ -1,8 +1,9 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import { todayISO } from '@/lib/cheques';
 import { formatDate } from '@/lib/utils';
 import { AlertTriangle, RotateCcw, Search } from 'lucide-react';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import * as api from '@/lib/api';
 import type { ChequeAllocationRow, ChequeDispositionType, IssuedChequeRow } from '@/lib/api';
 
@@ -38,6 +39,12 @@ export function ChequeReturnsContent() {
   const [loading, setLoading] = useState(false);
 
   const [search, setSearch] = useState('');
+
+  // G-03 (changes-14-09-26.md): mounts fresh on every ChequePage tab switch, so a mount-only
+  // effect covers both "page opens on this tab" and "user switches to this tab".
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => searchRef.current?.focus()); }, []);
+
   const [returningAlloc, setReturningAlloc] = useState<ChequeAllocationRow | null>(null);
   const [returnDate, setReturnDate] = useState(todayISO());
   const [returnRemarks, setReturnRemarks] = useState('');
@@ -47,6 +54,11 @@ export function ChequeReturnsContent() {
   const [issuedAction, setIssuedAction] = useState<{ row: IssuedChequeRow; mode: 'BOUNCED' | 'RETURNED' } | null>(null);
   const [issuedActionDate, setIssuedActionDate] = useState(todayISO());
   const [issuedActionReason, setIssuedActionReason] = useState('');
+
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog — these build their own inline
+  // modals rather than going through a shared component, so each needs its own hook call.
+  useEscapeToClose(returningAlloc != null, () => setReturningAlloc(null));
+  useEscapeToClose(issuedAction != null, () => setIssuedAction(null));
 
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -170,6 +182,7 @@ export function ChequeReturnsContent() {
         </div>
         <div className="relative min-w-[240px]">
           <input
+            ref={searchRef}
             type="text"
             placeholder="Cheque no. or payee..."
             value={search}

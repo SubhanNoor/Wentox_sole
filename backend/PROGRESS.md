@@ -5871,3 +5871,1714 @@ fix batch.
 **Files:** `frontend/src/pages/PurchasePage.tsx`, `frontend/src/pages/PurchaseReturnPage.tsx`,
 `frontend/src/pages/JournalVoucherPage.tsx`, `frontend/src/pages/StockVoucherPage.tsx`.
 `npx tsc -b` passes clean.
+
+## changes-14-09-26.md: JV-03 (reason optional) and RP-02 (amount required)
+
+First two items from the client's 2026-09-14 batch (`System_architecture/changes-14-09-26.md`) —
+picked as the smallest fully self-contained ones needing no further client input, per the user.
+
+**JV-03 — Journal Voucher reason is now optional**, was required:
+- New migration `033_journal_voucher_reason_optional.sql`: `journal_vouchers.reason` was
+  `NVARCHAR(200) NOT NULL` since migration 016 — dropped to nullable.
+- `journalVouchers.service.js`: removed the `validateHeader()` guard that rejected an empty reason,
+  and `buildHeaderFields()` now stores `null` instead of an empty/whitespace string.
+- `journalVouchers.repository.js#insertLedgerEntries()`: the per-line ledger narration fell back to
+  `line.narration || reason` — with reason now genuinely absent, this could have posted narration
+  literally reading `"Journal Voucher #123 — undefined"`. Fixed to omit the reason/narration segment
+  entirely when neither is present, falling back to just `"Journal Voucher #123"`.
+- Frontend: removed the required-asterisk marker and the `buildPayload()`/`isValid` guards on
+  `reason`; `JournalVoucherRow`/`UnpostedJournalVoucherRow.reason` typed `string | null`; the
+  toolbar Find's search guarded against a null reason (`(v.reason || '')`); `loadJv()` normalizes a
+  null reason to `''` before it reaches the persisted string field.
+- **Verified live** against `wentox_db`: ran the migration, created a real JV with no reason via
+  `journalVouchers.service.create()` — succeeded, confirmed `reason` stored as real SQL `NULL` (not
+  the string `"null"`). Cleaned up the test JV afterward.
+
+**RP-02 — Amount is now marked required on Receipts, and confirmed/fixed on Payments too**:
+- Both pages already blocked saving with a zero/blank amount (`buildPayload()`'s own `amount <= 0`
+  check) — that part was never actually broken. What was missing was the visible required marker
+  (red asterisk), which the Amount field had never had on either page, unlike every other required
+  field. Added it to both, matching the app's existing convention.
+- The doc's acceptance criteria also wants the keyboard **focus trap** on an empty required field —
+  that's a separate, not-yet-built shared-layer item (G-02) from the same batch; this field will
+  inherit it automatically once G-02 lands, same as every other required field in the app.
+
+**Files:** `backend/src/db/migrations/033_journal_voucher_reason_optional.sql` (new),
+`backend/src/services/journalVouchers.service.js`, `backend/src/repositories/journalVouchers.repository.js`,
+`frontend/src/lib/api.ts`, `frontend/src/pages/JournalVoucherPage.tsx`,
+`frontend/src/pages/ReceiptsPage.tsx`, `frontend/src/pages/ExpensesPage.tsx`.
+`node --check` passes; `npx tsc -b` passes clean.
+
+## changes-14-09-26.md: G-09 (account search must not match parent accounts)
+
+Root cause: every business-account picker's `label` bakes in the account's PARENT chart account
+name for display context — e.g. `"DIRECTOR EXPENSE (552000010) — EXPENSE"` — and both shared
+picker components (`SearchModal.tsx`, `SearchableSelect.tsx`) filter on the whole `label` string.
+So typing the parent's name ("expense") matched every account under it, not just accounts whose OWN
+name contains it — exactly the client's `DIRECTOR EXPENSE` vs `EXPENSE` example.
+
+Fixed in the shared layer, once, per the item's own instruction: added an optional `searchText`
+field to both components' option types — when supplied, filtering matches against it instead of
+`label`/`sublabel`, so a caller can keep the parent name in the visible label while excluding it
+from what's searched. Defaults to the old behavior (`label`+`sublabel`, or `label` alone for
+`SearchableSelect`) when omitted, so every other picker in the app is unaffected.
+
+Then found and fixed all 7 concrete business-account pickers building a parent-name-including label
+(`grep -rln ac_name` across `pages/`/`components/`, filtered to `label:` construction sites):
+`JournalVoucherPage.tsx` (1), `ExpensesPage.tsx` (2 — one for online-payment accounts, one missed by
+the first grep since its label spanned multiple lines), `ReceiptsPage.tsx` (3 — the main account
+picker, the online-settlement bank/account picker, and the endorsement "Pay To" picker),
+`TransferPage.tsx` (1), `ChequesTab.tsx` (1). Each now supplies `searchText` as just the account's
+own name+code (ReceiptsPage's main picker also keeps region/city in `searchText` — that's location
+metadata on the account itself, not a parent in the chart-of-accounts hierarchy the client's rule is
+about).
+
+Audited and confirmed already clean (no fix needed): `ChartAcSetupPage.tsx`'s group-account pickers
+and `GroupAcSetupPage.tsx`'s class picker (labels are already just the picked entity's own
+name+code, no parent baked in); the Overall Search page's backend query
+(`reports.repository.js#overallDirectory` / `vw_overall_directory`, migration 008) selects a
+business account's bare `ba.name`, no parent join in either the view or the `WHERE ... LIKE`.
+
+**Verified** with a standalone simulation of the exact client example (`DIRECTOR EXPENSE` and
+`OFFICE RENT`, both under a chart account named `EXPENSE`): searching `"expense"` against the fixed
+filter logic returns exactly `DIRECTOR EXPENSE` — `OFFICE RENT` (same parent, unrelated own name) is
+correctly excluded, matching the item's stated acceptance criterion precisely.
+
+**Files:** `frontend/src/components/SearchModal.tsx`, `frontend/src/components/SearchableSelect.tsx`,
+`frontend/src/pages/JournalVoucherPage.tsx`, `frontend/src/pages/ExpensesPage.tsx`,
+`frontend/src/pages/ReceiptsPage.tsx`, `frontend/src/pages/TransferPage.tsx`,
+`frontend/src/components/ChequesTab.tsx`. `npx tsc -b` passes clean.
+
+## changes-14-09-26.md: BA-02 (compacting half) — Search & Update Bilty Adda density
+
+Frontend-only, no behaviour change, per the item's own scope (the wider redesign half stays
+blocked on the client's walkthrough). Brought `BiltyUpdatePage.tsx` in line with SaleBillPage/
+ReceiptsPage's density:
+- Both cards: `p-5` → `p-3`, outer grid `gap-6 mb-6` → `gap-3 mb-3`.
+- Every input switched from plain `.soleria-input` (some with an inline `py-1.5` override) to
+  `.soleria-input-compact` — the same denser variant (`0.25rem/0.5rem` padding, `0.8125rem` font
+  vs. `0.5rem/0.75rem`/`0.875rem`) Sale Bill/Receipts use throughout.
+- Every label restyled to the same `text-[10px] uppercase tracking-wide text-slate-500` convention
+  those pages use, down from a mix of `text-xs`/`text-[11px]` with heavier weight/color.
+  Section headers `text-lg` → `text-base`, their icons `18` → `16`.
+  Status/success/error banners and the results toolbar's margin tightened a step to match.
+- Left untouched: the invoices table itself (`p-3` cells, already tighter than other list tables
+  like `FindTab.tsx`'s `p-3.5` — not part of the "extra spacing" the client described) and the
+  print-preview document (a separate, already-compact print template).
+
+**Files:** `frontend/src/pages/BiltyUpdatePage.tsx`. `npx tsc -b` passes clean.
+
+## changes-14-09-26.md: G-07 (Escape closes every popup) — full app-wide audit
+
+**Root cause / design**: the app had no single mechanism for this — some modals had an
+`onKeyDown={e => e.key==='Escape' && onClose()}` on their own wrapper div (works only while focus
+is inside that div — silently breaks the moment a modal opens without moving focus into it, or
+focus is later tabbed/clicked out while still open), one portaled modal (`ReportPrintPreviewModal`)
+had the same pattern despite portals making "is the focused element inside this DOM subtree" even
+less reliable, and 21 bespoke inline modals across 13 pages had no Escape handling at all.
+
+**Built once, in the shared layer** (per the item's own instruction): `frontend/src/hooks/
+useEscapeToClose.ts` — one `window`-level `keydown` listener backed by a module-level stack of
+close-callbacks. Every open dialog pushes its own `onClose` in mount order; Escape pops and calls
+only the LAST one. This makes "topmost only, one layer per press" automatic regardless of DOM
+nesting or portaling, and removes the focus-dependency entirely — the actual bug class found.
+
+**Migrated the 5 shared components** to it: `ConfirmModal.tsx`, `PasswordPromptModal.tsx`,
+`SearchModal.tsx`, `DuplicateNamePromptModal.tsx` (not yet wired to any save flow, but fixed for
+when it is), `reports/ReportPrintPreviewModal.tsx`.
+
+**Found and fixed 21 real gaps** — bespoke inline modals with ZERO Escape handling, via
+`comm -23 <(grep -rl "fixed inset-0") <(grep -rl "Escape")` across every page/component:
+- Find/Add-New modals: `SaleBillPage.tsx` (Find Bill, Add Sub-Customer, Add Customer),
+  `SaleReturnPage.tsx` (Find Return, Add Sub-Customer), `PurchasePage.tsx` (Add Vendor, Find
+  Purchase), `PurchaseReturnPage.tsx` (Find Return), `ReceiptsPage.tsx` (Find Voucher),
+  `ExpensesPage.tsx` (Find Voucher), `JournalVoucherPage.tsx` (Find JV), `StockVoucherPage.tsx`
+  (Find Stock Voucher).
+- `ChequesTab.tsx` (dispose/bounce/return-to-sender dialogs — 3), `ChequeReturnsContent.tsx`
+  (return-endorsement, bounce/return-issued dialogs — 2).
+- `ReportStockPage.tsx` (full color report, material stock adjustment — 2).
+- `SalaryRunPage.tsx`/`WageRunPage.tsx` (per-run breakdown view — 1 each).
+- `SettingsPage.tsx` (Reset Database's 2-password confirmation flow — matched each step's own
+  Cancel button exactly, including step 2 staying open while `resetBusy`, same as its disabled
+  Cancel button).
+
+Each fix follows the same shape: extract the modal's existing Cancel/X handler into a named
+function (if it wasn't already one), call `useEscapeToClose(isOpen, thatFunction)`, and point the
+Cancel/X button at the same function — so Escape can never diverge from the button's own behavior,
+including any reset/cleanup side effects. This is also why no special "unsaved work" handling was
+needed: Escape always routes through the exact function the Cancel button already calls.
+
+**Batch-migrated 13 Setup pages'** already-working-but-focus-fragile pattern (`Store`/`Adda`/
+`Employee`/`ChartAc`/`Bank`/`Region`/`City`/`Category`/`GroupAc`/`SubCustomer`/`Vendor`/
+`BusinessAc`/`Customer`SetupPage — all shared the identical `isModalOpen`/`handleCloseModal`
+naming, verified first, then processed with one script) to the shared hook, for consistency and to
+remove the focus-dependency there too.
+
+**Final verification**: `comm -23` sweep (this time also matching `backdrop-blur`/overlay-color
+classes, not just `fixed inset-0`, to catch anything phrased differently) across `pages/` and
+`components/` for Escape/`useEscapeToClose` coverage — zero gaps remain outside
+`components/ui/{dialog,alert-dialog,sheet,drawer}.tsx`, confirmed unused/unimported shadcn
+boilerplate (not reachable from the live app).
+
+**Files:** `frontend/src/hooks/useEscapeToClose.ts` (new), `frontend/src/components/ConfirmModal.tsx`,
+`frontend/src/components/PasswordPromptModal.tsx`, `frontend/src/components/SearchModal.tsx`,
+`frontend/src/components/DuplicateNamePromptModal.tsx`,
+`frontend/src/components/reports/ReportPrintPreviewModal.tsx`,
+`frontend/src/components/ChequesTab.tsx`, `frontend/src/pages/ChequeReturnsContent.tsx`,
+`frontend/src/pages/ReportStockPage.tsx`, `frontend/src/pages/SalaryRunPage.tsx`,
+`frontend/src/pages/WageRunPage.tsx`, `frontend/src/pages/SettingsPage.tsx`,
+`frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/SaleReturnPage.tsx`,
+`frontend/src/pages/PurchasePage.tsx`, `frontend/src/pages/PurchaseReturnPage.tsx`,
+`frontend/src/pages/ReceiptsPage.tsx`, `frontend/src/pages/ExpensesPage.tsx`,
+`frontend/src/pages/JournalVoucherPage.tsx`, `frontend/src/pages/StockVoucherPage.tsx`,
+`frontend/src/pages/StoreSetupPage.tsx`, `frontend/src/pages/AddaSetupPage.tsx`,
+`frontend/src/pages/EmployeeSetupPage.tsx`, `frontend/src/pages/ChartAcSetupPage.tsx`,
+`frontend/src/pages/BankSetupPage.tsx`, `frontend/src/pages/RegionSetupPage.tsx`,
+`frontend/src/pages/CitySetupPage.tsx`, `frontend/src/pages/CategorySetupPage.tsx`,
+`frontend/src/pages/GroupAcSetupPage.tsx`, `frontend/src/pages/SubCustomerSetupPage.tsx`,
+`frontend/src/pages/VendorSetupPage.tsx`, `frontend/src/pages/BusinessAcSetupPage.tsx`,
+`frontend/src/pages/CustomerSetupPage.tsx`. `npx tsc -b` passes clean throughout.
+
+## 2026-09-15 — changes-14-09-26.md: JV-01 (system-generated sequential voucher number)
+
+**What:** the Journal Voucher's "Number" field becomes truly system-generated and stable, same
+convention as Sale Bill/Purchase/etc.'s own System No. — instead of a manual free-text field
+(migration `023_journal_vouchers_number.sql`, never actually used by any live JV) or the frontend's
+own workaround of previewing `jv_id` (the internal identity) as if it were the document number.
+
+**Backend:** new migration `034_journal_voucher_system_number.sql` creates
+`dbo.seq_journal_voucher_no` and backfills all 5 existing JVs' `voucher_no` (all previously `NULL`)
+to 1–5 in creation order (`created_at, jv_id`), then starts the sequence at 6. `voucher_no` stays
+`NVARCHAR(30)` (per the client's own instruction — "the column stays, only how it's filled
+changes"), now holding the sequence value as a string.
+`journalVouchers.repository.js#insert()` resolves a fresh value via the shared
+`nextSequenceValue(transaction, 'dbo.seq_journal_voucher_no')` helper (already used by
+`draftSaleBills`/`draftPurchases`/etc.) rather than accepting `jv.voucher_no` from the caller — a
+client-supplied number is no longer possible even in principle. `updateHeader()` no longer writes
+`voucher_no` at all, so it's genuinely fixed for the document's whole life once assigned.
+`remove()` was previously a bare non-transactional `DELETE` — changed to accept a `transaction` and
+run inside one, alongside a new call to `deletedDocumentNumbers.repository.js#record()` under
+doc_type `'JOURNAL_VOUCHER'` (mirrors `draftSaleBills.service.js#remove()` exactly), so a deleted
+JV's number is retired for good and logged, never silently reused. `journalVouchers.service.js`'s
+`remove()` now takes a `userId` (for the deleted-number log) — its one caller,
+`journal-vouchers:remove` in the ipc layer, was updated to pass `session.userId`.
+`buildHeaderFields()` no longer reads `voucher_no` from the payload at all.
+
+**Frontend:** `JournalVoucherCreateInput.voucher_no` removed from `frontend/src/lib/api.ts` (never
+sent by the page anyway, but the type allowed it). `JournalVoucherPage.tsx` gained a new persisted
+`voucherNo` state (parallel to `jvId`/`status`/`mode`) set from `result.data.voucher_no` on
+save and `jv.voucher_no` on load, `null`ed on New — the entry form's "Number" field and its preview
+(`nextJvNoPreview`, now `MAX(voucher_no)+1` instead of `MAX(jv_id)+1`) both read this instead of
+`jv_id`. The toolbar's Find modal's search predicate and its results list also switched from
+matching/displaying `jv_id` to `voucher_no` (the record-list table underneath already displayed
+`voucher_no` correctly — only the entry-form field and Find were still on `jv_id`).
+
+**Verified live:** ran the migration against `wentox_db` — confirmed the 5 existing rows became
+`voucher_no` '1'..'5' and the sequence's `current_value` is 6. Called `journalVouchers.service.js`
+directly: created two real JVs (got voucher_no '6' and '7' on jv_id 1006/1007), deleted both,
+confirmed both numbers landed in `deleted_document_numbers` with doc_type `'JOURNAL_VOUCHER'`, then
+deleted those test rows. `node --check` on every touched backend file; `npx tsc -b` and a full
+`npx tsc -b --force` rebuild both pass clean.
+
+**Files:** `backend/src/db/migrations/034_journal_voucher_system_number.sql` (new),
+`backend/src/repositories/journalVouchers.repository.js`,
+`backend/src/services/journalVouchers.service.js`, `backend/src/ipc/journalVouchers.ipc.js`,
+`frontend/src/lib/api.ts`, `frontend/src/pages/JournalVoucherPage.tsx`.
+
+## 2026-09-15 — changes-14-09-26.md: JV-04 (row deletion in the detail grid — bug found & fixed)
+
+**What:** the client reported the JV detail grid's row deletion "does not work." Per the doc's own
+instruction, found the actual cause in `JournalVoucherPage.tsx` before adding anything, rather than
+layering a new delete UI over a broken one.
+
+**Root cause:** `handleRowClick(idx)` called `setMode('edit')` whenever the page was in view mode
+and a grid row was clicked — with no check on `isPosted`. The toolbar's own Edit button already
+guards against this (`disabled={!isViewMode || jvId == null || isPosted}`), but the row click
+bypassed it entirely. So clicking any row on a POSTED journal voucher silently flipped the whole
+page into edit mode; that in turn made both the toolbar's Delete button
+(`disabled={editingIndex != null ? isViewMode : ...}`, now `false`) and the Save button
+(`disabled={isViewMode || !isValid}`, now reachable) actionable. A user could select a row and
+press Delete — it visually disappeared from the grid, looking like it worked — but pressing Save
+always failed, because `journalVouchers.service.js#update()` rejects any edit on a `CONFIRMED`
+voucher with `ApiError.conflict('Unpost the Journal Voucher before editing', 'POSTED_LOCK')`. The
+deletion was never actually persisted — exactly the reported symptom.
+
+**Fix:** `handleRowClick` now checks `isPosted` before entering edit mode, matching the Edit
+button's own guard exactly — a row click on a posted voucher is now a no-op (same as clicking
+Edit itself would be).
+
+**Also added** (second half of JV-04's ask): a delete icon (`Trash2`, 14px, rose, matching
+Receipts'/Expenses' own per-row delete icon styling) at the front of every detail grid row,
+`onClick` calling `removeLine(idx)` directly with `e.stopPropagation()` so it doesn't also trigger
+the row's own select-for-edit handler. Enabled only when `!isViewMode && !isPosted &&
+!detailLocked` — the same rule already applied to the entry strip's own fields — so a posted
+voucher's rows are never actionable via the icon either, closing the same gap from the other
+direction. This also gives a direct one-click delete, replacing the previous indirect
+"click row to select it, then click the toolbar's Delete button" as the only way to remove a line.
+Totals/Net Total already recompute automatically (`totals` is a `useMemo` keyed on `lines`), so no
+change was needed there.
+
+**Not done — deferred, blocked on the client:** the row-pointer reposition after a delete (part of
+G-05) is not implemented — no such pointer/gutter exists anywhere in the app yet. G-05 is grouped
+with G-04/G-06 in the doc's own Sequencing, pending the client's walkthrough on G-04, so this part
+of JV-04's acceptance criteria stays open until that group is picked up.
+
+**Verified:** `npx tsc -b --force` full rebuild passes clean. The bug and fix were confirmed by
+tracing the exact state transitions (`mode`/`isViewMode`/`isPosted` → button `disabled` props →
+`handleSave`'s call into `journalVouchers.service.js#update()`'s `POSTED_LOCK` guard) rather than
+by a live click-through, since reproducing it live would require posting a real JV first.
+
+**Files:** `frontend/src/pages/JournalVoucherPage.tsx`.
+
+## 2026-09-15 — changes-14-09-26.md: BA-01 (print a bill from the Bilty Adda row)
+
+**What:** the Search & Update Bilty Adda page (`BiltyUpdatePage.tsx`) previously had no way to
+print an individual sale bill's invoice at all — only a "Show Print Preview" of the whole filtered
+directory as a report, and a select icon that loads a row into the bilty/adda-update form. The
+client wants to print a bill straight from its row, without navigating to the Sale Bill page.
+
+**Approach — one shared template, per the doc's own explicit warning against a divergent one:**
+extracted `SaleBillPage.tsx`'s former `renderBillPrintable()` function (the invoice markup it
+built inline from its own live form state) into a new standalone component,
+`frontend/src/components/reports/SaleBillPrintable.tsx`. The component takes one plain object,
+`SaleBillPrintModel` (also exported from the same file, along with `SaleBillPrintItem`) — every
+value it needs already resolved to a primitive (names, not ids; a items array of plain numbers/
+strings) — so it has zero dependency on which page or state shape produced those values.
+`SaleBillPage.tsx`'s `renderBillPrintable()` now just builds that model from its own component
+state (unchanged behaviour — still correct for an unsaved bill, since it's built from the live
+form fields, not a fetched row) and renders `<SaleBillPrintable model={model} />`. This removed
+`SaleBillPage.tsx`'s now-unused `wentoxLogo` import and its now-unused `formatDate` import (both
+moved into the shared component, which imports them itself).
+
+**`BiltyUpdatePage.tsx`:** added a `Printer` icon next to the existing row-select (`Edit2`) icon in
+the Action column. Its handler (`handlePrintBill`) fetches the full bill via `api.saleBills.get()`
+— the page's own `invoices` list (from `saleBills.biltySearch()`) carries the joined
+`customer_name`/`sub_customer_name`/`adda_name` but never `items` or a store name, so those two
+sources are combined: names from the already-loaded list row, everything else (items, totals,
+dates, delivery info) from the fresh full fetch. A new `stores` list is loaded on mount (via the
+already-existing `api.listStores()`) purely to resolve `store_id` → name, mirroring exactly how
+`SaleBillPage.tsx` itself does it. This page only ever lists POSTED bills (bilty/adda updates are
+UC-07's own POSTED-only rule), so `api.saleBills.get()` is always correct — no draft-table path
+needed. The result opens in the same `ReportPrintPreviewModal` (`orientation="portrait"`, matching
+`SaleBillPage`'s own single-bill preview) already used elsewhere on this page for the directory
+report, so the print/PDF-export/zoom chrome is identical too.
+
+**Deliberately not changed:** the row's own click behavior (selecting it into the bilty/adda-update
+form) — BA-01's own note says the row-click semantics for this page are still pending the client's
+BA-02 walkthrough (G-08 changes what a row click means elsewhere), so the print action is a
+separate icon, not a reinterpretation of the row click.
+
+**Verified live:** ran `saleBills.service.js#biltySearch()` and `#getById()` directly against
+`wentox_db` on a real posted bill and confirmed every field the model construction assumes is
+present with the expected shape — `article_name`, `color`, `cartons`, `pairs`, `rate`,
+`discount_percent`, `discount_value`, `value` on each item, and `total_cartons`, `total_pairs`,
+`gross_value`, `net_value` on the bill itself. `npx tsc -b --force` full rebuild passes clean.
+
+**Files:** `frontend/src/components/reports/SaleBillPrintable.tsx` (new),
+`frontend/src/pages/SaleBillPage.tsx`, `frontend/src/pages/BiltyUpdatePage.tsx`.
+
+## 2026-09-15 — changes-14-09-26.md: LED-01 (purchase ledger — one row per item)
+
+**What:** a purchase voucher with several item lines collapsed into one summed row in the ledger.
+The client wants one row per purchased item, grouped under its voucher, with the voucher total
+still visible and the ledger's running balance unaffected — display only.
+
+**Confirmed the posting model doesn't need to change first:** `purchases.service.js
+#postLedgerAndStock()` already writes exactly one ledger row per side per purchase (debit
+PURCHASES chart account, credit the vendor's business account), with a combined, comma-joined
+narration across all items (`buildPurchaseNarration()`). The item detail already lives in
+`purchase_items`, joinable by `purchase_id` — so this stayed entirely a reporting/display change,
+per the item's own explicit instruction not to restructure posting without checking first.
+
+**Backend:** `reports.repository.js#ledgerRows()` — the one query behind `accountLedger()`, which
+in turn backs Account Ledger, Business Ledger, AND `vendorLedger()` (Vendor Report's own ledger
+drill-down) — gained one new correlated subquery column, `pur_items_json`:
+```sql
+(
+  SELECT pi.material_id, m.name AS material_name, pi.unit, pi.quantity, pi.price_per_unit, pi.total_price
+  FROM dbo.purchase_items pi JOIN dbo.materials m ON m.material_id = pi.material_id
+  WHERE le.source_type = 'PURCHASE' AND pi.purchase_id = le.source_id
+  ORDER BY pi.line_no FOR JSON PATH
+) AS pur_items_json
+```
+Deliberately a correlated `FOR JSON PATH` subquery, not a direct `LEFT JOIN dbo.purchase_items` —
+a direct join would multiply one ledger row into N (one per item), which would double/triple-count
+that row's debit/credit in every caller's running-balance loop (`accountLedger()`'s
+`running += row.debit - row.credit`). The subquery keeps `ledgerRows()` returning exactly one row
+per `ledger_entries` row, with the item lines riding along as a nested JSON array instead. The
+`WHERE le.source_type = 'PURCHASE'` guard lives *inside* the correlation (not just as an outer
+filter) because `source_id` is only ever a `purchase_id` when `source_type = 'PURCHASE'` — for
+every other source type it's some unrelated table's own PK, and without the inner guard a
+non-purchase row could spuriously pick up an unrelated `purchase_items` row that happens to share
+that numeric id. Also added a `LEFT JOIN dbo.purchases pur ... LEFT JOIN dbo.vendors pur_v` (both
+guarded the same way) purely to surface the vendor's name and the purchase's own manual bill
+number for the row's own display.
+
+`reports.service.js#formatLedgerRow()`: the `'PURCHASE'` case now sets `bill_no` from
+`pur_bill_no` and rewrites `narration` to `"Purchase — <vendor name>"`. A new `purchase_items`
+field is computed once, parsed from the JSON column — an array of
+`{material_name, unit, quantity, price_per_unit, total_price}` for a Purchase row, `undefined` for
+every other row type (so the frontend can tell "not a purchase" apart from "a purchase with zero
+lines," though that shouldn't occur in practice).
+
+**Frontend:** `LedgerRow` (`frontend/src/lib/api.ts`) gained the optional `purchase_items` field
+(new `LedgerPurchaseItem` interface). `ReportKhaataPage.tsx` — chosen as the one surface to change
+first because it already has a Narration column with room for item detail (Account Ledger /
+Business Ledger are the app's own general-purpose ledger views) — its `runningKhaata` builder now
+expands a Purchase row carrying items into: a header row (voucher date/type/inv#/bill#/vendor
+narration, no debit/credit/balance shown), one row per item (`  MATERIAL — qty unit @ rate =
+amount`, italic, no balance shown), and a trailing "Voucher Total" row carrying the real
+debit/credit/balance. A new `KhaataRow.showBalance` flag (default true) hides the Balance cell on
+the header/item rows so the column still reads as exactly one balance change per voucher, not N;
+`isSubRow` lightens/indents the item and total rows. Both the on-screen table and the
+print-preview table (they already shared one `runningKhaata` array) render the expansion
+identically, and the Excel export inherits it for free the same way.
+
+**Not touched, by scope choice:** `VendorReportPage.tsx`'s own separate vendor-ledger table (a
+different, narrower rendering with no narration column at all today) was left as-is — if the
+client's "purchase ledger" specifically meant that view rather than Account/Business Ledger, it
+needs a follow-up to add a detail column there too. Sale, Sale Return and Purchase Return rows are
+untouched, matching the item's own explicit scope note.
+
+**Verified live** against `wentox_db`: called `reportsService.accountLedger()` directly for a
+single-item purchase (₨2,500 — PU Sheet Roll) and a genuine two-item purchase (`pcs` ₨15,600 +
+`pws` ₨145,440 = ₨161,040), confirmed the JSON parses into the correct `purchase_items` array in
+both cases and that the ledger row's own `credit` exactly equals the item total sum in the
+multi-item case. `node --check` on every touched backend file; `npx tsc -b --force` full rebuild
+passes clean.
+
+**Files:** `backend/src/repositories/reports.repository.js`,
+`backend/src/services/reports.service.js`, `frontend/src/lib/api.ts`,
+`frontend/src/pages/ReportKhaataPage.tsx`.
+
+## 2026-09-15 (correction, same day) — LED-01 was also missing from Vendor Balances / Business Account ledger
+
+**What happened:** the client screenshotted Vendor Balances and the Business Account ledger still
+showing the old combined narration ("90 Meters jh @ 80, 65 Meters kl @ 90" as one line) after the
+LED-01 fix above. Those two views turned out to be a completely different component from the one
+just fixed — `OverallTrailContent.tsx` (backs Reports Hub's "Vendor Balances"/"Customer Balances"
+tabs and Overall Trail's own Business Account quick-filter pill), not `ReportKhaataPage.tsx`
+("Account Ledger"/"Business Ledger" tabs). `OverallTrailContent.tsx` calls
+`api.reports.accountLedger()` directly and had its own two `ledger.rows.map(...)` calls (one for
+its print table, one for its on-screen table) that never went through `ReportKhaataPage.tsx`'s
+`runningKhaata` expansion — so the backend fix (verified correct) never reached this surface.
+
+**Fix:** added the identical expansion logic as a new `expandedLedgerRows` memo in
+`OverallTrailContent.tsx` (new `DisplayLedgerRow` type: `key/date/type/ref/narration/debit/
+credit/balance/showBalance/isSubRow`), replacing both `ledger.rows.map(...)` call sites (print
+table and on-screen table) and the ledger Excel export (`handleExportExcelLedger`) with it. Same
+header-row/item-rows/trailing-total-row shape as `ReportKhaataPage.tsx`'s own version.
+
+**Verified live** against the exact voucher from the client's screenshot: `reportsService
+.accountLedger({ ba_id: 1 })`'s entry #9003 returns `purchase_items: [{material_name: 'jh', ...},
+{material_name: 'kl', ...}]` with `credit: 13050` and `balance: -868450` — matching the
+screenshot's ₨13,050 and ₨868,450 exactly, confirming the backend was already correct and this was
+purely the second frontend surface having been missed. `npx tsc -b --force` passes clean.
+
+**Files:** `frontend/src/pages/OverallTrailContent.tsx`.
+
+## 2026-09-15 (second correction, same day) — LED-01's exact row shape per the client
+
+**What the client wanted, stated precisely:** a single-item purchase renders exactly as it always
+did — the plain, unsplit row, no change at all. Only a purchase with more than one item groups,
+and even then as compactly as possible: for N items, exactly N+1 rows (N item rows, no separate
+header row, plus 1 trailing total row). All rows compact (no extra vertical padding/spacing), and
+narration text plain black, not gray/italic.
+
+**Backend:** reverted `reports.service.js`'s `'PURCHASE'` case back to doing nothing beyond
+`type = 'Purchase'` — no narration/bill_no override. Reverted `reports.repository.js`'s
+`ledgerRows()` to drop the now-unused `LEFT JOIN dbo.purchases pur` / `LEFT JOIN dbo.vendors pur_v`
+and their two SELECT columns (`pur_bill_no`, `pur_vendor_name`) added in the first correction — a
+single-item purchase's narration is once again the plain, original combined string
+(`buildPurchaseNarration()`'s output) untouched. The `pur_items_json` correlated subquery (and the
+service's `purchase_items` parsing) stayed exactly as-is — that data was already correct, only the
+narration/bill_no override needed undoing.
+
+**Frontend:** in both `ReportKhaataPage.tsx`'s `runningKhaata` and `OverallTrailContent.tsx`'s
+`expandedLedgerRows`, changed the trigger condition from `purchase_items.length > 0` to `> 1`, and
+removed the separate header row entirely — the first item row now itself carries the voucher's
+date/type/inv#/bill#(/ref), narrating only that one item; every subsequent item row is blank in
+those columns; the trailing total row (unchanged) still alone carries the real debit/credit/
+balance. Net result for a 2-item purchase: exactly 3 rows (was 4 in the first correction's
+header+2-items+total shape). Styling: item/total rows now use tight vertical padding (`py-1`
+on-screen, `2px 6px` in print, versus `py-3`/`5px 6px` for a normal row) instead of a lighter
+background + italic + gray narration — narration text is now plain black
+(`text-slate-900`/`color: '#000000'`) on every row, matching a normal row's own narration color.
+
+**Verified live** once more: entry #6497 (single item, "leather") — narration is back to
+`"900 Meters leather @ 870"`, exactly its pre-LED-01 form; entry #9003 (two items, "jh"/"kl") — the
+`purchase_items` array, `credit` (₨13,050), and `balance` (-₨868,450) are unchanged from the first
+correction, confirming only the display/narration logic moved, not the underlying data. `node
+--check` on both touched backend files; `npx tsc -b --force` full rebuild passes clean.
+
+**Files:** `backend/src/repositories/reports.repository.js`,
+`backend/src/services/reports.service.js`, `frontend/src/pages/ReportKhaataPage.tsx`,
+`frontend/src/pages/OverallTrailContent.tsx`.
+
+## 2026-09-15 — changes-14-09-26.md: G-03 (autofocus audit — first input focused on every page open)
+
+**What:** `changes-15-08-26.md`'s G-01 established the app-wide rule that a page's first input
+gets focused on open; this item is the audit pass confirming it actually holds everywhere,
+including sub-panes that mount inside a parent page rather than being routed pages of their own.
+
+**Method:** dispatched a fork agent to statically audit all 47 files in `frontend/src/pages/*.tsx`
+for a working mount-time focus mechanism (grep for `firstFieldRef`/`autoFocus`/`.focus()` and any
+other ref-based focus pattern). It reported 25 PASS, 16 FAIL, 4 OUT OF SCOPE. Reviewed every FAIL
+myself before fixing anything, since the audit was grep-only and could both over- and under-report:
+
+- Discovered `AppLayout.tsx` already has a generic, app-wide G-01 fallback
+  (`focusFirstField(document)`, called on mount and again via a `MutationObserver`) that focuses
+  the first `FIELD_SELECTOR`-matching element inside the page's first `<form>` — but ONLY if the
+  page has a `<form>` at all. Checked every reported FAIL for a `<form>`: 12 of the 16 have none
+  at all (so the generic fallback genuinely does nothing for them — confirmed real fails), and 2
+  (`TransferPage.tsx`, `ChequeReturnsContent.tsx`) do have one, but every sibling data-entry page
+  that also has a `<form>` (SaleBillPage, PurchasePage, JournalVoucherPage, etc.) deliberately adds
+  its own explicit `firstFieldRef` on top rather than trusting the generic fallback alone — so
+  fixed those the same way for consistency, not left as "maybe it already works."
+- Caught two over-reports the grep-only audit couldn't tell apart from real fails:
+  `SaleAnalysisPage.tsx` and `SaleReportPage.tsx` both default to an `'overall'` view with zero
+  real inputs (only mode-toggle `<button>`s, not fields) — the `SearchableSelect` the audit found
+  is only reachable after switching to the non-default "By Month" view, so these are genuinely OUT
+  OF SCOPE per the item's own "read-only pages with no input" carve-out, reclassified rather than
+  patched with an irrelevant fix.
+- Also caught one under-report: `WageRunPage.tsx` had been marked PASS by the audit ("a working
+  focus mechanism exists") because it has several `.focus()` calls — but none of them fire on
+  mount; they're all row-to-row Enter-key navigation inside the entry grid. Its sibling,
+  `SalaryRunPage.tsx`, is structurally identical and WAS correctly flagged FAIL — the asymmetry
+  itself was the tell. Fixed both.
+
+**Fixes (15 files):** each got the established `firstFieldRef` pattern — a `useRef` on the page's
+first real field plus `useEffect(() => { requestAnimationFrame(() => ref.current?.focus()); },
+[...])` — except `SearchCustomerPage.tsx`, whose first field is a `SearchableSelect` (no plain
+`<input>` to ref), which instead got that component's own `autoFocus` prop. That prop already
+existed in `SearchableSelect.tsx` (built specifically for this, per its own header comment) but had
+never actually been used anywhere in the codebase until now.
+
+Three sub-panes that mount fresh on every `ChequePage` tab switch (`ChequeInHandContent.tsx`,
+`ChequeLedgerContent.tsx`, `ChequeReturnsContent.tsx`) needed only a plain mount-only effect — a
+remount already happens on every tab switch since these are conditionally rendered
+(`activeTab === 'x' && <Content />`), not hidden/shown, so "focus on mount" already covers "focus
+on tab switch" for free. `ProductLedgerContent.tsx`/`ReportCashBookPage.tsx` (Reports Hub tabs) are
+the same shape. Three drill-down list pages (`OverallTrailContent.tsx`, `ReportKhaataPage.tsx`,
+`VendorReportPage.tsx`) needed the effect gated on their own "is an account/vendor currently
+selected" state, so returning from a drill-down back to the list re-focuses the search box too, not
+just the very first mount.
+
+**Verification:** `npx tsc -b --force` passes clean; ran `npx eslint` scoped to all 15 touched
+files and confirmed none of the newly-added ref/effect lines produced any new warning or error —
+the pre-existing repo-wide `react-hooks/set-state-in-effect` warnings that show up in a full `npm
+run lint` are unrelated pre-existing findings across the whole codebase, not something this item
+introduced or is responsible for fixing. Not verified via an actual browser click-through — noted
+as a limitation rather than claimed.
+
+**Files:** `frontend/src/pages/BiltyUpdatePage.tsx`, `frontend/src/pages/TransferPage.tsx`,
+`frontend/src/pages/ChequeInHandContent.tsx`, `frontend/src/pages/ChequeLedgerContent.tsx`,
+`frontend/src/pages/ChequeReturnsContent.tsx`, `frontend/src/pages/OverallSearchPage.tsx`,
+`frontend/src/pages/OverallTrailContent.tsx`, `frontend/src/pages/PaymentTrailPage.tsx`,
+`frontend/src/pages/ProductLedgerContent.tsx`, `frontend/src/pages/ReportCashBookPage.tsx`,
+`frontend/src/pages/ReportKhaataPage.tsx`, `frontend/src/pages/SalaryRunPage.tsx`,
+`frontend/src/pages/WageRunPage.tsx`, `frontend/src/pages/SearchCustomerPage.tsx`,
+`frontend/src/pages/VendorReportPage.tsx`.
+
+## 2026-09-15 — changes-14-09-26.md: G-01 (negative balances in parentheses — audit, no fix needed)
+
+**What:** the client's own framing was explicit — "this item is an audit, not a new rule."
+`formatCurrency()` already wraps a negative value in parentheses (G-05, `changes-15-08-26.md`); the
+ask was to find every ledger surface printing a balance WITHOUT going through it.
+
+**Audited every named surface** from the item's own list: `ChequeLedgerContent.tsx`,
+`ChequeInHandContent.tsx`, `ChequeReturnsContent.tsx`, `ProductLedgerContent.tsx`,
+`OverallTrailContent.tsx`, `ReportKhaataPage.tsx`, `ReportCashBookPage.tsx`, `ReportStockPage.tsx`,
+`PaymentTrailPage.tsx`, `VendorReportPage.tsx`, `SaleReportPage.tsx`, `SaleAnalysisPage.tsx`, and
+the business/chart/control/group account ledgers (all the same `ReportKhaataPage` component,
+filtered by `ba_id` vs `ac_id` — not separate pages, already covered). Grepped each for
+`.toLocaleString()` and `Math.abs()` — the two ways a balance typically bypasses
+`formatCurrency()` — and traced every hit:
+
+- `ReportStockPage.tsx`/`ProductLedgerContent.tsx`'s `.toLocaleString()` calls are all on stock
+  quantities (pairs/cartons) — never-negative physical counts, not a signed ledger balance. Out of
+  this item's own scope by its own wording.
+- `AccountBalancePanel.tsx`'s per-line delta uses a manual `+`/`−` prefix with
+  `formatCurrency(Math.abs(delta))` — a deliberate, different convention for a signed *change*
+  amount, not a *balance* (its actual Current/After balance figures pass the signed value straight
+  through `formatCurrency()` already, correctly). Also not in the item's own surface list.
+- `VendorReportPage.tsx`'s "Journal Voucher applied" row similarly uses
+  `formatCurrency(Math.abs(row.total_jv))` — a magnitude next to explanatory text, not a running
+  balance.
+- Excel exports (`ReportKhaataPage`/`OverallTrailContent`'s `handleExportExcel*`) push the raw
+  numeric balance, not a `formatCurrency()` string — confirmed this is the consistent, deliberate,
+  app-wide convention (`exportRowsToExcel`'s own signature takes `number` specifically so `xlsx`
+  writes a real numeric cell Excel can sum/format) and not a gap "print and export output counts"
+  was pointing at — turning it into a parenthesized string would break the numeric cell Excel
+  export exists to provide. The PDF export path reuses the exact same print HTML as the Print
+  button (`lib/export.ts`'s own comment), so it's automatically covered by the print template
+  already being correct — no separate check needed there.
+
+**Result: no code changes.** Every genuine balance column, on screen and in its print template,
+already routes through `formatCurrency()` — G-05 was applied consistently everywhere this item's
+surface list points at. Documented the audit itself (what was checked, and why each near-miss
+wasn't actually a violation) in `changes-14-09-26.md` rather than leaving the item's completion
+unexplained.
+
+**Verification method:** static code audit (grep across every named file), not a live click-through
+with a real negative balance on screen — same caveat as G-03 above.
+
+## 2026-09-15 — changes-14-09-26.md: ACC-02 (Delete action on every account page)
+
+**What:** add a guarded Delete to Business Accounts, Chart of Accounts, Group Accounts, and Bank
+Accounts — blocked if the account carries transactions or is a system-default, following the
+existing soft-delete convention, no second deletion mechanism.
+
+**Starting point:** all four services already had a working `remove()`/`reactivate()` pair
+(soft-close via `status='CLOSED'`/`is_active=0`) from earlier milestone work —
+`BankSetupPage.tsx` even had a fully wired frontend "Deactivate" flow already. So this was mostly
+about closing specific gaps, not building the feature from scratch:
+
+1. **Missing guard — "carries transactions"** — none of the four `remove()` functions checked
+   ledger activity at all before closing an account. Added `hasLedgerActivity()`:
+   - `businessAccounts.repository.js`: `EXISTS(SELECT 1 FROM ledger_entries WHERE ba_id=@baId)`.
+   - `chartAccounts.repository.js`: same, keyed on `ac_id`.
+   - `bankAccounts.repository.js`: a bank account never posts `ledger_entries` against its own
+     `bank_id` — every payment/receipt/transfer through it posts against its *linked*
+     `business_accounts.ba_id` instead (`bank_accounts.ba_id`) — so this one joins through that
+     link. Also added `findLinkedOpeningBalance()` for the same reason.
+   - Plus a direct non-zero `opening_balance` check on `businessAccounts`/`bankAccounts` (an
+     opening balance is itself a posted OPENING ledger row, so `hasLedgerActivity` alone would
+     already catch it in practice, but checking the stored value directly is the more literal
+     statement of the doc's own wording, "any opening balance other than zero").
+   - `groupAccounts` needed nothing here — groups never receive `ledger_entries` directly, only
+     the chart accounts filed under them do.
+2. **Missing guard — "child accounts"** — `groupAccounts.service.js#remove()` already had this
+   (`isReferenced()`: any chart account filed under the group, active or closed, unconditional).
+   `chartAccounts.service.js#remove()` did not have the equivalent one level down — added
+   `chartAccounts.repository.js#hasChildren()` (any business account filed under it, same
+   unconditional shape) and wired it in.
+3. **"System-default account" guard — already complete, verified rather than assumed.**
+   `chartAccounts.service.js`'s `RESERVED_CODES = new Set(Object.values(CODES))` already covers
+   every reserved code, including `CHEQUES_IN_HAND` (the doc's own named example — "Cheques in
+   hand" turns out to be a *chart* account, not a business account: `db/seeds/run.js` creates its
+   chart-of-accounts row but never seeds a `business_accounts` row beneath it, unlike
+   `CASH_IN_HAND`/`JOURNAL_VOUCHER`). `businessAccounts.service.js`'s narrower
+   `STRUCTURAL_ACCOUNT_HEADS` (just those same two codes) is correspondingly correct — no other
+   reserved code has a business account that could collide with it.
+4. **No frontend Delete UI at all** on `BusinessAcSetupPage.tsx`/`ChartAcSetupPage.tsx`/
+   `GroupAcSetupPage.tsx` — each got a `Trash2` button (disabled + tooltipped when the row is
+   reserved/system) beside the existing Edit/Reactivate buttons, backed by a shared `ConfirmModal`
+   (already Escape-closing per this session's earlier G-07 work) naming the account.
+   `GroupAcSetupPage.tsx` had a second, independent gap: its list was unconditionally filtered to
+   `is_active` client-side, so a deactivated group could never even be *seen* again, let alone
+   reactivated — added a Status badge column and a Reactivate button there too, matching the other
+   three pages, so Delete has a real way back.
+5. **`BankSetupPage.tsx`'s existing Deactivate and reactivate-prompt dialogs weren't closing on
+   Escape** — neither matches the `isModalOpen`/`handleCloseModal` naming the original G-07 batch
+   script searched for (different state names: `deactivatingBank`/`reactivatePrompt`), so both were
+   silently missed by that sweep. Wired `useEscapeToClose` onto both — this item's own note
+   explicitly calls for it ("The dialog closes on Escape (G-07)"), so it's this item's fix to make,
+   not a separate follow-up.
+
+**Verified live** against `wentox_db`:
+- `businessAccounts.service.js#remove()`: "shazaib" (ledger activity, zero opening balance) →
+  refused with the transactions message; "fareed shoes" (non-zero opening balance) → refused with
+  that message.
+- `chartAccounts.service.js#remove()`: created a fresh chart account + a business account under
+  it — chart account refused while the child existed (`CHART_ACCOUNT_HAS_CHILDREN`); removed the
+  business account (succeeded cleanly); chart account then removed cleanly too.
+- `bankAccounts.service.js#remove()`: "Meezan Bank" (₨50,000 opening balance on its linked
+  account) → refused; a freshly created, unused bank account → removed cleanly.
+
+`node --check` on every touched backend file; `npx tsc -b --force` full rebuild passes clean.
+
+**Files:** `backend/src/repositories/businessAccounts.repository.js`,
+`backend/src/services/businessAccounts.service.js`,
+`backend/src/repositories/chartAccounts.repository.js`,
+`backend/src/services/chartAccounts.service.js`,
+`backend/src/repositories/bankAccounts.repository.js`,
+`backend/src/services/bankAccounts.service.js`,
+`frontend/src/pages/BusinessAcSetupPage.tsx`, `frontend/src/pages/ChartAcSetupPage.tsx`,
+`frontend/src/pages/GroupAcSetupPage.tsx`, `frontend/src/pages/BankSetupPage.tsx`.
+
+## 2026-09-15 — changes-14-09-26.md: ACC-01 (one sign rule, verified everywhere)
+
+**What:** the client's one authoritative rule — every account, everywhere a signed amount is
+entered: +ve → DEBIT (NAAM), -ve → CREDIT (JAMMA); for BANK/CASH specifically that maps onto
+money in/out. Confirmed 2026-09-14, overriding any earlier convention wherever code disagreed.
+Deliverable was explicitly a verification matrix, not just a fix — "verification is the
+deliverable, not just the code change."
+
+**Method:** traced every posting path listed in the item — opening balances, transfers, deposits,
+receipts, expenses/payments, cheque flows (deposit/endorse/bounce/return), direct settlements, and
+journal vouchers — down to the actual `debit`/`credit` values passed into each
+`ledger_entries` INSERT, reading the real service/repository code rather than assuming from
+naming. Specifically watched for a "double flip" (sign negated once in the service layer, negated
+again in the repository) per the item's own warning that this is the dangerous case ("reads as
+correct in one screen and inverts in the ledger").
+
+**Result: one violation, in one place.** Every entry point except the Journal Voucher's own entry
+strip was already correct — transfers/receipts/expenses/cheques/settlements are all
+fixed-direction transactions (never a user-typed signed amount deciding Dr/Cr), and the one place
+that IS an explicit direction choice (Transfer's Deposit tab) uses a CREDIT/DEBIT toggle button,
+not a signed number, so there's no sign-mapping logic there to get wrong. No double-flip pattern
+exists anywhere.
+
+`JournalVoucherPage.tsx`'s entry strip — a single signed Amount field standing in for separate
+Debit/Credit boxes — had the mapping backwards: `handleCommitLine` sent a **positive** amount to
+**credit** and negative to **debit**, the exact inverse of the rule. This wasn't an accidental bug;
+it matched a real 2026-08-26 instruction ("if it is positive... we are doing credit") that this
+item's 2026-09-14 confirmation explicitly supersedes. Fixed:
+- `handleCommitLine`: `debit: entry.amount > 0 ? entry.amount : 0, credit: entry.amount < 0 ?
+  Math.abs(entry.amount) : 0` (was the inverse).
+- `loadLineIntoEntry` (the read path reconstructing a signed Amount when re-opening a saved line
+  for edit): `amount: row.debit > 0 ? row.debit : -row.credit` (was the inverse) — had to flip in
+  lockstep with the write path or editing an existing line would silently re-invert it back.
+- The now-stale header comment describing the old convention, the Amount field's placeholder
+  ("+credit / -debit" → "+debit / -credit"), and the validation error's wording.
+- `journalVouchers.math.js` (the shared debit/credit sum + balance-check layer) needed no change —
+  confirmed it's a pure pass-through with no sign logic of its own, so it was never the source of
+  the bug and isn't affected by the fix.
+
+**Verified live** against `wentox_db`, reproducing the acceptance criterion's own spot-check
+exactly: posted a real JV crediting Meezan Bank ₨5,000 (what typing `-5000` now correctly produces)
+against a counter account. Balance ₨50,550 → ₨45,550, delta exactly -₨5,000. Unposted and deleted
+the test JV, balance restored to ₨50,550. The parentheses-display half of the acceptance criterion
+was already covered by G-01 (done earlier this session). `npx tsc -b --force` full rebuild passes
+clean.
+
+**Files:** `frontend/src/pages/JournalVoucherPage.tsx`.
+
+## 2026-09-15 — changes-14-09-26.md: CHQ-01 (investigated, no repro) + CHQ-02 (Mark Cleared for endorsed cheques)
+
+**CHQ-01 — "Endorsement fails":** per the item's own "reproduce first, then trace" instruction,
+investigated before touching any code. Found two entirely different features both called "Endorse"
+in this app: the Receipts page's own settlement checkbox (`dbo.settlements` — RP-01's subject, no
+cheque "sections") and the real cheque-endorsement action on `ChequesTab.tsx`'s Disposal tab
+(`endorseToVendor`/`endorseToExpense`, which does move a cheque through Pending → Endorsed →
+Cleared "sections," matching the acceptance criterion). Traced the second one's full path — button
+handler → frontend validation → IPC → service → repository → ledger/status writes — and it's
+already error-handled at every step (`saveAllocation` surfaces any backend failure via
+`setDialogError`, never silently). Checked the most plausible historical cause (endorsing a cheque
+whose receipt is still DRAFT) and found it's already fully guarded — not just a disabled button but
+an explanatory badge with a tooltip pointing at the fix — added in an earlier commit
+(`git log -S receiptPosted` → `3d8bfed8`, pre-dating this whole change-request doc).
+
+Verified the entire live flow directly against `wentox_db` rather than trusting the reading: called
+`endorseToVendor` on a real PENDING cheque, endorsed partially, reversed it, then endorsed it in
+full — every step succeeded, every ledger row landed correctly (per ACC-01's sign rule, already
+verified earlier this session), no partial write, no silent failure. **Could not reproduce the
+client's original failure.** Documented this as an investigation result, not a fix, with an honest
+note that the exact click sequence was never run in a live Electron window in this environment —
+if it still reproduces for the client, the next step is getting the precise steps from them rather
+than guessing further (their own instruction: a guess here risks a half-endorsed cheque). No code
+changed for CHQ-01 itself.
+
+**CHQ-02 — Mark Cleared for endorsed cheques:** confirmed first that Mark Cleared is a pure status
+flip with no ledger effect for the existing DEPOSITED→CLEARED case (money was already posted at
+deposit/endorsement time) — so extending it to ENDORSED cheques is genuinely a new entry point into
+an existing transition, not a new one, exactly as the item specifies. Two changes:
+- `cheques.service.js#markCleared()`: accepted only `cheque_status === 'DEPOSITED'` — extended to
+  also accept `'ENDORSED'`, renamed the error code `NOT_DEPOSITED` → `NOT_CLEARABLE` (no other
+  reference to the old code existed anywhere in the codebase, confirmed by grep before renaming).
+- `ChequesTab.tsx`: found the *exact same bug* this file had already hit and fixed once for
+  DEPOSITED cheques (its own `OPEN_STATUSES` comment documents that earlier incident: a status left
+  out of the "Open" filter view meant the row — and its Mark Cleared button, which only renders for
+  matching statuses — became unreachable without manually changing the filter). `ENDORSED` had
+  never been added to `OPEN_STATUSES`, and the Mark Cleared button's condition only checked
+  `row.status === 'DEPOSITED'`. Added `'ENDORSED'` to both, mirroring `DEPOSITED` exactly.
+
+**Verified live** against `wentox_db`: endorsed a real cheque (#4, ₨10,000) to completion (status →
+ENDORSED), called `markCleared()` — succeeded, status → CLEARED; confirmed `markCleared()` still
+correctly rejects a PENDING cheque, now with the renamed `NOT_CLEARABLE` code. All test allocation
+and ledger rows created during both CHQ-01's and CHQ-02's live testing were deleted afterward and
+cheque #4 restored to its original PENDING state (verified by re-querying it). `node --check`;
+`npx tsc -b --force` full rebuild passes clean.
+
+**Files:** `backend/src/services/cheques.service.js`, `frontend/src/components/ChequesTab.tsx`.
+
+## 2026-09-15 — changes-14-09-26.md: RP-01 (direct settlements missing from posted records)
+
+**What:** a settlement made directly through the Receipts screen's own "Endorse" checkbox
+(`dbo.settlements` — distinct from cheque endorsement) never showed up again once you navigated
+away — no way to find it, page back to it, or confirm it posted.
+
+**Traced the full path** per the item's own instruction: the settlement write itself
+(`settlements.service.js#create/post`) was never the problem — confirmed it writes cleanly to its
+own table with its own id/status. The gap was exactly where the item predicted: the query behind
+`ReceiptsPage.tsx`'s First/Prev/Next/Last navigation and Find,
+`receiptVouchers.repository.js#list()`, never references `dbo.settlements` at all — a settlement
+simply isn't part of the data those UI elements read from.
+
+**Fix, scoped to the Entry tab** (what the acceptance criterion itself names — "reopen the page,
+navigate posted records"):
+- Added `allSettlements` state + `refreshAllSettlements()` (`api.settlements.list({})`), fetched on
+  mount and after create/post/unpost, alongside the existing `allVouchers`/`refreshAllVouchers()`.
+- A settlement has no `voucher_no` (not part of that numbering sequence), so it can't sort into the
+  *same* numeric merge the deleted-number-gap display (`mergeWithDeleted`) uses for real vouchers.
+  Wrote `insertSettlementsByDate()` — merge-inserts settlement entries by `settlement_date` into
+  the already-ordered voucher+deleted-gap sequence, so First/Prev/Next/Last walk both kinds
+  chronologically. A run of settlements queued behind a 'deleted' gap marker (which carries no
+  date) just flushes in front of the next real voucher — the deleted-gap display's own position is
+  untouched, this item is about settlements being findable, not about that display's date
+  precision.
+- Built `openSettlementInEntry(settlementId)` — there was genuinely no way to load an *existing*
+  settlement by id before this; only the moment right after creating one happened to render
+  correctly (`handleSaveSettlement` sets the same fields inline). The new function fetches by id
+  and sets every one of those same fields, so a reopened settlement looks identical either way.
+- `derivedNavIndex`/`goToNavIndex` extended to find/open a `kind: 'settlement'` entry the same way
+  they already do for `kind: 'doc'`/`kind: 'deleted'`.
+- Find (`findResults`/`handleFindSelect`) unified into one `FindResult` shape covering both
+  receipt vouchers and settlements — searches settlement id, date, remarks, and either party's
+  name (`from_name`/`to_name`).
+
+**Confirmed already correct, not a gap (per the item's own "confirm the accounting side... report
+separately" instruction):**
+- Settlement ledger postings — already verified correct under ACC-01's sign rule earlier this
+  session (creditor debited, debtor credited).
+- Account/Business/Vendor Ledger and Overall Trail — all built on `reports.repository.js
+  #ledgerRows()`, which reads `ledger_entries` directly (not the document tables) — a settlement's
+  `source_type='SETTLEMENT'` rows are already picked up correctly there
+  (`reports.service.js#formatLedgerRow()`'s own `'SETTLEMENT'` case). This gap was specific to the
+  document-navigation query, not the ledger-reading ones.
+
+**Checked and found genuinely out of scope, not silently skipped:**
+- `ExpensesPage.tsx` has **no** Direct Settlement creation UI at all — its own "Endorse" concept
+  (`payment_mode: 'CHEQUE_ENDORSED'`) is the unrelated cheque-endorsement feature. Nothing can be
+  "missing from the payment list" today because nothing can be created there yet. Did find the
+  identical latent gap already waiting for whenever that's built: `reports.repository.js
+  #paymentTrailRows()` (backing `PaymentTrailPage`) only queries `dbo.expenses`, no
+  `dbo.settlements` reference — reported per the item's own audit instruction, not fixed, since
+  nothing can reach it yet.
+- `OverallReceiptsTab.tsx`/`WeeklyReceiptsTab.tsx`/`MonthlyReceiptsTab.tsx` (the Records tabs' own
+  voucher-*grouped* browsing tables, a separate and larger architecture keyed on `voucher_id` — a
+  concept a settlement doesn't have) have the identical underlying gap but were not touched in this
+  pass — the Entry tab fix above is what the acceptance criterion itself tests; these three are a
+  follow-up if the client needs settlements reachable from the grouped report views too.
+
+**Verified live** against `wentox_db`: created and posted a real settlement (₨2,500), confirmed
+`settlements.service.js#list()` returns it with every field the new frontend code consumes
+(`status`, `settlement_date`, `amount`, `from_name`, `to_name`) — the data layer both the fix and
+its ongoing correctness depend on. The frontend logic itself is verified by a full, clean
+type-check (structural typing meant the settlement-shaped entries unified with the existing
+`NavEntry<T>` machinery with zero type errors) — no live click-through was possible in this
+environment, noted as a limitation rather than claimed. Test settlement unposted and deleted
+afterward. `npx tsc -b --force` full rebuild passes clean.
+
+**Files:** `frontend/src/pages/ReceiptsPage.tsx`.
+
+## 2026-09-15 — changes-14-09-26.md: G-02 (required-field keyboard trap — shared layer, partial rollout)
+
+**What:** every field marked with the red asterisk should trap Enter/Tab/arrow-key advance while
+it's empty, showing an inline validation message, releasing the moment it's filled — implemented
+once in the shared field-navigation layer, never per page.
+
+**The shared mechanism (`lib/fieldNav.ts` — already the one file `AppLayout.tsx`'s G-01 keyboard
+handling and `SearchableSelect.tsx` both depend on, per its own header comment):**
+- `isRequiredAndEmpty(el)` — native `required` attribute + `ValidityState.valueMissing`. Deliberately
+  not a bespoke rule: a field only traps once it's actually marked `required`, inert everywhere
+  else, so rollout to more fields later never touches this function again and can't drift between
+  pages the way a bespoke per-page rule could.
+- `blockIfRequiredEmpty(el)` — the single call every advance path makes before moving focus.
+  Displays the message via the browser's native `reportValidity()` bubble, which positions itself
+  correctly at the field automatically (works inside a portaled modal too) — no custom message
+  component needed to satisfy "inline, under/next to the field."
+
+**Wired into every path the item names**, in `AppLayout.tsx`'s window-level keydown handler plus
+`lib/fieldNav.ts`'s shared `focusNextField()`:
+- Enter — checked immediately before the existing next-field/submit logic.
+- Tab — a new block; unlike Enter/arrows (which this app's G-01 code computes and moves itself),
+  native Tab movement has no JS behind it at all today, so the trap is `e.preventDefault()` rather
+  than computing a target field. Only forward Tab traps; Shift+Tab still retreats freely.
+- Arrow-Right/Down — same trap, forward direction only. Arrow-Left/Up (backward) deliberately left
+  alone — the item is about being carried *past* a field, not about being unable to retreat to fix
+  it; trapping backward navigation would lock the user on the field they're trying to go back to.
+- `focusNextField()` — the one shared advance point `SearchableSelect.tsx` and every page's own
+  "pick from a modal, then move on" call sites already route through.
+
+**Verified zero risk before marking anything `required`:** every current call site of
+`focusNextField()` passes a `button[data-field-nav]` (a SearchableSelect trigger) — `isRequiredAndEmpty()`
+only recognizes native `<input>`/`<select>`/`<textarea>`, so it's unconditionally `false` for all
+of them today. Confirmed by reading every one of the ~15 call sites across the codebase before
+writing a single line of the mechanism itself.
+
+**Rolled out to 8 real fields as a working pilot** (not the full app-wide sweep — see below):
+- `ReceiptsPage.tsx`: Amount, "Received Into" bank picker (a plain `<input>` search-trigger, not a
+  `SearchableSelect` component, so it genuinely qualifies for the native-`required` path).
+- `JournalVoucherPage.tsx`: Date, the entry strip's A/C Code search-trigger, Amount.
+- `ExpensesPage.tsx`: Amount Paid, Cheque No./Cheque Date — `required={...}` conditional on
+  `paymentMode`, matching the fields' own existing conditional asterisk exactly rather than a
+  static attribute.
+
+Confirmed the item's own "verify [the primary action button] still holds" requirement — all three
+pages already have their own `buildPayload()`-style early-return validation blocking Save
+regardless of this new keyboard-level trap; this item adds a second, earlier line of defense, not
+a replacement for the first.
+
+**Deliberately not done — explicit, low-risk follow-up, not silently dropped:**
+- `SearchableSelect.tsx`-based pickers (account/vendor/customer/chart-account — the majority of the
+  app's red-asterisk fields) aren't covered: a `<button>` has no native validity for
+  `isRequiredAndEmpty()` to read. Needs its own small, separate addition — a `required` prop, an
+  internal "is something selected" check, and its own inline message (native `reportValidity()`
+  doesn't apply to a button) — scoped as a follow-up since it touches a heavily-shared component
+  and deserves its own careful pass rather than a guess folded into this one.
+- Roughly 9 more files still carry the red-asterisk marker with no `required` attribute yet (~80+
+  marker occurrences found across 12 files total by grep; 3 files/8 fields done above). Adding
+  `required` to each remaining field is mechanical, and — because the mechanism is inert until a
+  field is actually marked — safe to do incrementally, one field or page at a time, with no drift
+  risk between pages since there is only the one shared implementation.
+
+**Verified:** `npx tsc -b --force` full rebuild passes clean. Traced every code path by hand rather
+than a live click-through (not possible in this environment) — noted as a limitation rather than
+claimed as browser-verified.
+
+**Files:** `frontend/src/lib/fieldNav.ts`, `frontend/src/components/AppLayout.tsx`,
+`frontend/src/pages/ReceiptsPage.tsx`, `frontend/src/pages/JournalVoucherPage.tsx`,
+`frontend/src/pages/ExpensesPage.tsx`.
+
+## 2026-09-15 — changes-14-09-26.md: LED-02 (business ledger narration — default account + mode of payment)
+
+**What:** two-part item — investigate how narration is generated today (write it up before
+touching anything, per the client's explicit ask), then extend it to show the counter-account and
+payment mode. Two real definitions needed confirming with the client before coding.
+
+**Investigation (part 1):** every ledger surface (Account/Business/Vendor Ledger, Overall Trail and
+Overall Search's drill-downs) goes through one function, `reports.service.js#formatLedgerRow()` — a
+switch on `source_type` that was inconsistent by document type: Receipt/Expense had
+`rc_payment_mode`/`ex_payment_mode` already fetched and simply never shown; Transfer already showed
+both account names as an accidental fallback; Settlement/JV/Cheque Endorsement left the raw stored
+narration as-is; Sale Bill/Purchase/Wage Run/Salary Run/Opening Balance had no counter-account or
+mode concept in their narration at all. Full per-type table written into `changes-14-09-26.md`
+itself as the required PR write-up.
+
+**Definitions confirmed with the client live** (via AskUserQuestion, mid-session): (1) a Journal
+Voucher can have 3+ lines, so "the counter-account" isn't singular there — confirmed: show the
+first other line only, matching every other document type's one-counter-account shape, rather than
+listing all lines or excluding JVs. (2) "mode of payment" scope confirmed as Receipt + Expense
+(the two types that actually record cash/cheque/bank at posting) plus Cheque Endorsement/Return
+(always "Cheque" by definition) — Direct Settlement's own `payment_mode` is explicitly informational
+(selects no posting target, per that code's own comment) and was confirmed excluded.
+
+**Implementation (part 2):** `reports.repository.js#ledgerRows()` gained one correlated subquery —
+for each row, the first *other* `ledger_entries` row sharing the same `source_type`+`source_id`
+(by `entry_id`), resolved to its account name via `business_accounts`/`chart_of_accounts`.
+`formatLedgerRow()` appends `— <counter account>` after its existing switch (skipped if that name's
+already present in the narration — Transfer's own fallback already includes it, so no doubling up)
+and, only for the three confirmed types, ` (<Mode>)` (`CASH`→Cash, `CHEQUE`/`CHEQUE_ENDORSED`/
+`CHEQUE_ISSUED`→Cheque, `ONLINE`→Bank Transfer). Always appended, never substituted, per the item's
+own "the user's text wins" rule.
+
+**Verified live** against `wentox_db`: Receipt with no remarks → `"Receipt #4 — CHEQUES IN HAND
+(Cheque)"`; Receipt WITH typed remarks → `"Advance for Sept order — CASH IN HAND (Cash)"` (the
+exact acceptance-criterion shape); Transfer with no remarks → unchanged
+`"Ahmed Footwear (LHR) → Karachi Boot House (KHI)"` (duplicate-name check correctly suppressed a
+second append); Transfer WITH remarks → `"Month-end sweep — Karachi Boot House (KHI)"`; Journal
+Voucher → `"<reason> — <first other line's account>"`; Cheque Endorsement →
+`"Cheque #1 to vendor — CHEQUES IN HAND (Cheque)"`. Every test document unposted/reversed and
+deleted afterward. Since every ledger view already renders `narration` as a plain string, this
+change needed **no frontend edits at all** — every surface picks it up automatically.
+
+**Noted, not fixed — pre-existing, out of scope:** Expense's own narration fallback
+(`ex_remarks || ex_ba_name`) shows the expense/vendor account's own name when remarks are blank,
+which reads oddly self-referential when viewed from that account's own ledger (flagged in
+`changes-14-09-26.md`, not changed — not something this item asked to fix).
+
+**Files:** `backend/src/repositories/reports.repository.js`, `backend/src/services/reports.service.js`.
+
+## 2026-09-15 — changes-14-09-26.md: G-02 (required-field keyboard trap — full rollout, follow-up to the pilot above)
+
+**What:** finish G-02 — extend the shared trap to `SearchableSelect`-based pickers (the majority of
+the app's red-asterisk fields, explicitly deferred in the pilot entry above since a `<button>`
+trigger has no native `required`/validity), then wire `required` onto every remaining native
+input/select and every qualifying `SearchableSelect` call site app-wide.
+
+**`SearchableSelect.tsx` support (`lib/fieldNav.ts` + `SearchableSelect.tsx`):**
+- `isRequiredAndEmpty()` gained a second branch: for an `HTMLButtonElement`, reads
+  `data-required`/`data-value-missing` attributes instead of `ValidityState` (which a button
+  doesn't have).
+- New `REQUIRED_BLOCKED_EVENT` (`'g02-required-blocked'`) constant — `blockIfRequiredEmpty()`
+  dispatches it at the button in place of calling `.reportValidity()` (only exists on real
+  form-validatable elements).
+- `SearchableSelect` gained a `required?: boolean` prop: sets the trigger's `data-required`/
+  `data-value-missing` attributes from `required`/`!value`; listens for `REQUIRED_BLOCKED_EVENT` on
+  its own trigger ref and shows an inline "Please select an option." message directly under the
+  button (satisfying the item's "inline, under/next to the field" requirement the same way the
+  native `reportValidity()` bubble does for real inputs); the message clears the moment `value`
+  becomes non-empty, mirroring how a native validation bubble disappears once its field is filled.
+
+**Native-input rollout — 21 files**, adding `required` to every `<input>`/`<select>`/`<textarea>`
+matching an existing (unmodified) red-asterisk label: `StoreSetupPage`, `AddaSetupPage`,
+`CitySetupPage`, `CategorySetupPage`, `RegionSetupPage`, `VendorSetupPage`,
+`SubCustomerSetupPage`, `ProductSetupPage` (Select Category search-trigger), `ChartAcSetupPage`,
+`BankSetupPage`, `BusinessAcSetupPage`, `GroupAcSetupPage`, `SettingsPage` (credentials form only —
+the system-reset password fields carry no asterisk and were left alone), `UserManagementPage` (5
+fields: create-user + reset-password modal), `TransferPage`, `SaleBillPage`, `SaleReturnPage`,
+`PurchasePage`, `PurchaseReturnPage`, `StockVoucherPage`. `CustomerSetupPage`'s Customer Name and
+`ChequesTab`'s only marker (a `SearchableSelect`, handled below) were checked and needed no native
+edit. `EmployeeSetupPage`'s Employee Name and `AddaSetupPage`'s Route checkbox-grid have no
+red-asterisk marker in the current UI at all — confirmed a pre-existing gap, left untouched per
+"only wire existing markers, never add new ones."
+
+**`SearchableSelect` rollout — 12 call sites**, found by grepping every `<SearchableSelect` call
+site app-wide (~55 total) and checking each one's surrounding label for either asterisk class the
+codebase uses (`text-red-500` and `text-rose-500`/`600` — the second one was missed on the first
+pass and caught by re-grepping for both): `ReceiptsPage` (Pay To, cheque-endorsement flow),
+`TransferPage` (From, To, deposit-into Account), `ChequesTab` (Deposit Into), `SaleReturnPage`
+(header Customer, line-item Color, Add-Sub-Customer-modal Region), `SaleBillPage` (line-item Color,
+Add-Sub-Customer-modal Region, Add-Customer-modal Select Region), `PurchasePage` (Add-Vendor-modal
+Select Region), `CustomerSetupPage` (Region — its sibling City field is explicitly labeled
+"(Optional)" and correctly left alone), `SubCustomerSetupPage` (Region), `ChartAcSetupPage` (Parent
+Group Account), `GroupAcSetupPage` (Account Class Category), `BusinessAcSetupPage` (Parent Chart of
+Account). Every other call site — mostly report/search filter toolbars
+(`ReportCashBookPage`/`SaleReportPage`/`SaleAnalysisPage`/`ReportStockPage`/`VendorReportPage`/
+`ReportKhaataPage`/`OverallTrailContent`/`ProductLedgerContent`/`FindTab`), `VendorSetupPage`'s
+optional Region/City, `ChequesTab`'s Vendor/Expense-Account fields, `EmployeeSetupPage` — was
+individually confirmed to carry no red-asterisk marker and left unmarked.
+`SearchCustomerPage.tsx`'s Customer filter does carry an asterisk but isn't inside a `<form>` at
+all, so `focusNextField()`'s `closest('form')` lookup can never engage there regardless — correctly
+left as-is rather than adding an inert prop.
+
+Confirmed every wired field sits inside an actual `<form>` (checked via `grep -c '<form'` on each
+touched file) so the field-nav mechanism genuinely applies, not just compiles.
+
+**Verified:** `npx tsc -b --force` run after every single file edit throughout, clean every time,
+including the final full-repo rebuild after the last change.
+
+**Files:** `frontend/src/lib/fieldNav.ts`, `frontend/src/components/SearchableSelect.tsx`, and the
+21+12 page/component files named above.
+
+---
+
+## 2026-09-15 — changes-14-09-26.md: G-06 (new data entry window opens on the default blank page, not a posted record)
+
+**What:** a data entry window opening with zero unposted documents must land on a fresh blank
+entry, not wherever the page's `mode` was left when the window last closed.
+
+**How:** the bug in the spec's own framing ("opening a page when the unposted count is 0 lands on
+posted records") isn't actually a fallback rule anywhere in the code — it's stale persisted UI
+state. Every data entry page keeps `mode: 'new'|'edit'|'view'` in `usePersistentField`
+(`frontend/src/hooks/usePersistentField.ts`), which writes through to localStorage and survives a
+window close/reopen (and an app restart). Browsing to a posted record via First/Prev/Next/Find
+sets `mode: 'view'`; nothing at mount ever reconciled that against the current unposted count, so a
+window closed while viewing a posted record reopened on that same posted record even after every
+draft had since been posted elsewhere or the unposted count had otherwise dropped to zero.
+
+Fixed at the one place every page already fetches its unposted list on mount: once that fetch
+resolves, if the result is empty **and** the persisted `mode` is `'view'`, call the page's own
+`handleNew()` to reset to a blank entry. `mode === 'new'`/`'edit'` is left completely untouched —
+that's genuine unsaved in-progress work (a new unsaved entry, or a draft mid-edit) and must survive
+a reopen exactly as today; this only corrects a stale "I was looking at a posted record" state.
+`handleNew()` itself was already safe to call unconditionally in this situation, since `mode
+=== 'view'` guarantees there's nothing unsaved on screen to lose.
+
+Two shapes of the same fix, depending on how each page tracks "unposted": `SaleBillPage`,
+`PurchasePage`, `SaleReturnPage`, `PurchaseReturnPage`, `JournalVoucherPage`, `StockVoucherPage`
+each keep a dedicated unposted-list state (`unpostedBills`/`unpostedPurchases`/`drafts`/
+`unpostedReturns`/`unpostedJvs`/`unpostedSvs`) refreshed by their own `refreshUnposted()` —
+chained `.then(data => data.length === 0 && mode === 'view' && handleNew())` onto that mount-time
+call. `ReceiptsPage` and `ExpensesPage` have no dedicated unposted list — they compute it as
+`allVouchers.filter(v => v.status !== 'POSTED')` — so the check there is
+`data.every(v => v.status === 'POSTED')` (true on an empty list too, correctly) chained onto their
+`refreshAllVouchers()`.
+
+`TransferPage` and `PaymentTrailPage`, both named in G-04's page list which G-06 explicitly reuses,
+turned out not to apply: Transfer's `mode` is a `'transfer'|'deposit'` tab switch with no
+posted/draft concept anywhere in it, and PaymentTrailPage is a read-only date-range report with no
+entry form or `mode` at all. Confirmed by reading both before excluding them, rather than assuming
+from the name list.
+
+**Verified:** `npx tsc -b --force` clean after all 8 edits. No live Electron click-through possible
+in this environment — this is a code-level fix verified by reading each page's actual mount-effect
+and `handleNew()` reset logic, not a UI walkthrough.
+
+**Files:** `frontend/src/pages/SaleBillPage.tsx`, `PurchasePage.tsx`, `SaleReturnPage.tsx`,
+`PurchaseReturnPage.tsx`, `ReceiptsPage.tsx`, `JournalVoucherPage.tsx`, `StockVoucherPage.tsx`,
+`ExpensesPage.tsx`.
+
+---
+
+## 2026-09-15 — changes-14-09-26.md: G-08 (clicking a detail row must not enter edit mode or highlight it)
+
+**What:** editing a detail-grid row is now deliberate — a plain click on a row produces no visible
+change at all (no edit load, no highlight); the user must click the row and then press a new
+toolbar "Edit Row" button before the row loads into the entry band and the blue highlight appears.
+
+**How:** every applicable page shared the same bug shape — the grid row's own `onClick` called the
+load-into-edit function directly, which loaded the row AND applied the highlight in one step, with
+no separate gate. Fixed on `SaleBillPage`, `PurchasePage`, `PurchaseReturnPage`, `SaleReturnPage`,
+`JournalVoucherPage`, `StockVoucherPage` by adding a second, purely internal
+`selectedIndex`/`selectedUid` state next to the existing `editingIndex`/`editingUid`: a row click
+now only records that value (no className tied to it at all — the click is genuinely invisible,
+not just inert-with-a-hint), toggling off on a second click of the same row. `editingIndex` alone
+still drives the highlight and the entry-band load, and is now set exclusively by a new toolbar
+"Edit Row" button acting on `selectedIndex`. The existing toolbar Delete button — already
+dual-purpose (delete the selected line, or the whole document with nothing selected) — was
+extended to fall back to `selectedIndex` when nothing is actively loaded for edit, so
+click-then-Delete keeps working exactly as before; every existing reset of
+`editingIndex`/`editingUid` to null (New, loading a different record, committing/cancelling an
+edit, removing a row) was extended to also clear the new selection state.
+
+`ReceiptsPage`/`ExpensesPage` have a different existing shape (an `isSelected` boolean computed
+from `mode === 'edit' && ... === line.draft_id`, and a per-row pencil/trash icon pair with their
+own `stopPropagation`, independent of the row's click) — the pencil icon already **is** the
+deliberate second action G-08 wants, and there's no toolbar-level "act on selected line" concept on
+these two pages worth preserving a selection for, so the fix there was simply removing the row's
+own `onClick` (which duplicated the pencil's load call) entirely, leaving a click fully inert.
+
+`TransferPage`/`PaymentTrailPage` (named via G-04's reused page list) confirmed out of scope by
+reading: Transfer's clickable tables are document-browse lists (First/Prev/Next-equivalent), not
+detail/line-item rows; PaymentTrailPage is a read-only report with no entry/edit concept.
+
+Judgment call: per the acceptance test's literal wording ("nothing changes on screen"), selection
+is fully invisible until Edit Row is pressed — no subtle indicator marks the pending Delete target
+either. Noted in `changes-14-09-26.md` as worth revisiting if the client's walkthrough wants a
+lighter "selected" cue preserved.
+
+**Verified:** `npx tsc -b --force` run and clean after every single file's edit. No live Electron
+click-through possible in this environment — verified by reading each page's actual click handler,
+highlight className, and toolbar button wiring, not a UI walkthrough.
+
+**Files:** `frontend/src/pages/SaleBillPage.tsx`, `PurchasePage.tsx`, `PurchaseReturnPage.tsx`,
+`SaleReturnPage.tsx`, `JournalVoucherPage.tsx`, `StockVoucherPage.tsx`, `ReceiptsPage.tsx`,
+`ExpensesPage.tsx`.
+
+---
+
+## 2026-09-15 — changes-14-09-26.md: RP-02 (Amount required field) — closing the focus-trap gap now that G-02 exists
+
+**What:** the required-Amount focus trap on Receipts/Payments, left as "not done, depends on G-02"
+in the 2026-09-14 pass, is now closed — a typed "0" traps the same way a blank field does.
+
+**How:** G-02's shared trap (`lib/fieldNav.ts#isRequiredAndEmpty`) only ever checked
+`ValidityState.valueMissing`. Both Amount fields already had `required` and `min={0}` — a typed
+"0" satisfies both (non-empty, not below a min of 0), so the trap silently let it through even
+though save-time validation (`buildPayload`'s `amount <= 0` check, already in place) still rejected
+it on Save. Fixed at the shared function rather than bolting on an Amount-specific special case:
+`isRequiredAndEmpty` now checks `el.required && !el.validity.valid` — any native constraint
+failure on a required field traps, not just a missing value. This is a strict superset of the old
+check and provably inert everywhere else already using `required`: grepped every `required` field
+in the app for a `min=`/`pattern=` alongside it and found only two more (Cartons on
+`SaleBillPage.tsx`/`SaleReturnPage.tsx`, `min={0.1}`) — a 0-cartons line item failing that
+should trap too, so this is a fix there as well, not a regression risk. Then changed both Amount
+fields' `min={0}` to `min={1}` (integer currency, via the existing `parseInt`) so "0" is now a real
+`rangeUnderflow` for the broadened check to actually catch.
+
+**Verified:** `npx tsc -b --force` clean. No live Electron click-through possible in this
+environment — verified by reading the native `ValidityState` semantics and confirming no other
+`required` field in the app combines `required` with a constraint a legitimately-filled value could
+still fail.
+
+**Files:** `frontend/src/lib/fieldNav.ts`, `frontend/src/pages/ReceiptsPage.tsx`,
+`frontend/src/pages/ExpensesPage.tsx`.
+
+---
+
+## 2026-09-15 — changes-14-09-26.md: RP-01 (direct settlements missing from posted records) — closing the Weekly/Monthly/Overall Records-tabs follow-up
+
+**What:** RP-01's own audit had already fixed the Receipt Entry tab's First/Prev/Next/Find (the
+acceptance criterion's literal ask) and flagged three more views with the identical gap as an
+optional follow-up: `OverallReceiptsTab.tsx`, `WeeklyReceiptsTab.tsx`, `MonthlyReceiptsTab.tsx` —
+the "Records" tabs that browse posted receipts grouped by voucher. A direct settlement made from
+Receipt Entry still never showed up there. Closed that follow-up now, completing the item.
+
+**How:** each of the three tabs already fetched `receipts.list()` + `receiptVouchers.list()` and
+grouped receipt lines into `{ voucherId, receipts, totalAmount }` cards. A settlement is a
+standalone `dbo.settlements` row with no `voucher_id`/lines, so it can't join that grouping —
+added a parallel `api.settlements.list({ status: 'CONFIRMED' })` fetch to each tab's `refreshAll`,
+filtered through the same date-range + name-query logic each tab already applies to receipts
+(matching a settlement's own `from_name`/`to_name` instead of one account name), and merged the
+result into a new discriminated `recordGroups` list (`{ kind: 'voucher', ... } | { kind:
+'settlement', settlement, totalAmount }`) that the outer table now actually renders, instead of
+`voucherCardsData` directly. A settlement row shows "Settlement #<id>" in the C.Book No column and
+a distinct badge instead of a receipt-count badge; clicking one opens a parallel detail view
+(Date/From/To/Mode/Remarks/Amount, a single row) with its own Unpost button
+(`api.settlements.unpost`). Unposting there needed the same "land back on Entry with it loaded"
+behavior the existing voucher Unpost already has — added `handleSettlementUnpostedElsewhere` to
+`ReceiptsPage.tsx`, mirroring `handleVoucherUnpostedElsewhere` and reusing `openSettlementInEntry`
+(already built for the Entry-tab half of RP-01), then wired a new `onSettlementUnposted` prop onto
+all three tabs alongside the existing `onVoucherUnposted`.
+
+The remaining "Not done" item from the original pass — a payment-side settlement showing in the
+Payments (Expenses) list — is unchanged and still genuinely out of scope: `ExpensesPage.tsx` has no
+Direct Settlement creation UI at all, so there's nothing yet that could be missing from that list;
+closing it means building a new feature, not fixing an existing gap.
+
+**Verified:** live against `wentox_db` — created a settlement (₨2,500, Ahmed Footwear (LHR) →
+Karachi Boot House (KHI)), posted it, confirmed `settlements.service.js#list({ status: 'CONFIRMED'
+})` returns exactly the shape (`from_name`/`to_name`/`amount`/`status`) the new frontend code
+consumes, then unposted and deleted the test row. `npx tsc -b --force` full rebuild clean. No live
+Electron click-through possible in this environment — the frontend logic itself was verified by
+reading the merged rendering path end to end and by the clean type-check, not a UI walkthrough.
+
+**Files:** `frontend/src/components/OverallReceiptsTab.tsx`, `WeeklyReceiptsTab.tsx`,
+`MonthlyReceiptsTab.tsx`, `frontend/src/pages/ReceiptsPage.tsx`.
+
+---
+
+## 2026-09-15 — changes-14-09-26.md: G-04 (row-area scrolling on data entry pages)
+
+**What:** the client's walkthrough landed (a photo of the legacy reference system, red box around
+the fixed toolbar/header/entry area, blue box around the scrollable line-item grid), confirming the
+doc's own default assumption exactly — so this item, previously blocked, is now unblocked and done.
+
+**How:** before writing anything, checked whether any page already had this — found 6 of the 8
+applicable pages (`SaleBillPage`, `PurchasePage`, `SaleReturnPage`, `PurchaseReturnPage`,
+`JournalVoucherPage`, `StockVoucherPage`) already fully implement it: each measures its entry
+card's own height via `getBoundingClientRect()` on mount/resize (`entryCardHeight`/
+`invoiceCardHeight`, `Math.max(<floor>, window.innerHeight - top - 32)` — the `-32` accounting for
+`AppLayout`'s `<main>`'s own bottom padding, the app's one shared scroll container), sets that as
+the card's fixed height, lays the card out as a flex column with the entry fields and totals
+footer `shrink-0` and only the line-items table `flex-1 min-h-0 overflow-y-auto`. This predates the
+current change-request batch (a general UX pass, going by the comments crediting "SaleBillPage" as
+the original) and happens to satisfy G-04 exactly as specified.
+
+Extended the identical pattern to the two pages that lacked it — `ReceiptsPage` and `ExpensesPage`
+— whose entry cards previously grew unbounded (form + entries table + totals all in normal flow),
+leaving `AppLayout`'s `<main>` to scroll the whole page once content overflowed. Added the same
+`entryCardRef`/`entryCardHeight` hook, wrapping deps on `activeTab`/`mode`/`lookupError`/
+`errorMsg`/`successMsg` (whatever can change the chrome height above the card), made the entry
+`<form>` and the totals/post-result-banner footer `shrink-0`, and made only the entries table's own
+wrapper `flex-1 min-h-0 overflow-auto` with `sticky top-0 z-10 bg-slate-50` on each `<th>` (matching
+`SaleBillPage`'s own line-item grid) so the column headers stay visible while scrolling.
+
+`PaymentTrailPage`/`TransferPage` (both named in the item's own page list) are out of scope, same
+reasoning already established for G-06/G-08: PaymentTrailPage is a read-only report with no entry
+form; TransferPage has no multi-line document/detail-grid concept at all.
+
+G-05 (the row pointer) is deliberately NOT included here even though the item says to implement
+them together — the grid this pass builds is exactly the prerequisite G-05 needs, but the pointer
+itself (a gutter marker + auto-scroll-to-it behavior) is a separate not-yet-built UI element with
+its own acceptance criterion, tracked as its own follow-up.
+
+**Verified:** `npx tsc -b --force` clean after each file. No live Electron click-through possible in
+this environment — verified by reading each page's actual flex/height/overflow wiring and
+confirming it matches the already-working pattern on the 6 pages that had it before this session,
+not a UI walkthrough.
+
+**Files:** `frontend/src/pages/ReceiptsPage.tsx`, `frontend/src/pages/ExpensesPage.tsx`.
+
+---
+
+## 2026-09-16 — changes-14-09-26.md: G-05 (last-record pointer in the detail grid)
+
+**What:** a ▶ marker in a narrow gutter column, sitting on whichever detail row was most recently
+added or updated from the entry strip, auto-scrolling the (now fixed-height, per G-04) grid into
+view when that row would otherwise be off-screen. The one item explicitly deferred alongside G-04
+("implement together... a fixed-height scrolling grid is what makes the row pointer meaningful"),
+now unblocked since G-04 landed the day before.
+
+**How:** new state — `lastEnteredIndex`/`lastEnteredUid`/`lastEnteredLineId` depending on the page
+— deliberately separate from G-08's `selectedIndex`/`editingIndex`: the item's own text says the
+pointer "must not look like, or behave as, the [G-08] highlight", so it's set ONLY when a row is
+actually committed (Add/Update Row), never by a click, and rendered as a plain `▶`
+(`text-emerald-600`) in its own unlabeled 18px gutter column — never a background/highlight, so it
+can't be visually confused with G-08's blue edit fill. Auto-scroll via a `rowRefs` array/map (keyed
+however that page already keys its rows) plus one `useEffect` that calls
+`rowRefs.current[pointer]?.scrollIntoView({ block: 'nearest' })` whenever the pointer moves.
+
+Three variants of the same idea, matched to how each page already tracks its own rows:
+- **Index-keyed** (`SaleBillPage`, `SaleReturnPage`, `JournalVoucherPage`, `StockVoucherPage`): the
+  pointer index is computed BEFORE the `setItems`/`setLines` call — a functional updater can't hand
+  a value back out synchronously — following each page's own existing merge-duplicate/
+  edit-in-place/append-new branching so a merged row points at what it merged into, an edited row
+  keeps its index, a new row points at the array's new last slot.
+- **Uid-keyed** (`PurchasePage`, `PurchaseReturnPage` — rows can leave the middle of the array, so
+  these two already key by a generated `uid` rather than position): `lastEnteredUid` + a
+  `Record<string, ...>` ref map instead of an array. The new row's `uid` is now generated up front
+  in `commitCurrentRow` (it used to be generated inline inside the `setItems` call, unreachable
+  from outside it) specifically so it can double as the pointer target.
+- **Server-line-keyed** (`ReceiptsPage`, `ExpensesPage` — a line commit is a real API round-trip,
+  and the grid re-fetches from the server after every commit rather than mutating a local array):
+  `lastEnteredLineId` holds the committed line's own `draft_id`, read straight off
+  `draftReceipts`/`draftExpenses`'s `create`/`update` result and set right after `refreshVoucher()`
+  so the ▶ and the scroll land together, the instant the row is actually on screen.
+
+Reset to `null` everywhere each page's own G-08-era `setSelectedIndex(null)`/`setSelectedUid(null)`
+already resets in a genuine "load a different record"/"start fresh" context (`handleNew`, opening a
+different bill/voucher/settlement) — found by grepping every existing call site and adding the
+sibling reset next to it, explicitly skipping the "load a row into the edit strip" sites (re-editing
+an existing row isn't "entering a new record", so the pointer stays where it was). Row removal
+adjusts/clears the pointer the same way `editingIndex` already does on the same delete.
+
+`TransferPage`/`PaymentTrailPage` confirmed out of scope again, same reasoning as G-04/G-06/G-08.
+
+**Verified:** `npx tsc -b --force` clean after every one of the 8 files. No live Electron
+click-through possible in this environment — verified by reading each page's actual pointer-index
+arithmetic, gutter-column JSX, and reset-site coverage, not a UI walkthrough.
+
+**Files:** `frontend/src/pages/SaleBillPage.tsx`, `PurchasePage.tsx`, `PurchaseReturnPage.tsx`,
+`SaleReturnPage.tsx`, `JournalVoucherPage.tsx`, `StockVoucherPage.tsx`, `ReceiptsPage.tsx`,
+`ExpensesPage.tsx`.
+
+---
+
+## 2026-09-16 — changes-14-09-26.md: JV-04 (row deletion) — closing the row-pointer reposition half now that G-05 exists
+
+**What:** JV-04's own 2026-09-15 pass fixed the actual delete bug and added the per-row delete
+icon, but explicitly left one acceptance detail open pending G-05: "the row pointer repositions
+sensibly after a delete — to the row that took the deleted row's place, or the last row if the
+deleted one was last." G-05 landed 2026-09-16; this closes that gap.
+
+**How:** G-05's own rollout gave every page's row-removal function the same behavior — clear the
+pointer if the deleted row was the one it pointed at, otherwise shift it down by one if a row
+above it was removed. That's correct for G-05's own spec (which never asked for a reposition), but
+JV-04's acceptance text is more specific. Changed `JournalVoucherPage.tsx`'s `removeLine` only: when
+the deleted row was the pointer, instead of `setLastEnteredIndex(null)`, computes
+`newLength = lines.length - 1` (read before the `setLines` filter commits) and sets
+`Math.min(idx, newLength - 1)` — the row that now occupies the deleted row's old slot, or the new
+last row if it was the last one — falling back to `null` only when the grid is now empty. The other
+7 pages' G-05 behavior is untouched; none of their own items asked for this.
+
+**Verified:** `npx tsc -b --force` clean.
+
+**Files:** `frontend/src/pages/JournalVoucherPage.tsx`.
+
+---
+
+## 2026-09-16 — changes-14-09-26.md: JV-02 (Journal Voucher page redesign, frontend only)
+
+**What:** matched `JournalVoucherPage.tsx`'s entry-band layout and overall density to the client's
+reference photo (`ref-pics/batch2/jv2.0.jpeg`) and the doc's own already-decided target layout —
+this item wasn't actually blocked (it isn't in the doc's "Blocked on the client" table, only listed
+in the Sequencing note as "do it after JV-01/JV-03/JV-04," which are all done), so it was picked up
+directly once the user pointed at the reference photo.
+
+**How:**
+- Renamed the header band's visible "Reason" label to "Remarks" (matching the reference exactly)
+  in three places that all name the same field: the header input, the Find-modal placeholder, and
+  the Recent Vouchers search placeholder/column header. The underlying field/state is still
+  `reason`, untouched — a display label only, JV-03's optionality unaffected.
+- Resolved one real ambiguity with the user before writing code: the reference's row 2 shows a
+  second boxed field under Amount, and the spec's own text just calls it "the second right-aligned
+  amount box." Since the app deliberately uses one signed Amount (ACC-01), adding a literal second
+  editable amount would be new behavior this "frontend only" item doesn't authorize — confirmed
+  with the user it's the picked account's own read-only running balance, so wired the existing
+  `AccountBalanceTooltip` component (same one Receipts/Expenses already use next to their account
+  pickers) into that slot, with a new `balanceRefreshKey` state bumped after save/post/unpost
+  (mirroring the exact pattern those two pages use) so it doesn't go stale after this JV's own
+  ledger effect.
+- Implemented the client's explicit tab-order reordering ("Narration comes before the amount")
+  via CSS Grid `gridTemplateAreas` rather than reordering the visual layout: the JSX's DOM order is
+  now A/C Code → Account Description (disabled, so `fieldNav.ts`'s shared field-walk skips it
+  automatically) → Narration → Amount → the balance box (no input, never in the walk), each still
+  placed into its reference-matching visual cell via `gridArea` — giving the requested Code →
+  Narration → Amount tab sequence while Amount stays visually in row 1 and Narration in row 2,
+  exactly like the photo. Moved the commit-on-Enter handler from Narration's `onKeyDown` to
+  Amount's, since Amount is now the strip's actual last tabbable field.
+- Compactness pass: card padding `p-6`→`p-3 md:p-4`, header/entry bands' `gap-4`/`mb-4`/`p-4`
+  →`gap-2`/`mb-2`/`p-2`, and every header/entry input's bare `soleria-input` + inline `style={{
+  fontSize: '13px' }}` hack → the shared `soleria-input-compact` class (matching
+  `SaleBillPage`/`ReceiptsPage`'s own convention) — closing the density gap the client's own
+  "strip the extra vertical whitespace" note called out. The detail grid's column set, G-05 pointer
+  gutter, JV-04 delete icons, and Net Total footer were already correct from earlier passes and
+  untouched here.
+
+**Verified:** `npx tsc -b --force` clean. Called `reports.service.js#accountBalance` (the balance
+tooltip's backing endpoint) live against `wentox_db` for a real account — returned its correct
+current balance. No live Electron click-through possible in this environment — the layout/tab-order
+logic was verified by reading the actual `gridTemplateAreas`/DOM-order wiring, not a UI walkthrough.
+
+**Files:** `frontend/src/pages/JournalVoucherPage.tsx`.
+
+---
+
+## 2026-09-16 — changes-14-09-26.md: BA-02 (Search & Bilty Adda Updation page redesign)
+
+**What:** closed out BA-02's remaining "redesign" half — the compacting half was already done
+2026-09-14; the redesign itself had been explicitly left blocked pending a client walkthrough,
+which landed as a reference photo (`ref-pics/batch2/billity adda.jpeg`) of the legacy
+"SEARCH & BILTY ADDA UPDATION" screen.
+
+**How:** the reference shows one consolidated dense toolbar (search filters + the
+selected-invoice Bilty/Adda update cluster + Update/Print buttons, all one strip), a single row of
+radio filters beneath it, then the results grid. `BiltyUpdatePage.tsx` previously had this split
+across two side-by-side cards ("Bilty Info Update" and "Search Filters") plus a separate results
+toolbar holding the print-preview button. Merged all of it into one toolbar card laid out as three
+bands matching the reference: search filters (one wrapping row), the update cluster with Update and
+Print together at the end (the old "Show Print Preview" button moved up here and was relabeled
+"Print" to match), then the bilty-status/sort-by radio pills combined into one row instead of two
+side-by-side columns. The results-count/status badges strip (a useful addition from the earlier
+build, not present in the reference) was kept, just moved below the new toolbar.
+
+One judgment call confirmed with the user before writing code: the reference shows a single "By
+Date" box, but the page already has a more capable Start/End date RANGE filter. Confirmed keeping
+the range rather than regressing to match the photo literally — every other existing field
+(Manual/System Bill No. split from BA-01, the Bilty No. search filter, Customer/Sub-Customer
+search) was likewise kept; the item's own scope is layout, not removing capability.
+
+**Verified:** `npx tsc -b --force` clean. No live Electron click-through possible in this
+environment — the layout was verified by reading the actual JSX structure against the reference
+photo, not a UI walkthrough. Purely a JSX rearrangement — same state, same handlers, same API
+calls as before, so no behavior/backend verification was needed.
+
+**Files:** `frontend/src/pages/BiltyUpdatePage.tsx`.
+
+**Follow-up (same day):** user-reported screenshot showed the search-filters row's fields reading
+as one merged blur — at up to 7 columns per row, this app's own `--border-color` (`#E3E0D8`, a very
+light off-white) gave adjacent fields essentially no visible separation once the gap between them
+got tight. Backed off to `md:grid-cols-3 lg:grid-cols-4` (wraps 7 fields to 2 rows) with `gap-x-4`
+instead of `gap-2`, and widened the update-cluster row's gap the same way — matching how
+`SaleBillPage`/`ReceiptsPage` never pack more than ~4 fields into one row for exactly this reason.
+`npx tsc -b --force` clean.
+
+**Two more follow-ups (same day), per the user:**
+1. Selecting a row's Edit icon now focuses the Bilty No. input (`updateBiltyNoRef`, new) —
+   "Selected Bill No." is read-only, so that's the first field there's actually anything to type
+   into. Separate from `firstFieldRef` (G-03's own page-open focus).
+2. The Show/Sort By filters were pill-style toggle buttons with a small dot — swapped for real
+   `<input type="radio">` elements (native circle, fills on selection, `accent-[#111c2a]`) with
+   plain label text, per the user's own screenshot showing what they wanted instead.
+`npx tsc -b --force` clean.
+
+---
+
+## 2026-09-16 — changes-14-09-26.md: G-06 — severe bug fix (posted record shows despite "Unposted" selected, on window reopen)
+
+**What:** user reported: opening a new window with 0 unposted documents sometimes still showed a
+POSTED document's data on screen, despite the Posted/Unposted dropdown defaulting to "Unposted" —
+a severe, confusing mismatch. This is a real gap in G-06's own 2026-09-15 fix, not a new item.
+
+**How:** G-06's fix only reset to blank when `mode === 'view'` — but `mode` can also be `'edit'`
+while a POSTED record is loaded, and G-06's check missed that entirely. Confirmed a concrete,
+reachable path: `SaleBillPage.tsx#handleEditSpecificBill` (wired to the Weekly/Monthly/Overall
+Records tabs' own "Edit" row action) calls `setMode('edit')` unconditionally on whatever row was
+clicked — including an already-POSTED one (rows from those tabs are always `sale_bills`, i.e.
+always posted). Closing the window there leaves `mode: 'edit'` + `currentBillIsPosted: true`
+persisted; reopening skipped G-06's reset (wrong mode), while `browseFilter` (the Posted/Unposted
+dropdown) is a plain `useState` that always defaults to `'unposted'` on mount, never persisted —
+producing exactly the reported mismatch.
+
+Fixed by switching the reset condition on 6 pages from `mode === 'view'` to each page's own
+persisted "is the loaded record posted" flag: `currentBillIsPosted` (SaleBillPage),
+`currentIsPosted` (PurchasePage, PurchaseReturnPage), `currentReturnIsPosted` (SaleReturnPage),
+`isPosted` — derived from persisted `status` (JournalVoucherPage, StockVoucherPage). Each of these
+is true if and only if an actual posted record is loaded, in EITHER `'view'` or `'edit'` mode, and
+is only ever cleared by that page's own `handleNew()` — so it can never be true while there's
+genuine unsaved new-document work to protect, same safety guarantee G-06's original fix had, just
+keyed on the right signal.
+
+Checked `ReceiptsPage`/`ExpensesPage` for the same gap before touching them: traced
+`handleEditLine` (rejects `line.status === 'CONFIRMED'` outright) and the voucher-header Edit
+button (`disabled={... || voucher.status === 'POSTED'}`) — neither page has any path into `'edit'`
+mode on a posted voucher, so their original `mode === 'view'` condition is already correct;
+left unchanged rather than fixed without a confirmed bug.
+
+**Verified:** `npx tsc -b --force` clean. No live Electron click-through possible in this
+environment — the bug path was confirmed by reading `handleEditSpecificBill`'s actual call sites
+and each page's own `handleNew()`/posted-flag wiring, not a UI walkthrough.
+
+**Files:** `frontend/src/pages/SaleBillPage.tsx`, `PurchasePage.tsx`, `PurchaseReturnPage.tsx`,
+`SaleReturnPage.tsx`, `JournalVoucherPage.tsx`, `StockVoucherPage.tsx`.
+
+---
+
+## 2026-09-16 — Bug fix: Sale Return posting wrongly required GP No./Bilty No./Adda
+
+**What:** user reported (screenshot): posting a Sale Return failed with "gp_no is required before
+confirming" even though the GP No. field on screen is labeled "— optional" with no red asterisk —
+the backend was silently enforcing a requirement the UI never told the user about.
+
+**How:** `draftSaleReturns.service.js#confirm()` required `bill_no`, `gp_no`, `bilty_no`, AND
+`adda_id` before posting. Every other document type disagrees: `saleBills.service.js`'s own
+`validateHeader()` only requires `bill_no` (its own comment: "dispatch details filled in [later]"),
+and `saleReturns.service.js`'s own `validateHeader()` — the function that actually runs on the real
+insert path `confirm()` calls into — has the identical comment on the identical three fields:
+"dispatch details that are often unknown when the return is [posted]" and also only requires
+`bill_no`. `draftSaleReturns.service.js#confirm()`'s extra checks were a stale duplicate that never
+got updated to match. Dropped the `gp_no`/`bilty_no`/`adda_id` checks, keeping only `bill_no` —
+matching both the frontend's own "optional" labeling and Sale Bill's already-established
+convention. Noted, not fixed (pre-existing, out of scope): unlike Sale Bill, Sale Return has no
+BiltyUpdatePage-equivalent to fill these fields in after posting — that gap is real but wasn't
+introduced by this fix, and keeping a requirement the UI never surfaced isn't the right way to
+paper over it.
+
+**Verified:** live against `wentox_db` — created a draft Sale Return with `gp_no`/`bilty_no`/
+`adda_id` all left null, called `confirm()`, confirmed it posted successfully (`return_id`
+assigned, all three fields correctly null on the resulting row). Unposted and deleted the test
+record afterward, confirmed zero ledger entries/stock movements/rows remained. `node --check`
+clean.
+
+**Files:** `backend/src/services/draftSaleReturns.service.js`.
+
+---
+
+## 2026-09-16 — Bug fix: System No./C.Book No. preview showed before New was ever pressed
+
+**What:** user reported: on every data-entry page, the System No./C.Book No. field showed a live
+PREVIEW of the next number (e.g. "#27") any time the page was in a blank/new state — including
+right when the page first opened, before New was ever clicked. Wanted it blank until New is
+explicitly pressed. Confirmed with the user: a page reopening with a genuine in-progress,
+never-saved draft restored from a previous session should still show the preview immediately
+(that counts as New having effectively already happened) — only a page that's never had New
+clicked and has nothing typed should show blank.
+
+**How:** every page already has a `useHasPageDraft('<page-key>')` call — a hook that captures,
+once at mount, whether there was genuine unsaved work restored from a previous session — which is
+exactly "New already effectively happened." Added a new `hasClickedNew` state on every page,
+seeded from that same `hasPageDraftAtMount`/`hasSaleBillDraft`/etc. value at mount (so a restored
+draft starts `true`), and set to `true` inside `handleNew()` itself. Since every path that already
+resets a page to a blank new document (the toolbar New button, G-06's own auto-reset-to-blank on a
+window reopening with zero unposted, and "ready for the next one" after a successful Post) already
+calls `handleNew()`, wiring it there covers all of them for free — no extra call sites needed.
+Then changed the System No. field's fallback branch (the one that shows the preview when no real
+number is assigned yet) from unconditional to gated on `hasClickedNew`: empty string instead of
+the preview when `false`. `StockVoucherPage.tsx` needed the gate folded into its existing
+three-way ternary (`svId != null` / `still loading, show '…'` / preview) rather than a simple
+two-way swap, to preserve its own "still loading" state exactly as before.
+
+**Verified:** `npx tsc -b --force` clean after every one of the 8 files. No live Electron
+click-through possible in this environment — verified by reading each page's actual `handleNew()`
+wiring and the field's display condition, not a UI walkthrough.
+
+**Files:** `frontend/src/pages/SaleBillPage.tsx`, `PurchasePage.tsx`, `SaleReturnPage.tsx`,
+`PurchaseReturnPage.tsx`, `JournalVoucherPage.tsx`, `StockVoucherPage.tsx`, `ReceiptsPage.tsx`,
+`ExpensesPage.tsx`.
+
+---
+
+## 2026-09-17 — LED-01 extended to Purchase Return (per the user)
+
+**What:** the purchase LEDGER's one-row-per-item grouping (LED-01, changes-14-09-26.md) now applies
+to Purchase Return too — a return with more than one item expands into N+1 rows (one per item, plus
+a totals row), same shape as a multi-item purchase; a single-item return renders exactly as before.
+
+**How:** `reports.repository.js#ledgerRows()` had a `pur_items_json` correlated subquery guarded to
+`source_type = 'PURCHASE'` only, joining `purchase_items`. Added an identical sibling subquery
+(`pur_return_items_json`) guarded to `source_type = 'PURCHASE_RETURN'`, joining
+`purchase_return_items` (same column shape: material_id, unit, quantity, price_per_unit,
+total_price). `reports.service.js#formatLedgerRow()` now picks whichever JSON column matches the
+row's own `source_type` and parses it into the SAME `purchase_items` field on the output row for
+both types — deliberately one shared field name, not two, so the frontend's per-item expansion
+logic only needs to also check `type === 'Purchase Return'` (`type` was already correctly set to
+"Purchase Return" for these rows), not a second field name. Updated both places that do the
+expansion — `ReportKhaataPage.tsx#runningKhaata` and `OverallTrailContent.tsx#expandedLedgerRows`
+(the two components LED-01's own purchase pass already covered, since Vendor Balances/Business
+Account Ledger route through the latter) — from `row.type === 'Purchase'` to
+`(row.type === 'Purchase' || row.type === 'Purchase Return')`.
+
+**Verified:** live against `wentox_db` — confirmed the existing single-item purchase return
+(return_id 1) still shows one plain row (no regression). Created a temporary 2-item purchase return
+(vendor 1, materials 2 + 2007), confirmed `reports.service.js#accountLedger()` returned both items
+correctly in `purchase_items` on that ledger row, then unconfirmed and deleted the test draft —
+confirmed zero rows remain in either `purchase_returns` or `draft_purchase_returns` for it
+afterward. `npx tsc -b --force` clean; `node --check` clean on both backend files.
+
+**Files:** `backend/src/repositories/reports.repository.js`, `backend/src/services/reports.service.js`,
+`frontend/src/pages/ReportKhaataPage.tsx`, `frontend/src/pages/OverallTrailContent.tsx`.
+
+---
+
+## 2026-09-17 — Correction: System No. preview also showed after G-06's automatic reset
+
+**What:** the "System No. blank until New is clicked" fix (logged above, 2026-09-16) was too loose
+— user reported (screenshot) a freshly opened Sale Bill window with 0 unposted bills still showed
+"#33" in the No. field, despite nobody clicking New. Corrected across all 8 pages.
+
+**How:** the first version put `setHasClickedNew(true)` inside each page's `handleNew()` itself —
+but `handleNew()` runs from many places, not just a deliberate click: G-06's own auto-reset-to-blank
+effect, Post/Post All's "ready for the next one" auto-continue, a Posted/Unposted dropdown's
+empty-list fallback, loading a specific voucher/settlement (which calls `handleNew()` first to
+clear the strip before overriding with the loaded record), and a just-deleted-voucher cleanup. Any
+of these running `handleNew()` was enough to reveal the preview.
+
+Corrected: `handleNew()` itself now always sets `hasClickedNew` to **false** (every reset-to-blank
+defaults to hiding the preview); only a deliberate "start a new document" UI action sets it **true**,
+immediately after calling `handleNew()`/its wrapper. Read every call site of the reset function on
+every page and classified each as deliberate (a human clicked a New-labeled button/tab) or
+programmatic (everything else) — only deliberate sites got the `true`:
+- **SaleBillPage/JournalVoucherPage/StockVoucherPage/SaleReturnPage**: the toolbar's own New
+  button, plus (Sale Return, Journal Voucher, Stock Voucher) a "New Voucher"/"New Return" tab
+  button in the Records tab bar.
+- **PurchasePage/PurchaseReturnPage**: the toolbar's own New button, plus a "New Purchase"/"New
+  Return" tab button.
+- **ReceiptsPage/ExpensesPage**: only the toolbar's own New Voucher button — neither page has a
+  second "New X" tab entry point.
+- Left alone (programmatic, confirmed blank stays blank) on every page: G-06's mount-time
+  auto-reset effect, Post/Post All's post-success "ready for the next one" reset, the
+  Posted/Unposted (or Unposted/Records) dropdown's own "nothing to show, fall back to blank"
+  branch, and loading a specific existing record/settlement (which resets via `handleNew()` first
+  as a clearing step, not as "starting new").
+
+**Verified:** `npx tsc -b --force` clean (checked after every file, and once more at the end across
+the full repo).
+
+**Files:** `frontend/src/pages/SaleBillPage.tsx`, `PurchasePage.tsx`, `SaleReturnPage.tsx`,
+`PurchaseReturnPage.tsx`, `JournalVoucherPage.tsx`, `StockVoucherPage.tsx`, `ReceiptsPage.tsx`,
+`ExpensesPage.tsx`.
+
+---
+
+## 2026-09-17 — Account deletion: investigated "not working" report, password-gated per the user
+
+**What:** user reported account deletion "not working" and asked that it require a password first
+(matching the app's other destructive-delete conventions). Investigated the "not working" claim
+directly against `wentox_db`; added the password gate, which was genuinely missing.
+
+**Investigation ("not working"):** live-tested all 4 account types' `remove()` end to end
+(`businessAccounts.service.js`, `chartAccounts.service.js`, `groupAccounts.service.js`,
+`bankAccounts.service.js`) with fresh, clean test accounts (no ledger activity, no party link, not
+reserved, zero opening balance) — every one closed correctly (`status: 'CLOSED'`) with no error.
+Read every frontend delete handler and the reserved-account (`is_reserved`) computation — no bug
+found in any of them. Could not reproduce an actual failure; the most likely explanation is that
+the account(s) the user tried to delete genuinely tripped one of ACC-02's own guards (has posted
+ledger activity, is party-linked to a vendor/customer/employee/bank, is a reserved structural
+account, or — Business Account only — has a non-zero opening balance) and the resulting error
+banner wasn't clearly noticed as the reason nothing happened. Not fixed, because nothing reproducibly
+broken was found — flagged back to the user for the specific account name/error if this recurs.
+
+**Password gate (the fix):** none of the 4 account types' delete required a password, unlike every
+other destructive delete in the app (bill/purchase/expense/receipt deletion). Added
+`authService.verifyPassword(session.userId, payload.password)` to all 4 `*.ipc.js` remove handlers
+(`businessAccounts`, `chartAccounts`, `groupAccounts`, `bankAccounts`), before calling into the
+service's own `remove()` — same pattern `expenses:remove` already uses. Extended each frontend
+`remove(id)` API wrapper to `remove(id, password)`, and the `window.api.*.remove` payload types to
+carry it. On the frontend, replaced the delete confirmation UI with `PasswordPromptModal` (which
+already verifies the password itself before calling `onSuccess`) on all 4 setup pages —
+`BusinessAcSetupPage`/`ChartAcSetupPage`/`GroupAcSetupPage` swapped their shared `ConfirmModal` for
+it; `BankSetupPage` had its own bespoke inline confirm dialog, replaced the same way for
+consistency. One dialog now stands in for what used to be a two-step confirm-then-delete, matching
+the rest of the app's convention where entering the password IS the deliberate confirmation.
+
+**Verified:** live against `wentox_db` — `authService.verifyPassword` correctly rejects a wrong
+password (`Incorrect password`) and accepts the real one; ran the exact IPC-handler sequence
+(reject-then-accept) against a fresh test Business Account end to end — correctly refused with the
+wrong password, then closed successfully with the right one. `npx tsc -b --force` and `node --check`
+both clean.
+
+**Files:** `backend/src/ipc/businessAccounts.ipc.js`, `chartAccounts.ipc.js`, `groupAccounts.ipc.js`,
+`bankAccounts.ipc.js`, `frontend/src/lib/api.ts`, `frontend/src/pages/BusinessAcSetupPage.tsx`,
+`ChartAcSetupPage.tsx`, `GroupAcSetupPage.tsx`, `BankSetupPage.tsx`.
+
+---
+
+## 2026-09-17 — Follow-up: "delete" only closed an account, it stayed visible everywhere
+
+**What:** user clarified the actual complaint behind "deletion is not working": they meant a
+"deleted" account should genuinely disappear, not just get an inactive badge while still showing
+up in the setup page's own list and every account-picker dropdown across the app. Confirmed a real
+hard delete isn't viable (many tables reference these accounts — drafts, settlements, transfers,
+deposits, stock vouchers, cheque allocations — so a literal `DELETE FROM` would routinely fail on a
+live foreign-key constraint unless every one of those was separately guarded against, and it would
+give up the existing Reactivate/undo safety net). Asked the user directly; they chose: keep the
+existing soft-close, but stop showing closed accounts anywhere by default.
+
+**How, in two parts:**
+1. **Setup pages' own lists.** `BusinessAcSetupPage`/`ChartAcSetupPage`/`GroupAcSetupPage` always
+   fetched `includeInactive: true` and rendered every CLOSED account inline with a badge, with no
+   way to hide them at all — unlike `BankSetupPage`, which already had a "Show inactive" toggle,
+   off by default. Added the identical toggle ("Show closed") to the other three, filtering the
+   main list client-side (`status === 'ACTIVE'` / `is_active` depending on the row shape) unless
+   switched on, and threaded the same toggle into each page's own "children under this parent"
+   nested fetch (business accounts under a chart, chart accounts under a group) so a closed child
+   stays hidden there too. Reactivate remains reachable by switching the toggle on.
+2. **Account-picker dropdowns app-wide.** Live-traced every non-setup page that loads business
+   accounts to populate a picker (`JournalVoucherPage`, `ReceiptsPage`, `ExpensesPage`,
+   `TransferPage`) and found `businessAccounts.repository.js#list()` defaults the OPPOSITE way from
+   `bankAccounts`/`groupAccounts` (which default to active-only, `includeInactive` opts IN to
+   showing closed/inactive) — it returns every account regardless of status unless the caller
+   explicitly passes `excludeClosed: true`. Every one of those 4 pages called `listBusinessAccounts()`
+   with no filter at all, so a closed business account was silently selectable as a payee/payer on
+   a brand-new Journal Voucher line, Receipt, Expense, or Transfer. Added `excludeClosed: true` to
+   all 4 call sites. Left `SaleBillPage`'s and `StockVoucherPage`'s own `listBusinessAccounts()`
+   calls untouched — traced both and confirmed neither is a picker; they only resolve an id already
+   chosen elsewhere (a customer's own linked account, the reserved Stock Transfer account) by
+   lookup, not present a list of choices. `chartAccounts.repository.js#list()` has the identical
+   inverted default, but no non-setup page calls it directly, so nothing to fix there.
+
+**Verified:** live against `wentox_db` — closed a real test business account, confirmed
+`businessAccounts.service.js#list({ excludeClosed: true })` correctly omits it while a plain
+`list({})` still includes it (confirming the inverted-default diagnosis). `npx tsc -b --force`
+clean. Cleaned up every test account/group/chart/bank row created while verifying this and the
+prior password-gate entry (`TEST DELETE ACCOUNT`/`GROUP`/`CHART`/`BANK`, `TEST PASSWORD GATE
+DELETE`) — confirmed zero rows remain.
+
+**Files:** `frontend/src/pages/BusinessAcSetupPage.tsx`, `ChartAcSetupPage.tsx`,
+`GroupAcSetupPage.tsx`, `JournalVoucherPage.tsx`, `ReceiptsPage.tsx`, `ExpensesPage.tsx`,
+`TransferPage.tsx`.
+
+## 2026-09-17 — Permanent (hard) delete, added on top of the soft-close, for all 4 account types
+
+**What:** the user asked for a genuine hard delete — "add permanent delete option" — explicitly on
+top of the soft-close/hide-everywhere behaviour just built above, not instead of it. Added a
+second, stricter, irreversible action (`permanentDelete`) for Business Accounts, Chart Accounts,
+Group Accounts, and Bank Accounts.
+
+**Design:** a two-gate flow, identical shape across all 4 types:
+1. The account must already be CLOSED (soft-deleted via the existing `remove()`) — `permanentDelete`
+   refuses outright on an ACTIVE account with `ACCOUNT_NOT_CLOSED`.
+2. A new `hasAnyReference()` repository check, per type, strictly broader than each type's existing
+   "block a reversible close" guards (`hasLedgerActivity`/`isPartyLinked`/`hasChildren`/
+   `isReferenced`, which only ever needed to cover what blocks a *reversible* close) — it covers
+   every table+column with a live FK into the row, since a real `DELETE FROM` has to survive all of
+   them or SQL Server throws a raw constraint error. Refuses with `ACCOUNT_STILL_REFERENCED` if
+   anything is found.
+3. Only then does an actual `DELETE FROM` run, inside `withTransaction`.
+4. Password-gated identically to `remove()` (`authService.verifyPassword` in the IPC handler).
+
+Per type, what `hasAnyReference()` covers beyond the existing guards:
+- **Business accounts** (`businessAccounts.repository.js`): vendors/customers/employees/
+  bank_accounts linked by `ba_id`, `ledger_entries`, `cheque_allocations.target_ba_id`,
+  `deposits.to_ba_id`, draft/posted expenses and receipts (`ba_id` OR `online_ba_id`),
+  `journal_voucher_lines`, `settlements` (`from_ba_id`/`to_ba_id`), `stock_vouchers.
+  on_account_ba_id`, `transfers` (`from_ba_id`/`to_ba_id`).
+- **Chart accounts** (`chartAccounts.repository.js`): any `business_accounts` row still filed
+  under it, `ledger_entries.ac_id`, `draft_sale_bills`/`sale_bills`/`stock_vouchers.main_ac_id`.
+- **Group accounts** (`groupAccounts.repository.js`): any `chart_of_accounts` row still filed under
+  it, plus (one level further than the existing close guard checks) any `business_accounts` row
+  resolved transitively through those chart accounts.
+- **Bank accounts** (`bankAccounts.repository.js`): scoped the same way `remove()` already is —
+  hard-deleting a bank account never touches its linked `business_accounts` row (kept for ledger/
+  history integrity, same as the soft-close), so this only needs every FK pointing at `bank_id`
+  itself: `cheques.bank_id`, `receipts`/`draft_receipts`/`expenses`/`draft_expenses.bank_id`.
+
+Chart/group accounts also keep their existing reserved-account guard (`RESERVED_CODES`/
+`STRUCTURAL_ACCOUNT_HEADS`) in `permanentDelete` — a reserved account can never even be closed, so
+it can never reach the hard-delete path, but the check is repeated defensively rather than assumed.
+
+**Frontend:** `api.ts` gained a `permanentDelete(id, password)` wrapper + type for all 4 account
+APIs. Each setup page (`BusinessAcSetupPage`, `ChartAcSetupPage`, `GroupAcSetupPage`,
+`BankSetupPage`) gained a second destructive action — an `XOctagon` icon button next to Reactivate,
+visible only on an already-closed/deactivated row — opening its own `PasswordPromptModal` instance
+with explicit "cannot be undone" wording distinct from the existing soft-delete modal's "can be
+undone with Reactivate" wording.
+
+**Verified:** live against `wentox_db`, for all 4 types — `permanentDelete` correctly refuses on an
+ACTIVE/not-yet-closed row; correctly refuses once closed but still referenced (tested with a real
+cross-table reference per type: a draft expense against a business account, a chart account filed
+under a group, a chart account still active under a group, a draft expense with `bank_id` set); and
+correctly succeeds and removes the row once closed and genuinely unreferenced, confirmed by a
+follow-up lookup throwing "not found." All test rows created for verification were cleaned up
+afterward — confirmed zero remain. `node --check` clean on every touched backend file; `npx tsc -b
+--force` clean on the frontend.
+
+**Files:** `backend/src/repositories/{businessAccounts,chartAccounts,groupAccounts,
+bankAccounts}.repository.js`, `backend/src/services/{businessAccounts,chartAccounts,
+groupAccounts,bankAccounts}.service.js`, `backend/src/ipc/{businessAccounts,chartAccounts,
+groupAccounts,bankAccounts}.ipc.js`, `frontend/src/lib/api.ts`, `frontend/src/pages/
+{BusinessAcSetupPage,ChartAcSetupPage,GroupAcSetupPage,BankSetupPage}.tsx`.
+
+## 2026-09-17 — Business Accounts Setup: disable Delete for party-linked rows, not just reserved ones
+
+**Bug:** the user reported (via screenshot) that every row in Business Accounts Setup — including
+plainly customer-owned accounts like "Ahmed Footwear (LHR)" — had a fully clickable, non-greyed
+Delete button, same as any ordinary account. Clicking it walked the user through the whole
+password-prompt flow only to fail at the very end with `businessAccounts.service.js#remove()`'s
+existing guard: "This account belongs to a vendor, customer, employee, or bank — manage it from
+that setup screen instead." The guard itself was correct and always had been; only the reserved-
+account rows (`is_reserved`, e.g. Cash in Hand) were ever pre-emptively disabled in the UI — a
+party-linked row looked identical to a genuinely deletable one until the user had already entered
+their password.
+
+**Fix:** `businessAccounts.repository.js#list()` now computes `is_party_linked` per row (an EXISTS
+check against `vendors`/`customers`/`employees`/`bank_accounts.ba_id`, the same four tables
+`isPartyLinked()` already checked one row at a time inside `remove()` — just surfaced for every row
+in one list query instead of only checked reactively at delete time). `businessAccounts.service.js
+#list()` passes it straight through (already spreads the raw row). `BusinessAcSetupPage.tsx`'s
+Delete button (and, defensively, the Permanent Delete button, though a party-linked row can never
+actually reach CLOSED status since `remove()` blocks it before that point) is now also disabled
+when `is_party_linked` is true, with a tooltip matching the backend's own wording — same treatment
+`is_reserved` already got.
+
+**Verified:** live against `wentox_db` — `businessAccounts.service.js#list({}, { role: 'ADMIN' })`
+returns 47 rows, 26 flagged `is_party_linked: true`, and the flagged set is exactly the customer/
+vendor/employee/bank-linked rows visible in the reported screenshot (Ahmed Footwear, Karachi Boot
+House, Malik Traders, etc.). `node --check` clean; `npx tsc -b --force` clean.
+
+**Files:** `backend/src/repositories/businessAccounts.repository.js`, `frontend/src/lib/api.ts`,
+`frontend/src/pages/BusinessAcSetupPage.tsx`.

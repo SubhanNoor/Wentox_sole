@@ -2,6 +2,7 @@
 // Channel prefix is kebab-case ('group-accounts') to match preload.js's camelToKebab(feature).
 const { ipcMain } = require('electron');
 const service = require('../services/groupAccounts.service');
+const authService = require('../services/auth.service');
 const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
 
@@ -26,13 +27,24 @@ module.exports = function register() {
     return service.update(payload.id, payload);
   }));
 
-  ipcMain.handle('group-accounts:remove', wrap((payload) => {
-    requireSession();
+  // Password-gated per the user (2026-09-17), same as every other account type's delete.
+  ipcMain.handle('group-accounts:remove', wrap(async (payload) => {
+    const session = requireSession();
+    await authService.verifyPassword(session.userId, payload.password);
     return service.remove(payload.id);
   }));
 
   ipcMain.handle('group-accounts:reactivate', wrap((payload) => {
     requireSession();
     return service.reactivate(payload.id);
+  }));
+
+  // True hard delete — added on top of (never instead of) the soft-close above, per the user
+  // (2026-09-17). Password-gated the same way remove() is; the service enforces the stricter
+  // "already closed, and referenced nowhere at all" guard.
+  ipcMain.handle('group-accounts:permanentDelete', wrap(async (payload) => {
+    const session = requireSession();
+    await authService.verifyPassword(session.userId, payload.password);
+    return service.permanentDelete(payload.id);
   }));
 };

@@ -1,6 +1,6 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, nextSequenceValue } = require('../db/pool');
 
 function linesSubquery(alias = 'jv') {
   // No GROUP BY — SQL Server rejects a bare column (jv_id) selected alongside aggregates
@@ -105,9 +105,13 @@ async function findById(jvId) {
 }
 
 async function insert(transaction, jv) {
+  // System-generated, sequential, never reused (JV-01, changes-14-09-26.md) — same convention as
+  // sale_bill_no/purchase_no. Always freshly resolved here; a client-supplied voucher_no is never
+  // accepted (the frontend field is read-only).
+  const voucherNo = String(await nextSequenceValue(transaction, 'dbo.seq_journal_voucher_no'));
   const request = requestWithParams(transaction, {
     jvDate: { type: sql.Date, value: jv.jv_date },
-    voucherNo: { type: sql.NVarChar(30), value: jv.voucher_no ?? null },
+    voucherNo: { type: sql.NVarChar(30), value: voucherNo },
     reason: { type: sql.NVarChar(200), value: jv.reason },
     remarks: { type: sql.NVarChar(500), value: jv.remarks ?? null },
     createdBy: { type: sql.Int, value: jv.created_by ?? null },
@@ -121,16 +125,17 @@ async function insert(transaction, jv) {
 }
 
 async function updateHeader(transaction, jvId, jv) {
+  // voucher_no is never touched here — it's assigned once at insert() and stays for the
+  // document's whole life (JV-01), same as system_no on the other document types.
   const request = requestWithParams(transaction, {
     jvId: { type: sql.Int, value: jvId },
     jvDate: { type: sql.Date, value: jv.jv_date },
-    voucherNo: { type: sql.NVarChar(30), value: jv.voucher_no ?? null },
     reason: { type: sql.NVarChar(200), value: jv.reason },
     remarks: { type: sql.NVarChar(500), value: jv.remarks ?? null },
   });
   await request.query(`
     UPDATE dbo.journal_vouchers SET
-      jv_date = @jvDate, voucher_no = @voucherNo, reason = @reason, remarks = @remarks
+      jv_date = @jvDate, reason = @reason, remarks = @remarks
     WHERE jv_id = @jvId
   `);
 }
@@ -157,10 +162,9 @@ async function deleteLines(transaction, jvId) {
   await request.query('DELETE FROM dbo.journal_voucher_lines WHERE jv_id = @jvId');
 }
 
-async function remove(jvId) {
-  await query('DELETE FROM dbo.journal_vouchers WHERE jv_id = @jvId', {
-    jvId: { type: sql.Int, value: jvId },
-  });
+async function remove(transaction, jvId) {
+  const request = requestWithParams(transaction, { jvId: { type: sql.Int, value: jvId } });
+  await request.query('DELETE FROM dbo.journal_vouchers WHERE jv_id = @jvId');
 }
 
 async function setStatus(transaction, jvId, status, updatedBy) {
@@ -175,16 +179,19 @@ async function setStatus(transaction, jvId, status, updatedBy) {
 }
 
 // One ledger_entries row per line — each line's own narration if given, else the header reason
-// prefixed with the voucher id, so every ledger it lands on says which JV moved it and why.
+// prefixed with the voucher id, so every ledger it lands on says which JV moved it and why. reason
+// is optional now (changes-14-09-26.md JV-03) — when neither a line narration nor a header reason
+// is present, the voucher id alone is enough; printing "— null"/"— undefined" is not acceptable.
 async function insertLedgerEntries(transaction, { jvId, jvDate, lines, reason }) {
   for (const line of lines) {
+    const detail = line.narration || reason;
     const request = requestWithParams(transaction, {
       entryDate: { type: sql.Date, value: jvDate },
       baId: { type: sql.Int, value: line.ba_id },
       debit: { type: sql.Decimal(14, 2), value: line.debit },
       credit: { type: sql.Decimal(14, 2), value: line.credit },
       sourceId: { type: sql.Int, value: jvId },
-      narration: { type: sql.NVarChar(500), value: `Journal Voucher #${jvId} — ${line.narration || reason}` },
+      narration: { type: sql.NVarChar(500), value: detail ? `Journal Voucher #${jvId} — ${detail}` : `Journal Voucher #${jvId}` },
     });
     await request.query(`
       INSERT INTO dbo.ledger_entries (entry_date, ba_id, debit, credit, source_type, source_id, narration)

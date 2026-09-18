@@ -8,6 +8,7 @@ import * as api from '@/lib/api';
 import type { StockRow, VendorStockRow, ProductLedgerResult, StockMovementRow, StockMovementType, CategoryRow, VendorRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { getWindowParam, shouldAutoPreview, isChildWindow } from '@/lib/windowParams';
 
 const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
@@ -105,6 +106,11 @@ export default function ReportStockPage() {
   } | null>(null);
   const [materialAdjQty, setMaterialAdjQty] = useState('');
   const [materialAdjError, setMaterialAdjError] = useState('');
+
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog — these build their own inline
+  // modals rather than going through a shared component, so each needs its own hook call.
+  useEscapeToClose(showColorReport, () => setShowColorReport(false));
+  useEscapeToClose(materialAdjModal != null, () => setMaterialAdjModal(null));
 
   async function handleSaveMaterialAdjustment() {
     if (!materialAdjModal) return;

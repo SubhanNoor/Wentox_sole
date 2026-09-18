@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
-import { formatCurrency } from '@/context/AppContext';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Search, Eye } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
@@ -16,6 +16,13 @@ export function VendorReportContent() {
   const [vendorSearch, setVendorSearch] = useState(() => getWindowParam('vendorSearch') || '');
   const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
+
+  // G-03 (changes-14-09-26.md): the cursor lands in the vendor search box whenever the grouped-
+  // list view is showing — on first open, and again on returning to it from a drill-down.
+  const vendorSearchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!selectedVendorId) requestAnimationFrame(() => vendorSearchRef.current?.focus());
+  }, [selectedVendorId]);
 
   const [vendors, setVendors] = useState<VendorRow[]>([]);
   const [vendorGroupRows, setVendorGroupRows] = useState<VendorReportRow[]>([]);
@@ -212,6 +219,7 @@ export function VendorReportContent() {
                   <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search Vendor:</span>
                   <div className="relative">
                     <input
+                      ref={vendorSearchRef}
                       type="text"
                       placeholder="Search by vendor name..."
                       value={vendorSearch}
@@ -418,7 +426,7 @@ export function VendorReportContent() {
                           <td className="p-3 text-center font-mono text-xs">{row.ref}</td>
                           <td className="p-3 text-right font-bold text-emerald-700">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
                           <td className="p-3 text-right font-bold text-rose-700">{row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}</td>
-                          <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(Math.abs(row.balance))}</td>
+                          <td className="p-3 text-right font-bold" style={{ color: balanceColor(row.balance) }}>{formatCurrency(row.balance)}</td>
                         </tr>
                       ))
                     )}

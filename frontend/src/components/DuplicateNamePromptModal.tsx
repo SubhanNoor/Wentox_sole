@@ -1,5 +1,6 @@
 import { AlertTriangle, Check, Plus, RotateCcw, X } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 // Mirrors the backend's checkName() result shape (customers/subCustomers/vendors services):
 //   { status: 'none' | 'active' | 'inactive', matches: [...] }
@@ -41,6 +42,9 @@ export default function DuplicateNamePromptModal({
   onCreateNew,
   onCancel,
 }: DuplicateNamePromptModalProps) {
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog, one layer at a time.
+  useEscapeToClose(isOpen, onCancel);
+
   if (!isOpen) return null;
 
   const isInactive = status === 'inactive';
@@ -51,7 +55,6 @@ export default function DuplicateNamePromptModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
-      onKeyDown={e => { if (e.key === 'Escape') onCancel(); }}
       tabIndex={-1}
     >
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full max-h-[90vh] overflow-y-auto">

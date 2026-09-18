@@ -1190,8 +1190,8 @@ function reducer(state: State, action: Action): State {
 
     /* ──── Payroll Handlers (payroll.md §8) ────
      * Unlike sale bills, posting a payroll run has no stock side effect to
-     * reverse — a run's only effect is on a balance, and getEmployeeBalance
-     * counts Posted runs only. So posting and unposting are pure status flips.
+     * reverse — a run's only effect is on a balance, and the employee ledger
+     * holds Posted runs only. So posting and unposting are pure status flips.
      * Unposting stamps unpostedAt and copies the outgoing total to
      * amountBefore: a labourer holds no paperwork of his own, so without that
      * record a silent edit to what he is owed leaves no trace anywhere.
@@ -1344,10 +1344,10 @@ export function formatCurrency(value: number): string {
 
 /**
  * G-05: the app-wide debit/credit color convention — red for a negative (credit/payable) balance,
- * green for zero or positive (debit/receivable). Pair with `formatCurrency(Math.abs(value))` so
- * the sign is carried by color alone, never a leading "-" (formatCurrency itself already swaps a
- * raw negative for parentheses, but every balance display should use this instead of its own
- * red/green/gray ternary so the rule stays one place).
+ * green for zero or positive (debit/receivable). Pair with `formatCurrency(value)` (the signed
+ * value, not `Math.abs()`) so a credit balance renders in parentheses too, matching the Debit/
+ * Credit ledger columns — every balance display should use this instead of its own red/green/gray
+ * ternary so the rule stays one place.
  */
 export function balanceColor(value: number): string {
   return value < 0 ? '#e11d48' : '#047857';

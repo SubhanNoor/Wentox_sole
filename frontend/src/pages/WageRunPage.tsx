@@ -1,9 +1,10 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
-import type { EmployeeRow, ProductRow, StageRow, WageRunRow, ExpenseRow } from '@/lib/api';
-import { getRunBalanceBlock } from '@/lib/payroll';
+import type { EmployeeRow, ProductRow, StageRow, WageRunRow, ExpenseRow, LedgerRow } from '@/lib/api';
+import { getRunBalanceBlock, getRunBalanceBlockFromLedger } from '@/lib/payroll';
 import { formatDate, formatCartons } from '@/lib/utils';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import AppLayout from '@/components/AppLayout';
 import SearchModal from '@/components/SearchModal';
 import { Plus, Trash2, Save, HardHat, AlertTriangle, Edit2, Undo2, History, Clock, ChevronDown, X } from 'lucide-react';
@@ -55,6 +56,12 @@ export default function WageRunPage() {
   // being lost for good.
   const clearWageRunDraft = useClearPageDraft('wage-run');
   const [date, setDate] = usePersistentField('wage-run', 'date', today());
+  // G-03 (changes-14-09-26.md): the cursor lands in the first field (Settlement Date) on open —
+  // this page had no explicit mount-time focus at all (the entry card being a real <form> only
+  // gets AppLayout's generic G-01 fallback, which every sibling page — Purchase/SaleBill/Journal
+  // Voucher — deliberately backs up with its own ref instead of relying on).
+  const dateFieldRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => dateFieldRef.current?.focus()); }, []);
   const [employeeId, setEmployeeId] = usePersistentField('wage-run', 'employeeId', '');
   const [stage, setStage] = usePersistentField('wage-run', 'stage', '');
   const [items, setItems] = usePersistentField<FormItem[]>('wage-run', 'items', [emptyItem()]);
@@ -207,9 +214,27 @@ export default function WageRunPage() {
   const filledItems = items.filter(it => it.articleId !== '' && Number(it.cartons) > 0);
   const grandTotal = filledItems.reduce((s, it) => s + it.amount, 0);
 
-  const block = employeeId && selectedWorker
-    ? getRunBalanceBlock(selectedWorker, date, grandTotal, runs, expenses, editingRunId ?? undefined)
-    : { baqaya: 0, banam: 0, net: 0 };
+  // The selected worker's whole account ledger — Baqaya/Banam come from it (see
+  // getRunBalanceBlockFromLedger for why). Re-fetched whenever runs/expenses reload, i.e. after
+  // every save/post/unpost. null = not loaded (or not readable by this user): falls back to the
+  // older runs+expenses estimate rather than showing nothing.
+  const [workerLedger, setWorkerLedger] = useState<LedgerRow[] | null>(null);
+  const workerBaId = selectedWorker?.ba_id ?? null;
+  useEffect(() => {
+    setWorkerLedger(null);
+    if (workerBaId == null) return;
+    let cancelled = false;
+    api.reports.accountLedger({ ba_id: workerBaId }).then(res => {
+      if (!cancelled && res.ok) setWorkerLedger(res.data.rows);
+    });
+    return () => { cancelled = true; };
+  }, [workerBaId, runs, expenses]);
+
+  const block = !employeeId || !selectedWorker
+    ? { baqaya: 0, banam: 0, net: 0 }
+    : workerLedger
+      ? getRunBalanceBlockFromLedger(workerLedger, date, grandTotal)
+      : getRunBalanceBlock(selectedWorker, date, grandTotal, runs, expenses, editingRunId ?? undefined);
 
   // Settling by PERIOD rather than by day makes a same-date duplicate check
   // close to worthless — the real risk is paying the same fortnight twice, a
@@ -313,6 +338,8 @@ export default function WageRunPage() {
   // read-only instead of loading it into the editable entry form. Works for CONFIRMED runs too,
   // unlike editRun, which refuses to touch a posted run. Mirrors the identical fix on SalaryRunPage.
   const [viewingRun, setViewingRun] = useState<WageRunRow | null>(null);
+  // G-07 (changes-14-09-26.md): Escape closes the topmost dialog.
+  useEscapeToClose(viewingRun != null, () => setViewingRun(null));
   const [viewLoading, setViewLoading] = useState(false);
   const viewRun = async (run: WageRunRow) => {
     setViewLoading(true);
@@ -466,7 +493,7 @@ export default function WageRunPage() {
             <div className="shrink-0 grid grid-cols-1 md:grid-cols-3 gap-4 pb-4 mb-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Settlement Date</label>
-                  <input type="date"
+                  <input ref={dateFieldRef} type="date"
             value={date} onChange={e => setDate(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); workerContainerRef.current?.querySelector<HTMLButtonElement>('button[data-field-nav]')?.focus(); } }}
             className="soleria-input" />
