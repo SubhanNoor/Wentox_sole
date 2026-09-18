@@ -66,6 +66,12 @@ function emptyEntry(): EntryLine {
 }
 
 export default function JournalVoucherPage() {
+  // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
+  // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
+  // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
+  // first, and a no-op on the locked form) never wins. Declared first — Post handlers use it.
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  const focusNewButton = () => requestAnimationFrame(() => requestAnimationFrame(() => newButtonRef.current?.focus()));
   const [accounts, setAccounts] = useState<BusinessAccountRow[]>([]);
   const [vouchers, setVouchers] = useState<JournalVoucherRow[]>([]);
   const [lookupError, setLookupError] = useState('');
@@ -139,6 +145,7 @@ export default function JournalVoucherPage() {
     const workingDate = date;
     handleNew();
     setDate(workingDate);
+    focusNewButton();
   };
 
   // Recorded Journal Vouchers moved to its own tab (was inline below the live entry form on the
@@ -197,6 +204,7 @@ export default function JournalVoucherPage() {
   // A blank voucher reached any way other than New (first open with nothing unposted, after Post,
   // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
   const awaitingNew = mode === 'new' && voucherNo == null && !hasClickedNew;
+  useEffect(() => { if (awaitingNew) focusNewButton(); }, [awaitingNew]);
   const masterLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
   const detailLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
 
@@ -486,6 +494,7 @@ export default function JournalVoucherPage() {
     const workingDate = date;
     handleNew();
     setDate(workingDate);
+    focusNewButton();
   };
 
   const handleUnpost = async () => {
@@ -602,7 +611,6 @@ export default function JournalVoucherPage() {
   // same record list.
   const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('unposted');
   const [navVouchers, setNavVouchers] = useState<JournalVoucherRow[]>([]);
-  const newButtonRef = useRef<HTMLButtonElement>(null);
 
   const refreshNav = useCallback(async () => {
     const res = await api.journalVouchers.list({});
@@ -659,7 +667,7 @@ export default function JournalVoucherPage() {
       const latest = (freshUnposted ?? unpostedJvs).slice(-1)[0];
       if (latest) await loadJv(latest.jv_id);
       else handleNew();
-      requestAnimationFrame(() => newButtonRef.current?.focus());
+      focusNewButton();
     } else {
       const fresh = await refreshNav();
       const list = [...(fresh ?? navVouchers)].filter(v => v.status === 'CONFIRMED').reverse();
@@ -698,13 +706,21 @@ export default function JournalVoucherPage() {
   // The Number shown before saving is only a PREVIEW (MAX(voucher_no)+1, never reserved
   // server-side). Always shown, from the moment the page opens — an earlier round gated it behind
   // pressing New, which the user reversed (2026-08-31): the number should just be there.
+  const [deletedJvNumbers, setDeletedJvNumbers] = useState<{ system_no: number }[]>([]);
+  useEffect(() => {
+    api.journalVouchers.listDeletedNumbers().then(res => { if (res.ok) setDeletedJvNumbers(res.data); });
+  }, [navVouchers]);
+
 const nextJvNoPreview = useMemo(
     () => Math.max(
       0,
       ...navVouchers.map(v => Number(v.voucher_no) || 0),
       ...unpostedJvs.map(v => Number(v.voucher_no) || 0),
+      // A deleted number is never reused — the sequence skips past it (migration 035), so the
+      // preview must too, or it would promise #8 and Save would hand out #9.
+      ...deletedJvNumbers.map(d => d.system_no),
     ) + 1,
-    [navVouchers, unpostedJvs]
+    [navVouchers, unpostedJvs, deletedJvNumbers]
   );
 
   // Toolbar's Find — a quick jump to any JV (posted or unposted) by number or reason, searched
@@ -932,7 +948,7 @@ const nextJvNoPreview = useMemo(
               <span>Un Post</span>
             </button>
             <button
-              type="button" onClick={handlePost} disabled={!isViewMode || jvId == null || isPosted}
+              type="button" onClick={async () => { await handlePost(); focusNewButton(); }} disabled={!isViewMode || jvId == null || isPosted}
               title="Post"
               className="toolbar-btn"
             >
@@ -944,7 +960,7 @@ const nextJvNoPreview = useMemo(
                 unposted JV is the Unposted dropdown plus First/Prev./Next/Last. */}
             {unpostedJvs.length > 0 && (
               <button
-                type="button" onClick={handlePostAll} disabled={postAllBusy || browseFilter === 'posted'}
+                type="button" onClick={async () => { await handlePostAll(); focusNewButton(); }} disabled={postAllBusy || browseFilter === 'posted'}
                 title={`Post All (${unpostedJvs.length})`}
                 className="toolbar-btn"
               >
@@ -1003,6 +1019,7 @@ const nextJvNoPreview = useMemo(
             size (shrink-0) — only the table wrapper is flex-1. */}
         <form
           id="jv-entry-form" ref={entryCardRef} onSubmit={handleSave}
+          noValidate
           className="card-white p-3 md:p-4 bg-white border flex flex-col" style={{ height: entryCardHeight ?? undefined }}
           data-edit-scope="detail"
         >

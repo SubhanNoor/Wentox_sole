@@ -188,6 +188,11 @@ async function postAll(ids, userId, session) {
   return { posted, failed, attempted: targets.length };
 }
 
+function listDeletedNumbers() {
+  return deletedNumbersRepository.listByType('JOURNAL_VOUCHER');
+}
+
 module.exports = {
   list, getById, create, update, remove, post, unpost, listUnposted, postAll, getCounterAccount,
+  listDeletedNumbers,
 };

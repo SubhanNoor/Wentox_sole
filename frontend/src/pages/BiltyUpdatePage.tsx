@@ -137,7 +137,10 @@ export default function BiltyUpdatePage() {
     setSelectedBillId(bill.bill_id);
     setUpdateBillNo(bill.bill_no);
     setUpdateBiltyNo(bill.bilty_no || '');
-    setUpdateAddaId(bill.adda_id ? String(bill.adda_id) : (addas[0] ? String(addas[0].adda_id) : ''));
+    // No adda on the bill -> the picker stays blank (per the user, 2026-09-18). It used to pre-fill
+    // the FIRST adda in the list, which read as if the bill already had one — and one Update click
+    // would have saved that guess.
+    setUpdateAddaId(bill.adda_id ? String(bill.adda_id) : '');
     setErrorMsg('');
     requestAnimationFrame(() => updateBiltyNoRef.current?.focus());
   };
@@ -171,6 +174,7 @@ export default function BiltyUpdatePage() {
     setSelectedBillId(null);
     setUpdateBillNo('');
     setUpdateBiltyNo('');
+    setUpdateAddaId('');
     setErrorMsg('');
     loadInvoices();
   };
@@ -360,6 +364,24 @@ export default function BiltyUpdatePage() {
       </div>
     </div>
   );
+
+  // Only the invoice list scrolls (per the user, 2026-09-18): the search/update panel above stays
+  // put. The table card is pinned to whatever viewport height is left below its own top edge —
+  // same technique as JournalVoucherPage's entry card — and scrolls inside, with a sticky header.
+  const tableCardRef = useRef<HTMLDivElement>(null);
+  const [tableCardHeight, setTableCardHeight] = useState<number | null>(null);
+  useEffect(() => {
+    function recompute() {
+      const el = tableCardRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      // AppLayout's <main> adds 32px of padding-bottom below whatever height is claimed here.
+      setTableCardHeight(Math.max(240, window.innerHeight - top - 32));
+    }
+    recompute();
+    window.addEventListener('resize', recompute);
+    return () => window.removeEventListener('resize', recompute);
+  }, [successMsg, errorMsg, loading, filteredInvoices.length]);
 
   return (
     <AppLayout pageTitle="Search & Bilty Adda Updation">
@@ -576,9 +598,16 @@ export default function BiltyUpdatePage() {
         </div>
 
         {/* Invoices Table */}
-        <div className="card-white bg-white border border-slate-200/80 rounded-2xl overflow-hidden">
+        <div
+          ref={tableCardRef}
+          className="card-white bg-white border border-slate-200/80 rounded-2xl"
+          // Inline, not the overflow-auto class: index.css's own `.card-white { overflow: hidden }`
+          // is unlayered CSS, which beats Tailwind's layered utilities — the class lost and the list
+          // was clipped instead of scrolling (reported 2026-09-18).
+          style={{ height: tableCardHeight ?? undefined, overflow: 'auto' }}
+        >
           <table className="w-full text-left border-collapse">
-            <thead>
+            <thead className="sticky top-0 z-10">
               <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
                 <th className="p-3 pl-4">Invoice Date</th>
                 <th className="p-3 text-center">Inv. No (Sys)</th>

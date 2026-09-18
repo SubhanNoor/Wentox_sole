@@ -2145,6 +2145,7 @@ declare global {
         listUnposted: () => Promise<ApiResult<UnpostedJournalVoucherRow[]>>;
         postAll: (payload?: { ids?: number[] }) => Promise<ApiResult<PostAllResult<'jv_id'>>>;
         counterAccount: () => Promise<ApiResult<BusinessAccountRow>>;
+        listDeletedNumbers: () => Promise<ApiResult<DeletedNumberRow[]>>;
       };
       stockVouchers: {
         list: (payload?: StockVoucherListFilters) => Promise<ApiResult<StockVoucherRow[]>>;
@@ -3048,6 +3049,8 @@ export const journalVouchers = {
     window.api ? window.api.journalVouchers.postAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE),
   counterAccount: () =>
     window.api ? window.api.journalVouchers.counterAccount() : Promise.resolve(NO_BRIDGE),
+  listDeletedNumbers: (): Promise<ApiResult<DeletedNumberRow[]>> =>
+    window.api ? window.api.journalVouchers.listDeletedNumbers() : Promise.resolve(NO_BRIDGE),
 };
 
 function normalizeStockVoucherRow<T extends { voucher_date: string }>(row: T): T {

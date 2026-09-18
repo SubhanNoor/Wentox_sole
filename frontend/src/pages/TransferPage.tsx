@@ -499,7 +499,7 @@ export default function TransferPage() {
                         value={amount || ''}
                         disabled={isTransferViewMode}
                         onChange={e => setAmount(Math.max(0, Number(e.target.value) || 0))}
-                        placeholder="Enter amount in Rs..."
+                        placeholder="Enter amount..."
                         className="soleria-input font-semibold font-mono text-right"
                       />
                     </div>
@@ -752,7 +752,7 @@ export default function TransferPage() {
                         value={depAmount || ''}
                         disabled={isDepositViewMode}
                         onChange={e => setDepAmount(Math.max(0, Number(e.target.value) || 0))}
-                        placeholder="Enter amount in Rs..."
+                        placeholder="Enter amount..."
                         className="soleria-input font-semibold font-mono text-right"
                       />
                     </div>

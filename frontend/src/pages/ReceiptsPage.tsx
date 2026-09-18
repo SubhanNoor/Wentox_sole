@@ -38,6 +38,12 @@ const RECEIPT_TAB_LABELS: Record<ReceiptTab, string> = {
 const today = () => new Date().toISOString().split('T')[0];
 
 export default function ReceiptsPage() {
+  // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
+  // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
+  // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
+  // first, and a no-op on the locked form) never wins. Declared first — Post handlers use it.
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  const focusNewButton = () => requestAnimationFrame(() => requestAnimationFrame(() => newButtonRef.current?.focus()));
   const { state } = useApp();
 
   // Navigation / Tabs State — sync with state.currentTab
@@ -163,7 +169,6 @@ export default function ReceiptsPage() {
   // new vouchers from. Posted is purely a browse mode over already-posted vouchers (First/Prev./
   // Next/Last + Unpost).
   const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('unposted');
-  const newButtonRef = useRef<HTMLButtonElement>(null);
   // Edit button's Master-scope focus target — mirrors ExpensesPage's own firstFieldRef, since
   // this page never had one before there was an Edit button to land it from.
   const firstFieldRef = useRef<HTMLInputElement>(null);
@@ -384,6 +389,7 @@ export default function ReceiptsPage() {
   // A blank voucher reached any way other than New (first open with nothing unposted, after Post,
   // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
   const awaitingNew = mode === 'new' && voucher == null && openVoucherId == null && !hasClickedNew;
+  useEffect(() => { if (awaitingNew) focusNewButton(); }, [awaitingNew]);
   const masterFieldsLocked = awaitingNew || (isViewMode || (mode === 'edit' && editScope !== 'master'));
   const detailFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
   // True only in the narrow window the Edit button (Master scope) opens — display of Date/Remarks
@@ -1534,7 +1540,7 @@ const nextVoucherNo = useMemo(
                 </button>
                 <button
                   type="button"
-                  onClick={handlePostVoucher}
+                  onClick={async () => { await handlePostVoucher(); focusNewButton(); }}
                   disabled={deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy}
                   title={voucherBusy ? 'Posting…' : `Post Voucher${voucherLines.length ? ` (${voucherLines.length})` : ''}`}
                   className="toolbar-btn"
@@ -1546,7 +1552,7 @@ const nextVoucherNo = useMemo(
                     awaiting posting, one at a time, reporting any that fail. */}
                 <button
                   type="button"
-                  onClick={handlePostAllVouchers}
+                  onClick={async () => { await handlePostAllVouchers(); focusNewButton(); }}
                   disabled={navUnpostedVouchers.length === 0 || postAllVouchersBusy || navFilter === 'posted'}
                   title={postAllVouchersBusy ? 'Posting…' : `Post All (${navUnpostedVouchers.length})`}
                   className="toolbar-btn"
@@ -2158,7 +2164,7 @@ const nextVoucherNo = useMemo(
                           <th className="sticky top-0 z-10 bg-slate-50 p-2.5">Narration</th>
                           <th className="sticky top-0 z-10 bg-slate-50 p-2.5">Cheque No</th>
                           <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-center">Type</th>
-                          <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-right">Rs. (Jamma)</th>
+                          <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-right">Jamma</th>
                           <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-center">Status</th>
                           <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-center" data-no-print>Actions</th>
                         </tr>

@@ -54,6 +54,12 @@ function newItemUid(): string {
 }
 
 export default function PurchaseReturnPage() {
+  // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
+  // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
+  // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
+  // first, and a no-op on the locked form) never wins. Declared first — Post handlers use it.
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  const focusNewButton = () => requestAnimationFrame(() => requestAnimationFrame(() => newButtonRef.current?.focus()));
   // ── Real lookup / list data ──
   const [vendors, setVendors] = useState<VendorRow[]>([]);
   const [cities, setCities] = useState<CityRow[]>([]);
@@ -218,8 +224,8 @@ export default function PurchaseReturnPage() {
   // from the moment the page opens — an earlier round gated it behind pressing New, which the
   // user reversed (2026-08-31): the number should just be there.
 const nextSystemBillNo = useMemo(
-    () => nextSystemNoPreview(...unpostedReturns.map(d => d.system_no), ...returns.map(r => r.system_no)),
-    [unpostedReturns, returns]
+    () => nextSystemNoPreview(...unpostedReturns.map(d => d.system_no), ...returns.map(r => r.system_no), ...deletedNumbers.map(d => d.system_no)),
+    [unpostedReturns, returns, deletedNumbers]
   );
 
   // Vendor field is a typable <input> (2026-08-27, matching PurchasePage.tsx: "do this purchase
@@ -697,6 +703,7 @@ const nextSystemBillNo = useMemo(
   // A blank return reached any way other than New (first open with nothing unposted, after Post,
   // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
   const awaitingNew = mode === 'new' && currentSystemNo == null && !hasClickedNew;
+  useEffect(() => { if (awaitingNew) focusNewButton(); }, [awaitingNew]);
   const isValid = useMemo(() => {
     if (awaitingNew) return false;
     if (!vendorId || !date) return false;
@@ -1016,7 +1023,6 @@ const nextSystemBillNo = useMemo(
   // new returns from. Posted is purely a browse mode over already-posted returns (First/Prev./
   // Next/Last + Un Post).
   const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('unposted');
-  const newButtonRef = useRef<HTMLButtonElement>(null);
 
   // Sorted by system_no (creation order), NOT sortedReturns' own date-based order (right for the
   // "Recorded Purchase Returns" listing below, wrong here) — same fix as PurchasePage/SaleBillPage,
@@ -1447,7 +1453,7 @@ const nextSystemBillNo = useMemo(
             </button>
             <button
               type="button"
-              onClick={handlePost}
+              onClick={async () => { await handlePost(); focusNewButton(); }}
               disabled={deletedPlaceholder != null || !isViewMode || returnId == null || currentIsPosted}
               title="Post"
               className="toolbar-btn"
@@ -1460,7 +1466,7 @@ const nextSystemBillNo = useMemo(
                 draft is the Unposted dropdown plus First/Prev./Next/Last. */}
             {unpostedReturns.length > 0 && (
               <button
-                type="button" onClick={handlePostAll} disabled={postAllBusy || navFilter === 'posted'}
+                type="button" onClick={async () => { await handlePostAll(); focusNewButton(); }} disabled={postAllBusy || navFilter === 'posted'}
                 title={`Post All (${unpostedReturns.length})`}
                 className="toolbar-btn"
               >
@@ -1542,6 +1548,7 @@ const nextSystemBillNo = useMemo(
             (shrink-0) — only the table wrapper is flex-1. */}
         <form
           id="purchase-return-form"
+          noValidate
           ref={invoiceCardRef}
           onSubmit={handleSave}
           className="card-white p-6 bg-white border flex flex-col"

@@ -88,6 +88,12 @@ function emptyEntry(): EntryLine {
 }
 
 export default function StockVoucherPage() {
+  // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
+  // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
+  // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
+  // first, and a no-op on the locked form) never wins. Declared first — Post handlers use it.
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  const focusNewButton = () => requestAnimationFrame(() => requestAnimationFrame(() => newButtonRef.current?.focus()));
   const { dispatch } = useApp();
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [stores, setStores] = useState<StoreRow[]>([]);
@@ -275,6 +281,7 @@ export default function StockVoucherPage() {
   // A blank voucher reached any way other than New (first open with nothing unposted, after Post,
   // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
   const awaitingNew = mode === 'new' && svId == null && !hasClickedNew;
+  useEffect(() => { if (awaitingNew) focusNewButton(); }, [awaitingNew]);
   const masterLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
   const detailLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
 
@@ -908,7 +915,6 @@ export default function StockVoucherPage() {
   // on the same record list.
   const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('unposted');
   const [navVouchers, setNavVouchers] = useState<StockVoucherRow[]>([]);
-  const newButtonRef = useRef<HTMLButtonElement>(null);
 
   const [navVouchersLoaded, setNavVouchersLoaded] = useState(false);
   const refreshNav = useCallback(async () => {
@@ -1248,7 +1254,7 @@ export default function StockVoucherPage() {
               <span>Un Post</span>
             </button>
             <button
-              type="button" onClick={handlePost} disabled={!isViewMode || svId == null || isPosted}
+              type="button" onClick={async () => { await handlePost(); focusNewButton(); }} disabled={!isViewMode || svId == null || isPosted}
               title="Post"
               className="toolbar-btn"
             >
@@ -1261,7 +1267,7 @@ export default function StockVoucherPage() {
                 dropdown plus First/Prev./Next/Last. */}
             {unpostedSvs.length > 0 && (
               <button
-                type="button" onClick={handlePostAll} disabled={postAllBusy || browseFilter === 'posted'}
+                type="button" onClick={async () => { await handlePostAll(); focusNewButton(); }} disabled={postAllBusy || browseFilter === 'posted'}
                 title={`Post All (${unpostedSvs.length})`}
                 className="toolbar-btn"
               >
@@ -1316,6 +1322,7 @@ export default function StockVoucherPage() {
 
         <form
           id="sv-entry-form" ref={entryCardRef} onSubmit={handleSave}
+          noValidate
           className="card-white p-6 bg-white border flex flex-col" style={{ height: entryCardHeight ?? undefined }}
           data-edit-scope="detail"
         >

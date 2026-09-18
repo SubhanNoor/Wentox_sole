@@ -55,6 +55,12 @@ function newItemUid(): string {
 }
 
 export default function PurchasePage() {
+  // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
+  // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
+  // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
+  // first, and a no-op on the locked form) never wins. Declared first — Post handlers use it.
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  const focusNewButton = () => requestAnimationFrame(() => requestAnimationFrame(() => newButtonRef.current?.focus()));
   // ── Real lookup / list data ──
   const [vendors, setVendors] = useState<VendorRow[]>([]);
   const [regions, setRegions] = useState<RegionRow[]>([]);
@@ -282,8 +288,8 @@ export default function PurchasePage() {
   // moment the page opens — an earlier round gated it behind pressing New, which the user reversed
   // (2026-08-31): the number should just be there.
 const nextSystemBillNo = useMemo(
-    () => nextSystemNoPreview(...unpostedPurchases.map(d => d.system_no), ...purchases.map(p => p.system_no)),
-    [unpostedPurchases, purchases]
+    () => nextSystemNoPreview(...unpostedPurchases.map(d => d.system_no), ...purchases.map(p => p.system_no), ...deletedNumbers.map(d => d.system_no)),
+    [unpostedPurchases, purchases, deletedNumbers]
   );
 
   // Vendor field opens a centered "find" modal (SearchModal) instead of SearchableSelect's small
@@ -492,6 +498,7 @@ const nextSystemBillNo = useMemo(
   // A blank purchase reached any way other than New (first open with nothing unposted, after Post,
   // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
   const awaitingNew = mode === 'new' && currentSystemNo == null && !hasClickedNew;
+  useEffect(() => { if (awaitingNew) focusNewButton(); }, [awaitingNew]);
   const isValid = useMemo(() => {
     if (awaitingNew) return false;
     if (!vendorId || !date) return false;
@@ -886,7 +893,6 @@ const nextSystemBillNo = useMemo(
   // new purchases from. Posted is purely a browse mode over already-posted purchases (First/Prev./
   // Next/Last + Un Post).
   const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('unposted');
-  const newButtonRef = useRef<HTMLButtonElement>(null);
 
   // Sorted by system_no (creation order), NOT sortedPurchases' own date-based order (right for the
   // "Recorded Purchases" listing below, wrong here) — a backdated purchase_date used to put that
@@ -1356,7 +1362,7 @@ const nextSystemBillNo = useMemo(
             </button>
             <button
               type="button"
-              onClick={handlePost}
+              onClick={async () => { await handlePost(); focusNewButton(); }}
               disabled={deletedPlaceholder != null || !isViewMode || purchaseId == null || currentIsPosted}
               title="Post"
               className="toolbar-btn"
@@ -1369,7 +1375,7 @@ const nextSystemBillNo = useMemo(
                 draft is the Unposted dropdown plus First/Prev./Next/Last. */}
             {unpostedPurchases.length > 0 && (
               <button
-                type="button" onClick={handlePostAll} disabled={postAllBusy || navFilter === 'posted'}
+                type="button" onClick={async () => { await handlePostAll(); focusNewButton(); }} disabled={postAllBusy || navFilter === 'posted'}
                 title={`Post All (${unpostedPurchases.length})`}
                 className="toolbar-btn"
               >
@@ -1453,6 +1459,7 @@ const nextSystemBillNo = useMemo(
             size (shrink-0) — only the table wrapper is flex-1. */}
         <form
           id="purchase-entry-form"
+          noValidate
           ref={invoiceCardRef}
           onSubmit={handleSave}
           className="card-white p-6 bg-white border flex flex-col"

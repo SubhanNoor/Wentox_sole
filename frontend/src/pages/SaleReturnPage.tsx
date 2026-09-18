@@ -72,6 +72,12 @@ function recalcItem(item: UiItem): UiItem {
 }
 
 export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?: 'return' | 'weekly' | 'monthly' | 'overall' | 'find' }) {
+  // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
+  // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
+  // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
+  // first, and a no-op on the locked form) never wins. Declared first — Post handlers use it.
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  const focusNewButton = () => requestAnimationFrame(() => requestAnimationFrame(() => newButtonRef.current?.focus()));
   const { state, dispatch } = useApp();
 
   // Seeded from the URL's own `tab` (openWindow's second argument) so a window opened straight at
@@ -143,7 +149,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // the awaitingNew lock, and only the New button/tab sets it (pressNew).
   const { hasRealDraftAtMount: hasSaleReturnDraft, hasClickedNew, setHasClickedNew, markNewClicked } =
     useNewDocGate('sale-return', ['customerId', 'billNo', 'items']);
-  const pressNew = () => { handleNew(); markNewClicked(); };
 
   // Form State
   //
@@ -161,6 +166,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // (first open, after Post, Post All, a deleted return) could still be typed into and saved, and
   // the backend assigned it a number anyway. So such a page stays fully locked until New.
   const awaitingNew = mode === 'new' && currentSystemNo == null && !hasClickedNew;
+  useEffect(() => { if (awaitingNew) focusNewButton(); }, [awaitingNew]);
   const [currentReturnIsPosted, setCurrentReturnIsPosted] = usePersistentField('sale-return', 'currentReturnIsPosted', false);
   const [date, setDate] = usePersistentField('sale-return', 'date', getTodayDate());
   const [storeId, setStoreId] = usePersistentField('sale-return', 'storeId', '');
@@ -364,7 +370,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setBillNo(row.bill_no);
     setGpNo(row.gp_no || '');
     setBiltyNo(row.bilty_no || '');
-    setAddaId(String(row.adda_id));
+    setAddaId(row.adda_id != null ? String(row.adda_id) : '');
     setRemarks(row.remarks || '');
     setInvoiceDiscount(row.invoice_discount || 0);
 
@@ -406,7 +412,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // Next/Last + Un Post).
   const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('unposted');
   const [postedReturns, setPostedReturns] = useState<SaleReturnRow[]>([]);
-  const newButtonRef = useRef<HTMLButtonElement>(null);
 
   const refreshPostedReturns = useCallback(async () => {
     const res = await api.saleReturns.list();
@@ -580,7 +585,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setSubCustomerId(bill.sub_customer_id != null ? String(bill.sub_customer_id) : '');
     setGpNo(bill.gp_no || '');
     setBiltyNo(bill.bilty_no || '');
-    setAddaId(String(bill.adda_id));
+    setAddaId(bill.adda_id != null ? String(bill.adda_id) : '');
     setRemarks(`Return from Sale Bill No. ${bill.bill_no}`);
     setInvoiceDiscount(bill.invoice_discount || 0);
     setSourceBillItems(bill.items);
@@ -769,8 +774,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // moment the page opens — an earlier round gated it behind pressing New, which the user reversed
   // (2026-08-31).
 const nextSystemReturnNo = useMemo(
-    () => nextSystemNoPreview(...drafts.map(d => d.system_no), ...postedReturns.map(r => r.system_no)),
-    [drafts, postedReturns]
+    () => nextSystemNoPreview(...drafts.map(d => d.system_no), ...postedReturns.map(r => r.system_no), ...deletedNumbers.map(d => d.system_no)),
+    [drafts, postedReturns, deletedNumbers]
   );
 
   // G-01: auto-focus the first field (Date) whenever the return tab becomes the active view and
@@ -828,7 +833,9 @@ const nextSystemReturnNo = useMemo(
     setBillNo('');
     setGpNo('');
     setBiltyNo('');
-    setAddaId(addas[0] ? String(addas[0].adda_id) : '');
+    // Blank, not the first adda (per the user, 2026-09-18): adda is optional, and a pre-filled one
+    // reads as if it had been chosen. Same as Sale Bill's own handleNew.
+    setAddaId('');
     setRemarks('');
     setInvoiceDiscount(0);
     setItems([]);
@@ -846,6 +853,8 @@ const nextSystemReturnNo = useMemo(
     // on SaleBillPage's own handleNew).
     requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
+  // New button / New tab — the only path that marks New as deliberately clicked (useNewDocGate).
+  const pressNew = () => { handleNew(); markNewClicked(); };
 
   const buildPayload = (): SaleReturnCreateInput | null => {
     if (!date) { setErrorMsg('Date is required.'); return null; }
@@ -1023,15 +1032,14 @@ const nextSystemReturnNo = useMemo(
   // storeId repair (see its comment for the full reasoning): handleNew() picks these defaults
   // alongside clearSaleReturnDraft(), so usePersistentField's suppression window swallows the
   // write and nothing touches them again to trigger a later one. Store is required, so losing it
-  // greys out Save/Done on a return that otherwise looks complete; Adda isn't required but is
-  // just as much lost state, so it gets restored too rather than silently coming back blank.
+  // greys out Save/Done on a return that otherwise looks complete. Adda is NOT repaired any more:
+  // it defaults to blank now (2026-09-18), so blank is its correct restored value.
   //
   // Gated on there actually having been a draft at mount, so a genuinely fresh page still goes
   // through handleNew() without writing a draft it doesn't need.
   useEffect(() => {
     if (!hasSaleReturnDraft) return;
     if (!storeId && stores.length > 0) setStoreId(String(stores[0].store_id));
-    if (!addaId && addas.length > 0) setAddaId(String(addas[0].adda_id));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasSaleReturnDraft, storeId, stores, addaId, addas]);
 
@@ -1923,7 +1931,7 @@ const nextSystemReturnNo = useMemo(
             </button>
             <button
               type="button"
-              onClick={handlePostCurrentReturn}
+              onClick={async () => { await handlePostCurrentReturn(); focusNewButton(); }}
               disabled={deletedPlaceholder != null || mode !== 'view' || returnId == null || currentReturnIsPosted}
               title="Post"
               className="toolbar-btn"
@@ -1949,7 +1957,7 @@ const nextSystemReturnNo = useMemo(
             {drafts.length > 0 && (
               <button
                 type="button"
-                onClick={handlePostAllDrafts}
+                onClick={async () => { await handlePostAllDrafts(); focusNewButton(); }}
                 disabled={postAllDraftsBusy || browseFilter === 'posted'}
                 title={`Post All (${drafts.length})`}
                 className="toolbar-btn"
@@ -2620,7 +2628,7 @@ const nextSystemReturnNo = useMemo(
                 <input type="text" value={formatCurrency(itemsTotalValue)} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '130px' }} />
               </div>
               <div className="flex flex-col gap-0.5">
-                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Rs.</label>
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Net Total</label>
                 <input
                   type="text"
                   value={formatCurrency(finalTotalValue)}

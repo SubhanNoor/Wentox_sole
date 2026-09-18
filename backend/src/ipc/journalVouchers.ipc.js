@@ -60,6 +60,13 @@ module.exports = function register() {
   }));
 
   // The entry form's smart-default counter-account (see reservedAccounts.js).
+  // Every JV voucher_no retired by a delete — the page's No. preview skips them, same as the
+  // sequence (migration 035) does.
+  ipcMain.handle('journal-vouchers:listDeletedNumbers', wrap(() => {
+    requireSession();
+    return service.listDeletedNumbers();
+  }));
+
   ipcMain.handle('journal-vouchers:counterAccount', wrap(() => {
     requireSession();
     return service.getCounterAccount();

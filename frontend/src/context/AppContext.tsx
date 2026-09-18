@@ -1337,9 +1337,11 @@ export function useApp() {
 
 /* ──────────────────── Helper Functions ──────────────────── */
 
+// No "Rs" prefix anywhere (per the user, 2026-09-18: "remove the Rs. from all the ledgers balances
+// and everything") — plain grouped figures, credits still in parentheses.
 export function formatCurrency(value: number): string {
-  if (value < 0) return `(Rs ${Math.abs(value).toLocaleString('en-US')})`;
-  return 'Rs ' + value.toLocaleString('en-US');
+  if (value < 0) return `(${Math.abs(value).toLocaleString('en-US')})`;
+  return value.toLocaleString('en-US');
 }
 
 /**

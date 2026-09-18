@@ -186,7 +186,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
 
   const handleExportExcel = () => {
     if (!selectedAccount) return;
-    const headers = ['Date', 'Type', 'Inv #', 'Bill #', 'Narration', 'Pairs', 'Debit (Rs.)', 'Credit (Rs.)', 'Balance (Rs.)'];
+    const headers = ['Date', 'Type', 'Inv #', 'Bill #', 'Narration', 'Pairs', 'Debit', 'Credit', 'Balance'];
     const rows = runningKhaata.map(r => [
       r.date, r.type, r.invNo, r.billNo, r.narration, r.pairs, r.debit, r.credit, r.balance
     ]);
@@ -225,7 +225,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Pairs</th>
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Debit (Dr)</th>
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Credit (Cr)</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Balance (Rs.)</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Balance</th>
           </tr>
         </thead>
         <tbody>

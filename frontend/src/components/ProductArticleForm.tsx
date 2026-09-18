@@ -198,7 +198,7 @@ export default function ProductArticleForm({
             {errors?.packing && <p className="text-[10px] text-rose-600 mt-0.5 font-semibold">{errors.packing}</p>}
           </div>
           <div>
-            <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">Sale Price (Rs)</label>
+            <label className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5">Sale Price</label>
             <input
               type="number"
               disabled={disabled}

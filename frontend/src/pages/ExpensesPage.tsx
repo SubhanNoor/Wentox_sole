@@ -34,6 +34,12 @@ const today = () => new Date().toISOString().split('T')[0];
 const NON_TERMINAL_CHEQUE_STATUS = new Set(['PENDING', 'DEPOSITED', 'ENDORSED', 'PARTIALLY_ENDORSED']);
 
 export default function ExpensesPage() {
+  // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
+  // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
+  // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
+  // first, and a no-op on the locked form) never wins. Declared first — Post handlers use it.
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  const focusNewButton = () => requestAnimationFrame(() => requestAnimationFrame(() => newButtonRef.current?.focus()));
   // Navigation / Tabs State
   const [activeTab, setActiveTab] = useState<'entry' | 'weekly' | 'monthly' | 'overall'>('entry');
 
@@ -142,7 +148,6 @@ export default function ExpensesPage() {
   // new vouchers from. Posted is purely a browse mode over already-posted vouchers (First/Prev./
   // Next/Last + Unpost).
   const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('unposted');
-  const newButtonRef = useRef<HTMLButtonElement>(null);
   // Persisted with mode above — together these three say WHICH line the strip is correcting, and
   // all three have to survive a page switch or the correction is committed as a new line instead.
   const [expenseId, setExpenseId] = usePersistentField<number | null>('expenses', 'expenseId', null);
@@ -264,6 +269,7 @@ export default function ExpensesPage() {
   // A blank voucher reached any way other than New (first open with nothing unposted, after Post,
   // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
   const awaitingNew = mode === 'new' && voucher == null && openVoucherId == null && !hasClickedNew;
+  useEffect(() => { if (awaitingNew) focusNewButton(); }, [awaitingNew]);
   const masterFieldsLocked = awaitingNew || (isViewMode || (mode === 'edit' && editScope !== 'master'));
   const detailFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
   // True only in the narrow window the Edit button (Master scope) opens — display of Date/Remarks
@@ -1260,7 +1266,7 @@ export default function ExpensesPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={handlePostVoucher}
+                  onClick={async () => { await handlePostVoucher(); focusNewButton(); }}
                   disabled={deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy}
                   title={voucherBusy ? 'Posting…' : `Post Voucher${voucherLines.length ? ` (${voucherLines.length})` : ''}`}
                   className="toolbar-btn"
@@ -1271,7 +1277,7 @@ export default function ExpensesPage() {
                 {/* Moved here from the removed Pending Posting panel. */}
                 <button
                   type="button"
-                  onClick={handlePostAllVouchers}
+                  onClick={async () => { await handlePostAllVouchers(); focusNewButton(); }}
                   disabled={navUnpostedVouchers.length === 0 || postAllVouchersBusy || navFilter === 'posted'}
                   title={postAllVouchersBusy ? 'Posting…' : `Post All (${navUnpostedVouchers.length})`}
                   className="toolbar-btn"
@@ -1511,7 +1517,7 @@ export default function ExpensesPage() {
                       value={amount || ''}
                       disabled={isViewMode || detailFieldsLocked}
                       onChange={e => setAmount(Math.max(0, parseInt(e.target.value) || 0))}
-                      placeholder="Enter amount in Rs..."
+                      placeholder="Enter amount..."
                       className="soleria-input py-1 text-xs font-semibold font-mono"
                     />
                   </div>
@@ -1630,7 +1636,7 @@ export default function ExpensesPage() {
                         <th className="sticky top-0 z-10 bg-slate-50 p-2.5">Narration</th>
                         <th className="sticky top-0 z-10 bg-slate-50 p-2.5">Cheque No</th>
                         <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-center">Type</th>
-                        <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-right">Rs. (Naam)</th>
+                        <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-right">Naam</th>
                         <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-center">Status</th>
                         <th className="sticky top-0 z-10 bg-slate-50 p-2.5 text-center" data-no-print>Actions</th>
                       </tr>

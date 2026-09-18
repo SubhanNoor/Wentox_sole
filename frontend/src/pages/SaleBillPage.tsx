@@ -72,6 +72,12 @@ function recalcItem(item: UiItem): UiItem {
 }
 
 export default function SaleBillPage() {
+  // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
+  // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
+  // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
+  // first, and a no-op on the locked form) never wins. Declared first — Post handlers use it.
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  const focusNewButton = () => requestAnimationFrame(() => requestAnimationFrame(() => newButtonRef.current?.focus()));
   const { state, dispatch } = useApp();
 
   // Weekly/Monthly/Overall/Find sub-tabs — same sub-tab bar as Sale Return's own (2026-08-26, per
@@ -186,7 +192,6 @@ export default function SaleBillPage() {
   // the awaitingNew lock, and only the New button/tab sets it (pressNew).
   const { hasRealDraftAtMount: hasSaleBillDraft, hasClickedNew, setHasClickedNew, markNewClicked } =
     useNewDocGate('sale-bill', ['customerId', 'billNo', 'items']);
-  const pressNew = () => { handleNew(); markNewClicked(); };
 
   // Form State
   //
@@ -211,7 +216,15 @@ export default function SaleBillPage() {
   // (first open, after Post, Post All, a deleted bill) could still be typed into and saved, and
   // the backend assigned it a number anyway. So such a page stays fully locked until New.
   const awaitingNew = mode === 'new' && currentSystemNo == null && !hasClickedNew;
+  useEffect(() => { if (awaitingNew) focusNewButton(); }, [awaitingNew]);
   const [currentBillIsPosted, setCurrentBillIsPosted] = usePersistentField('sale-bill', 'currentBillIsPosted', false);
+  // Pairs per variant this bill ALREADY holds in the database (as last saved — draft or posted).
+  // Saving a bill deducts its stock at once (draftSaleBills.service.js), so the stock rollup this
+  // page reads has already lost them; stockExceededRows adds them back, exactly like the backend's
+  // own edit check (effectiveOnHand). Without it, reopening a saved bill that uses most of an
+  // article's stock showed "Stock Limit Exceeded" and disabled Save (reported from production,
+  // 2026-09-18, bill #93). {} for a bill that's never been saved.
+  const [savedPairsByVariant, setSavedPairsByVariant] = usePersistentField<Record<number, number>>('sale-bill', 'savedPairsByVariant', {});
   const [date, setDate] = usePersistentField('sale-bill', 'date', getTodayDate());
   const [storeId, setStoreId] = usePersistentField('sale-bill', 'storeId', '');
   const [customerId, setCustomerId] = usePersistentField('sale-bill', 'customerId', '');
@@ -426,8 +439,8 @@ export default function SaleBillPage() {
   // opens — an earlier round gated it behind pressing New, which the user reversed (2026-08-31):
   // the number should just be there.
 const nextSystemBillNo = useMemo(
-    () => nextSystemNoPreview(...unpostedBills.map(d => d.system_no), ...postedBills.map(b => b.system_no)),
-    [unpostedBills, postedBills]
+    () => nextSystemNoPreview(...unpostedBills.map(d => d.system_no), ...postedBills.map(b => b.system_no), ...deletedNumbers.map(d => d.system_no)),
+    [unpostedBills, postedBills, deletedNumbers]
   );
 
   // Customer, Store, Sub Cust., Adda Code — every lookup on this form is a real, typable <input>
@@ -528,6 +541,15 @@ const nextSystemBillNo = useMemo(
 
   const isCustomDelivery = useMemo(() => deliveryType === 'custom', [deliveryType]);
 
+  const pairsByVariant = (lines: { variant_id: number | null; pairs: number }[] | { variantId: number | null; pairs: number }[]) => {
+    const out: Record<number, number> = {};
+    for (const l of lines as { variant_id?: number | null; variantId?: number | null; pairs: number }[]) {
+      const v = l.variant_id ?? l.variantId;
+      if (v != null && l.pairs > 0) out[v] = (out[v] || 0) + Number(l.pairs);
+    }
+    return out;
+  };
+
   const stockExceededRows = useMemo(() => {
     // Nothing can be judged "over stock" before the stock rollup has loaded — getStockInfo reports
     // 0 available for every variant while `stockRows` is still `[]`, so EVERY line looks exceeded,
@@ -555,7 +577,8 @@ const nextSystemBillNo = useMemo(
     items.forEach((it) => {
       if (it.variantId != null && it.pairs > 0) {
         const stockInfo = getStockInfo(it.articleId, it.variantId);
-        const availablePairs = stockInfo ? stockInfo.pairs : 0;
+        // Plus what this same bill already took when it was saved (see savedPairsByVariant).
+        const availablePairs = (stockInfo ? stockInfo.pairs : 0) + (savedPairsByVariant[it.variantId] || 0);
         const requestedPairs = requestedPairsByVariant[it.variantId] || it.pairs;
         if (requestedPairs > availablePairs) {
           exceededMap[it.uid] = { availablePairs, requestedPairs, itemCartons: it.cartons };
@@ -563,7 +586,7 @@ const nextSystemBillNo = useMemo(
       }
     });
     return exceededMap;
-  }, [items, getStockInfo, stockLoaded]);
+  }, [items, getStockInfo, stockLoaded, savedPairsByVariant]);
 
   const hasStockExceeded = useMemo(() => Object.keys(stockExceededRows).length > 0, [stockExceededRows]);
 
@@ -666,6 +689,7 @@ const nextSystemBillNo = useMemo(
       };
     });
     setItems(loadedItems);
+    setSavedPairsByVariant(pairsByVariant(loadedItems));
     setEntry(newUiItem());
     setEditingIndex(null);
     setSelectedIndex(null);
@@ -738,6 +762,7 @@ const nextSystemBillNo = useMemo(
       };
     });
     setItems(loadedItems);
+    setSavedPairsByVariant(pairsByVariant(loadedItems));
     setEntry(newUiItem());
     setEditingIndex(null);
     setSelectedIndex(null);
@@ -764,7 +789,6 @@ const nextSystemBillNo = useMemo(
   // new bills from. Posted is purely a browse mode over already-posted bills (First/Prev./Next/
   // Last + Un Post).
   const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('unposted');
-  const newButtonRef = useRef<HTMLButtonElement>(null);
 
   const refreshPosted = useCallback(async () => {
     const res = await api.saleBills.list();
@@ -958,6 +982,7 @@ const nextSystemBillNo = useMemo(
     setBillId(null);
     setCurrentSystemNo(null);
     setCurrentBillIsPosted(false);
+    setSavedPairsByVariant({});
     setDate(getTodayDate());
     setStoreId(stores[0] ? String(stores[0].store_id) : '');
     setCustomerId('');
@@ -986,6 +1011,8 @@ const nextSystemBillNo = useMemo(
     // never fires and focus would otherwise stay wherever it was.
     requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
+  // New button / New tab — the only path that marks New as deliberately clicked (useNewDocGate).
+  const pressNew = () => { handleNew(); markNewClicked(); };
 
   // SB-05: a finished bill clears straight back to a blank one so the next can be typed
   // immediately. Reuses handleNew() rather than repeating its field list, so "a blank bill" stays
@@ -1089,6 +1116,7 @@ const nextSystemBillNo = useMemo(
       setBillId(result.data.bill_id);
       setCurrentSystemNo(result.data.system_no);
       setCurrentBillIsPosted(true);
+      setSavedPairsByVariant(pairsByVariant(items));
       setSuccessMsg('Sale bill updated successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
       setMode(finalize ? 'view' : 'edit');
@@ -1111,6 +1139,7 @@ const nextSystemBillNo = useMemo(
     setBillId(result.data.draft_id);
     setCurrentSystemNo(result.data.system_no);
     setCurrentBillIsPosted(false);
+    setSavedPairsByVariant(pairsByVariant(items));
     // SB-05: only a freshly created bill counts as "part of this run" — an edit of an existing
     // bill must not clear the form out from under the user when it posts.
     if (mode !== 'edit') {
@@ -1434,9 +1463,11 @@ const nextSystemBillNo = useMemo(
       (sum, it, i) => (i !== editingIndex && it.variantId === entry.variantId ? sum + it.pairs : sum),
       0,
     );
-    const remainingPairs = Math.max(0, stockInfo.pairs - reservedPairs);
+    // + what this bill already took when it was saved — same add-back as stockExceededRows.
+    const onHandPairs = stockInfo.pairs + (savedPairsByVariant[entry.variantId] || 0);
+    const remainingPairs = Math.max(0, onHandPairs - reservedPairs);
     return { remainingPairs, ...cartonsAndPairs(remainingPairs, entry.packing) };
-  }, [entry.articleId, entry.variantId, entry.packing, items, editingIndex, getStockInfo]);
+  }, [entry.articleId, entry.variantId, entry.packing, items, editingIndex, getStockInfo, savedPairsByVariant]);
 
   const entryStockCheck = useMemo(() => {
     if (entry.variantId == null || entry.pairs <= 0 || !entryStockInHand) return null;
@@ -1957,7 +1988,7 @@ const nextSystemBillNo = useMemo(
             </button>
             <button
               type="button"
-              onClick={handlePostCurrentBill}
+              onClick={async () => { await handlePostCurrentBill(); focusNewButton(); }}
               disabled={deletedPlaceholder != null || mode !== 'view' || billId == null || currentBillIsPosted}
               title="Post"
               className="toolbar-btn"
@@ -1984,7 +2015,7 @@ const nextSystemBillNo = useMemo(
                 same way, since nothing asked for them to go away. */}
             <button
               type="button"
-              onClick={handleSaveAndPost}
+              onClick={async () => { await handleSaveAndPost(); focusNewButton(); }}
               disabled={deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded || currentBillIsPosted}
               title="Save & Post"
               className="toolbar-btn"
@@ -1995,7 +2026,7 @@ const nextSystemBillNo = useMemo(
             {unpostedBills.length > 0 && (
               <button
                 type="button"
-                onClick={handlePostAll}
+                onClick={async () => { await handlePostAll(); focusNewButton(); }}
                 disabled={postAllBusy || browseFilter === 'posted'}
                 title={`Post All (${unpostedBills.length})`}
                 className="toolbar-btn"
@@ -2723,7 +2754,7 @@ const nextSystemBillNo = useMemo(
                 <input type="text" value={formatCurrency(itemsTotalValue)} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '130px' }} />
               </div>
               <div className="flex flex-col gap-0.5">
-                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Rs.</label>
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Net Total</label>
                 <input
                   type="text"
                   value={formatCurrency(finalTotalValue)}
