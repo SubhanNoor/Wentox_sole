@@ -176,7 +176,8 @@ export default function ChartAcSetupPage() {
   // PasswordPromptModal IS the confirmation step now, replacing the old plain ConfirmModal.
   const confirmDeleteChart = async (password: string) => {
     if (!deletingChart) return;
-    const res = await chartAccountsApi.remove(deletingChart.ac_id, password);
+    // One-step delete (per the user, 2026-09-18) — straight to the permanent delete, no close first.
+    const res = await chartAccountsApi.permanentDelete(deletingChart.ac_id, password);
     if (!res.ok) {
       setErrorMsg(res.error.message);
       setTimeout(() => setErrorMsg(''), 5000);
@@ -429,7 +430,7 @@ export default function ChartAcSetupPage() {
                           RESERVED_ACCOUNT_CODES.includes(c.code)
                             ? 'System account — cannot be deleted'
                             : c.has_children
-                              ? 'Still has business accounts filed under it — move or close those first'
+                              ? 'Still has active business accounts filed under it — close those first'
                               : 'Permanently Delete — cannot be undone'
                         }
                       >
@@ -445,7 +446,7 @@ export default function ChartAcSetupPage() {
                         RESERVED_ACCOUNT_CODES.includes(c.code)
                           ? 'System account — cannot be deleted'
                           : c.has_children
-                            ? 'Still has business accounts filed under it — move or close those first'
+                            ? 'Still has active business accounts filed under it — close those first'
                             : 'Delete Chart Account'
                       }
                     >
@@ -646,7 +647,7 @@ export default function ChartAcSetupPage() {
           onClose={() => setDeletingChart(null)}
           onSuccess={confirmDeleteChart}
           title="Delete Chart Account"
-          subtitle={deletingChart ? `Confirm your password to delete "${deletingChart.name}". It will be hidden from selection everywhere — this can be undone any time with Reactivate.` : undefined}
+          subtitle={deletingChart ? `Confirm your password to delete "${deletingChart.name}". This PERMANENTLY removes it (and any closed business accounts under it) — it cannot be undone. Refused if any business account under it is active, or anything has transactions or a customer/vendor/employee/bank link.` : undefined}
         />
 
         <PasswordPromptModal
@@ -654,7 +655,7 @@ export default function ChartAcSetupPage() {
           onClose={() => setPermDeletingChart(null)}
           onSuccess={confirmPermanentDeleteChart}
           title="Permanently Delete Chart Account"
-          subtitle={permDeletingChart ? `Confirm your password to PERMANENTLY delete "${permDeletingChart.name}". This cannot be undone — the record itself is removed, not just closed. It will be refused if this account is still referenced anywhere (a business account filed under it, or any ledger activity).` : undefined}
+          subtitle={permDeletingChart ? `Confirm your password to PERMANENTLY delete "${permDeletingChart.name}". This cannot be undone — the record itself is removed, not just closed. Its CLOSED business accounts are permanently deleted with it. It will be refused if any business account under it is still active, or if it or any of those closed accounts has transactions or a customer/vendor/employee/bank link.` : undefined}
         />
 
       </div>

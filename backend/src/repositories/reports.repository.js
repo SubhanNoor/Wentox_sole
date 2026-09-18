@@ -158,6 +158,11 @@ async function ledgerRows(filters = {}) {
        le.entry_id, le.entry_date, le.source_type, le.source_id, le.debit, le.credit,
        le.pairs, le.narration,
        sb.bill_id AS sb_inv_no, sb.bill_no AS sb_bill_no,
+       -- The number users actually know each document by (2026-09-18): ledgers showed internal ids
+       -- ("Sale bill #5026") that SQL Server's identity cache had pushed far past the System No.
+       sb.system_no AS sb_system_no, sr.system_no AS sr_system_no, pu.system_no AS pu_system_no,
+       pr.system_no AS pr_system_no, jv.voucher_no AS jv_voucher_no,
+       rv.voucher_no AS rc_voucher_no, ev.voucher_no AS ex_voucher_no,
        sr.return_id AS sr_inv_no, sr.bill_no AS sr_bill_no,
        rc.receipt_id AS rc_id, rc.payment_mode AS rc_payment_mode, rc.remarks AS rc_remarks,
        rc.details AS rc_details, rc_ba.name AS rc_account_name,
@@ -166,6 +171,10 @@ async function ledgerRows(filters = {}) {
        -- Cash Book only (UC-37): its TYPE and CHEQUE NO columns come from the paying document, not
        -- from the ledger row. Every other ledgerRows() caller ignores these three.
        ex.payment_mode AS ex_payment_mode, ex.issued_cheque_no AS ex_issued_cheque_no,
+       -- Ledger narration (2026-09-18): a cheque payment shows its cheque number and due date.
+       ex.issued_cheque_date AS ex_issued_cheque_date,
+       ex_ch.cheque_no AS ex_cheque_no, ex_ch.cheque_date AS ex_cheque_date,
+       cal_ch.cheque_no AS cal_cheque_no, cal_ch.cheque_date AS cal_cheque_date,
        wr.wage_run_id AS wr_id, wr.stage_key AS wr_stage_key, wr_emp.name AS wr_employee_name,
        sar.salary_run_id AS sar_id, sar.period_month AS sar_period_month,
        tr.transfer_id AS tr_id, tr.remarks AS tr_remarks,
@@ -199,23 +208,7 @@ async function ledgerRows(filters = {}) {
          WHERE le.source_type = 'PURCHASE_RETURN' AND pri.return_id = le.source_id
          ORDER BY pri.line_no
          FOR JSON PATH
-       ) AS pur_return_items_json,
-       -- LED-02 (changes-14-09-26.md, 2026-09-15): "default account" = the counter-account of the
-       -- posting, the other side of the same transaction. source_type+source_id normally identifies
-       -- exactly two ledger_entries rows (one debit, one credit); this picks whichever OTHER row
-       -- comes first by entry_id. For a multi-line Journal Voucher (3+ rows sharing one source_id)
-       -- that's a deliberate simplification, confirmed with the client: show the first other line
-       -- only, not every one of them — matches the "one counter-account" shape every other document
-       -- type already has.
-       (
-         SELECT TOP 1 COALESCE(ba2.name, ca2.name)
-         FROM dbo.ledger_entries le2
-         LEFT JOIN dbo.business_accounts ba2 ON ba2.ba_id = le2.ba_id
-         LEFT JOIN dbo.chart_of_accounts ca2 ON ca2.ac_id = le2.ac_id
-         WHERE le2.source_type = le.source_type AND le2.source_id = le.source_id
-           AND le2.entry_id <> le.entry_id
-         ORDER BY le2.entry_id
-       ) AS counter_account_name
+       ) AS pur_return_items_json
      FROM dbo.ledger_entries le
      LEFT JOIN dbo.sale_bills sb    ON le.source_type = 'SALE_BILL'    AND sb.bill_id = le.source_id
      LEFT JOIN dbo.sale_returns sr  ON le.source_type = 'SALE_RETURN'  AND sr.return_id = le.source_id
@@ -224,6 +217,15 @@ async function ledgerRows(filters = {}) {
      LEFT JOIN dbo.cheques ch       ON rc.cheque_id = ch.cheque_id
      LEFT JOIN dbo.expenses ex      ON le.source_type = 'EXPENSE'      AND ex.expense_id = le.source_id
      LEFT JOIN dbo.business_accounts ex_ba ON ex_ba.ba_id = ex.ba_id
+     LEFT JOIN dbo.cheques ex_ch    ON ex.cheque_id = ex_ch.cheque_id
+     LEFT JOIN dbo.receipt_vouchers rv ON rv.voucher_id = rc.voucher_id
+     LEFT JOIN dbo.expense_vouchers ev ON ev.voucher_id = ex.voucher_id
+     LEFT JOIN dbo.purchases pu     ON le.source_type = 'PURCHASE'        AND pu.purchase_id = le.source_id
+     LEFT JOIN dbo.purchase_returns pr ON le.source_type = 'PURCHASE_RETURN' AND pr.return_id = le.source_id
+     LEFT JOIN dbo.journal_vouchers jv ON le.source_type = 'JOURNAL_VOUCHER' AND jv.jv_id = le.source_id
+     LEFT JOIN dbo.cheque_allocations cal ON le.source_type = 'CHEQUE_ALLOCATION' AND cal.allocation_id = le.source_id
+     LEFT JOIN dbo.receipts cal_rc  ON cal_rc.receipt_id = cal.receipt_id
+     LEFT JOIN dbo.cheques cal_ch   ON cal_ch.cheque_id = cal_rc.cheque_id
      LEFT JOIN dbo.wage_runs wr     ON le.source_type = 'WAGE_RUN'     AND wr.wage_run_id = le.source_id
      LEFT JOIN dbo.employees wr_emp ON wr_emp.employee_id = wr.employee_id
                                    AND wr_emp.employee_type = wr.employee_type

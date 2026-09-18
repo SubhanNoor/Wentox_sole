@@ -190,7 +190,8 @@ export default function BusinessAcSetupPage() {
   const [deletingBiz, setDeletingBiz] = useState<BusinessAccountRow | null>(null);
   const confirmDeleteBusinessAc = async (password: string) => {
     if (!deletingBiz) return;
-    const res = await businessAccountsApi.remove(deletingBiz.ba_id, password);
+    // One-step delete (per the user, 2026-09-18) — straight to the permanent delete, no close first.
+    const res = await businessAccountsApi.permanentDelete(deletingBiz.ba_id, password);
     if (!res.ok) {
       setErrorMsg(res.error.message);
       setTimeout(() => setErrorMsg(''), 5000);
@@ -596,7 +597,7 @@ export default function BusinessAcSetupPage() {
           onClose={() => setDeletingBiz(null)}
           onSuccess={confirmDeleteBusinessAc}
           title="Delete Business Account"
-          subtitle={deletingBiz ? `Confirm your password to delete "${deletingBiz.name}". It will be hidden from selection everywhere — this can be undone any time with Reactivate.` : undefined}
+          subtitle={deletingBiz ? `Confirm your password to delete "${deletingBiz.name}". This PERMANENTLY removes it — it cannot be undone. Refused if it has transactions, an opening balance, or belongs to a customer/vendor/employee/bank.` : undefined}
         />
 
         <PasswordPromptModal

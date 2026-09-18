@@ -203,6 +203,20 @@ export default function ReportStockPage() {
     });
   }, [groupedArticles]);
 
+  // Full Report search (per the user, 2026-09-18): article name, category, or a color the article
+  // actually HAS stock in ("black" -> articles carrying black), case-insensitive.
+  const [colorReportSearch, setColorReportSearch] = useState('');
+  const visibleColorReportRows = useMemo(() => {
+    const q = colorReportSearch.trim().toLowerCase();
+    if (!q) return colorReportRows;
+    return colorReportRows.filter(r =>
+      String(r.commonName ?? '').toLowerCase().includes(q)
+      || String(r.categoryName ?? '').toLowerCase().includes(q)
+      || Object.entries(r.byColor).some(([color, c]) =>
+        color.toLowerCase().includes(q) && !!c && (c.cartons > 0 || c.extraPairs > 0)),
+    );
+  }, [colorReportRows, colorReportSearch]);
+
   const colorReportTotalPairs = useMemo(() => colorReportRows.reduce((sum, r) => sum + r.totalPairs, 0), [colorReportRows]);
   const totalPairs = useMemo(() => filteredStockRows.reduce((sum, r) => sum + r.total_pairs, 0), [filteredStockRows]);
   const totalCartons = useMemo(() => filteredStockRows.reduce((sum, r) => sum + r.cartons, 0), [filteredStockRows]);
@@ -1418,6 +1432,18 @@ export default function ReportStockPage() {
                 <p className="text-xs text-slate-500 mt-0.5">Every article × every color, cartons/extra-pairs (0/0 if the article has none of that color)</p>
               </div>
               <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    autoFocus
+                    value={colorReportSearch}
+                    onChange={e => setColorReportSearch(e.target.value)}
+                    placeholder="Search article, category or color..."
+                    className="soleria-input soleria-input-compact pl-8"
+                    style={{ width: '260px' }}
+                  />
+                </div>
                 <button
                   onClick={() => setShowColorReport(false)}
                   className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors cursor-pointer"
@@ -1441,14 +1467,14 @@ export default function ReportStockPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {colorReportRows.length === 0 ? (
+                  {visibleColorReportRows.length === 0 ? (
                     <tr>
                       <td colSpan={3 + allColorsAcrossArticles.length} className="text-center p-8 text-slate-400">
                         No products found matching stock criteria.
                       </td>
                     </tr>
                   ) : (
-                    colorReportRows.map(r => (
+                    visibleColorReportRows.map(r => (
                       <tr key={r.articleId} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
                         <td className="p-3 pl-4 font-semibold text-slate-700 whitespace-nowrap">{r.commonName}</td>
                         <td className="p-3 text-slate-500 whitespace-nowrap">{r.categoryName}</td>

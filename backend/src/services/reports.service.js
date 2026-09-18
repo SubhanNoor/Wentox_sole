@@ -122,6 +122,24 @@ function paymentModeLabelFor(r) {
   return null;
 }
 
+// Ledger narration for a payment (per the user, 2026-09-18): ONLY the mode of payment — and for a
+// cheque, its number and due date — never the account name (the ledger already IS that account;
+// the counter account was noise). "Cheque #123456 — Due 20/09/2026".
+function dmy(d) {
+  if (!d) return null;
+  const x = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(x.getTime())) return null;
+  return `${String(x.getUTCDate()).padStart(2, '0')}/${String(x.getUTCMonth() + 1).padStart(2, '0')}/${x.getUTCFullYear()}`;
+}
+function paymentNarration(mode, chequeNo, dueDate) {
+  if (mode !== 'Cheque') return mode;
+  const parts = ['Cheque'];
+  if (chequeNo) parts[0] = `Cheque #${chequeNo}`;
+  const due = dmy(dueDate);
+  if (due) parts.push(`Due ${due}`);
+  return parts.join(' — ');
+}
+
 // ── Shared ledger + balance helpers ─────────────────────────────────────────────────────────
 // UC-35 Khaata row shape — reused by account-ledger, business-ledger's detail view, and the two
 // new reports (overall-trail drill-down, overall-search drill-down).
@@ -136,18 +154,18 @@ function formatLedgerRow(r) {
 
   switch (r.source_type) {
     case 'SALE_BILL':
-      type = 'Sale Bill'; inv_no = r.sb_inv_no; bill_no = r.sb_bill_no; narration = narration || 'SAME';
+      type = 'Sale Bill'; inv_no = r.sb_system_no ?? r.sb_inv_no; bill_no = r.sb_bill_no; narration = narration || 'SAME';
       break;
     case 'SALE_RETURN':
-      type = 'Sale Return'; inv_no = r.sr_inv_no; bill_no = r.sr_bill_no; narration = narration || 'SAME';
+      type = 'Sale Return'; inv_no = r.sr_system_no ?? r.sr_inv_no; bill_no = r.sr_bill_no; narration = narration || 'SAME';
       break;
     case 'RECEIPT': {
-      type = 'Receipt (Jamma)';
+      type = 'Receipt (Jamma)'; inv_no = r.rc_voucher_no ?? null;
       // A bounce/return reversal reuses source_type='RECEIPT' on purpose (reverse-never-erase,
       // §6.1) with its OWN narration ("BOUNCED reversal of receipt #X") — that must win over the
       // receipt's own remarks, or the reversal row would misleadingly look like a normal receipt.
       const isReversal = r.narration && /reversal/i.test(r.narration);
-      narration = isReversal ? r.narration : (r.rc_remarks || r.rc_details || r.narration || 'Receipt');
+      narration = isReversal ? r.narration : paymentNarration(paymentModeLabelFor(r) || 'Receipt', r.cheque_no, r.cheque_date);
       if (r.cheque_no) { cheque_no = r.cheque_no; cheque_date = r.cheque_date; cheque_received_date = r.cheque_received_date; }
       break;
     }
@@ -155,7 +173,12 @@ function formatLedgerRow(r) {
       type = 'Commission'; narration = narration || 'Invoice Discount / Commission';
       break;
     case 'EXPENSE':
-      type = 'Expense'; narration = r.ex_remarks || r.ex_ba_name || narration;
+      type = 'Expense'; inv_no = r.ex_voucher_no ?? null;
+      narration = paymentNarration(
+        paymentModeLabelFor(r) || 'Expense',
+        r.ex_payment_mode === 'CHEQUE_ISSUED' ? r.ex_issued_cheque_no : r.ex_cheque_no,
+        r.ex_payment_mode === 'CHEQUE_ISSUED' ? r.ex_issued_cheque_date : r.ex_cheque_date,
+      );
       break;
     case 'WAGE_RUN':
       type = 'Wage Run'; narration = 'HISAB';
@@ -168,28 +191,30 @@ function formatLedgerRow(r) {
       break;
     }
     case 'TRANSFER':
-      type = 'Transfer'; narration = r.tr_remarks || `${r.tr_from_name || ''} → ${r.tr_to_name || ''}`;
+      // No "From → To" account names any more (2026-09-18) — remarks if typed, else nothing extra.
+      type = 'Transfer'; narration = r.tr_remarks || '';
       break;
     // The stored narration already names the other side ("Settled directly to/by X") — that is the
     // whole point of the document, so it wins over the user's free-text remarks rather than the
     // usual remarks-first order. Remarks are appended when present.
     case 'SETTLEMENT':
-      type = 'Direct Settlement';
+      // The stored narration names the other party ("Settled directly by X") — dropped (2026-09-18).
+      type = 'Direct Settlement'; narration = `Settlement #${r.source_id}`;
       break;
     // The stored narration already carries the reason and the other side, so it stands as-is —
     // showing a bare "Journal Voucher" would hide exactly the thing a JV row needs to explain.
     case 'JOURNAL_VOUCHER':
-      type = 'Journal Voucher';
+      type = 'Journal Voucher'; inv_no = r.jv_voucher_no != null ? Number(r.jv_voucher_no) || r.jv_voucher_no : null;
       break;
     case 'PURCHASE':
       // LED-01 (changes-14-09-26.md, corrected 2026-09-15 per the client): a single-item purchase
       // must render exactly as it always did — type + the original combined narration, untouched.
       // Only a MORE-THAN-ONE-item purchase gets the per-item row treatment, entirely on the
       // frontend from `purchase_items` below; this case intentionally does nothing extra.
-      type = 'Purchase';
+      type = 'Purchase'; inv_no = r.pu_system_no ?? null;
       break;
     case 'PURCHASE_RETURN':
-      type = 'Purchase Return';
+      type = 'Purchase Return'; inv_no = r.pr_system_no ?? null;
       break;
     case 'CHEQUE_ALLOCATION': {
       // Both the original endorsement (cheques.service.js#endorseToVendor/endorseToExpense,
@@ -200,6 +225,9 @@ function formatLedgerRow(r) {
       // for both directions of money movement.
       const isReversal = r.narration && /reversal/i.test(r.narration);
       type = isReversal ? 'Cheque Return' : 'Cheque Endorsement';
+      // The stored text names the bank/vendor and an internal cheque id — replaced by the real
+      // cheque number and due date (2026-09-18). A reversal keeps its own explanatory text.
+      if (!isReversal) narration = paymentNarration('Cheque', r.cal_cheque_no, r.cal_cheque_date);
       break;
     }
     case 'OPENING':
@@ -209,20 +237,16 @@ function formatLedgerRow(r) {
       break;
   }
 
-  // LED-02 (changes-14-09-26.md, 2026-09-15): append the counter-account name — and, for a
-  // Receipt/Expense/Cheque Endorsement or Return, the mode of payment — to whatever narration the
-  // switch above produced. Always appended, never substituted: a user's own typed text (or an
-  // already-descriptive stored narration) is never overwritten, only extended. Skipped when the
-  // narration already names the counter account (Transfer's own fallback already does, e.g. "HBL
-  // Bank → Cash in Hand") so the same account name is never shown twice on one line.
-  const counterAccountName = r.counter_account_name || null;
-  if (counterAccountName && !(narration || '').toLowerCase().includes(counterAccountName.toLowerCase())) {
-    narration = narration ? `${narration} — ${counterAccountName}` : counterAccountName;
+  // Stored narrations were written with the document's INTERNAL id ("Sale bill #5026", "Journal
+  // Voucher #2006 — …") — swap that for the number the user knows it by, i.e. the same Inv # shown
+  // beside it (per the user, 2026-09-18: "why in narration it shows sale bill no 5026").
+  if (inv_no != null && narration && r.source_id != null) {
+    const idRef = new RegExp(`^((?:Sale bill|Sale return|Purchase|Purchase return|Journal Voucher) #)${r.source_id}\\b`, 'i');
+    narration = narration.replace(idRef, `$1${inv_no}`);
   }
-  const paymentModeLabel = paymentModeLabelFor(r);
-  if (paymentModeLabel) {
-    narration = narration ? `${narration} (${paymentModeLabel})` : `(${paymentModeLabel})`;
-  }
+
+  // LED-02's counter-account name + "(mode)" suffix removed (per the user, 2026-09-18): payment rows
+  // now carry only their mode (and cheque no./due date) above, and no row names another account.
 
   // LED-01: parsed once here (not left as a raw JSON string) so every caller of formatLedgerRow —
   // account-ledger, business-ledger, vendor-ledger, since all three go through accountLedger() —

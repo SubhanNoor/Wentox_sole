@@ -13,7 +13,8 @@ async function list(filters = {}) {
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
     `SELECT ga.*, ac.code AS class_code, ac.name AS class_name,
-            CAST(CASE WHEN EXISTS (SELECT 1 FROM dbo.chart_of_accounts ca WHERE ca.group_id = ga.group_id)
+            -- ACTIVE chart accounts only (2026-09-18) — a closed one no longer blocks closing the group.
+            CAST(CASE WHEN EXISTS (SELECT 1 FROM dbo.chart_of_accounts ca WHERE ca.group_id = ga.group_id AND ca.status = 'ACTIVE')
                  THEN 1 ELSE 0 END AS BIT) AS has_children
      FROM dbo.group_accounts ga
      JOIN dbo.account_classes ac ON ac.class_id = ga.class_id
@@ -94,7 +95,8 @@ async function setActive(groupId, isActive) {
 // deactivated (would silently orphan their own hierarchy display).
 async function isReferenced(groupId) {
   const result = await query(
-    'SELECT TOP 1 1 AS found FROM dbo.chart_of_accounts WHERE group_id = @groupId',
+    // ACTIVE only (2026-09-18) — closed chart accounts are removed by permanentDelete instead.
+    "SELECT TOP 1 1 AS found FROM dbo.chart_of_accounts WHERE group_id = @groupId AND status = 'ACTIVE'",
     { groupId: { type: sql.Int, value: groupId } },
   );
   return result.recordset.length > 0;
@@ -118,6 +120,14 @@ async function hasAnyReference(groupId) {
   return Object.values(row).some((v) => v != null);
 }
 
+async function closedChartIds(groupId) {
+  const result = await query(
+    "SELECT ac_id, name FROM dbo.chart_of_accounts WHERE group_id = @groupId AND status = 'CLOSED'",
+    { groupId: { type: sql.Int, value: groupId } },
+  );
+  return result.recordset;
+}
+
 async function hardDelete(transaction, groupId) {
   const request = requestWithParams(transaction, { groupId: { type: sql.Int, value: groupId } });
   await request.query('DELETE FROM dbo.group_accounts WHERE group_id = @groupId');
@@ -125,5 +135,5 @@ async function hardDelete(transaction, groupId) {
 
 module.exports = {
   list, findById, findByName, nextSerial, insert, update, setActive, isReferenced,
-  hasAnyReference, hardDelete,
+  hasAnyReference, hardDelete, closedChartIds,
 };

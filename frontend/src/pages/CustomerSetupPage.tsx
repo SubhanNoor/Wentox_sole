@@ -275,7 +275,7 @@ export default function CustomerSetupPage() {
               <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Narration</th>
               <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Debit (PKR)</th>
               <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Credit (PKR)</th>
-              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Balance (PKR)</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '130px', minWidth: '130px', whiteSpace: 'nowrap' }}>Balance (PKR)</th>
             </tr>
           </thead>
           <tbody>
@@ -553,7 +553,7 @@ export default function CustomerSetupPage() {
                       <th className="p-3">Narration</th>
                       <th className="p-3 text-right">Debit (PKR)</th>
                       <th className="p-3 text-right">Credit (PKR)</th>
-                      <th className="p-3 text-right">Balance</th>
+                      <th className="p-3 text-right whitespace-nowrap" style={{ minWidth: '110px' }}>Balance</th>
                     </tr>
                   </thead>
                   <tbody>

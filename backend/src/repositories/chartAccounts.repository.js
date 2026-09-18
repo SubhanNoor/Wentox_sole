@@ -29,7 +29,9 @@ async function list(filters = {}) {
   const result = await query(
     `SELECT ca.*, ga.code AS group_code, ga.name AS group_name, ga.class_id,
             acl.code AS class_code, acl.name AS class_name,
-            CAST(CASE WHEN EXISTS (SELECT 1 FROM dbo.business_accounts ba WHERE ba.ac_id = ca.ac_id)
+            -- ACTIVE children only (2026-09-18): a closed business account no longer blocks closing
+            -- its chart account — see hasChildren.
+            CAST(CASE WHEN EXISTS (SELECT 1 FROM dbo.business_accounts ba WHERE ba.ac_id = ca.ac_id AND ba.status = 'ACTIVE')
                  THEN 1 ELSE 0 END AS BIT) AS has_children
      FROM dbo.chart_of_accounts ca
      JOIN dbo.group_accounts ga    ON ga.group_id = ca.group_id
@@ -123,12 +125,14 @@ async function hasLedgerActivity(acId) {
   return result.recordset.length > 0;
 }
 
-// ACC-02's "child accounts" check for this level of the hierarchy: any business account filed
-// under this chart account (ba.ac_id is its parent — see schema.sql's own comment on the column),
-// active or closed — unconditional, same as groupAccounts.repository.js#isReferenced.
+// ACC-02's "child accounts" check for this level of the hierarchy: any ACTIVE business account filed
+// under this chart account. Closed ones used to count too (per the user, 2026-09-18: "there is no
+// business account under it but still can't delete it") — the lists hide closed accounts, and the
+// error itself told the user to "close those first", which then changed nothing. Closed children
+// are dealt with by permanentDelete instead (see closedChildIds).
 async function hasChildren(acId) {
   const result = await query(
-    'SELECT TOP 1 1 AS found FROM dbo.business_accounts WHERE ac_id = @acId',
+    "SELECT TOP 1 1 AS found FROM dbo.business_accounts WHERE ac_id = @acId AND status = 'ACTIVE'",
     { acId: { type: sql.Int, value: acId } },
   );
   return result.recordset.length > 0;
@@ -153,6 +157,30 @@ async function hasAnyReference(acId) {
   return Object.values(row).some((v) => v != null);
 }
 
+// Closed business accounts filed under this chart account — permanentDelete removes them along with
+// it, provided none of them is referenced anywhere.
+async function closedChildIds(acId) {
+  const result = await query(
+    "SELECT ba_id, name FROM dbo.business_accounts WHERE ac_id = @acId AND status = 'CLOSED'",
+    { acId: { type: sql.Int, value: acId } },
+  );
+  return result.recordset;
+}
+
+// hasAnyReference minus the business_accounts check — for a permanent delete that removes its
+// closed business accounts itself, only everything ELSE referencing the chart account matters.
+async function hasNonChildReference(acId) {
+  const result = await query(
+    `SELECT
+       (SELECT TOP 1 1 FROM dbo.ledger_entries WHERE ac_id = @acId) AS ledger,
+       (SELECT TOP 1 1 FROM dbo.draft_sale_bills WHERE main_ac_id = @acId) AS draftSaleBill,
+       (SELECT TOP 1 1 FROM dbo.sale_bills WHERE main_ac_id = @acId) AS saleBill,
+       (SELECT TOP 1 1 FROM dbo.stock_vouchers WHERE main_ac_id = @acId) AS stockVoucher`,
+    { acId: { type: sql.Int, value: acId } },
+  );
+  return Object.values(result.recordset[0]).some((v) => v != null);
+}
+
 async function hardDelete(transaction, acId) {
   const request = requestWithParams(transaction, { acId: { type: sql.Int, value: acId } });
   await request.query('DELETE FROM dbo.chart_of_accounts WHERE ac_id = @acId');
@@ -160,5 +188,5 @@ async function hardDelete(transaction, acId) {
 
 module.exports = {
   findByCode, list, findById, findByGroupAndName, nextSerial, insert, update, setStatus,
-  hasLedgerActivity, hasChildren, hasAnyReference, hardDelete,
+  hasLedgerActivity, hasChildren, hasAnyReference, hardDelete, closedChildIds, hasNonChildReference,
 };

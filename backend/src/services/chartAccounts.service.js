@@ -2,6 +2,7 @@
 // Throw ApiError for expected failures; use withTransaction for multi-write ops.
 const repository = require('../repositories/chartAccounts.repository');
 const groupAccountsRepository = require('../repositories/groupAccounts.repository');
+const businessAccountsRepository = require('../repositories/businessAccounts.repository');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 const CODES = require('../constants/reservedAccounts');
@@ -82,7 +83,7 @@ async function remove(acId) {
   const hasChildren = await repository.hasChildren(acId);
   if (hasChildren) {
     throw ApiError.conflict(
-      `${account.name} still has business accounts filed under it — move or close those first`,
+      `${account.name} still has active business accounts filed under it — move or close those first`,
       'CHART_ACCOUNT_HAS_CHILDREN',
     );
   }
@@ -114,21 +115,51 @@ async function permanentDelete(acId, session) {
   if (RESERVED_CODES.has(account.code)) {
     throw ApiError.conflict('This is a reserved chart account and cannot be deleted', 'RESERVED_ACCOUNT');
   }
-  if (account.status !== 'CLOSED') {
-    throw ApiError.conflict(
-      `${account.name} must be closed (deleted) first — permanent delete is only for an already-closed account`,
-      'ACCOUNT_NOT_CLOSED',
-    );
-  }
-  const referenced = await repository.hasAnyReference(acId);
-  if (referenced) {
-    throw ApiError.conflict(
-      `${account.name} is still referenced elsewhere (a business account filed under it, posted or draft ledger activity) and cannot be permanently deleted`,
-      'ACCOUNT_STILL_REFERENCED',
-    );
-  }
-  await withTransaction((transaction) => repository.hardDelete(transaction, acId));
+  // One-step delete (per the user, 2026-09-18: "just one time deletion is fine") — no longer has to
+  // be closed first; every in-use check below still applies, so only an unused account can go.
+  const closedChildren = await assertPurgeable(account);
+  await withTransaction((transaction) => purge(transaction, acId, closedChildren));
   return { ok: true };
 }
 
-module.exports = { list, getById, create, update, remove, reactivate, permanentDelete };
+// Everything a permanent delete of this (closed) chart account would remove, checked up front:
+// the chart account itself plus its CLOSED business accounts (per the user, 2026-09-18 — closing
+// them and then being refused anyway was the whole complaint). Any ACTIVE business account, or
+// anything referencing the chart account or one of those closed children, refuses the lot — and
+// names what is in the way instead of a generic "still referenced". Shared with
+// groupAccounts.service.js#permanentDelete, which purges whole closed chart accounts the same way.
+async function assertPurgeable(account) {
+  if (await repository.hasChildren(account.ac_id)) {
+    throw ApiError.conflict(
+      `${account.name} still has active business accounts filed under it — close those first`,
+      'CHART_ACCOUNT_HAS_CHILDREN',
+    );
+  }
+  if (await repository.hasNonChildReference(account.ac_id)) {
+    throw ApiError.conflict(
+      `${account.name} has posted or draft activity of its own and cannot be permanently deleted`,
+      'ACCOUNT_STILL_REFERENCED',
+    );
+  }
+  const closedChildren = await repository.closedChildIds(account.ac_id);
+  const inUse = [];
+  for (const child of closedChildren) {
+    if (await businessAccountsRepository.hasAnyReference(child.ba_id)) inUse.push(child.name);
+  }
+  if (inUse.length) {
+    throw ApiError.conflict(
+      `${account.name} cannot be permanently deleted: its closed business account(s) ${inUse.join(', ')} have transactions or are linked to a customer/vendor/employee/bank`,
+      'ACCOUNT_STILL_REFERENCED',
+    );
+  }
+  return closedChildren;
+}
+
+async function purge(transaction, acId, closedChildren) {
+  for (const child of closedChildren) {
+    await businessAccountsRepository.hardDelete(transaction, child.ba_id);
+  }
+  await repository.hardDelete(transaction, acId);
+}
+
+module.exports = { list, getById, create, update, remove, reactivate, permanentDelete, assertPurgeable, purge };

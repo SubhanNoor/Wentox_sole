@@ -166,7 +166,7 @@ export function VendorReportContent() {
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Ref #</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Debit (IN)</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Credit (OUT)</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Balance</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '130px', minWidth: '130px', whiteSpace: 'nowrap' }}>Balance</th>
               </tr>
             </thead>
             <tbody>
@@ -410,7 +410,7 @@ export function VendorReportContent() {
                       <th className="p-3 text-center">Ref #</th>
                       <th className="p-3 text-right">Debit (IN)</th>
                       <th className="p-3 text-right">Credit (OUT)</th>
-                      <th className="p-3 text-right">Balance</th>
+                      <th className="p-3 text-right whitespace-nowrap" style={{ minWidth: '110px' }}>Balance</th>
                     </tr>
                   </thead>
                   <tbody>

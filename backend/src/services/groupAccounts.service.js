@@ -2,6 +2,8 @@
 // Throw ApiError for expected failures; use withTransaction for multi-write ops.
 const repository = require('../repositories/groupAccounts.repository');
 const accountClassesRepository = require('../repositories/accountClasses.repository');
+const chartAccountsRepository = require('../repositories/chartAccounts.repository');
+const chartAccountsService = require('./chartAccounts.service');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 
@@ -79,7 +81,7 @@ async function remove(groupId) {
   const referenced = await repository.isReferenced(groupId);
   if (referenced) {
     throw ApiError.conflict(
-      'This group still has chart accounts filed under it — move or close those first',
+      'This group still has active chart accounts filed under it — move or close those first',
       'GROUP_IN_USE',
     );
   }
@@ -100,20 +102,27 @@ async function reactivate(groupId) {
 // account resolved transitively through this group's chart accounts.
 async function permanentDelete(groupId) {
   const group = await getById(groupId);
-  if (group.is_active) {
+  // One-step delete (per the user, 2026-09-18: "just one time deletion is fine") — no longer has to
+  // be closed first; every in-use check below still applies, so only an unused account can go.
+  // Its CLOSED chart accounts (and their closed business accounts) go with it — per the user,
+  // 2026-09-18. Each is checked exactly as a standalone chart-account permanent delete would be;
+  // any active child anywhere below, or anything in use, refuses the whole operation.
+  if (await repository.isReferenced(groupId)) {
     throw ApiError.conflict(
-      `${group.name} must be closed (deleted) first — permanent delete is only for an already-closed group`,
-      'ACCOUNT_NOT_CLOSED',
+      `${group.name} still has active chart accounts filed under it — close those first`,
+      'GROUP_IN_USE',
     );
   }
-  const referenced = await repository.hasAnyReference(groupId);
-  if (referenced) {
-    throw ApiError.conflict(
-      `${group.name} is still referenced elsewhere (a chart account or business account filed under it) and cannot be permanently deleted`,
-      'ACCOUNT_STILL_REFERENCED',
-    );
+  const closedCharts = await repository.closedChartIds(groupId);
+  const plan = [];
+  for (const { ac_id: acId } of closedCharts) {
+    const chart = await chartAccountsRepository.findById(acId);
+    plan.push({ acId, children: await chartAccountsService.assertPurgeable(chart) });
   }
-  await withTransaction((transaction) => repository.hardDelete(transaction, groupId));
+  await withTransaction(async (transaction) => {
+    for (const { acId, children } of plan) await chartAccountsService.purge(transaction, acId, children);
+    await repository.hardDelete(transaction, groupId);
+  });
   return { ok: true };
 }
 

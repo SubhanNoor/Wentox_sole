@@ -172,7 +172,8 @@ export default function GroupAcSetupPage() {
   // PasswordPromptModal IS the confirmation step now, replacing the old plain ConfirmModal.
   const confirmDeleteGroup = async (password: string) => {
     if (!deletingGroup) return;
-    const res = await groupAccountsApi.remove(deletingGroup.group_id, password);
+    // One-step delete (per the user, 2026-09-18) — straight to the permanent delete, no close first.
+    const res = await groupAccountsApi.permanentDelete(deletingGroup.group_id, password);
     if (!res.ok) {
       setErrorMsg(res.error.message);
       setTimeout(() => setErrorMsg(''), 5000);
@@ -590,7 +591,7 @@ export default function GroupAcSetupPage() {
           onClose={() => setDeletingGroup(null)}
           onSuccess={confirmDeleteGroup}
           title="Delete Group Account"
-          subtitle={deletingGroup ? `Confirm your password to delete "${deletingGroup.name}". It will be hidden from selection everywhere — this can be undone any time with Reactivate.` : undefined}
+          subtitle={deletingGroup ? `Confirm your password to delete "${deletingGroup.name}". This PERMANENTLY removes it (and any closed chart/business accounts under it) — it cannot be undone. Refused if any account under it is active, or has transactions or a customer/vendor/employee/bank link.` : undefined}
         />
 
         <PasswordPromptModal
@@ -598,7 +599,7 @@ export default function GroupAcSetupPage() {
           onClose={() => setPermDeletingGroup(null)}
           onSuccess={confirmPermanentDeleteGroup}
           title="Permanently Delete Group Account"
-          subtitle={permDeletingGroup ? `Confirm your password to PERMANENTLY delete "${permDeletingGroup.name}". This cannot be undone — the record itself is removed, not just closed. It will be refused if any chart account (or business account beneath it) is still filed under this group.` : undefined}
+          subtitle={permDeletingGroup ? `Confirm your password to PERMANENTLY delete "${permDeletingGroup.name}". This cannot be undone — the record itself is removed, not just closed. Its CLOSED chart accounts (and their closed business accounts) are permanently deleted with it. It will be refused if any account beneath it is still active, or has transactions or a customer/vendor/employee/bank link.` : undefined}
         />
 
       </div>

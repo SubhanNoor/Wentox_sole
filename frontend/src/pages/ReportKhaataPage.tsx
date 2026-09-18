@@ -225,7 +225,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Pairs</th>
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Debit (Dr)</th>
             <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Credit (Cr)</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Balance</th>
+            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '130px', minWidth: '130px', whiteSpace: 'nowrap' }}>Balance</th>
           </tr>
         </thead>
         <tbody>
@@ -540,11 +540,11 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                       <th className="p-3">Type</th>
                       <th className="p-3 text-center">Inv #</th>
                       <th className="p-3 text-center">Bill #</th>
-                      <th className="p-3" style={{ minWidth: '220px' }}>Narration</th>
+                      <th className="p-3" style={{ minWidth: '160px' }}>Narration</th>
                       <th className="p-3 text-center">Pairs</th>
                       <th className="p-3 text-right">Debit (Dr)</th>
                       <th className="p-3 text-right">Credit (Cr)</th>
-                      <th className="p-3 text-right">Balance</th>
+                      <th className="p-3 text-right whitespace-nowrap" style={{ minWidth: '110px' }}>Balance</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -595,7 +595,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                             <td className={`px-3 text-right text-rose-700 font-bold ${cellV}`}>
                               {row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}
                             </td>
-                            <td className={`px-3 text-right font-bold font-mono ${cellV}`} style={{ color: balanceColor(row.balance) }}>
+                            <td className={`px-3 text-right font-bold font-mono whitespace-nowrap ${cellV}`} style={{ color: balanceColor(row.balance) }}>
                               {row.showBalance === false ? '' : formatCurrency(displayBal)}
                             </td>
                           </tr>

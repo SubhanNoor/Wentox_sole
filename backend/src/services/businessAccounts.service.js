@@ -354,12 +354,8 @@ async function permanentDelete(baId, session) {
       'RESERVED_ACCOUNT',
     );
   }
-  if (account.status !== 'CLOSED') {
-    throw ApiError.conflict(
-      `${account.name} must be closed (deleted) first — permanent delete is only for an already-closed account`,
-      'ACCOUNT_NOT_CLOSED',
-    );
-  }
+  // One-step delete (per the user, 2026-09-18: "just one time deletion is fine") — no longer has to
+  // be closed first; every in-use check below still applies, so only an unused account can go.
   const referenced = await repository.hasAnyReference(baId);
   if (referenced) {
     throw ApiError.conflict(
