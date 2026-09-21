@@ -23,6 +23,352 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Receipts Post/Unpost UI-wiring regression test (Top 8 #4)
+
+### 2026-09-20 — static source check that Post/Unpost are actually wired to a button
+- **What:** `frontend/src/pages/ReceiptsPage.wiring.test.ts` — targets the 2026-08-09 bug where
+  `receipts:post`/`receipts:unpost` existed correctly on both the backend and `lib/api.ts`, but
+  `ReceiptsPage.tsx` never called either — every receipt entered through the UI silently stayed a
+  DRAFT forever, invisible to any balance or report, found only via a user reporting a payment that
+  never updated a balance. A backend-only test can never catch this class of bug since the backend
+  was correct the whole time; the gap was purely "is the button actually wired to anything."
+- **Decision:** asked the user how to cover it, same fork as the Journal Voucher test — full
+  component-render test (heavy, and `ReceiptsPage.tsx` is another file with the in-progress
+  toolbar/`DocumentToolbar`/`RowActions` refactor sitting uncommitted) vs. a lightweight static
+  check vs. skip. Chose the lightweight static check.
+- **How:** reads `ReceiptsPage.tsx`'s own source via Vite's `?raw` import (not Node's `fs` — keeps
+  the test inside the same browser-context tsconfig as the rest of `src/`, no Node type deps
+  needed) and asserts three things together: `handlePost`/`handleUnpost` are defined, they call the
+  *actual* current API functions (`api.receipts.post`/`api.settlements.post` for post;
+  `api.receipts.unconfirm`/`api.settlements.unpost` for unpost — a regular receipt unposts via
+  `unconfirm()`, moving it back to a draft, not a plain status-flip `unpost()`, so the test pins the
+  real call rather than a guessed generic name), AND that each handler is genuinely referenced as
+  `onClick={handlePost}`/`onClick={handleUnpost}` somewhere in the JSX — that last check is what
+  actually catches "defined but never wired to a button," the real shape of the 2026-08-09 bug.
+- **Verified it's real**: temporarily stripped `onClick={handlePost}` from the Post button
+  (reproducing the exact bug), confirmed the test failed, restored the file, confirmed a byte-for-
+  byte identical restore (`diff` clean) and all 11 tests (this file + `journalVoucherMath.test.ts`)
+  passing again. `tsc -b --noEmit` clean.
+- **Files:** `frontend/src/pages/ReceiptsPage.wiring.test.ts` (new)
+
+---
+
+## Sale Bill posting regression suite (Top 8 #2 — highest blast radius)
+
+### 2026-09-20 — create/post/unpost/edit-while-posted regression suite + two harness fixes
+- **What:** `backend/test/saleBills.posting.test.js` — 5 tests covering the single most-broken area
+  in `PROGRESS.md`'s history: create (reserves stock immediately, no ledger yet), post (writes a
+  balanced ledger pair with `pairs` populated on both legs — re-covers the 2026-09-20 bug from a
+  full lifecycle angle), unpost (removes the ledger pair, leaves the stock reservation untouched),
+  and editing an already-posted bill (reconciles BOTH ledger and stock to the new totals, old rows
+  replaced not left alongside the new ones).
+- **Fixtures:** `backend/testlib/fixtures.js` — real service calls (region/store/category/product/
+  variant-with-real-stock/customer), not mocks or raw INSERTs, so a variant's on-hand stock comes
+  from an actual `stock.service.js#logProduction()` PRODUCTION movement the same way a real one
+  would. `setupSaleFixtures(t, opts)` centralizes the whole arrange step AND registers cleanup
+  against `t` (the TestContext) before anything is created, mutating a tracker object as each piece
+  succeeds — see below for why.
+- **Two real bugs found and fixed in the test harness itself, before this suite could be trusted:**
+  1. Running the whole suite together (not just this file in isolation) hit a genuine race: Node's
+     `--test` runs test FILES concurrently by default, and two files simultaneously creating
+     business accounts collided on `businessAccounts.repository.js#nextSerial()`'s
+     `SELECT MAX(existing_serial)+1` (no locking) — a `UNIQUE KEY` violation on
+     `business_accounts.code`. Fixed by adding `--test-concurrency=1` to `npm test`; integration
+     tests sharing one live database shouldn't run as separate concurrent processes regardless of
+     whether the underlying allocation is race-safe. (Worth its own coverage later — tracked as a
+     separate `system_no`-style allocation-race task, since this is the same *shape* of bug in a
+     different function.)
+  2. `test/helpers/*.js` were being silently picked up and run as their own trivial "passing tests"
+     — Node's default test-file discovery includes `**/test/**/*.js` (any `.js` under a directory
+     literally named `test`, recursively), which matched the helpers despite them having no `test()`
+     calls at all. Fixed by moving them to `backend/testlib/` (a sibling of `test/`, not nested
+     inside it) — `testlib` doesn't match the pattern's literal `test` path segment.
+  3. Found via the race above: a **fixed-object** `t.after()` (registered only after every fixture
+     already succeeded) leaves anything created before a mid-setup throw permanently orphaned — the
+     race's own failure left exactly one orphaned region behind, cleaned up manually. Refactored
+     both this suite and `businessAccounts.openingBalance.test.js` to register `t.after()` against a
+     **mutable tracker object** before creating anything, mutating it as each fixture succeeds.
+     Verified directly: ran a throwaway test that calls `setupSaleFixtures()` then immediately
+     throws — confirmed every fixture it had created was still cleaned up (Node's test runner runs
+     `after` hooks even when the test body itself fails).
+- **Verified:** ran the full suite (`businessAccounts.openingBalance.test.js` +
+  `saleBills.posting.test.js`, 6 tests) 3× back to back — all pass, zero residual rows in
+  `ledger_entries`/`stock_movements`/`sale_bills`/`customers`/`article_colors`/`articles`/
+  `product_categories`/`regions` each time (the one persistent `stores` row is the seeded default
+  "Main Store", not test residue).
+- **Files:** `backend/test/saleBills.posting.test.js` (new), `backend/testlib/fixtures.js` (new,
+  moved from `backend/test/helpers/`), `backend/testlib/cleanup.js` (new, moved),
+  `backend/test/businessAccounts.openingBalance.test.js`, `backend/package.json`
+
+---
+
+## Cross-page Posted/Unposted reset-on-reopen regression test (Top 8 #6 — G-06)
+
+### 2026-09-20 — one test per page for a bug that was copy-pasted 6 times
+- **What:** `frontend/src/pages/postedFilterReset.wiring.test.ts` — 6 tests, one per document page
+  (SaleBillPage, SaleReturnPage, PurchasePage, PurchaseReturnPage, JournalVoucherPage,
+  StockVoucherPage), targeting G-06 (2026-09-15, logged in `PROGRESS.md` as a "severe bug"):
+  opening a new window could show a POSTED document's data while the Posted/Unposted filter still
+  defaulted to "Unposted" — the reset-on-reopen check was originally gated on `mode === 'view'`,
+  which missed the `mode === 'edit'` case (reachable via an edit-on-a-posted-record flow, e.g.
+  SaleBillPage's own bilty/adda-on-a-posted-bill edit). Fixed across all 6 pages by gating on each
+  page's own persisted "is this actually a posted record" flag instead of `mode` — since only
+  `handleNew()` ever clears that flag, it can never be true while there's genuine unsaved work.
+- **Why one test per page, not one shared test**: this was one bug copy-pasted into 6 separate
+  `useEffect` blocks, each with its own locally-named flag (`currentBillIsPosted`,
+  `currentReturnIsPosted`, `currentIsPosted` ×2, `isPosted` ×2) — a regression in any single page's
+  own copy would not be caught by testing another page, so each of the 6 gets its own assertion
+  pinned to its actual current flag name (read from the real source, not guessed).
+- **How:** static source check via Vite's `?raw` imports (same approach as
+  `ReceiptsPage.wiring.test.ts` — these are large, heavily integrated pages, several mid-refactor
+  when this was written) asserting the reset callback is gated on `data.length === 0 && <that
+  page's actual flag>`, never `mode === 'view'` alone.
+- **Verified it's real**: temporarily reverted `SaleBillPage.tsx`'s check back to the original buggy
+  `mode === 'view'` form, confirmed the test failed, restored the file (byte-for-byte diff clean),
+  confirmed all 17 frontend tests (3 files) pass again. `tsc -b --noEmit` clean.
+- **Files:** `frontend/src/pages/postedFilterReset.wiring.test.ts` (new)
+- **This closes out all 6 tracked follow-up items from `testing_priority_plan.md`'s Top 8** (Sale
+  Bill/Return posting, Cheques disposal, Receipts wiring, Report posted-only filters + a live
+  Payment Trail fix, the allocation-race fix, and this cross-page reset test) — 22 tests total
+  across backend (`node --test`) and frontend (`vitest`), plus the standalone
+  `check-ipc-bridge.js` structural gate wired into every release.
+
+---
+
+## Allocation-race fix: 4 repositories' code generation, a live and easily-reproduced bug (Top 8 #2 revised)
+
+### 2026-09-20 — sp_getapplock serialization for businessAccounts/chartAccounts/groupAccounts/products code allocation
+- **What:** this task started as "test the `system_no` allocation race" per the original testing
+  plan, but investigation found that risk no longer exists — the document `system_no` columns
+  (sale bill/return, purchase/return, journal voucher) already moved to real SQL Server `SEQUENCE`
+  objects (migrations 031/035), which are atomic by the engine's own guarantee. The ACTUAL live
+  race was elsewhere: `businessAccounts.repository.js`, `chartAccounts.repository.js`,
+  `groupAccounts.repository.js`, and `products.repository.js` (`nextCode`/`nextBatchNo`) each
+  allocate their own code via a plain "SELECT MAX(existing)+1, then INSERT" with no locking — the
+  same shape of bug the document numbers used to have, just never migrated off it.
+- **Proved it live before touching anything**: fired 8 concurrent `customersService.create()` calls
+  against the same reserved chart account — 6 of 8 failed with a raw `UNIQUE KEY` constraint
+  violation, only 2 succeeded. This is easily triggered in the real app: two windows/users creating
+  a customer/vendor/product around the same moment.
+- **Fix:** added `pool.js#acquireAppLock(transaction, resourceName)` — wraps `sp_getapplock` with
+  `@LockOwner = 'Transaction'` (auto-released at commit/rollback, no explicit release needed) —
+  and called it at the top of all 4 repositories' serial/code functions, each scoped to the right
+  parent key so unrelated concurrent creates never serialize against each other for no reason
+  (`business_account_serial:<chartCode>`, `chart_account_serial:<groupCode>`,
+  `group_account_serial:<classDigit>`, `article_code` (global), `article_batch_no:<vendorId>`).
+  Did NOT convert these to `SEQUENCE` objects like `system_no` — a `SEQUENCE` is a fixed, statically
+  named object, a poor fit for codes scoped per parent (per chart code, per class digit, per
+  vendor) rather than one fixed counter.
+- **Verified thoroughly**: re-ran the exact 8-concurrent-create reproduction post-fix — 8/8
+  succeeded, all codes unique — for both business accounts and products. Then proved the fix
+  actually matters, not just coincidentally working: temporarily disabled the lock call, reproduced
+  the failure again (7/8 failed) via both an ad hoc script AND the checked-in test file directly,
+  restored the fix (byte-for-byte diff clean both times), confirmed all 16 tests pass again. Ran the
+  full suite 3× back to back with a stable, unchanged baseline in every relevant table (no residue).
+- **Files:** `backend/test/allocationRace.test.js` (new, 4 tests — business accounts, products,
+  chart accounts, group accounts), `backend/src/db/pool.js` (`acquireAppLock`),
+  `backend/src/repositories/businessAccounts.repository.js`,
+  `backend/src/repositories/chartAccounts.repository.js`,
+  `backend/src/repositories/groupAccounts.repository.js`, `backend/src/repositories/products.repository.js`
+
+---
+
+## Report posted-only filter regression suite + a live Payment Trail bug found and fixed (Top 8 #8)
+
+### 2026-09-20 — Sale Analysis/Vendor Report regression tests + Payment Trail settlements gap fixed
+- **What:** `backend/test/reports.postedOnly.test.js` — 3 tests guarding the "forgot the
+  posted-only filter" bug class (independently reintroduced 3+ times across Sale Analysis/Sale
+  Report/Vendor Report per `PROGRESS.md`'s history): an unposted Sale Bill must not inflate Sale
+  Analysis's Total Sales; an unposted Purchase must not inflate Vendor Report's Total Purchase;
+  both correctly appear once posted.
+- **Live bug found and fixed, not just historical**: while researching this, found that
+  `reports.repository.js#paymentTrailRows()` (Payment Trail, UC-34) only ever queried
+  `dbo.expenses` — but `settlements.service.js#create()` lets a Direct Settlement's `to_ba_id` be
+  ANY business account (vendor, employee wages, expense head, no restriction), which is reachable
+  through the standalone Direct Settlement screen right now, not gated behind some not-yet-built
+  UI. Since `vendorReportRows()` already correctly folds settlements into a vendor's "Payment
+  Paid", this meant **Vendor Report and Payment Trail could already disagree over the exact same
+  real settlement today** — confirmed with the user this was worth fixing immediately rather than
+  just documenting. Fixed `paymentTrailRows()` to `UNION ALL` expenses and settlements
+  (`to_ba_id`) before grouping by chart-account code, mirroring `vendorReportRows()`'s own pattern.
+  Added a third test proving a settlement paid straight to a vendor now counts in Payment Trail's
+  "Vendors - Suppliers" bucket, and that a DRAFT (unposted) settlement still doesn't.
+- **Verified real, not trivial**: for the Payment Trail fix specifically, temporarily reverted
+  `paymentTrailRows()` to its old expenses-only query, confirmed the new test failed
+  ("0 !== 1500"), restored the fix (byte-for-byte diff clean), confirmed all 12 tests pass.
+- **Fixtures/cleanup**: extended `testlib/cleanup.js` with `purchaseId` (+ `vendor_stock_movements`
+  cleanup) and `settlementId` cases. Found and fixed a real small leak in the test itself along the
+  way: `materialsRepository.resolveOrCreate()` creates a genuinely new `materials` row per unique
+  name, and nothing was cleaning those up — added a `materialIds` cleanup case; confirmed zero
+  residue across repeated runs afterward.
+- **Files:** `backend/test/reports.postedOnly.test.js` (new), `backend/src/repositories/reports.repository.js`
+  (`paymentTrailRows()` fix), `backend/testlib/cleanup.js`
+
+---
+
+## Cheques disposal state machine regression suite (Top 8 #3/#4 — most bug-dense module)
+
+### 2026-09-20 — deposit/endorse/bounce/reverseAllocation regression suite
+- **What:** `backend/test/cheques.disposal.test.js` — 5 tests covering `cheques.service.js`'s
+  disposal state machine, the most bug-dense module in `PROGRESS.md`'s whole history (4 distinct
+  real bugs against it). Covers: `deposit()` writes a balanced Dr bank/Cr Cheques In Hand pair and
+  marks the cheque DEPOSITED; `endorseToVendor()` writes Dr vendor/Cr Cheques In Hand; `bounce()`
+  reverses both the deposit allocation AND the original receipt via new balanced entries (never
+  deleting/rewriting), keeps the global trial balance at zero, and never flips the receipt back to
+  DRAFT; `reverseAllocation()` undoes one partial endorsement only, freeing the cheque's balance
+  back to PENDING without touching the receipt or any other allocation.
+- **Fixtures:** extended `testlib/fixtures.js`/`cleanup.js` with `makeVendor()`, `makeBank()`, and
+  `setupChequeFixtures(t)` (customer + bank + vendor, same up-front-registered-cleanup shape as
+  `setupSaleFixtures`); `cleanupFixtures()` gained a `receiptId` case handling the receipts↔cheques
+  circular FK (null out `receipts.cheque_id` before deleting the `cheques` row, matching
+  `receipts.service.js#remove()`'s own documented order) plus `vendorId`/`bankId` cases.
+- **Verified it's real, not trivially passing**: temporarily removed the `insertLedgerEntries` call
+  from `deposit()` (reproducing the exact 2026-08-10 bug this module's own comments describe),
+  confirmed the deposit test failed with a clear message ("0 !== 2"), restored the original code,
+  confirmed all 9 tests (this suite + the two from before) pass again. Ran the full suite 3× back
+  to back with zero residual rows in every relevant table (`ledger_entries`, `stock_movements`,
+  `receipts`, `cheques`, `cheque_allocations`, `vendors` beyond the seeded system vendor,
+  `bank_accounts`, `customers`, `regions`) each time.
+- **Files:** `backend/test/cheques.disposal.test.js` (new), `backend/testlib/fixtures.js`,
+  `backend/testlib/cleanup.js`
+
+---
+
+## Backend + frontend test infrastructure, first two regression tests
+
+### 2026-09-20 — Trial-balance invariant test (backend) + Journal Voucher sign-mapping test (frontend)
+- **What:** first two real automated tests in the repo (previously zero, on either side), targeting
+  the two highest-priority items from `System_architecture/testing_priority_plan.md`'s revised
+  Top 8: the Journal Voucher debit/credit sign-inversion bug (#1) and the opening-balance
+  double-entry bug (#2/#7 combined into one standing invariant).
+- **Backend test infra:** `npm run test:setup` provisions a throwaway `wentox_test` database by
+  reusing the app's own idempotent `migrate()`/`seed()` — no separate test schema to maintain.
+  `npm test` runs `node --test` (Node's built-in runner, zero new dependency) against it. First
+  test: `backend/test/businessAccounts.openingBalance.test.js` — asserts the trial balance
+  (`SUM(debit) = SUM(credit)` across all of `ledger_entries`) stays zero after a customer is
+  created with a nonzero opening balance, and that the OPENING pair is on the correct side.
+  **Verified it's a real test, not a trivial pass**: temporarily removed the counter-entry leg from
+  `businessAccounts.repository.js#replaceOpeningEntries()` (reproducing the original 2026-08-10
+  bug), confirmed the test failed with a clear message, then restored the original code and
+  confirmed it passed again. Also ran 3× back to back with a DB query proving zero residual rows —
+  the cleanup itself had a bug first try (deleted the `ba_id`-keyed OPENING leg but not the
+  `ac_id`-keyed counter leg, leaving one stray row per run), caught and fixed before it could
+  quietly poison later test runs.
+- **Frontend test infra:** installed `vitest` (matches the existing Vite toolchain, zero config
+  needed), added `frontend/vitest.config.ts` (deliberately separate from `vite.config.ts` — no
+  React plugin or jsdom needed for pure-logic tests, keeps `npm test` fast; a future component test
+  can add those). `npm test` runs `vitest run`.
+- **Journal Voucher sign bug**: the actual 2026-09-15 (`ACC-01`) bug lived in
+  `JournalVoucherPage.tsx#handleCommitLine`'s inline sign mapping, which isn't a standalone
+  function — asked the user how to cover it (extract to a pure function vs. a full component
+  render test vs. skip for now); chose extraction. Added `frontend/src/lib/journalVoucherMath.ts`
+  (`amountToDebitCredit`/`debitCreditToAmount`, mirroring the backend's existing
+  `journalVouchers.math.js` pattern) and `journalVoucherMath.test.ts` (7 cases, including a
+  round-trip property test). Wired into `JournalVoucherPage.tsx` at its two call sites
+  (`handleCommitLine`, `loadLineIntoEntry`) as a minimal, behavior-preserving substitution — flagged
+  to the user first since that file had unrelated in-progress work (the toolbar/`DocumentToolbar`/
+  `RowActions` refactor) sitting uncommitted, last touched ~3 hours earlier; confirmed the two edits
+  landed cleanly isolated from that work via a targeted diff review. **Verified it's a real test**
+  the same way: temporarily re-inverted the sign mapping (reproducing the original bug), confirmed
+  3 of 7 cases failed with clear messages, restored the fix, confirmed all 7 pass again.
+  `tsc -b --noEmit` clean after the page edit.
+- **Files:** `backend/scripts/setup-test-db.js` (new), `backend/test/businessAccounts.openingBalance.test.js`
+  (new), `backend/package.json`; `frontend/vitest.config.ts` (new),
+  `frontend/src/lib/journalVoucherMath.ts` (new), `frontend/src/lib/journalVoucherMath.test.ts`
+  (new), `frontend/src/pages/JournalVoucherPage.tsx`, `frontend/package.json`
+
+---
+
+## IPC bridge wiring check — structural regression gate
+
+### 2026-09-20 — `check:ipc-bridge` script + dead `accounts:tree` feature removed
+- **What:** following `System_architecture/testing_priority_plan.md`'s root-cause analysis (the
+  client's repeated post-delivery bugs cluster into a few patterns, the biggest being silent
+  frontend/backend wiring gaps — Journal Voucher and Direct Settlement both shipped completely
+  broken because they were missing from `frontend/src/lib/ipcBridge.ts`'s `FEATURES` allow-list),
+  added a standalone script that makes this exact class of bug impossible to ship silently again.
+- **How:** `backend/scripts/check-ipc-bridge.js` scans every `src/ipc/*.ipc.js` for
+  `ipcMain.handle('<feature>:<action>', ...)` channel prefixes (multi-line-call-aware), converts
+  each to camelCase, and diffs against `ipcBridge.ts`'s `FEATURES` array — failing loudly (exit 1)
+  on any backend feature with no frontend entry, and warning (non-fatal) on any `FEATURES` entry
+  with no matching backend channel. Wired into `npm run dist:win`/`release:win` as the very first
+  step, so a release now fails in seconds, before spending build minutes, if this regresses. Added
+  as `npm run check:ipc-bridge` for standalone/local use too.
+- **First run immediately found a real gap**: `accounts:tree` (Milestone 8's read-only Class→Group→
+  Chart→Business hierarchy view) was registered on the backend but never added to `FEATURES` —
+  confirmed harmless (not an active bug) because `ChartAcSetupPage.tsx` never actually calls it; it
+  composes the same hierarchy client-side from separate `chartAccounts`/`groupAccounts`/
+  `businessAccounts` list calls instead. Per the user's decision, deleted the dead feature entirely
+  rather than wire up something with zero callers: removed `accounts.ipc.js`,
+  `accountsTree.service.js`, `accountsTree.repository.js`, and its registration in
+  `src/ipc/index.js`. Confirmed no other reference anywhere in `backend/src` or `frontend/src`.
+- **Verified:** `npm run check:ipc-bridge` passes clean (48/48 backend feature prefixes present);
+  `node -c` clean on `src/ipc/index.js`.
+- **CI:** added `.github/workflows/ipc-bridge-check.yml` (mirrors `nsis-lint.yml`'s pattern — plain
+  Node, no deps, runs in seconds) triggered on push to `main`/PRs touching `backend/src/ipc/**` or
+  `frontend/src/lib/ipcBridge.ts`, and wired as a second gate job (alongside `nsis-lint`) in
+  `release.yml` before the Windows build runs. Verified both workflow YAML files parse and the
+  script runs correctly invoked from the repo root, matching how CI calls it.
+- **Files:** `backend/scripts/check-ipc-bridge.js` (new), `backend/package.json`,
+  `backend/src/ipc/index.js`, `.github/workflows/ipc-bridge-check.yml` (new),
+  `.github/workflows/release.yml`; deleted `backend/src/ipc/accounts.ipc.js`,
+  `backend/src/services/accountsTree.service.js`, `backend/src/repositories/accountsTree.repository.js`
+
+---
+
+## Search & Bilty Adda Updation — Bill No. editing added
+
+### 2026-09-20 — Manual Bill No. now editable from the same screen as Bilty No./Adda (UC-20)
+- **What:** the user asked that "Search & Bilty Adda Updation" (`BiltyUpdatePage.tsx`) also let the
+  manual Bill No. be edited/corrected post-save, alongside the existing Bilty No./Adda fields.
+- **How:** extended the existing non-financial `updateBiltyInfo` path (allowed on POSTED bills, no
+  password guard, never touches ledger/stock) rather than routing through the full financial
+  `update()`. Two decisions confirmed with the user first: no new uniqueness check on `bill_no`
+  (none exists today anywhere for sale bills, front or back end — adding one only here would be
+  inconsistent) and no password guard on posted bills (kept consistent with Bilty No./Adda's
+  existing no-password treatment on this same screen). `bill_no` is `NOT NULL` in schema, unlike the
+  other two fields, so `updateBiltyInfo()` gained a real validation check it never had before.
+  "Selected Bill No." input changed from `readOnly disabled` to a normal editable input
+  (disabled only until a row is selected); the row-select auto-focus target moved from the Bilty No.
+  input to this one, since it's now the first editable field again.
+- **Verified:** live round-trip against the dev DB — updated bill #1's `bill_no`, confirmed the
+  change, reverted it back, and confirmed the new empty-`bill_no` validation throws
+  `bill_no is required`. `tsc -b` clean on frontend; `node -c` clean on all three backend files.
+- **Files:** `backend/src/repositories/saleBills.repository.js`,
+  `backend/src/services/saleBills.service.js`, `backend/src/ipc/saleBills.ipc.js`,
+  `frontend/src/lib/api.ts`, `frontend/src/pages/BiltyUpdatePage.tsx`
+
+---
+
+## Customer Khaata Ledger — "Pairs" column was blank for Sale Bill / Sale Return rows
+
+### 2026-09-20 — Sale Bill/Return ledger postings never set `ledger_entries.pairs` (Milestone 2, Module 2.1/2.2)
+- **What:** the Customer Khaata Ledger's "Pairs" column (already fully built end-to-end: `KhaataRow`
+  type, on-screen table, print preview, Excel export) always rendered "-" for Sale Bill and Sale
+  Return rows. Purchase/Purchase Return rows were unaffected — those get their pairs display from
+  expanded `purchase_items` JSON client-side, a different path.
+- **How:** root cause was in the write path, not the read/display path — `ledger_entries.pairs` is a
+  real column the repository already selects and inserts (`pairs: { type: sql.Int, value: row.pairs
+  ?? null }`), but nothing calling `insertLedgerEntries()` for `SALE_BILL`/`SALE_RETURN` ever passed
+  a `pairs` value, so it was always written as `NULL`. Fixed by threading a `pairs` number through
+  every ledger-posting call site: `saleBills.service.js#writeLedger()` gained a `pairs` param (its
+  callers `update()`/`post()` pass `totals.totalPairs`/`bill.total_pairs`); both
+  `saleBills.service.js#postLedgerAndStock()` and `saleReturns.service.js#postLedgerAndStock()` now
+  compute `items.reduce((sum, item) => sum + item.pairs, 0)` locally, since every caller of those two
+  (including the draft-confirm flows in `draftSaleBills.service.js`/`draftSaleReturns.service.js`)
+  already passes an `items`/`lines` array with a `.pairs` field per line. No schema, repository, or
+  frontend changes needed — the column and UI already existed correctly.
+- **Backfill:** the user asked for historical rows to show pairs too, so migration
+  `036_backfill_sale_ledger_pairs.sql` was added — an idempotent `UPDATE ... WHERE pairs IS NULL`
+  copying `sale_bills.total_pairs`/`sale_returns.total_pairs` onto both ledger legs of each
+  already-posted document. Applied via `npm run migrate` and verified: 54/54 existing SALE_BILL
+  ledger rows backfilled (no SALE_RETURN rows existed yet in this database), spot-checked against
+  the source bills' `total_pairs` and matched exactly.
+- **Files:** `backend/src/services/saleBills.service.js`, `backend/src/services/saleReturns.service.js`,
+  `backend/src/db/migrations/036_backfill_sale_ledger_pairs.sql`
+
+---
+
 ## Stock Voucher — new document type, replacing the old inline "+ Add Stock" flow (new capability, not in the original milestone scope)
 
 ### 2026-08-26 — Stock Voucher: full backend + frontend, same architecture as Journal Voucher

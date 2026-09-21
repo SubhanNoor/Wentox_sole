@@ -24,7 +24,7 @@ export default function EditScopeRadios({
   onChange: (scope: 'master' | 'detail') => void;
 }) {
   return (
-    <div className="flex items-center justify-center gap-5 mb-2 select-none" data-no-print>
+    <div className="flex items-center justify-center gap-5 my-0.5 select-none" data-no-print>
       {(['master', 'detail'] as const).map(scope => (
         <label
           key={scope}

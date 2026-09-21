@@ -43,7 +43,7 @@ export default function BiltyUpdatePage() {
   const firstFieldRef = useRef<HTMLInputElement>(null);
   // Focused after selecting a row for editing (see handleSelectBill below) — separate from
   // firstFieldRef, which is only for G-03's own "focus the first field on page open" rule.
-  const updateBiltyNoRef = useRef<HTMLInputElement>(null);
+  const updateBillNoRef = useRef<HTMLInputElement>(null);
   useEffect(() => { requestAnimationFrame(() => firstFieldRef.current?.focus()); }, []);
 
   const [addas, setAddas] = useState<AddaRow[]>([]);
@@ -132,7 +132,8 @@ export default function BiltyUpdatePage() {
 
   // Select a bill from table — per the user, 2026-09-16: clicking a row's Edit icon should land
   // the cursor straight in the first field there is actually something to edit, not leave it
-  // wherever it happened to be. "Selected Bill No." is read-only, so that's the Bilty No. input.
+  // wherever it happened to be. "Selected Bill No." is now editable too (2026-09-20), so it's the
+  // first field again.
   const handleSelectBill = (bill: SaleBillRow) => {
     setSelectedBillId(bill.bill_id);
     setUpdateBillNo(bill.bill_no);
@@ -142,7 +143,7 @@ export default function BiltyUpdatePage() {
     // would have saved that guess.
     setUpdateAddaId(bill.adda_id ? String(bill.adda_id) : '');
     setErrorMsg('');
-    requestAnimationFrame(() => updateBiltyNoRef.current?.focus());
+    requestAnimationFrame(() => updateBillNoRef.current?.focus());
   };
 
   // Perform Update
@@ -150,6 +151,10 @@ export default function BiltyUpdatePage() {
     e.preventDefault();
     if (!selectedBillId) {
       setErrorMsg('Please select an invoice from the table below first.');
+      return;
+    }
+    if (!updateBillNo.trim()) {
+      setErrorMsg('Please enter a valid Bill Number.');
       return;
     }
     if (!updateBiltyNo.trim()) {
@@ -161,7 +166,7 @@ export default function BiltyUpdatePage() {
       return;
     }
 
-    const res = await api.saleBills.updateBilty(selectedBillId, updateBiltyNo, Number(updateAddaId));
+    const res = await api.saleBills.updateBilty(selectedBillId, updateBiltyNo, Number(updateAddaId), updateBillNo.trim());
     if (!res.ok) {
       setErrorMsg(res.error.message);
       return;
@@ -477,15 +482,16 @@ export default function BiltyUpdatePage() {
           <form onSubmit={handleUpdateBilty} className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-[1fr_1fr_1.4fr_auto_auto] gap-x-4 gap-y-2 items-end pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
             <div>
               <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-0.5">
-                Selected Bill No.
+                Bill No.
               </label>
               <input
+                ref={updateBillNoRef}
                 type="text"
                 value={updateBillNo}
-                readOnly
-                disabled
+                onChange={e => setUpdateBillNo(e.target.value)}
+                disabled={!selectedBillId}
                 placeholder="Click a row to select..."
-                className="soleria-input-compact bg-slate-50 text-slate-500 font-semibold"
+                className="soleria-input-compact font-semibold disabled:bg-slate-50 disabled:text-slate-500"
               />
             </div>
             <div>
@@ -493,7 +499,6 @@ export default function BiltyUpdatePage() {
                 Enter Bilty No.
               </label>
               <input
-                ref={updateBiltyNoRef}
                 type="text"
                 value={updateBiltyNo}
                 onChange={e => setUpdateBiltyNo(e.target.value)}

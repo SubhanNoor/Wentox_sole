@@ -39,6 +39,13 @@ export default function CheckForUpdatesPage() {
     setInfo({ currentVersion: data.currentVersion, latestVersion: data.latestVersion });
     if (data.updateAvailable) {
       setStatus('update-available');
+    } else if (data.checkError) {
+      // Never claim "you're up to date" when the lookup itself failed — a permanent fault (no
+      // release yet, missing latest.yml, GitHub unreachable) looked identical to genuinely having
+      // the newest build, which is what made this button look broken (per the user, 2026-09-20).
+      // SettingsPage's own check has always done this; this page had not.
+      setStatus('error');
+      setMessage(`Could not reach the update server: ${data.checkError}`);
     } else {
       setStatus('up-to-date');
       setMessage(data.packaged === false ? 'Update checking only works in a packaged build.' : "You're on the latest version.");

@@ -1,7 +1,6 @@
 // Central IPC registrar (mirrors the old routes/index.js): each feature module registers its own
 // ipcMain.handle channels. Called once from electron/main.js before the BrowserWindow loads, so
 // every channel exists before the renderer can invoke one.
-const registerAccounts = require('./accounts.ipc');
 const registerAccountClasses = require('./accountClasses.ipc');
 const registerAlerts = require('./alerts.ipc');
 const registerAuth = require('./auth.ipc');
@@ -52,7 +51,6 @@ const registerWindows = require('./windows.ipc');
 const registerZoom = require('./zoom.ipc');
 
 module.exports = function registerIpcHandlers() {
-  registerAccounts();
   registerAccountClasses();
   registerAlerts();
   registerAuth();

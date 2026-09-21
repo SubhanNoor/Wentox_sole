@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { formatCurrency } from '@/context/AppContext';
+import { formatCurrency, useApp } from '@/context/AppContext';
+import { exportRowsToExcel } from '@/lib/export';
 import AppLayout from '@/components/AppLayout';
+import DocumentToolbar from '@/components/DocumentToolbar';
 import SearchModal from '@/components/SearchModal';
 import * as api from '@/lib/api';
 import type {
@@ -10,10 +12,7 @@ import type {
 } from '@/lib/api';
 import { focusNextField } from '@/lib/fieldNav';
 import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
-import {
-  Save, Edit, Trash2, Plus, CheckCircle2, Undo2, ChevronDown,
-  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, PackageCheck, Search
-} from 'lucide-react';
+import { Edit, Trash2, ChevronDown } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
 import MonthlyExpensesTab from '@/components/MonthlyExpensesTab';
@@ -34,6 +33,7 @@ const today = () => new Date().toISOString().split('T')[0];
 const NON_TERMINAL_CHEQUE_STATUS = new Set(['PENDING', 'DEPOSITED', 'ENDORSED', 'PARTIALLY_ENDORSED']);
 
 export default function ExpensesPage() {
+  const { dispatch } = useApp();
   // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
   // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
   // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
@@ -737,6 +737,9 @@ export default function ExpensesPage() {
     if (!res.ok) { fail('Failed to unpost voucher: ' + res.error.message); return; }
     setVoucherResult({ action: 'unpost', data: res.data });
     setVoucher(res.data.voucher);
+    // Land on the editable screen straight away (toolbar standardisation, 2026-09-20) — adding a
+    // row to a just-unposted document is the whole reason for unposting it.
+    setMode('edit');
     setBalanceRefreshKey(k => k + 1);
     refreshAllVouchers();
     refreshCheques(); // unposting releases any cheque allocation the lines held
@@ -1019,20 +1022,15 @@ export default function ExpensesPage() {
   // Pending Posting panel; a toolbar action now, so it targets the open voucher. Backend rejects
   // deleting a PARTIAL voucher, hence the UNPOSTED-only gate on the button.
   // True while a committed line is pulled into the entry strip — i.e. a row is selected.
-  const selectedLineId = mode === 'edit' && entryIsDraft ? expenseId : null;
 
   // Toolbar Delete targets the SELECTED ENTRY when a row is selected, the whole voucher otherwise —
   // the rule Purchase/Sale Bill/Stock Voucher already follow, brought here so the toolbar means the
   // same thing on every voucher page (per the user, 2026-09-01). Both paths keep the password
   // prompt, which is also what names which of the two is about to happen.
+  // Toolbar Delete ALWAYS deletes the whole document now (per the user, 2026-09-20: a new user
+  // could not know a row had to be deselected first). Deleting a single row is the row's own
+  // Delete button in the grid — one meaning per button.
   const handleDeleteVoucherClick = () => {
-    if (selectedLineId != null) {
-      const line = voucherLines.find(l => l.draft_id === selectedLineId);
-      if (line) {
-        setDeleteTarget({ kind: 'draft', id: selectedLineId, amount: Number(line.amount) });
-        return;
-      }
-    }
     if (!voucher) return;
     setDeleteTarget({ kind: 'voucher', id: voucher.voucher_id, amount: Number(voucher.total_amount) });
   };
@@ -1153,139 +1151,83 @@ export default function ExpensesPage() {
                 buttons instead of pill-shaped colored ones, matching Purchase/Purchase Return/
                 Receipts. Done/Update is a plain button now, not a form submit — Enter (the form's
                 own onSubmit) and Done diverge on purpose, see their own comments above. */}
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
-              <div className="flex flex-wrap items-center gap-0.5">
-                {/* Update (editing a line, or the header via Edit + Master scope) and Done (a fresh
-                    line) both just commit and stay on the open voucher now — Done no longer starts
-                    a new one (per the user, 2026-09-07: that meant every voucher needed a separate
-                    trip through Unposted to find and post it). Use New to start an actually-blank
-                    voucher. */}
-                {!isViewMode && deletedPlaceholder == null && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      if (isHeaderEditing) {
-                        if (await commitHeaderEdit()) clearEntryRow();
-                      } else if (mode === 'edit') {
-                        if (await commitEntryLine()) clearEntryRow();
-                      } else {
-                        await handleDoneButton();
-                      }
-                    }}
-                    title={isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done — save this entry, ready to Post'}
-                    className="toolbar-btn"
-                  >
-                    <Save size={20} strokeWidth={2.5} className="text-blue-600" />
-                    <span>{mode === 'edit' ? 'Update' : 'Done'}</span>
-                  </button>
-                )}
-                <button
-                  data-new-action="true" ref={newButtonRef} type="button" onClick={() => { startNewVoucher(); markNewClicked(); }} disabled={navFilter === 'posted'} title="New Voucher" className="toolbar-btn">
-                  <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
-                  <span>New</span>
-                </button>
-                {/* Whole-voucher delete (password-gated). UNPOSTED only — the backend refuses to
-                    delete a PARTIAL voucher, since some of its lines already have ledger entries. */}
-                <button
-                  type="button"
-                  onClick={handleDeleteVoucherClick}
-                  disabled={deletedPlaceholder != null || (selectedLineId != null ? false : (!voucher || voucher.status !== 'UNPOSTED'))}
-                  title={selectedLineId != null
-                    ? 'Delete the selected entry (asks for your password)'
-                    : 'Delete this voucher (asks for your password)'}
-                  className="toolbar-btn"
-                >
-                  <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
-                  <span>Delete</span>
-                </button>
-                {/* Edit — the only way to unlock the voucher header (Date/Remarks) again once a
-                    voucher exists; per-row Edit on a line still exists separately for detail
-                    lines. Lands focus on the first field of whichever scope is picked. Per the
-                    user, 2026-08-31. */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMode('edit');
-                    if (editScope === 'master' && voucher) {
-                      // Seed the local editable copies from the voucher's own values so the
-                      // fields show the right starting point the moment they unlock — the value
-                      // binding below switches to these while isHeaderEditing.
-                      setDate(voucher.voucher_date);
-                      setVoucherRemarks(voucher.remarks ?? '');
-                    }
-                    if (editScope === 'detail') focusFirstEntryField();
-                    else requestAnimationFrame(() => firstFieldRef.current?.focus());
-                  }}
-                  disabled={deletedPlaceholder != null || !voucher || voucher.status === 'POSTED'}
-                  title="Edit — unlock the voucher header or entry strip, per the Edit Scope selected"
-                  className="toolbar-btn"
-                >
-                  <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
-                  <span>Edit</span>
-                </button>
-
-                <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-                <button type="button" onClick={handleNavFirst} disabled={!canNavPrevious} title="First" className="toolbar-btn">
-                  <ChevronsLeft size={20} strokeWidth={2.5} className="text-amber-600" />
-                  <span>First</span>
-                </button>
-                <button type="button" onClick={handleNavPrevious} disabled={!canNavPrevious} title="Previous" className="toolbar-btn">
-                  <ChevronLeft size={20} strokeWidth={2.5} className="text-amber-600" />
-                  <span>Prev.</span>
-                </button>
-                <button type="button" onClick={handleNavNext} disabled={!canNavNext} title="Next" className="toolbar-btn">
-                  <ChevronRight size={20} strokeWidth={2.5} className="text-amber-600" />
-                  <span>Next</span>
-                </button>
-                <button type="button" onClick={handleNavLast} disabled={!canNavNext} title="Last" className="toolbar-btn">
-                  <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
-                  <span>Last</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsFindOpen(true)}
-                  title="Find a voucher by C.Book No, date or remarks"
-                  className="toolbar-btn"
-                >
-                  <Search size={20} strokeWidth={2.5} className="text-slate-600" />
-                  <span>Find</span>
-                </button>
-
-                <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-                <button
-                  type="button"
-                  onClick={handleUnpostVoucher}
-                  disabled={deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy}
-                  title="Unpost Voucher"
-                  className="toolbar-btn"
-                >
-                  <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
-                  <span>Unpost</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => { await handlePostVoucher(); focusNewButton(); }}
-                  disabled={deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy}
-                  title={voucherBusy ? 'Posting…' : `Post Voucher${voucherLines.length ? ` (${voucherLines.length})` : ''}`}
-                  className="toolbar-btn"
-                >
-                  <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
-                  <span>Post</span>
-                </button>
-                {/* Moved here from the removed Pending Posting panel. */}
-                <button
-                  type="button"
-                  onClick={async () => { await handlePostAllVouchers(); focusNewButton(); }}
-                  disabled={navUnpostedVouchers.length === 0 || postAllVouchersBusy || navFilter === 'posted'}
-                  title={postAllVouchersBusy ? 'Posting…' : `Post All (${navUnpostedVouchers.length})`}
-                  className="toolbar-btn"
-                >
-                  <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
-                  <span>Post All</span>
-                </button>
-              </div>
+            <div className="flex items-center flex-nowrap overflow-x-auto justify-between gap-2 mb-1 p-1.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
+          <DocumentToolbar
+            newAction={{ onClick: () => { startNewVoucher(); markNewClicked(); }, title: 'New Voucher', ref: newButtonRef }}
+            remove={{
+              onClick: handleDeleteVoucherClick,
+              disabled: deletedPlaceholder != null || !voucher || voucher.status !== 'UNPOSTED',
+              title: 'Delete this whole voucher — every entry on it goes too (asks for your password)',
+            }}
+            editRow={{
+              onClick: () => {
+                const line = voucherLines.find(l => l.draft_id === lastEnteredLineId) ?? voucherLines[voucherLines.length - 1];
+                if (line) handleEditLine(line);
+              },
+              disabled: deletedPlaceholder != null || !voucher || voucher.status === 'POSTED' || voucherLines.length === 0,
+              title: 'Edit the last entry you touched',
+            }}
+            edit={{
+              onClick: () => {
+                setMode('edit');
+                if (editScope === 'master' && voucher) {
+                  setDate(voucher.voucher_date);
+                  setVoucherRemarks(voucher.remarks ?? '');
+                }
+                if (editScope === 'detail') focusFirstEntryField();
+                else requestAnimationFrame(() => firstFieldRef.current?.focus());
+              },
+              disabled: deletedPlaceholder != null || !voucher || voucher.status === 'POSTED',
+            }}
+            save={{
+              onClick: async () => {
+                if (isHeaderEditing) {
+                  if (await commitHeaderEdit()) clearEntryRow();
+                } else if (mode === 'edit') {
+                  if (await commitEntryLine()) clearEntryRow();
+                } else {
+                  await handleDoneButton();
+                }
+              },
+              disabled: isViewMode || deletedPlaceholder != null,
+              title: 'Save this entry into the voucher',
+            }}
+            done={{
+              onClick: async () => {
+                if (isHeaderEditing) {
+                  if (await commitHeaderEdit()) clearEntryRow();
+                } else if (mode === 'edit') {
+                  if (await commitEntryLine()) clearEntryRow();
+                } else {
+                  await handleDoneButton();
+                }
+              },
+              disabled: isViewMode || deletedPlaceholder != null,
+              title: isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done — save this entry, ready to Post',
+            }}
+            cancel={{ onClick: () => { clearEntryRow(); setMode('new'); }, disabled: mode !== 'edit', title: 'Cancel Edit' }}
+            first={{ onClick: handleNavFirst, disabled: !canNavPrevious }}
+            prev={{ onClick: handleNavPrevious, disabled: !canNavPrevious, title: 'Previous' }}
+            next={{ onClick: handleNavNext, disabled: !canNavNext }}
+            last={{ onClick: handleNavLast, disabled: !canNavNext }}
+            print={{ onClick: () => window.print(), disabled: !voucher }}
+            find={{ onClick: () => setIsFindOpen(true) }}
+            unpost={{ onClick: handleUnpostVoucher, disabled: deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy, title: 'Unpost Voucher' }}
+            post={{ onClick: async () => { await handlePostVoucher(); focusNewButton(); }, disabled: deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy, title: 'Post Voucher' }}
+            exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
+            saveAndPost={{ disabled: true, title: 'Not used here — each entry is saved as you add it; press Post when the voucher is complete' }}
+            postAll={{ onClick: async () => { await handlePostAllVouchers(); focusNewButton(); }, disabled: navUnpostedVouchers.length === 0 || postAllVouchersBusy || navFilter === 'posted', title: `Post All (${navUnpostedVouchers.length})` }}
+            pdf={{ onClick: () => window.print(), disabled: !voucher, title: 'Export PDF — choose "Save as PDF" in the print dialog' }}
+            excel={{
+              onClick: () => exportRowsToExcel(
+                `expenses-voucher-${voucher?.voucher_no ?? ''}`,
+                ['Account', 'Details', 'Amount'],
+                voucherLines.map(l => [l.account_name ?? '', l.details ?? '', Number(l.amount)]),
+              ),
+              disabled: !voucher || voucherLines.length === 0,
+              title: 'Export Excel',
+            }}
+          />
 
               {/* Unposted (default) = add/post new vouchers; Posted = browse already-posted ones
                   (per the user, 2026-08-30). */}
@@ -1828,7 +1770,9 @@ export default function ExpensesPage() {
         onClose={() => setDeleteTarget(null)}
         onSuccess={handleDeleteConfirmed}
         title="Delete Expense"
-        subtitle={deleteTarget ? `Confirm your password to permanently delete this ${formatCurrency(deleteTarget.amount)} expense. This cannot be undone.` : undefined}
+        subtitle={deleteTarget ? (deleteTarget.kind === 'voucher'
+          ? `This deletes the WHOLE voucher and every entry on it (${formatCurrency(deleteTarget.amount)}) — not a single entry. It cannot be undone. Confirm your password.`
+          : `Confirm your password to permanently delete this ${formatCurrency(deleteTarget.amount)} expense entry. This cannot be undone.`) : undefined}
       />
 
       {/* Find Voucher — jump to any voucher by C.Book No, date or remarks. */}

@@ -5,11 +5,7 @@ import WeeklyTab from '@/components/WeeklyTab';
 import MonthlyTab from '@/components/MonthlyTab';
 import OverallTab from '@/components/OverallTab';
 import FindTab from '@/components/FindTab';
-import {
-  Save, Plus, Trash2, Printer, FileDown, FileSpreadsheet, Edit, AlertTriangle, CheckCircle2,
-  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, LogOut, Search, X, Undo2, FilePlus2,
-  PackageCheck, ChevronDown
-} from 'lucide-react';
+import { Plus, AlertTriangle, ChevronDown } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { SaleBillPrintable, type SaleBillPrintModel } from '@/components/reports/SaleBillPrintable';
@@ -17,6 +13,8 @@ import { getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal, { findDirectMatch } from '@/components/SearchModal';
+import DocumentToolbar from '@/components/DocumentToolbar';
+import RowActions from '@/components/RowActions';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
 import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
@@ -930,15 +928,10 @@ const nextSystemBillNo = useMemo(
   // deleting a line item is a toolbar action, enabled only while a row is selected". A row loaded
   // for editing (editingIndex) takes priority; otherwise a merely-clicked row (selectedIndex, G-08)
   // is the target; with neither, it falls back to this page's own whole-bill delete.
+  // Toolbar Delete ALWAYS deletes the whole document now (per the user, 2026-09-20: a new user
+  // could not know a row had to be deselected first). Deleting a single row is the row's own
+  // Delete button in the grid — one meaning per button.
   const handleDeleteAction = () => {
-    if (editingIndex != null) {
-      handleRemoveItemRow(editingIndex);
-      return;
-    }
-    if (selectedIndex != null) {
-      handleRemoveItemRow(selectedIndex);
-      return;
-    }
     handleDeleteCurrentBill();
   };
 
@@ -1828,245 +1821,45 @@ const nextSystemBillNo = useMemo(
               Icon color signals the action's nature (not the button background): emerald =
               create/confirm, rose = delete/destructive, sky = edit, blue = save, slate = cancel/
               neutral, amber = navigation. */}
-          <div className="flex flex-wrap items-center gap-2">
-          <div className="flex flex-wrap items-center gap-0.5">
-            {/* New and Post All both act on drafts — nonsensical while the dropdown is browsing
-                Posted, so both are disabled there rather than acting on whichever draft happened
-                to be on screen before the switch (per the user, 2026-09-04). */}
-            <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={pressNew} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
-              <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
-              <span>New</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleDeleteAction}
-              disabled={deletedPlaceholder != null || ((editingIndex != null || selectedIndex != null) ? isViewMode : (mode !== 'view' || billId == null || currentBillIsPosted))}
-              title={(editingIndex != null || selectedIndex != null) ? 'Delete selected article' : 'Delete'}
-              className="toolbar-btn"
-            >
-              <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
-              <span>Delete</span>
-            </button>
-            {/* G-08 (changes-14-09-26.md, 2026-09-15): editing a detail row is now deliberate —
-                click a row (no visible change), then press Edit to actually load it into the
-                entry strip and apply the highlight. */}
-            <button
-              type="button"
-              onClick={handleEditSelectedRow}
-              disabled={selectedIndex == null || editingIndex != null || isViewMode || currentBillIsPosted || (mode === 'edit' && editScope !== 'detail')}
-              title="Edit selected article"
-              className="toolbar-btn"
-            >
-              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
-              <span>Edit Row</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleEditCurrentBill}
-              // Posted bills are read-only: while the dropdown is on Posted the only action
-              // offered is Un Post, which drops the bill back to a draft and follows it into
-              // the Unposted view, where it can be edited (per the user, 2026-09-04).
-              disabled={deletedPlaceholder != null || mode !== 'view' || billId == null || currentBillIsPosted}
-              title="Edit"
-              className="toolbar-btn"
-            >
-              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
-              <span>Edit</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSave(false)}
-              disabled={deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded}
-              title="Save — keep editing this bill"
-              className="toolbar-btn"
-            >
-              <Save size={20} strokeWidth={2.5} className="text-blue-600" />
-              <span>Save</span>
-            </button>
-            <button
-              type="submit"
-              onClick={() => handleSave(true)}
-              disabled={deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded}
-              title="Done — finish this bill, then Post it"
-              className="toolbar-btn"
-            >
-              <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
-              <span>Done</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('view')}
-              disabled={mode !== 'edit'}
-              title="Cancel Edit"
-              className="toolbar-btn"
-            >
-              <X size={20} strokeWidth={2.5} className="text-slate-500" />
-              <span>Cancel</span>
-            </button>
-
-            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            <button
-              type="button"
-              onClick={handleFirst}
-              disabled={!canBrowse}
-              title="First"
-              className="toolbar-btn"
-            >
-              <ChevronsLeft size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>First</span>
-            </button>
-            <button
-              type="button"
-              onClick={handlePrev}
-              disabled={!canNavPrevious}
-              title="Pre."
-              className="toolbar-btn"
-            >
-              <ChevronLeft size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>Pre.</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleNext}
-              disabled={!canNavNext}
-              title="Next"
-              className="toolbar-btn"
-            >
-              <ChevronRight size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>Next</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleLast}
-              disabled={!canBrowse}
-              title="Last"
-              className="toolbar-btn"
-            >
-              <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>Last</span>
-            </button>
-
-            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            <button
-              type="button"
-              onClick={() => setIsPrintingSingle(true)}
-              disabled={deletedPlaceholder != null || mode !== 'view' || billId == null}
-              title="Print"
-              className="toolbar-btn"
-            >
-              <Printer size={20} strokeWidth={2.5} className="text-slate-600" />
-              <span>Print</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsFindOpen(true)}
-              title="Find"
-              className="toolbar-btn"
-            >
-              <Search size={20} strokeWidth={2.5} className="text-slate-600" />
-              <span>Find</span>
-            </button>
-
-            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            <button
-              type="button"
-              onClick={handleUnpostCurrentBill}
-              // No longer gated on the dropdown: it used to require browseFilter === 'unposted'
-              // back when that value MEANT "I'm here to unpost". Now that the dropdown genuinely
-              // filters, requiring it would be backwards — "Unposted" lists drafts, none of which
-              // can be unposted. Being on a posted bill is the only real precondition.
-              disabled={deletedPlaceholder != null || mode !== 'view' || billId == null || !currentBillIsPosted}
-              title="Un Post — move this posted bill back to drafts"
-              className="toolbar-btn"
-            >
-              <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
-              <span>Un Post</span>
-            </button>
-            <button
-              type="button"
-              onClick={async () => { await handlePostCurrentBill(); focusNewButton(); }}
-              disabled={deletedPlaceholder != null || mode !== 'view' || billId == null || currentBillIsPosted}
-              title="Post"
-              className="toolbar-btn"
-            >
-              <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
-              <span>Post</span>
-            </button>
-
-            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            <button
-              type="button"
-              onClick={() => dispatch({ type: 'NAVIGATE', page: 'home' })}
-              title="Exit"
-              className="toolbar-btn"
-            >
-              <LogOut size={20} strokeWidth={2.5} className="text-slate-600" />
-              <span>Exit</span>
-            </button>
-
-            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            {/* Extra convenience actions, not in the ref-pic's own set — kept, just styled the
-                same way, since nothing asked for them to go away. */}
-            <button
-              type="button"
-              onClick={async () => { await handleSaveAndPost(); focusNewButton(); }}
-              disabled={deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded || currentBillIsPosted}
-              title="Save & Post"
-              className="toolbar-btn"
-            >
-              <FilePlus2 size={20} strokeWidth={2.5} className="text-emerald-600" />
-              <span>Save+Post</span>
-            </button>
-            {unpostedBills.length > 0 && (
-              <button
-                type="button"
-                onClick={async () => { await handlePostAll(); focusNewButton(); }}
-                disabled={postAllBusy || browseFilter === 'posted'}
-                title={`Post All (${unpostedBills.length})`}
-                className="toolbar-btn"
-              >
-                <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
-                <span>Post All</span>
-              </button>
-            )}
-            {/* Opens the same preview modal as Print, rather than exporting straight away: that
-                used to call exportToPDF() with nothing shown first, which (a) gave no chance to
-                check it's the right bill and (b) was the direct cause of the empty-PDF bug fixed
-                just before this — printToPDF captured whatever was on screen at the instant of
-                the click, and the printable markup didn't exist unless isPrintingSingle was
-                already true. Opening the modal guarantees both: a visible preview, and the
-                printable content mounted before its own Export PDF button can be reached at all. */}
-            <button
-              type="button"
-              onClick={() => setIsPrintingSingle(true)}
-              disabled={deletedPlaceholder != null || mode !== 'view' || billId == null}
-              title="Export PDF"
-              className="toolbar-btn"
-            >
-              <FileDown size={20} strokeWidth={2.5} className="text-slate-600" />
-              <span>PDF</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
+          <div className="flex items-center flex-nowrap overflow-x-auto gap-2">
+          <DocumentToolbar
+            newAction={{ onClick: pressNew, disabled: browseFilter === 'posted', ref: newButtonRef }}
+            remove={{
+              onClick: handleDeleteAction,
+              disabled: deletedPlaceholder != null || billId == null || currentBillIsPosted,
+              title: 'Delete this whole bill — every article on it goes too (asks for your password)',
+            }}
+            editRow={{
+              onClick: handleEditSelectedRow,
+              disabled: selectedIndex == null || editingIndex != null || isViewMode || currentBillIsPosted || (mode === 'edit' && editScope !== 'detail'),
+              title: 'Edit selected article',
+            }}
+            edit={{ onClick: handleEditCurrentBill, disabled: deletedPlaceholder != null || mode !== 'view' || billId == null || currentBillIsPosted }}
+            save={{ onClick: () => handleSave(false), disabled: deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded, title: 'Save — keep editing this bill' }}
+            done={{ onClick: () => handleSave(true), submit: true, disabled: deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded, title: 'Done — finish this bill, then Post it' }}
+            cancel={{ onClick: () => setMode('view'), disabled: mode !== 'edit', title: 'Cancel Edit' }}
+            first={{ onClick: handleFirst, disabled: !canBrowse }}
+            prev={{ onClick: handlePrev, disabled: !canNavPrevious }}
+            next={{ onClick: handleNext, disabled: !canNavNext }}
+            last={{ onClick: handleLast, disabled: !canBrowse }}
+            print={{ onClick: () => setIsPrintingSingle(true), disabled: deletedPlaceholder != null || mode !== 'view' || billId == null }}
+            find={{ onClick: () => setIsFindOpen(true) }}
+            unpost={{ onClick: handleUnpostCurrentBill, disabled: deletedPlaceholder != null || mode !== 'view' || billId == null || !currentBillIsPosted, title: 'Un Post — move this posted bill back to drafts' }}
+            post={{ onClick: async () => { await handlePostCurrentBill(); focusNewButton(); }, disabled: deletedPlaceholder != null || mode !== 'view' || billId == null || currentBillIsPosted }}
+            exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
+            saveAndPost={{ onClick: async () => { await handleSaveAndPost(); focusNewButton(); }, disabled: deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded || currentBillIsPosted, title: 'Save & Post' }}
+            postAll={{ onClick: async () => { await handlePostAll(); focusNewButton(); }, disabled: postAllBusy || browseFilter === 'posted' || unpostedBills.length === 0, title: `Post All (${unpostedBills.length})` }}
+            pdf={{ onClick: () => setIsPrintingSingle(true), disabled: deletedPlaceholder != null || mode !== 'view' || billId == null, title: 'Export PDF' }}
+            excel={{
+              onClick: () => {
                 const headers = ['Article', 'Packing', 'Cartons', 'Pairs', 'Rate', 'D%', 'D. Value', 'Total Value'];
                 const rows = items.map(it => [it.label, it.packing, formatCartons(it.cartons), it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
                 exportRowsToExcel(`sale-bill-${billNo || billId}`, headers, rows);
-              }}
-              disabled={deletedPlaceholder != null || mode !== 'view' || billId == null}
-              title="Export Excel"
-              className="toolbar-btn"
-            >
-              <FileSpreadsheet size={20} strokeWidth={2.5} className="text-slate-600" />
-              <span>Excel</span>
-            </button>
-          </div>
+              },
+              disabled: deletedPlaceholder != null || mode !== 'view' || billId == null,
+              title: 'Export Excel',
+            }}
+          />
 
           {/* Post All result — a run can post 18 of 20 bills, and the two that failed are the
               whole point of the message, so it stays on screen until dismissed. */}
@@ -2669,6 +2462,7 @@ const nextSystemBillNo = useMemo(
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '90px' }}>Pairs</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '100px' }}>Rate</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1 text-right" style={{ width: '130px' }}>Value</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '84px' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -2698,11 +2492,21 @@ const nextSystemBillNo = useMemo(
                     <td className="p-1 text-center font-mono text-sm font-semibold text-slate-700">{item.pairs || '-'}</td>
                     <td className="p-1 text-right font-mono text-sm text-slate-700">{item.rate.toLocaleString()}</td>
                     <td className="p-1 text-right font-mono font-semibold text-sm" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(item.value)}</td>
+                    <td className="p-1 text-center whitespace-nowrap">
+                      <RowActions
+                        onEdit={() => handleRowClick(idx)}
+                        onDelete={() => handleRemoveItemRow(idx)}
+                        disabled={deletedPlaceholder != null || currentBillIsPosted || editingIndex != null || (mode === 'edit' && editScope !== 'detail')}
+                        editTitle="Edit this article"
+                        deleteTitle="Delete this article"
+                        disabledTitle="Unpost and edit the document (Detail scope) to change its articles"
+                      />
+                    </td>
                   </tr>
                 ))}
                 {items.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="p-3 text-center text-xs text-slate-400">
+                    <td colSpan={8} className="p-3 text-center text-xs text-slate-400">
                       No articles added yet.
                     </td>
                   </tr>
@@ -2955,7 +2759,7 @@ const nextSystemBillNo = useMemo(
         }
         subtitle={
           passwordActionType === 'delete_unposted_bill'
-            ? `Please enter password for user '${state.currentUsername || 'user'}' to permanently delete this unposted bill.`
+            ? `This deletes the WHOLE bill and every article on it — not a single row. It cannot be undone. Enter the password for user '${state.currentUsername || 'user'}' to confirm.`
             : `Please enter password for user '${state.currentUsername || 'user'}' to save changes to Bill #${billNo || currentSystemNo || ''}.`
         }
       />

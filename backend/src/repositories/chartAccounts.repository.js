@@ -1,6 +1,6 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, acquireAppLock } = require('../db/pool');
 
 // Reserved-account lookup (see src/constants/reservedAccounts.js) — used by posting logic to
 // resolve e.g. the SALES account without hardcoding its ac_id anywhere.
@@ -70,7 +70,10 @@ async function findByGroupAndName(groupId, name) {
 // §3.2: chart code = <parent group's code> + 2-digit serial (6 digits total) — matches the
 // majority of already-seeded reserved codes (e.g. group '1000' + '01' = '100001' CUSTOMERS
 // ACCOUNTS); see groupAccounts's own nextSerial for the level above.
+// acquireAppLock serializes this per groupCode — see businessAccounts.repository.js#nextSerial's
+// own comment for why (a plain MAX(...)+1 races under concurrent creates).
 async function nextSerial(transaction, groupCode) {
+  await acquireAppLock(transaction, `chart_account_serial:${groupCode}`);
   const request = requestWithParams(transaction, {
     groupCode: { type: sql.VarChar(20), value: groupCode },
   });

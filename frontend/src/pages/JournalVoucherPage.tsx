@@ -1,6 +1,9 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { formatCurrency } from '@/context/AppContext';
+import { formatCurrency, useApp } from '@/context/AppContext';
+import { exportRowsToExcel } from '@/lib/export';
 import AppLayout from '@/components/AppLayout';
+import DocumentToolbar from '@/components/DocumentToolbar';
+import RowActions from '@/components/RowActions';
 import SearchModal from '@/components/SearchModal';
 import { focusNextField } from '@/lib/fieldNav';
 import * as api from '@/lib/api';
@@ -9,10 +12,7 @@ import type {
   UnpostedJournalVoucherRow, PostAllResult,
 } from '@/lib/api';
 import { formatDate, getTodayDate, toDateInputValue } from '@/lib/utils';
-import {
-  Edit, Search, Plus, Trash2, BookText, ChevronDown, CheckCircle2, PackageCheck, Undo2,
-  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Printer
-} from 'lucide-react';
+import { Search, BookText, ChevronDown } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
 import AccountBalanceTooltip from '@/components/AccountBalanceTooltip';
@@ -20,6 +20,7 @@ import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/us
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { amountToDebitCredit, debitCreditToAmount } from '@/lib/journalVoucherMath';
 
 /**
  * Journal Voucher — a real multi-line double-entry journal (legacy "Journal Entry" screen): N
@@ -66,6 +67,7 @@ function emptyEntry(): EntryLine {
 }
 
 export default function JournalVoucherPage() {
+  const { dispatch } = useApp();
   // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
   // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
   // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
@@ -314,9 +316,9 @@ export default function JournalVoucherPage() {
       uid: editingIndex != null ? lines[editingIndex].uid : newLineUid(),
       baId: entry.baId,
       baSearchText: entry.baSearchText,
-      // ACC-01: +ve -> DEBIT, -ve -> CREDIT.
-      debit: entry.amount > 0 ? entry.amount : 0,
-      credit: entry.amount < 0 ? Math.abs(entry.amount) : 0,
+      // ACC-01: +ve -> DEBIT, -ve -> CREDIT (see lib/journalVoucherMath.ts's own header for why
+      // this is a separate, unit-tested function rather than inlined here).
+      ...amountToDebitCredit(entry.amount),
       narration: entry.narration,
     };
     const pointerIdx = editingIndex != null ? editingIndex : lines.length;
@@ -344,7 +346,7 @@ export default function JournalVoucherPage() {
   // credit -> -ve (the exact inverse of handleCommitLine's own split above).
   const loadLineIntoEntry = (idx: number) => {
     const row = lines[idx];
-    setEntry({ baId: row.baId, baSearchText: row.baSearchText, amount: row.debit > 0 ? row.debit : -row.credit, narration: row.narration });
+    setEntry({ baId: row.baId, baSearchText: row.baSearchText, amount: debitCreditToAmount(row.debit, row.credit), narration: row.narration });
     setEditingIndex(idx);
     setSelectedIndex(null);
     requestAnimationFrame(() => entryAccountTriggerRef.current?.focus());
@@ -400,15 +402,10 @@ export default function JournalVoucherPage() {
   // loaded for editing (editingIndex) takes priority; otherwise a merely-clicked row
   // (selectedIndex, G-08) is the target; with neither, it's the whole-JV delete (currently-open
   // unposted voucher).
+  // Toolbar Delete ALWAYS deletes the whole document now (per the user, 2026-09-20: a new user
+  // could not know a row had to be deselected first). Deleting a single row is the row's own
+  // Delete button in the grid — one meaning per button.
   const handleDeleteAction = () => {
-    if (editingIndex != null) {
-      removeLine(editingIndex);
-      return;
-    }
-    if (selectedIndex != null) {
-      removeLine(selectedIndex);
-      return;
-    }
     if (jvId == null || isPosted) return;
     pendingDeleteJvId.current = jvId;
     setIsPasswordModalOpen(true);
@@ -453,27 +450,50 @@ export default function JournalVoucherPage() {
     };
   };
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Save (keep editing) and Done (finish) share one path — `finalize` is the only difference,
+  // matching Sale Bill/Purchase, where Save and Done have always been separate buttons
+  // (toolbar standardisation, 2026-09-20). Returns the saved id, for Save+Post.
+  const doSave = async (finalize: boolean) => {
     // Backstop for the awaitingNew lock.
-    if (awaitingNew) { setErrorMsg('Click New to start a voucher first.'); return; }
+    if (awaitingNew) { setErrorMsg('Click New to start a voucher first.'); return null; }
     const payload = buildPayload();
-    if (!payload) return;
+    if (!payload) return null;
     const result = mode === 'edit' && jvId != null
       ? await api.journalVouchers.update(jvId, payload)
       : await api.journalVouchers.create(payload);
-    if (!result.ok) { fail('Failed to save Journal Voucher: ' + result.error.message); return; }
+    if (!result.ok) { fail('Failed to save Journal Voucher: ' + result.error.message); return null; }
     setJvId(result.data.jv_id);
     setVoucherNo(result.data.voucher_no);
     setStatus(result.data.status);
     setErrorMsg('');
     flash('Journal Voucher saved — Post it to update every line\'s ledger.');
-    setMode('view');
+    if (finalize) setMode('view');
     clearJournalVoucherDraft();
     refresh();
     refreshUnposted();
     refreshNav();
     setBalanceRefreshKey(k => k + 1);
+    return result.data.jv_id;
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await doSave(true);
+  };
+
+  // Cancel Edit — drops back to the saved copy, same as Purchase's own Cancel (2026-09-20).
+  const handleCancelEdit = async () => {
+    if (jvId == null) { handleNew(); return; }
+    await loadJv(jvId);
+    setMode('view');
+  };
+
+  // Save+Post in one click, same as Sale Bill's (2026-09-20).
+  const handleSaveAndPost = async () => {
+    const savedId = await doSave(true);
+    if (savedId == null) return;
+    await handlePost(savedId);
+    focusNewButton();
   };
 
   // Posting finishes this JV and readies the form for the next one — same convention as Sale
@@ -482,9 +502,12 @@ export default function JournalVoucherPage() {
   // bill"). Reuses handleNew() (which already focuses Date itself) rather than repeating its
   // field list, then restores the working date — handleNew() snaps to today, and a run of JVs
   // entered for an earlier date would otherwise reset on every one.
-  const handlePost = async () => {
-    if (jvId == null) return;
-    const res = await api.journalVouchers.post(jvId);
+  // `idOverride` lets Save+Post post the voucher it has just saved, before the id state has
+  // re-rendered (toolbar standardisation, 2026-09-20).
+  const handlePost = async (idOverride?: number) => {
+    const postId = idOverride ?? jvId;
+    if (postId == null) return;
+    const res = await api.journalVouchers.post(postId);
     if (!res.ok) { fail('Failed to post: ' + res.error.message); return; }
     flash('Journal Voucher posted — every line\'s ledger updated.');
     refresh();
@@ -510,6 +533,9 @@ export default function JournalVoucherPage() {
     // It's a draft again now, so the window follows it back to the Unposted view (per the user,
     // 2026-08-30) rather than staying on Posted looking at a record that no longer belongs there.
     setBrowseFilter('unposted');
+    // Land on the editable screen straight away (toolbar standardisation, 2026-09-20) — adding a
+    // row to a just-unposted document is the whole reason for unposting it.
+    setMode('edit');
   };
 
   // Listing rows only carry rolled-up totals (line_count/total_debit/total_credit), not the
@@ -784,7 +810,7 @@ const nextJvNoPreview = useMemo(
           onClose={() => { setIsPasswordModalOpen(false); pendingDeleteJvId.current = null; }}
           onSuccess={handleDeletePasswordSuccess}
           title="Delete Unposted Journal Voucher"
-          subtitle="Enter your password to permanently delete this unposted Journal Voucher."
+          subtitle="This deletes the WHOLE voucher and every line on it — not a single row. It cannot be undone. Enter your password to confirm."
         />
 
         {/* Find Journal Voucher Modal — jump to any posted or unposted JV by number or reason. */}
@@ -845,130 +871,46 @@ const nextJvNoPreview = useMemo(
             exactly (per the user, 2026-08-26): New/Delete/Edit/Done, First/Previous/Next/Last,
             Print/Find, Un Post/Post. Every action always renders, only `disabled` changes per
             state, instead of whole button groups mounting/unmounting per mode. */}
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
-          <div className="flex flex-wrap items-center gap-0.5">
-            <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { handleNew(); markNewClicked(); }} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
-              <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
-              <span>New</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleDeleteAction}
-              disabled={(editingIndex != null || selectedIndex != null) ? isViewMode : (mode !== 'view' || jvId == null || isPosted)}
-              title={(editingIndex != null || selectedIndex != null) ? 'Delete selected line' : 'Delete'}
-              className="toolbar-btn"
-            >
-              <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
-              <span>Delete</span>
-            </button>
-            {/* G-08 (changes-14-09-26.md, 2026-09-15): editing a detail row is now deliberate —
-                click a row (no visible change), then press Edit Row to actually load it into the
-                entry strip and apply the highlight. */}
-            <button
-              type="button"
-              onClick={handleEditSelectedRow}
-              disabled={selectedIndex == null || editingIndex != null || (isViewMode && isPosted) || (mode === 'edit' && editScope !== 'detail')}
-              title="Edit selected line"
-              className="toolbar-btn"
-            >
-              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
-              <span>Edit Row</span>
-            </button>
-            <button
-              type="button"
-              // Edit — lands focus on the first field of whichever scope is picked (per the user, 2026-08-31).
-              onClick={() => {
+        <div className="flex items-center flex-nowrap overflow-x-auto justify-between gap-2 mb-1 p-1.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
+          <DocumentToolbar
+            newAction={{ onClick: () => { handleNew(); markNewClicked(); }, disabled: browseFilter === 'posted', ref: newButtonRef }}
+            remove={{
+              onClick: handleDeleteAction,
+              disabled: jvId == null || isPosted,
+              title: 'Delete this whole voucher — every line on it goes too (asks for your password)',
+            }}
+            editRow={{ onClick: handleEditSelectedRow, disabled: selectedIndex == null || editingIndex != null || (isViewMode && isPosted) || (mode === 'edit' && editScope !== 'detail'), title: 'Edit selected line' }}
+            edit={{
+              onClick: () => {
                 setMode('edit');
                 requestAnimationFrame(() => {
                   if (editScope === 'detail') entryAccountTriggerRef.current?.focus();
                   else firstFieldRef.current?.focus();
                 });
-              }}
-              disabled={!isViewMode || jvId == null || isPosted}
-              title="Edit"
-              className="toolbar-btn"
-            >
-              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
-              <span>Edit</span>
-            </button>
-            <button
-              type="submit" form="jv-entry-form" disabled={isViewMode || !isValid}
-              title="Done"
-              className="toolbar-btn"
-            >
-              <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
-              <span>Done</span>
-            </button>
-
-            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            <button type="button" onClick={handleFirst} disabled={!canBrowse} title="First" className="toolbar-btn">
-              <ChevronsLeft size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>First</span>
-            </button>
-            <button type="button" onClick={handlePrev} disabled={!canNavPrevious} title="Previous" className="toolbar-btn">
-              <ChevronLeft size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>Prev.</span>
-            </button>
-            <button type="button" onClick={handleNext} disabled={!canNavNext} title="Next" className="toolbar-btn">
-              <ChevronRight size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>Next</span>
-            </button>
-            <button type="button" onClick={handleLast} disabled={!canBrowse} title="Last" className="toolbar-btn">
-              <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>Last</span>
-            </button>
-
-            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            <button
-              type="button"
-              onClick={() => window.print()}
-              disabled={mode !== 'view' || jvId == null}
-              title="Print"
-              className="toolbar-btn"
-            >
-              <Printer size={20} strokeWidth={2.5} className="text-slate-600" />
-              <span>Print</span>
-            </button>
-            <button type="button" onClick={() => setIsFindOpen(true)} title="Find" className="toolbar-btn">
-              <Search size={20} strokeWidth={2.5} className="text-slate-600" />
-              <span>Find</span>
-            </button>
-
-            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            <button
-              type="button" onClick={handleUnpost} disabled={!isViewMode || jvId == null || !isPosted}
-              title="Un Post — move this posted voucher back to drafts"
-              className="toolbar-btn"
-            >
-              <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
-              <span>Un Post</span>
-            </button>
-            <button
-              type="button" onClick={async () => { await handlePost(); focusNewButton(); }} disabled={!isViewMode || jvId == null || isPosted}
-              title="Post"
-              className="toolbar-btn"
-            >
-              <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
-              <span>Post</span>
-            </button>
-            {/* Post All — moved here when the left-hand Pending Posting panel was removed (per the
-                user, 2026-09-03: it overlapped the Master/Detail radios). Reaching one specific
-                unposted JV is the Unposted dropdown plus First/Prev./Next/Last. */}
-            {unpostedJvs.length > 0 && (
-              <button
-                type="button" onClick={async () => { await handlePostAll(); focusNewButton(); }} disabled={postAllBusy || browseFilter === 'posted'}
-                title={`Post All (${unpostedJvs.length})`}
-                className="toolbar-btn"
-              >
-                <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
-                <span>{postAllBusy ? 'Posting…' : 'Post All'}</span>
-              </button>
-            )}
-          </div>
+              },
+              disabled: !isViewMode || jvId == null || isPosted,
+            }}
+            save={{ onClick: async () => { await doSave(false); }, disabled: isViewMode || !isValid, title: 'Save — keep editing this voucher' }}
+            done={{ submit: true, form: 'jv-entry-form', disabled: isViewMode || !isValid, title: 'Done — finish this voucher, then Post it' }}
+            cancel={{ onClick: handleCancelEdit, disabled: mode !== 'edit', title: 'Cancel Edit' }}
+            first={{ onClick: handleFirst, disabled: !canBrowse }}
+            prev={{ onClick: handlePrev, disabled: !canNavPrevious, title: 'Previous' }}
+            next={{ onClick: handleNext, disabled: !canNavNext }}
+            last={{ onClick: handleLast, disabled: !canBrowse }}
+            print={{ onClick: () => window.print(), disabled: mode !== 'view' || jvId == null }}
+            find={{ onClick: () => setIsFindOpen(true) }}
+            unpost={{ onClick: handleUnpost, disabled: !isViewMode || jvId == null || !isPosted, title: 'Un Post — move this posted voucher back to unposted' }}
+            post={{ onClick: async () => { await handlePost(); focusNewButton(); }, disabled: !isViewMode || jvId == null || isPosted }}
+            exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
+            saveAndPost={{ onClick: handleSaveAndPost, disabled: isViewMode || !isValid, title: 'Save & Post' }}
+            postAll={{ onClick: async () => { await handlePostAll(); focusNewButton(); }, disabled: postAllBusy || browseFilter === 'posted' || unpostedJvs.length === 0, title: postAllBusy ? 'Posting…' : `Post All (${unpostedJvs.length})` }}
+            pdf={{ onClick: () => window.print(), disabled: mode !== 'view' || jvId == null, title: 'Export PDF — choose "Save as PDF" in the print dialog' }}
+            excel={{
+              onClick: () => exportRowsToExcel(`journal-voucher-${jvId}`, ['A/C Code', 'Account', 'Narration', 'Debit', 'Credit'], lines.map(l => [accounts.find(a => a.ba_id === Number(l.baId))?.code ?? '', accounts.find(a => a.ba_id === Number(l.baId))?.name ?? l.baSearchText, l.narration, l.debit, l.credit])),
+              disabled: mode !== 'view' || jvId == null,
+              title: 'Export Excel',
+            }}
+          />
 
           {/* Posted/Unposted — picks which list First/Prev./Next/Last page through. Same row as
               the toolbar icons. Unposted (default) = add/post new JVs; Posted = browse
@@ -1208,18 +1150,25 @@ const nextJvNoPreview = useMemo(
                       unlabeled, matching the ref pic (ref-pics/batch2/jv2.0.jpeg). Separate from
                       the delete-icon column right after it (JV-04). */}
                   <th className="sticky top-0 z-10 bg-slate-50 p-1" style={{ width: '18px' }} />
-                  <th className="sticky top-0 z-10 bg-slate-50 p-2 pl-4" style={{ width: '36px' }}></th>
-                  <th className="sticky top-0 z-10 bg-slate-50 p-2" style={{ minWidth: '160px' }}>A/C Code</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-2 pl-4" style={{ minWidth: '160px' }}>A/C Code</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-2">Account Description</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-2">Narration</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-2 text-right" style={{ width: '140px' }}>Debit (NAAM)</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-2 text-right" style={{ width: '140px' }}>Credit (JAMMA)</th>
+                  {/* Per-row Edit/Delete at the right-hand end (per the user, 2026-09-20) — the
+                      toolbar's own Edit Row/Delete still work off the selected row. */}
+                  <th className="sticky top-0 z-10 bg-slate-50 p-2 text-center" style={{ width: '84px' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {lines.map((line, idx) => {
                   const selectedAccount = accounts.find(a => a.ba_id === Number(line.baId));
-                  const canDeleteRow = !isViewMode && !isPosted && !detailLocked;
+                  // Both row buttons work straight from view mode (per the user, 2026-09-20: "why do
+                  // I have to click a row then it enables the edit/delete button") — pressing either
+                  // switches the voucher into edit mode itself, exactly as a row click used to. Only a
+                  // POSTED voucher (unpost first), a line already loaded for editing, or the
+                  // Master/Detail switch sitting on Master disables them.
+                  const rowActionsEnabled = !isPosted && editingIndex == null && !(mode === 'edit' && editScope !== 'detail');
                   return (
                     <tr
                       key={line.uid}
@@ -1239,24 +1188,23 @@ const nextJvNoPreview = useMemo(
                       <td className="p-1 text-center text-emerald-600" aria-hidden="true">
                         {idx === lastEnteredIndex && '▶'}
                       </td>
-                      <td className="p-2 pl-4 text-center">
-                        <button
-                          type="button"
-                          onClick={e => { e.stopPropagation(); if (canDeleteRow) removeLine(idx); }}
-                          disabled={!canDeleteRow}
-                          title={canDeleteRow ? 'Delete this line' : 'Unpost and edit the voucher to delete lines'}
-                          className="text-rose-500 hover:text-rose-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </td>
-                      <td className="p-2 font-mono text-xs text-slate-600">{selectedAccount?.code ?? '—'}</td>
+                      <td className="p-2 pl-4 font-mono text-xs text-slate-600">{selectedAccount?.code ?? '—'}</td>
                       <td className="p-2 text-xs text-slate-800 font-semibold">
                         {selectedAccount ? selectedAccount.name : (line.baSearchText || '—')}
                       </td>
                       <td className="p-2 text-xs text-slate-600">{line.narration || '—'}</td>
                       <td className="p-2 text-right font-mono text-sm text-slate-700">{line.debit > 0 ? formatCurrency(line.debit) : '-'}</td>
                       <td className="p-2 text-right font-mono text-sm text-slate-700">{line.credit > 0 ? `(${formatCurrency(line.credit)})` : '-'}</td>
+                      <td className="p-2 text-center whitespace-nowrap">
+                        <RowActions
+                          onEdit={() => { if (isViewMode) setMode('edit'); handleRowClick(idx); }}
+                          onDelete={() => { if (isViewMode) setMode('edit'); removeLine(idx); }}
+                          disabled={!rowActionsEnabled}
+                          editTitle="Edit this line"
+                          deleteTitle="Delete this line"
+                          disabledTitle="Unpost the voucher (Detail scope) to change its lines"
+                        />
+                      </td>
                     </tr>
                   );
                 })}

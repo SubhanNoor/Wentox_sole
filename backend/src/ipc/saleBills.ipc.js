@@ -106,7 +106,7 @@ module.exports = function register() {
     }),
   );
 
-  // bilty_no + adda_id only, non-financial — no password guard, works regardless of posted status.
+  // bilty_no + adda_id + bill_no, non-financial — no password guard, works regardless of posted status.
   ipcMain.handle(
     'sale-bills:updateBilty',
     wrap((payload) => {

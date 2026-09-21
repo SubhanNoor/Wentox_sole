@@ -1,6 +1,6 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, acquireAppLock } = require('../db/pool');
 
 async function list(filters = {}) {
   const conditions = [];
@@ -46,7 +46,10 @@ async function findByName(name) {
 // §3.2 allocation rule, one level up from businessAccounts.repository.js#nextSerial — serial =
 // MAX(existing serial under that class digit) + 1, 3 digits wide (class digit + 3-digit serial =
 // the 4-digit group code, e.g. '1' + '001' = '1001').
+// acquireAppLock serializes this per classDigit — see businessAccounts.repository.js#nextSerial's
+// own comment for why (a plain MAX(...)+1 races under concurrent creates).
 async function nextSerial(transaction, classDigit) {
+  await acquireAppLock(transaction, `group_account_serial:${classDigit}`);
   const request = requestWithParams(transaction, {
     classDigit: { type: sql.VarChar(1), value: classDigit },
   });

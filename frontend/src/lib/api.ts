@@ -1968,7 +1968,7 @@ declare global {
         unconfirm: (payload: { id: number }) => Promise<ApiResult<DraftSaleBillRow>>;
         remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         biltySearch: (payload?: SaleBillListFilters) => Promise<ApiResult<SaleBillRow[]>>;
-        updateBilty: (payload: { id: number; bilty_no: string; adda_id: number }) => Promise<ApiResult<SaleBillRow>>;
+        updateBilty: (payload: { id: number; bilty_no: string; adda_id: number; bill_no: string }) => Promise<ApiResult<SaleBillRow>>;
         lastSoldRate: (payload: { customer_id: number; variant_id: number }) => Promise<ApiResult<number | null>>;
         listUnposted: () => Promise<ApiResult<UnpostedBillRow[]>>;
         postAll: (payload?: { ids?: number[] }) => Promise<ApiResult<PostAllResult<'bill_id'>>>;
@@ -2600,8 +2600,8 @@ export const saleBills = {
     window.api ? window.api.saleBills.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   biltySearch: (payload?: SaleBillListFilters) =>
     window.api ? window.api.saleBills.biltySearch(payload).then(r => mapResult(r, rows => rows.map(normalizeBillRow))) : Promise.resolve(NO_BRIDGE),
-  updateBilty: (id: number, bilty_no: string, adda_id: number) =>
-    window.api ? window.api.saleBills.updateBilty({ id, bilty_no, adda_id }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
+  updateBilty: (id: number, bilty_no: string, adda_id: number, bill_no: string) =>
+    window.api ? window.api.saleBills.updateBilty({ id, bilty_no, adda_id, bill_no }).then(r => mapResult(r, normalizeBillRow)) : Promise.resolve(NO_BRIDGE),
   lastSoldRate: (customer_id: number, variant_id: number) =>
     window.api ? window.api.saleBills.lastSoldRate({ customer_id, variant_id }) : Promise.resolve(NO_BRIDGE),
   // SB-06: bills awaiting posting, and posting a whole run of them at once.

@@ -1,0 +1,35 @@
+name: IPC bridge wiring check
+
+# Every backend IPC channel prefix (src/ipc/*.ipc.js) must have a matching entry in the frontend's
+# ipcBridge.ts FEATURES allow-list, or window.api.<feature> is undefined in the running app. This
+# exact gap shipped Journal Voucher and Direct Settlement completely broken before being caught by
+# hand (see System_architecture/testing_priority_plan.md). Pure static check, no dependencies
+# needed beyond Node itself, so it runs in seconds — fast feedback on every push/PR, and is also
+# called by release.yml as a gate before the real build.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/src/ipc/**'
+      - 'frontend/src/lib/ipcBridge.ts'
+      - 'backend/scripts/check-ipc-bridge.js'
+      - '.github/workflows/ipc-bridge-check.yml'
+  pull_request:
+    paths:
+      - 'backend/src/ipc/**'
+      - 'frontend/src/lib/ipcBridge.ts'
+      - 'backend/scripts/check-ipc-bridge.js'
+  workflow_call:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check every backend IPC feature is registered in the frontend bridge
+        run: node backend/scripts/check-ipc-bridge.js

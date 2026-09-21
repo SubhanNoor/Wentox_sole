@@ -1,13 +1,18 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, acquireAppLock } = require('../db/pool');
 
 // §3.2 allocation rule: serial = MAX(existing serial under that parent) + 1, zero-padded to 4
 // digits. A business account's code is its parent chart account's 6-digit code + this serial.
 // Takes the caller's transaction — always called immediately before insert() within the same
 // withTransaction block (see businessAccounts.service.js), so the serial and the row it names
 // are computed and written atomically with whatever party (vendor/customer) it's created for.
+//
+// acquireAppLock serializes this per chartCode — without it, two concurrent creates under the
+// same reserved chart account both read the same MAX and collide on insert (see pool.js's own
+// comment: reproduced live, 6 of 8 concurrent customer creates failed on a UNIQUE KEY violation).
 async function nextSerial(transaction, chartCode) {
+  await acquireAppLock(transaction, `business_account_serial:${chartCode}`);
   const request = requestWithParams(transaction, {
     chartCode: { type: sql.VarChar(20), value: chartCode },
   });

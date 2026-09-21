@@ -485,24 +485,42 @@ async function vendorReportRows(filters = {}) {
 // SALARIES_PAYABLE (each employee's own ba, per employee_type), not the separate EMPLOYEES
 // (400005) code — so each bucket is defined by which chart accounts real money actually flows
 // through, not by the single reserved code whose NAME matches the bucket label most literally.
+// Direct Settlement (migration 015): a debtor of ours can pay one of these same categories
+// directly (e.g. a customer settling straight with a vendor) — no money moves through our cash or
+// bank, but the vendor/employee/expense head still got paid, so it belongs here alongside expenses
+// exactly the way vendorReportRows() already folds settlements into "Payment Paid" for a vendor.
+// Found live: settlements.service.js#create() lets `to_ba_id` be ANY business account, so a
+// settlement landing on a vendor/employee/expense-head account is reachable today, not a future
+// risk — this was undercounting Payment Trail against what Vendor Report already reported
+// correctly for the very same settlement.
 async function paymentTrailRows(filters = {}) {
-  const conditions = ["e.status = 'CONFIRMED'"];
+  const expenseConditions = ["e.status = 'CONFIRMED'"];
+  const settlementConditions = ["s.status = 'CONFIRMED'"];
   const params = {};
   if (filters.date_from) {
-    conditions.push('e.expense_date >= @dateFrom');
+    expenseConditions.push('e.expense_date >= @dateFrom');
+    settlementConditions.push('s.settlement_date >= @dateFrom');
     params.dateFrom = { type: sql.Date, value: filters.date_from };
   }
   if (filters.date_to) {
-    conditions.push('e.expense_date <= @dateTo');
+    expenseConditions.push('e.expense_date <= @dateTo');
+    settlementConditions.push('s.settlement_date <= @dateTo');
     params.dateTo = { type: sql.Date, value: filters.date_to };
   }
 
   const result = await query(
-    `SELECT ca.code, ca.name, ca.is_restricted, SUM(e.amount) AS total
-     FROM dbo.expenses e
-     JOIN dbo.business_accounts ba ON ba.ba_id = e.ba_id
+    `SELECT ca.code, ca.name, ca.is_restricted, SUM(combined.amount) AS total
+     FROM (
+       SELECT e.ba_id, e.amount
+       FROM dbo.expenses e
+       WHERE ${expenseConditions.join(' AND ')}
+       UNION ALL
+       SELECT s.to_ba_id AS ba_id, s.amount
+       FROM dbo.settlements s
+       WHERE ${settlementConditions.join(' AND ')}
+     ) combined
+     JOIN dbo.business_accounts ba ON ba.ba_id = combined.ba_id
      JOIN dbo.chart_of_accounts ca ON ca.ac_id = ba.ac_id
-     WHERE ${conditions.join(' AND ')}
      GROUP BY ca.code, ca.name, ca.is_restricted`,
     params,
   );

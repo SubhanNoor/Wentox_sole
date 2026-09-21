@@ -1,6 +1,9 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
+import { exportRowsToExcel } from '@/lib/export';
 import AppLayout from '@/components/AppLayout';
+import DocumentToolbar from '@/components/DocumentToolbar';
+import RowActions from '@/components/RowActions';
 import SearchModal from '@/components/SearchModal';
 import { focusNextField } from '@/lib/fieldNav';
 import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
@@ -10,10 +13,7 @@ import type {
   StockVoucherCreateInput, UnpostedStockVoucherRow, PostAllResult, StockRow, BusinessAccountRow,
 } from '@/lib/api';
 import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, cartonsAndPairs } from '@/lib/utils';
-import {
-  Edit, Search, Plus, Trash2, Boxes, ChevronDown, CheckCircle2, PackageCheck, Undo2,
-  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Printer
-} from 'lucide-react';
+import { Search, Boxes, ChevronDown } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
 import EditScopeRadios from '@/components/EditScopeRadios';
@@ -712,15 +712,10 @@ export default function StockVoucherPage() {
   // loaded for editing (editingIndex) takes priority; otherwise a merely-clicked row
   // (selectedIndex, G-08) is the target; with neither, it's the whole-voucher delete
   // (currently-open unposted voucher).
+  // Toolbar Delete ALWAYS deletes the whole document now (per the user, 2026-09-20: a new user
+  // could not know a row had to be deselected first). Deleting a single row is the row's own
+  // Delete button in the grid — one meaning per button.
   const handleDeleteAction = () => {
-    if (editingIndex != null) {
-      removeLine(editingIndex);
-      return;
-    }
-    if (selectedIndex != null) {
-      removeLine(selectedIndex);
-      return;
-    }
     if (svId == null || isPosted) return;
     pendingDeleteSvId.current = svId;
     setIsPasswordModalOpen(true);
@@ -762,34 +757,60 @@ export default function StockVoucherPage() {
     };
   };
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Save (keep editing) and Done (finish) share one path — `finalize` is the only difference,
+  // matching Sale Bill/Purchase, where Save and Done have always been separate buttons
+  // (toolbar standardisation, 2026-09-20). Returns the saved id, for Save+Post.
+  const doSave = async (finalize: boolean) => {
     // Backstop for the awaitingNew lock.
-    if (awaitingNew) { setErrorMsg('Click New to start a voucher first.'); return; }
+    if (awaitingNew) { setErrorMsg('Click New to start a voucher first.'); return null; }
     const payload = buildPayload();
-    if (!payload) return;
+    if (!payload) return null;
     const result = mode === 'edit' && svId != null
       ? await api.stockVouchers.update(svId, payload)
       : await api.stockVouchers.create(payload);
-    if (!result.ok) { fail('Failed to save Stock Voucher: ' + result.error.message); return; }
+    if (!result.ok) { fail('Failed to save Stock Voucher: ' + result.error.message); return null; }
     setSvId(result.data.stock_voucher_id);
     setStatus(result.data.status);
     setErrorMsg('');
     flash('Stock Voucher saved — Post it to update stock.');
-    setMode('view');
+    if (finalize) setMode('view');
     clearStockVoucherDraft();
     refresh();
     refreshUnposted();
     refreshUnpostedReservations(svId);
     refreshNav();
+    return result.data.stock_voucher_id;
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await doSave(true);
+  };
+
+  // Cancel Edit — drops back to the saved copy, same as Purchase's own Cancel (2026-09-20).
+  const handleCancelEdit = async () => {
+    if (svId == null) { handleNew(); return; }
+    await loadSv(svId);
+    setMode('view');
+  };
+
+  // Save+Post in one click, same as Sale Bill's (2026-09-20).
+  const handleSaveAndPost = async () => {
+    const savedId = await doSave(true);
+    if (savedId == null) return;
+    await handlePost(savedId);
+    focusNewButton();
   };
 
   // Posting finishes this voucher and readies the form for the next one — same convention as
   // Sale Bill/Journal Voucher's own "clear straight back to blank so the next can be typed
   // immediately".
-  const handlePost = async () => {
-    if (svId == null) return;
-    const res = await api.stockVouchers.post(svId);
+  // `idOverride` lets Save+Post post the voucher it has just saved, before the id state has
+  // re-rendered (toolbar standardisation, 2026-09-20).
+  const handlePost = async (idOverride?: number) => {
+    const postId = idOverride ?? svId;
+    if (postId == null) return;
+    const res = await api.stockVouchers.post(postId);
     if (!res.ok) { fail('Failed to post: ' + res.error.message); return; }
     flash('Stock Voucher posted — stock updated.');
     refresh();
@@ -814,6 +835,9 @@ export default function StockVoucherPage() {
     // It's a draft again now, so the window follows it back to the Unposted view (per the user,
     // 2026-08-30) rather than staying on Posted looking at a record that no longer belongs there.
     setBrowseFilter('unposted');
+    // Land on the editable screen straight away (toolbar standardisation, 2026-09-20) — adding a
+    // row to a just-unposted document is the whole reason for unposting it.
+    setMode('edit');
   };
 
   // Listing rows only carry rolled-up totals, not the per-line detail — loading a voucher always
@@ -1087,7 +1111,7 @@ export default function StockVoucherPage() {
           onClose={() => { setIsPasswordModalOpen(false); pendingDeleteSvId.current = null; }}
           onSuccess={handleDeletePasswordSuccess}
           title="Delete Unposted Stock Voucher"
-          subtitle="Enter your password to permanently delete this unposted Stock Voucher."
+          subtitle="This deletes the WHOLE voucher and every line on it — not a single row. It cannot be undone. Enter your password to confirm."
         />
 
         {/* Find Stock Voucher Modal — jump to any posted or unposted voucher by number or remarks. */}
@@ -1151,131 +1175,46 @@ export default function StockVoucherPage() {
         <>
         {/* Toolbar — icon-over-label buttons (`.toolbar-btn`), same set as JournalVoucherPage's
             own: New/Delete/Edit/Done, First/Previous/Next/Last, Print/Find, Un Post/Post. */}
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
-          <div className="flex flex-wrap items-center gap-0.5">
-            <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { handleNew(); markNewClicked(); }} disabled={browseFilter === 'posted'} title="New" className="toolbar-btn">
-              <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
-              <span>New</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleDeleteAction}
-              disabled={(editingIndex != null || selectedIndex != null) ? isViewMode : (mode !== 'view' || svId == null || isPosted)}
-              title={(editingIndex != null || selectedIndex != null) ? 'Delete selected line' : 'Delete'}
-              className="toolbar-btn"
-            >
-              <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
-              <span>Delete</span>
-            </button>
-            {/* G-08 (changes-14-09-26.md, 2026-09-15): editing a detail row is now deliberate —
-                click a row (no visible change), then press Edit Row to actually load it into the
-                entry strip and apply the highlight. */}
-            <button
-              type="button"
-              onClick={handleEditSelectedRow}
-              disabled={selectedIndex == null || editingIndex != null || (mode === 'edit' && editScope !== 'detail')}
-              title="Edit selected line"
-              className="toolbar-btn"
-            >
-              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
-              <span>Edit Row</span>
-            </button>
-            <button
-              type="button"
-              // Edit — lands focus on the first field of whichever scope is picked (per the user, 2026-08-31).
-              onClick={() => {
+        <div className="flex items-center flex-nowrap overflow-x-auto justify-between gap-2 mb-1 p-1.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
+          <DocumentToolbar
+            newAction={{ onClick: () => { handleNew(); markNewClicked(); }, disabled: browseFilter === 'posted', ref: newButtonRef }}
+            remove={{
+              onClick: handleDeleteAction,
+              disabled: svId == null || isPosted,
+              title: 'Delete this whole voucher — every line on it goes too (asks for your password)',
+            }}
+            editRow={{ onClick: handleEditSelectedRow, disabled: selectedIndex == null || editingIndex != null || (isViewMode && isPosted) || (mode === 'edit' && editScope !== 'detail'), title: 'Edit selected line' }}
+            edit={{
+              onClick: () => {
                 setMode('edit');
                 requestAnimationFrame(() => {
                   if (editScope === 'detail') entryArticleTriggerRef.current?.focus();
                   else firstFieldRef.current?.focus();
                 });
-              }}
-              disabled={!isViewMode || svId == null || isPosted}
-              title="Edit"
-              className="toolbar-btn"
-            >
-              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
-              <span>Edit</span>
-            </button>
-            <button
-              type="submit" form="sv-entry-form" disabled={isViewMode || !isValid}
-              title="Done"
-              className="toolbar-btn"
-            >
-              <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
-              <span>Done</span>
-            </button>
-
-            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            <button type="button" onClick={handleFirst} disabled={!canBrowse} title="First" className="toolbar-btn">
-              <ChevronsLeft size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>First</span>
-            </button>
-            <button type="button" onClick={handlePrev} disabled={!canNavPrevious} title="Previous" className="toolbar-btn">
-              <ChevronLeft size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>Prev.</span>
-            </button>
-            <button type="button" onClick={handleNext} disabled={!canNavNext} title="Next" className="toolbar-btn">
-              <ChevronRight size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>Next</span>
-            </button>
-            <button type="button" onClick={handleLast} disabled={!canBrowse} title="Last" className="toolbar-btn">
-              <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>Last</span>
-            </button>
-
-            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            <button
-              type="button"
-              onClick={() => window.print()}
-              disabled={mode !== 'view' || svId == null}
-              title="Print"
-              className="toolbar-btn"
-            >
-              <Printer size={20} strokeWidth={2.5} className="text-slate-600" />
-              <span>Print</span>
-            </button>
-            <button type="button" onClick={() => setIsFindOpen(true)} title="Find" className="toolbar-btn">
-              <Search size={20} strokeWidth={2.5} className="text-slate-600" />
-              <span>Find</span>
-            </button>
-
-            <span className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            <button
-              type="button" onClick={handleUnpost} disabled={!isViewMode || svId == null || !isPosted}
-              title="Un Post — move this posted voucher back to drafts"
-              className="toolbar-btn"
-            >
-              <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
-              <span>Un Post</span>
-            </button>
-            <button
-              type="button" onClick={async () => { await handlePost(); focusNewButton(); }} disabled={!isViewMode || svId == null || isPosted}
-              title="Post"
-              className="toolbar-btn"
-            >
-              <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
-              <span>Post</span>
-            </button>
-            {/* Post All — moved here when the left-hand Pending Posting panel was removed (per the
-                user, 2026-09-03: it overlapped the Master/Detail radios). Same treatment Receipts
-                and Sale Bill already had. Reaching one specific unposted voucher is the Unposted
-                dropdown plus First/Prev./Next/Last. */}
-            {unpostedSvs.length > 0 && (
-              <button
-                type="button" onClick={async () => { await handlePostAll(); focusNewButton(); }} disabled={postAllBusy || browseFilter === 'posted'}
-                title={`Post All (${unpostedSvs.length})`}
-                className="toolbar-btn"
-              >
-                <PackageCheck size={20} strokeWidth={2.5} className="text-emerald-600" />
-                <span>{postAllBusy ? 'Posting…' : 'Post All'}</span>
-              </button>
-            )}
-          </div>
+              },
+              disabled: !isViewMode || svId == null || isPosted,
+            }}
+            save={{ onClick: async () => { await doSave(false); }, disabled: isViewMode || !isValid, title: 'Save — keep editing this voucher' }}
+            done={{ submit: true, form: 'sv-entry-form', disabled: isViewMode || !isValid, title: 'Done — finish this voucher, then Post it' }}
+            cancel={{ onClick: handleCancelEdit, disabled: mode !== 'edit', title: 'Cancel Edit' }}
+            first={{ onClick: handleFirst, disabled: !canBrowse }}
+            prev={{ onClick: handlePrev, disabled: !canNavPrevious, title: 'Previous' }}
+            next={{ onClick: handleNext, disabled: !canNavNext }}
+            last={{ onClick: handleLast, disabled: !canBrowse }}
+            print={{ onClick: () => window.print(), disabled: mode !== 'view' || svId == null }}
+            find={{ onClick: () => setIsFindOpen(true) }}
+            unpost={{ onClick: handleUnpost, disabled: !isViewMode || svId == null || !isPosted, title: 'Un Post — move this posted voucher back to unposted' }}
+            post={{ onClick: async () => { await handlePost(); focusNewButton(); }, disabled: !isViewMode || svId == null || isPosted }}
+            exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
+            saveAndPost={{ onClick: handleSaveAndPost, disabled: isViewMode || !isValid, title: 'Save & Post' }}
+            postAll={{ onClick: async () => { await handlePostAll(); focusNewButton(); }, disabled: postAllBusy || browseFilter === 'posted' || unpostedSvs.length === 0, title: postAllBusy ? 'Posting…' : `Post All (${unpostedSvs.length})` }}
+            pdf={{ onClick: () => window.print(), disabled: mode !== 'view' || svId == null, title: 'Export PDF — choose "Save as PDF" in the print dialog' }}
+            excel={{
+              onClick: () => exportRowsToExcel(`stock-voucher-${svId}`, ['Article / Color', 'Category', 'Packing', 'Cartons', 'Pairs'], lines.map(l => [l.label, l.categoryName, l.packing, l.cartons, l.pairs])),
+              disabled: mode !== 'view' || svId == null,
+              title: 'Export Excel',
+            }}
+          />
 
           {/* Posted/Unposted — picks which list First/Prev./Next/Last page through. Same row as
               the toolbar icons. Unposted (default) = add/post new vouchers; Posted = browse
@@ -1638,6 +1577,7 @@ export default function StockVoucherPage() {
                   <th className="sticky top-0 z-10 bg-slate-50 p-1.5" style={{ minWidth: '120px' }}>Category</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-center" style={{ width: '110px' }}>Cartons</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-1.5 text-right" style={{ width: '110px' }}>Pairs</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '84px' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1664,11 +1604,21 @@ export default function StockVoucherPage() {
                     <td className="py-1 px-2 text-xs text-slate-600">{line.categoryName || '—'}</td>
                     <td className="py-1 px-2 text-center font-mono text-sm text-slate-700">{formatCartons(line.cartons)}</td>
                     <td className="py-1 px-2 text-right font-mono text-sm text-slate-700">{line.pairs.toLocaleString()}</td>
+                    <td className="py-1 px-2 text-center whitespace-nowrap">
+                      <RowActions
+                        onEdit={() => handleRowClick(idx)}
+                        onDelete={() => removeLine(idx)}
+                        disabled={isPosted || editingIndex != null || (mode === 'edit' && editScope !== 'detail')}
+                        editTitle="Edit this line"
+                        deleteTitle="Delete this line"
+                        disabledTitle="Unpost and edit the document (Detail scope) to change its lines"
+                      />
+                    </td>
                   </tr>
                 ))}
                 {lines.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="p-3 text-center text-xs text-slate-400">
+                    <td colSpan={6} className="p-3 text-center text-xs text-slate-400">
                       No lines added yet.
                     </td>
                   </tr>

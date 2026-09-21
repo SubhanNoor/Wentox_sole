@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { formatCurrency } from '@/context/AppContext';
+import { formatCurrency, useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
+import DocumentToolbar from '@/components/DocumentToolbar';
+import RowActions from '@/components/RowActions';
 import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
 import * as api from '@/lib/api';
@@ -11,10 +13,7 @@ import type {
 import { formatDate, getTodayDate, getThreeMonthsAgoDate, toDateInputValue, nextSystemNoPreview, mergeWithDeleted } from '@/lib/utils';
 import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
 import { focusNextField } from '@/lib/fieldNav';
-import {
-  Plus, Trash2, Save, ShoppingBag, Edit, CheckCircle2, XCircle, Undo2, ChevronDown,
-  ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Printer, FileDown, FileSpreadsheet, Search
-} from 'lucide-react';
+import { Plus, ShoppingBag, CheckCircle2, ChevronDown } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
 import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
@@ -55,6 +54,7 @@ function newItemUid(): string {
 }
 
 export default function PurchasePage() {
+  const { dispatch } = useApp();
   // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
   // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
   // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
@@ -1142,15 +1142,10 @@ const nextSystemBillNo = useMemo(
   // Toolbar "Delete" is dual-purpose, matching Sale Bill/Sale Return's own Delete: a row loaded
   // for editing (editingUid) takes priority; otherwise a merely-clicked row (selectedUid, G-08) is
   // the target; with neither, it falls back to deleting the whole unposted purchase.
+  // Toolbar Delete ALWAYS deletes the whole document now (per the user, 2026-09-20: a new user
+  // could not know a row had to be deselected first). Deleting a single row is the row's own
+  // Delete button in the grid — one meaning per button.
   const deleteSelectedArticle = () => {
-    if (editingUid) {
-      removeItemRow(editingUid);
-      return;
-    }
-    if (selectedUid) {
-      removeItemRow(selectedUid);
-      return;
-    }
     handleDeleteCurrentPurchase();
   };
 
@@ -1217,197 +1212,57 @@ const nextSystemBillNo = useMemo(
             <form> below even though it now renders outside it — see fieldNav.ts's
             `findSubmitButton` comment for why the HTML `form` attribute is the established way
             other pages (Receipts, Transfer, etc.) already do this. */}
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
-          <div className="flex flex-wrap items-center gap-0.5">
-            {/* ref-pics/batch2/sale bill.png toolbar style: small square buttons, icon on top,
-                label underneath, tightly packed in one strip — not pill-shaped colored buttons. */}
-            <button
-              data-new-action="true" ref={newButtonRef} type="button" onClick={() => { startNewPurchase(); markNewClicked(); }} disabled={navFilter === 'posted'} title="New Purchase" className="toolbar-btn">
-              <Plus size={20} strokeWidth={2.5} className="text-emerald-600" />
-              <span>New</span>
-            </button>
-            <button
-              type="button"
-              onClick={deleteSelectedArticle}
-              disabled={deletedPlaceholder != null || ((editingUid || selectedUid) ? isViewMode : (!isViewMode || purchaseId == null || currentIsPosted))}
-              title={(editingUid || selectedUid) ? 'Delete selected article' : 'Delete'}
-              className="toolbar-btn"
-            >
-              <Trash2 size={20} strokeWidth={2.5} className="text-rose-600" />
-              <span>Delete</span>
-            </button>
-            {/* G-08 (changes-14-09-26.md, 2026-09-15): editing a detail row is now deliberate —
-                click a row (no visible change), then press Edit Row to actually load it into the
-                entry fields and apply the highlight. */}
-            <button
-              type="button"
-              onClick={handleEditSelectedRow}
-              disabled={selectedUid == null || editingUid != null || isViewMode || detailFieldsLocked}
-              title="Edit selected article"
-              className="toolbar-btn"
-            >
-              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
-              <span>Edit Row</span>
-            </button>
-            <button
-              type="button"
-              // Edit — lands focus on the first field of whichever scope is picked (per the user, 2026-08-31).
-              onClick={() => {
+        <div className="flex items-center flex-nowrap overflow-x-auto justify-between gap-2 mb-1 p-1.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
+          <DocumentToolbar
+            newAction={{ onClick: () => { startNewPurchase(); markNewClicked(); }, disabled: navFilter === 'posted', ref: newButtonRef, title: 'New' }}
+            remove={{
+              onClick: deleteSelectedArticle,
+              disabled: deletedPlaceholder != null || purchaseId == null || currentIsPosted,
+              title: 'Delete this whole purchase — every article on it goes too (asks for your password)',
+            }}
+            editRow={{ onClick: handleEditSelectedRow, disabled: selectedUid == null || editingUid != null || isViewMode || detailFieldsLocked, title: 'Edit selected article' }}
+            edit={{
+              onClick: () => {
                 setMode('edit');
                 requestAnimationFrame(() => {
                   if (editScope === 'detail') materialNameRef.current?.focus();
                   else firstFieldRef.current?.focus();
                 });
-              }}
-              disabled={deletedPlaceholder != null || !isViewMode || currentIsPosted}
-              title="Edit"
-              className="toolbar-btn"
-            >
-              <Edit size={20} strokeWidth={2.5} className="text-sky-600" />
-              <span>Edit</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => doSave(false)}
-              disabled={deletedPlaceholder != null || isViewMode || !isValid}
-              title="Save — keep editing this purchase"
-              className="toolbar-btn"
-            >
-              <Save size={20} strokeWidth={2.5} className="text-blue-600" />
-              <span>Save</span>
-            </button>
-            <button
-              type="submit"
-              form="purchase-entry-form"
-              disabled={deletedPlaceholder != null || isViewMode || !isValid}
-              title="Done — finish this purchase, then Post it"
-              className="toolbar-btn"
-            >
-              <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
-              <span>Done</span>
-            </button>
-            <button
-              type="button"
-              onClick={async () => {
+              },
+              disabled: deletedPlaceholder != null || !isViewMode || currentIsPosted,
+            }}
+            save={{ onClick: () => doSave(false), disabled: deletedPlaceholder != null || isViewMode || !isValid, title: 'Save — keep editing this purchase' }}
+            done={{ submit: true, form: 'purchase-entry-form', disabled: deletedPlaceholder != null || isViewMode || !isValid, title: 'Done — finish this purchase, then Post it' }}
+            cancel={{
+              onClick: async () => {
                 if (purchaseId == null) return;
                 const res = await api.purchases.get(purchaseId);
                 if (res.ok) await loadPurchaseRow(res.data);
-              }}
-              disabled={mode !== 'edit'}
-              title="Cancel Edit"
-              className="toolbar-btn"
-            >
-              <XCircle size={20} strokeWidth={2.5} className="text-slate-500" />
-              <span>Cancel</span>
-            </button>
-
-            <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            {/* Record navigation — First/Previous/Next/Last, browsing whichever list `navFilter`
-                (the Posted/Unposted dropdown, far right) currently points at. */}
-            <button type="button" onClick={handleNavFirst} disabled={!canBrowse} title="First" className="toolbar-btn">
-              <ChevronsLeft size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>First</span>
-            </button>
-            <button type="button" onClick={handleNavPrevious} disabled={!canNavPrevious} title="Previous" className="toolbar-btn">
-              <ChevronLeft size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>Prev.</span>
-            </button>
-            <button type="button" onClick={handleNavNext} disabled={!canNavNext} title="Next" className="toolbar-btn">
-              <ChevronRight size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>Next</span>
-            </button>
-            <button type="button" onClick={handleNavLast} disabled={!canBrowse} title="Last" className="toolbar-btn">
-              <ChevronsRight size={20} strokeWidth={2.5} className="text-amber-600" />
-              <span>Last</span>
-            </button>
-
-            <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            <button
-              type="button"
-              onClick={() => setIsPrintingSingle(true)}
-              disabled={deletedPlaceholder != null || !isViewMode || purchaseId == null}
-              title="Print"
-              className="toolbar-btn"
-            >
-              <Printer size={20} strokeWidth={2.5} className="text-slate-600" />
-              <span>Print</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsFindOpen(true)}
-              title="Find"
-              className="toolbar-btn"
-            >
-              <Search size={20} strokeWidth={2.5} className="text-slate-600" />
-              <span>Find</span>
-            </button>
-
-            <div className="w-px self-stretch mx-1" style={{ background: 'var(--border-color)' }} />
-
-            <button
-              type="button"
-              onClick={handleUnpost}
-              // No longer gated on the dropdown: that made sense only while 'unposted' MEANT
-              // "I'm here to unpost". Now the dropdown genuinely filters, and its Unposted list
-              // holds drafts — none of which can be unposted. Being on a posted purchase is the
-              // only real precondition.
-              disabled={deletedPlaceholder != null || !isViewMode || purchaseId == null || !currentIsPosted}
-              title="Unpost — move this posted purchase back to drafts"
-              className="toolbar-btn"
-            >
-              <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
-              <span>Unpost</span>
-            </button>
-            <button
-              type="button"
-              onClick={async () => { await handlePost(); focusNewButton(); }}
-              disabled={deletedPlaceholder != null || !isViewMode || purchaseId == null || currentIsPosted}
-              title="Post"
-              className="toolbar-btn"
-            >
-              <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
-              <span>Post</span>
-            </button>
-            {/* Post All — moved here when the left-hand Pending Posting panel was removed (per the
-                user, 2026-09-03: it overlapped the Master/Detail radios). Reaching one specific
-                draft is the Unposted dropdown plus First/Prev./Next/Last. */}
-            {unpostedPurchases.length > 0 && (
-              <button
-                type="button" onClick={async () => { await handlePostAll(); focusNewButton(); }} disabled={postAllBusy || navFilter === 'posted'}
-                title={`Post All (${unpostedPurchases.length})`}
-                className="toolbar-btn"
-              >
-                <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
-                <span>{postAllBusy ? 'Posting…' : 'Post All'}</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setIsPrintingSingle(true)}
-              disabled={deletedPlaceholder != null || !isViewMode || purchaseId == null}
-              title="Export PDF"
-              className="toolbar-btn"
-            >
-              <FileDown size={20} strokeWidth={2.5} className="text-slate-600" />
-              <span>PDF</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
+              },
+              disabled: mode !== 'edit',
+              title: 'Cancel Edit',
+            }}
+            first={{ onClick: handleNavFirst, disabled: !canBrowse }}
+            prev={{ onClick: handleNavPrevious, disabled: !canNavPrevious, title: 'Previous' }}
+            next={{ onClick: handleNavNext, disabled: !canNavNext }}
+            last={{ onClick: handleNavLast, disabled: !canBrowse }}
+            print={{ onClick: () => setIsPrintingSingle(true), disabled: deletedPlaceholder != null || !isViewMode || purchaseId == null }}
+            find={{ onClick: () => setIsFindOpen(true) }}
+            unpost={{ onClick: handleUnpost, disabled: deletedPlaceholder != null || !isViewMode || purchaseId == null || !currentIsPosted, title: 'Unpost — move this posted purchase back to drafts' }}
+            post={{ onClick: async () => { await handlePost(); focusNewButton(); }, disabled: deletedPlaceholder != null || !isViewMode || purchaseId == null || currentIsPosted }}
+            exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
+            postAll={{ onClick: async () => { await handlePostAll(); focusNewButton(); }, disabled: postAllBusy || navFilter === 'posted' || unpostedPurchases.length === 0, title: postAllBusy ? 'Posting…' : `Post All (${unpostedPurchases.length})` }}
+            pdf={{ onClick: () => setIsPrintingSingle(true), disabled: deletedPlaceholder != null || !isViewMode || purchaseId == null, title: 'Export PDF' }}
+            excel={{
+              onClick: () => {
                 const headers = ['Material', 'Unit', 'Quantity', 'Rate', 'Total Price'];
                 const rows = items.map(it => [it.materialName, it.unit, it.quantity, it.pricePerUnit, it.totalPrice]);
                 exportRowsToExcel(`purchase-${billNo || purchaseId}`, headers, rows);
-              }}
-              disabled={deletedPlaceholder != null || !isViewMode || purchaseId == null}
-              title="Export Excel"
-              className="toolbar-btn"
-            >
-              <FileSpreadsheet size={20} strokeWidth={2.5} className="text-slate-600" />
-              <span>Excel</span>
-            </button>
-          </div>
+              },
+              disabled: deletedPlaceholder != null || !isViewMode || purchaseId == null,
+              title: 'Export Excel',
+            }}
+          />
 
           {/* Posted/Unposted — picks which list Previous/Next/First/Last page through. Unposted
               (default) = add/post new purchases; Posted = browse already-posted ones (per the
@@ -1754,12 +1609,13 @@ const nextSystemBillNo = useMemo(
                   <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '110px' }}>Quantity</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3 text-center" style={{ width: '130px' }}>Price / Unit</th>
                   <th className="sticky top-0 z-10 bg-slate-50 p-3 text-right" style={{ width: '130px' }}>Total Price</th>
+                  <th className="sticky top-0 z-10 bg-slate-50 p-1 text-center" style={{ width: '84px' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {items.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="p-6 text-center text-slate-400 text-sm">
+                    <td colSpan={7} className="p-6 text-center text-slate-400 text-sm">
                       No articles added yet — fill the fields above and press Enter.
                     </td>
                   </tr>
@@ -1791,6 +1647,16 @@ const nextSystemBillNo = useMemo(
                     <td className="p-3 text-center font-semibold text-slate-700">{item.quantity}</td>
                     <td className="p-3 text-center font-semibold text-slate-700">{formatCurrency(item.pricePerUnit)}</td>
                     <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(item.totalPrice)}</td>
+                    <td className="p-3 text-center whitespace-nowrap">
+                      <RowActions
+                        onEdit={() => handleEditRow(item)}
+                        onDelete={() => removeItemRow(item.uid)}
+                        disabled={deletedPlaceholder != null || isViewMode || detailFieldsLocked || editingUid != null}
+                        editTitle="Edit this article"
+                        deleteTitle="Delete this article"
+                        disabledTitle="Unpost and edit the document (Detail scope) to change its articles"
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -1976,7 +1842,7 @@ const nextSystemBillNo = useMemo(
           onClose={() => { setIsPasswordModalOpen(false); pendingDeleteDraftId.current = null; }}
           onSuccess={handleDeletePasswordSuccess}
           title="Delete Unposted Purchase"
-          subtitle="Enter your password to permanently delete this unposted purchase."
+          subtitle="This deletes the WHOLE purchase and every article on it — not a single row. It cannot be undone. Enter your password to confirm."
         />
 
         {/* Find Purchase Modal — jump to any posted or unposted purchase by System No., manual

@@ -342,15 +342,16 @@ async function biltySearch(filters = {}) {
   return result.recordset;
 }
 
-// bilty_no + adda_id ONLY — non-financial, so unlike updateHeader() this never touches
+// bilty_no + adda_id + bill_no — non-financial, so unlike updateHeader() this never touches
 // ledger/stock and is allowed regardless of posted status (UC-20).
-async function updateBiltyInfo(billId, { bilty_no, adda_id }) {
+async function updateBiltyInfo(billId, { bilty_no, adda_id, bill_no }) {
   await query(
-    'UPDATE dbo.sale_bills SET bilty_no = @biltyNo, adda_id = @addaId WHERE bill_id = @billId',
+    'UPDATE dbo.sale_bills SET bilty_no = @biltyNo, adda_id = @addaId, bill_no = @billNo WHERE bill_id = @billId',
     {
       billId: { type: sql.Int, value: billId },
       biltyNo: { type: sql.VarChar(30), value: bilty_no },
       addaId: { type: sql.Int, value: adda_id },
+      billNo: { type: sql.VarChar(30), value: bill_no },
     },
   );
 }

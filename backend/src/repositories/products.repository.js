@@ -3,7 +3,7 @@
 // Naming note (milestone6.md): the feature/screen is "products"/"Product Details" but the real
 // table is dbo.articles (PK article_id) — database_schema_v4.3.md's products/product_id shape is
 // stale here.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, acquireAppLock } = require('../db/pool');
 
 const COST_FIELDS = [
   'cutting', 'edging', 'up_stitch', 'bending', 'stubble_dori', 'shape_form',
@@ -86,7 +86,11 @@ async function findById(articleId) {
 // Takes the in-flight transaction (not the pool) so a multi-article batch insert sees its own
 // prior rows within the same transaction — a plain pool query would repeat the same MAX() for
 // every row and hand out duplicate codes.
+// acquireAppLock serializes this globally (one counter, no per-parent scope) — see
+// businessAccounts.repository.js#nextSerial's own comment for why (a plain MAX(...)+1 races under
+// concurrent creates).
 async function nextCode(transaction) {
+  await acquireAppLock(transaction, 'article_code');
   const request = requestWithParams(transaction, {});
   const result = await request.query(
     `SELECT MAX(TRY_CAST(SUBSTRING(code, 3, 30) AS INT)) AS maxNum
@@ -100,7 +104,10 @@ async function nextCode(transaction) {
 // sequence, e.g. Ali's batches and Abdullah's don't share a counter), starting at 1. Backed by
 // UQ_articles_vendor_batch UNIQUE (vendor_id, batch_no). Transaction-scoped for the same reason
 // as nextCode() above.
+// acquireAppLock serializes this per vendorId — see businessAccounts.repository.js#nextSerial's
+// own comment for why (a plain MAX(...)+1 races under concurrent creates).
 async function nextBatchNo(transaction, vendorId) {
+  await acquireAppLock(transaction, `article_batch_no:${vendorId}`);
   const request = requestWithParams(transaction, { vendorId: { type: sql.Int, value: vendorId } });
   const result = await request.query(
     `SELECT MAX(batch_no) AS maxBatch FROM dbo.articles WHERE vendor_id = @vendorId`,

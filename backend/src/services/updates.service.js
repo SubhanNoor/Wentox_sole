@@ -37,6 +37,18 @@ function checkInternet() {
 //   2. The connection drops (or GitHub errors) DURING the actual update lookup, having passed
 //      step 1 — resolves as "no update found," never surfaced as an error. A flaky connection
 //      mid-check isn't the user's problem to interpret; they just try again later.
+// A release only counts as an update when it is actually NEWER. Plain `!==` also fired when the
+// installed build was AHEAD of the latest release (a test build, or a release pulled after the
+// fact), offering a downgrade as an "update" (2026-09-20).
+function isNewer(latest, current) {
+  const parts = (v) => String(v).split('.').map((n) => parseInt(n, 10) || 0);
+  const [a, b] = [parts(latest), parts(current)];
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  }
+  return false;
+}
+
 async function check() {
   const online = await checkInternet();
   if (!online) {
@@ -54,7 +66,7 @@ async function check() {
     const currentVersion = app.getVersion();
     const latestVersion = result?.updateInfo?.version;
     return {
-      updateAvailable: Boolean(latestVersion && latestVersion !== currentVersion),
+      updateAvailable: Boolean(latestVersion && isNewer(latestVersion, currentVersion)),
       currentVersion,
       latestVersion,
       packaged: true,

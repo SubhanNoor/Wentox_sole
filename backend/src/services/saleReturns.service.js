@@ -266,6 +266,8 @@ async function postLedgerAndStock(transaction, {
     throw new Error(`Reserved chart account SALES (code ${CODES.SALES}) not found — run npm run seed`);
   }
 
+  const pairs = items.reduce((sum, item) => sum + item.pairs, 0);
+
   await repository.insertLedgerEntries(transaction, [
     {
       entry_date: returnDate,
@@ -275,6 +277,7 @@ async function postLedgerAndStock(transaction, {
       source_type: 'SALE_RETURN',
       source_id: returnId,
       narration: `Sale return #${returnId}`,
+      pairs,
     },
     {
       entry_date: returnDate,
@@ -284,6 +287,7 @@ async function postLedgerAndStock(transaction, {
       source_type: 'SALE_RETURN',
       source_id: returnId,
       narration: `Sale return #${returnId}`,
+      pairs,
     },
   ]);
 

@@ -18,8 +18,11 @@ jobs:
   nsis-lint:
     uses: ./.github/workflows/nsis-lint.yml
 
+  ipc-bridge-check:
+    uses: ./.github/workflows/ipc-bridge-check.yml
+
   release:
-    needs: nsis-lint
+    needs: [nsis-lint, ipc-bridge-check]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

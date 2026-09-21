@@ -302,11 +302,14 @@ select option:hover {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  width: 50px;
-  height: 46px;
+  /* Sized so the full standard toolbar (20 actions + dividers + the Posted/Unposted dropdown) fits
+     on ONE row inside the card, instead of wrapping onto a second (per the user, 2026-09-20). */
+  gap: 1px;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
   border-radius: 0.375rem;
-  font-size: 9.5px;
+  font-size: 8.5px;
   font-weight: 700;
   line-height: 1;
   color: #000000;

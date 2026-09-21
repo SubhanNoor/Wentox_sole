@@ -101,6 +101,34 @@ async function nextSequenceValue(transaction, sequenceName) {
   return result.recordset[0].n;
 }
 
+// Serializes a "SELECT MAX(existing serial)+1, then INSERT" code-allocation pattern under the
+// SAME transaction, so a second concurrent transaction wanting the same resourceName blocks until
+// the first commits (or rolls back) instead of computing the same next value and colliding on
+// INSERT. @LockOwner = 'Transaction' auto-releases the lock at commit/rollback — no explicit
+// sp_releaseapplock needed.
+//
+// This is a genuine, easily-reproduced race, not a theoretical one: 8 concurrent
+// customersService.create() calls against the same reserved chart account produced 6 UNIQUE KEY
+// violations out of 8 (2026-09-20) — businessAccounts/chartAccounts/groupAccounts/products
+// repositories' own nextSerial()/nextCode()/nextBatchNo() functions all had this gap. The
+// document-number columns (sale bill/return, purchase/return, journal voucher system_no) already
+// solved the same problem a different way — real SQL Server SEQUENCE objects (migration 031/035)
+// — but a SEQUENCE is a fixed, statically-named object, a poor fit for these codes, which are
+// scoped per parent (per chart code, per class digit, per vendor) rather than one fixed counter.
+//
+// resourceName MUST distinguish every independently-numbered scope (e.g. one lock per chart code,
+// not one lock for the whole table) — otherwise unrelated concurrent creates would serialize
+// against each other for no reason. Always a hardcoded prefix + a real id/code, never user input.
+async function acquireAppLock(transaction, resourceName) {
+  const request = requestWithParams(transaction, { resource: { type: sql.NVarChar(128), value: resourceName } });
+  await request.query(`
+    DECLARE @lockResult INT;
+    EXEC @lockResult = sp_getapplock @Resource = @resource, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 15000;
+    IF @lockResult < 0
+      THROW 51000, 'Could not acquire an allocation lock in time — another save for the same code range is still in progress', 1;
+  `);
+}
+
 function applyParams(request, params) {
   for (const [name, value] of Object.entries(params)) {
     if (value && typeof value === 'object' && 'type' in value && 'value' in value) {
@@ -112,6 +140,6 @@ function applyParams(request, params) {
 }
 
 module.exports = {
-  sql, getPool, closePool, query, withTransaction, requestWithParams, nextSequenceValue,
+  sql, getPool, closePool, query, withTransaction, requestWithParams, nextSequenceValue, acquireAppLock,
   consumeDirty, isDirty,
 };

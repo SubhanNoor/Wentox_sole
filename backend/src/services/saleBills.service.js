@@ -211,6 +211,7 @@ async function update(id, payload) {
         customerId: bill.customer_id,
         netValue: totals.netValue,
         billDate: bill.bill_date,
+        pairs: totals.totalPairs,
       });
     }
   });
@@ -232,6 +233,7 @@ async function post(id) {
       customerId: bill.customer_id,
       netValue: bill.net_value,
       billDate: bill.bill_date,
+      pairs: bill.total_pairs,
     });
   });
 
@@ -410,7 +412,7 @@ async function remove(id) {
 // reserved at save time instead of at post time. postLedgerAndStock (below) stays intact for
 // draftSaleBills.confirm, which still writes both in one step (confirm = create + post collapsed
 // into one action on a bill that was never separately saved-unposted).
-async function writeLedger(transaction, { billId, customerId, netValue, billDate }) {
+async function writeLedger(transaction, { billId, customerId, netValue, billDate, pairs }) {
   const customer = await customersService.getById(customerId);
   if (!customer.ba_id) {
     throw ApiError.conflict(
@@ -433,6 +435,7 @@ async function writeLedger(transaction, { billId, customerId, netValue, billDate
       source_type: 'SALE_BILL',
       source_id: billId,
       narration: `Sale bill #${billId}`,
+      pairs,
     },
     {
       entry_date: billDate,
@@ -442,6 +445,7 @@ async function writeLedger(transaction, { billId, customerId, netValue, billDate
       source_type: 'SALE_BILL',
       source_id: billId,
       narration: `Sale bill #${billId}`,
+      pairs,
     },
   ]);
 }
@@ -491,6 +495,8 @@ async function postLedgerAndStock(transaction, { billId, customerId, netValue, b
     }
   }
 
+  const pairs = items.reduce((sum, item) => sum + item.pairs, 0);
+
   await repository.insertLedgerEntries(transaction, [
     {
       entry_date: billDate,
@@ -500,6 +506,7 @@ async function postLedgerAndStock(transaction, { billId, customerId, netValue, b
       source_type: 'SALE_BILL',
       source_id: billId,
       narration: `Sale bill #${billId}`,
+      pairs,
     },
     {
       entry_date: billDate,
@@ -509,6 +516,7 @@ async function postLedgerAndStock(transaction, { billId, customerId, netValue, b
       source_type: 'SALE_BILL',
       source_id: billId,
       narration: `Sale bill #${billId}`,
+      pairs,
     },
   ]);
 
@@ -557,15 +565,23 @@ function biltySearch(filters = {}) {
   });
 }
 
-// bilty_no + adda_id ONLY, non-financial — allowed on a POSTED bill, unlike the full update()
+// bilty_no + adda_id + bill_no, non-financial — allowed on a POSTED bill, unlike the full update()
 // above which is blocked from touching items/totals once posted, this never even checks
-// is_posted, since it never writes to ledger_entries/stock_movements.
+// is_posted, since it never writes to ledger_entries/stock_movements. No password guard either,
+// same reasoning — none of these three fields move money or stock.
 async function updateBiltyInfo(billId, payload) {
   await getById(billId); // 404s if the bill doesn't exist
-  // Both optional since migrations 012/013 made the columns nullable — this screen exists precisely
-  // to fill them in later, so demanding them here blocked clearing a value that was entered wrongly.
+  // bilty_no/adda_id stay optional since migrations 012/013 made the columns nullable — this screen
+  // exists precisely to fill them in later, so demanding them here blocked clearing a value that was
+  // entered wrongly. bill_no is different: it's NOT NULL on sale_bills (schema.sql), so unlike the
+  // other two it can't be blanked out here.
+  if (!payload.bill_no) throw ApiError.badRequest('bill_no is required');
 
-  await repository.updateBiltyInfo(billId, { bilty_no: payload.bilty_no, adda_id: payload.adda_id });
+  await repository.updateBiltyInfo(billId, {
+    bilty_no: payload.bilty_no,
+    adda_id: payload.adda_id,
+    bill_no: payload.bill_no,
+  });
   return getById(billId);
 }
 
