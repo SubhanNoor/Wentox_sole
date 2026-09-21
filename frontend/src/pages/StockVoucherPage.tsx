@@ -290,7 +290,19 @@ export default function StockVoucherPage() {
     [stores]
   );
 
+  // With Detail scope selected on an already-open, unposted voucher, New means "add another line
+  // to THIS voucher", not "abandon it and start over" — only Master scope (or no voucher open yet)
+  // gets the full reset below. Same reset shape used after committing a line, since the outcome is
+  // identical: an empty, focused entry strip, voucher untouched.
   const handleNew = () => {
+    if (mode === 'edit' && editScope === 'detail' && svId != null) {
+      setEntry(emptyEntry());
+      setEditingIndex(null);
+      setSelectedIndex(null);
+      setErrorMsg('');
+      requestAnimationFrame(() => entryArticleTriggerRef.current?.focus());
+      return;
+    }
     setMode('new'); setHasClickedNew(false); setSvId(null); setStatus('DRAFT');
     setDate(getTodayDate()); setStoreId(''); setRemarks('');
     // Fixed to STOCK TRANSFER, never blank — the auto-populate effect above also covers this once

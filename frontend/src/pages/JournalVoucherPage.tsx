@@ -222,7 +222,20 @@ export default function JournalVoucherPage() {
     [accounts]
   );
 
+  // With Detail scope selected on an already-open, unposted voucher, New means "add another line
+  // to THIS voucher" — the exact reason Un Post now lands straight in edit mode (see handleUnpost's
+  // own comment) — not "abandon it and start over." Only Master scope (or no voucher open yet)
+  // gets the full reset below. Same reset shape handleCommitLine already uses after committing a
+  // line, since the outcome is identical: an empty, focused entry strip, voucher untouched.
   const handleNew = () => {
+    if (mode === 'edit' && editScope === 'detail' && jvId != null) {
+      setEntry(emptyEntry());
+      setEditingIndex(null);
+      setSelectedIndex(null);
+      setErrorMsg('');
+      requestAnimationFrame(() => entryAccountTriggerRef.current?.focus());
+      return;
+    }
     setMode('new'); setHasClickedNew(false); setJvId(null); setVoucherNo(null); setStatus('DRAFT');
     setDate(getTodayDate()); setReason('');
     setLines([]);

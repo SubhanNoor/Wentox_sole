@@ -165,9 +165,19 @@ async function ledgerRows(filters = {}) {
        rv.voucher_no AS rc_voucher_no, ev.voucher_no AS ex_voucher_no,
        sr.return_id AS sr_inv_no, sr.bill_no AS sr_bill_no,
        rc.receipt_id AS rc_id, rc.payment_mode AS rc_payment_mode, rc.remarks AS rc_remarks,
-       rc.details AS rc_details, rc_ba.name AS rc_account_name,
+       rc.details AS rc_details, rc.ba_id AS rc_ba_id, rc_ba.name AS rc_account_name,
+       -- ONLINE receipt/expense narration (2026-09-21): migration 028/029 let payment_mode=ONLINE
+       -- name ANY business account directly via online_ba_id, not just a bank (e.g. a customer's
+       -- receipt paid straight into a vendor's account) — the "never show the account name, the
+       -- counter side is noise" rule from 2026-09-18 only holds when that counter side is always
+       -- the same generic bank. Once it can be any specific party, that name IS the information
+       -- (reported by the user: both ledgers showed a bare "Bank Transfer", telling neither side
+       -- who the other party actually was). Only pulled in for the ONLINE-to-a-named-account case;
+       -- the plain-bank ONLINE narration is untouched.
+       rc.online_ba_id AS rc_online_ba_id, rc_online_ba.name AS rc_online_ba_name,
        ch.cheque_no, ch.cheque_date, ch.cheque_received_date,
-       ex.expense_id AS ex_id, ex.remarks AS ex_remarks, ex_ba.name AS ex_ba_name,
+       ex.expense_id AS ex_id, ex.remarks AS ex_remarks, ex.ba_id AS ex_ba_id, ex_ba.name AS ex_ba_name,
+       ex.online_ba_id AS ex_online_ba_id, ex_online_ba.name AS ex_online_ba_name,
        -- Cash Book only (UC-37): its TYPE and CHEQUE NO columns come from the paying document, not
        -- from the ledger row. Every other ledgerRows() caller ignores these three.
        ex.payment_mode AS ex_payment_mode, ex.issued_cheque_no AS ex_issued_cheque_no,
@@ -214,9 +224,11 @@ async function ledgerRows(filters = {}) {
      LEFT JOIN dbo.sale_returns sr  ON le.source_type = 'SALE_RETURN'  AND sr.return_id = le.source_id
      LEFT JOIN dbo.receipts rc      ON le.source_type IN ('RECEIPT','COMMISSION') AND rc.receipt_id = le.source_id
      LEFT JOIN dbo.business_accounts rc_ba ON rc_ba.ba_id = rc.ba_id
+     LEFT JOIN dbo.business_accounts rc_online_ba ON rc_online_ba.ba_id = rc.online_ba_id
      LEFT JOIN dbo.cheques ch       ON rc.cheque_id = ch.cheque_id
      LEFT JOIN dbo.expenses ex      ON le.source_type = 'EXPENSE'      AND ex.expense_id = le.source_id
      LEFT JOIN dbo.business_accounts ex_ba ON ex_ba.ba_id = ex.ba_id
+     LEFT JOIN dbo.business_accounts ex_online_ba ON ex_online_ba.ba_id = ex.online_ba_id
      LEFT JOIN dbo.cheques ex_ch    ON ex.cheque_id = ex_ch.cheque_id
      LEFT JOIN dbo.receipt_vouchers rv ON rv.voucher_id = rc.voucher_id
      LEFT JOIN dbo.expense_vouchers ev ON ev.voucher_id = ex.voucher_id

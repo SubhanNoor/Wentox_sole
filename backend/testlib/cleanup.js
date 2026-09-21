@@ -5,12 +5,16 @@
 const { query } = require('../src/db/pool');
 
 async function cleanupFixtures({
-  billId, returnId, receiptId, purchaseId, materialIds, settlementId, vendorId, bankId, ba_id,
-  customerId, variantId, productId, categoryId, storeId, regionId,
+  billId, returnId, receiptId, expenseId, purchaseId, materialIds, settlementId, vendorId, bankId,
+  ba_id, customerId, variantId, productId, categoryId, storeId, regionId,
 } = {}) {
   if (settlementId != null) {
     await query("DELETE FROM dbo.ledger_entries WHERE source_type = 'SETTLEMENT' AND source_id = @id", { id: settlementId });
     await query('DELETE FROM dbo.settlements WHERE settlement_id = @id', { id: settlementId });
+  }
+  if (expenseId != null) {
+    await query("DELETE FROM dbo.ledger_entries WHERE source_type = 'EXPENSE' AND source_id = @id", { id: expenseId });
+    await query('DELETE FROM dbo.expenses WHERE expense_id = @id', { id: expenseId });
   }
   if (purchaseId != null) {
     await query("DELETE FROM dbo.ledger_entries WHERE source_type = 'PURCHASE' AND source_id = @id", { id: purchaseId });

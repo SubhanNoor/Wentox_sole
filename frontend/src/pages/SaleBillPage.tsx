@@ -965,7 +965,19 @@ const nextSystemBillNo = useMemo(
   // cleared by handleNew() and by loading any existing bill.
   const createdInThisRun = useRef(false);
 
+  // With Detail scope selected on an already-open, unposted bill, New means "add another line to
+  // THIS bill", not "abandon it and start over" — only Master scope (or no bill open yet) gets the
+  // full reset below. Same reset shape used after committing a line, since the outcome is
+  // identical: an empty, focused entry row, bill untouched.
   const handleNew = () => {
+    if (mode === 'edit' && editScope === 'detail' && billId != null) {
+      setEntry(newUiItem());
+      setEditingIndex(null);
+      setSelectedIndex(null);
+      setErrorMsg('');
+      requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
+      return;
+    }
     clearSaleBillDraft();
     setMode('new');
     setHasClickedNew(false);

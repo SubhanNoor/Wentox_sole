@@ -3,6 +3,7 @@ import { formatCurrency, useApp } from '@/context/AppContext';
 import { exportRowsToExcel } from '@/lib/export';
 import AppLayout from '@/components/AppLayout';
 import DocumentToolbar from '@/components/DocumentToolbar';
+import RowActions from '@/components/RowActions';
 import SearchModal from '@/components/SearchModal';
 import * as api from '@/lib/api';
 import type {
@@ -12,7 +13,7 @@ import type {
 } from '@/lib/api';
 import { focusNextField } from '@/lib/fieldNav';
 import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
-import { Edit, Trash2, ChevronDown } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
 import MonthlyExpensesTab from '@/components/MonthlyExpensesTab';
@@ -760,7 +761,16 @@ export default function ExpensesPage() {
 
   // PN-01: abandon the voucher on screen and start a blank one. Nothing is deleted — an unposted
   // voucher with lines still exists and is reachable from the Pending Posting panel.
+  //
+  // With Detail scope selected on an already-open, unposted voucher, New means "add another line
+  // to THIS voucher" instead — clearEntryRow() is the exact existing "ready for the next line"
+  // reset (used after committing a line), so this reuses it rather than abandoning the voucher.
+  // Only Master scope (or no voucher open yet) gets the full reset below.
   const startNewVoucher = () => {
+    if (mode === 'edit' && editScope === 'detail' && voucher) {
+      clearEntryRow();
+      return;
+    }
     setVoucher(null);
     setVoucherRemarks('');
     setVoucherResult(null);
@@ -1635,32 +1645,20 @@ export default function ExpensesPage() {
                           <td className="p-2.5 text-center" data-no-print>
                             <div className="flex items-center justify-center gap-1.5">
                               {line.status === 'DRAFT' && (
-                                <>
-                                  {/* Detail-scope interaction — locked while mid-correction of a
-                                      DIFFERENT line with Master selected (2026-08-31), same
-                                      mirror-image gate as the entry strip fields above. */}
-                                  <button
-                                    type="button"
-                                    // stopPropagation: the row itself selects on click now.
-                                    onClick={e => { e.stopPropagation(); if (!detailFieldsLocked) handleEditLine(line); }}
-                                    disabled={detailFieldsLocked}
-                                    title={detailFieldsLocked ? 'Select Detail to edit voucher entries' : 'Pull this entry back into the form to correct it'}
-                                    className="text-slate-500 hover:text-slate-800 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                                  >
-                                    <Edit size={14} />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={e => { e.stopPropagation(); if (detailFieldsLocked) return; setDeleteTarget(line.draft_id != null
-                                      ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
-                                      : { kind: 'expense', id: line.expense_id as number, amount: Number(line.amount) }); }}
-                                    disabled={detailFieldsLocked}
-                                    title={detailFieldsLocked ? 'Select Detail to delete voucher entries' : 'Delete this entry (asks for your password)'}
-                                    className="text-rose-500 hover:text-rose-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                </>
+                                // Detail-scope interaction — locked while mid-correction of a
+                                // DIFFERENT line with Master selected (2026-08-31), same
+                                // mirror-image gate as the entry strip fields above.
+                                <RowActions
+                                  onEdit={() => handleEditLine(line)}
+                                  onDelete={() => setDeleteTarget(line.draft_id != null
+                                    ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
+                                    : { kind: 'expense', id: line.expense_id as number, amount: Number(line.amount) })}
+                                  disabled={detailFieldsLocked}
+                                  editTitle="Pull this entry back into the form to correct it"
+                                  deleteTitle="Delete this entry (asks for your password)"
+                                  editDisabledTitle="Select Detail to edit voucher entries"
+                                  deleteDisabledTitle="Select Detail to delete voucher entries"
+                                />
                               )}
                             </div>
                           </td>

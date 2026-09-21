@@ -23,6 +23,60 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Online-payment counter-party narration + toolbar/New-button consistency pass
+
+### 2026-09-22 — Receipt/Expense ONLINE narration now names the actual counter-party
+- **What:** live client-reported bug — a Receipt paid ONLINE straight into a vendor's account
+  (`payload.online_ba_id`, migrations 028/029) showed a bare "Bank Transfer" on both the customer's
+  and the vendor's ledger, naming neither side. Fixed for both Receipts and Expenses: each ledger
+  now reads e.g. `Bank Transfer — to Acme Vendor` / `Bank Transfer — from Acme Customer`.
+- **How:** `reports.repository.js` joins `business_accounts` on `online_ba_id` for both receipts
+  and expenses and selects the counter-party's name plus the source `ba_id`. `reports.service.js`
+  adds `namedOnlineCounterparty()`, applied only when `payment_mode==='ONLINE' && online_ba_id` is
+  set — a plain ONLINE payment into a generic bank account (no `online_ba_id`) is unaffected, per
+  the pre-existing 2026-09-18 "counter account name is noise" rule, which only holds when the
+  counter side really is always the same generic bank. `formatLedgerRow()` now takes `viewedBaId` to
+  know which side is being displayed. Verified with a negative-control run (temporarily neutered the
+  new helper, confirmed 2 of 3 new tests correctly failed, restored, confirmed all pass) plus a full
+  `npm test` run (19/19) before and after.
+- **Files:** `backend/src/repositories/reports.repository.js`, `backend/src/services/reports.service.js`,
+  `backend/test/reports.onlineCounterparty.test.js` (new), `backend/testlib/cleanup.js` (added
+  `expenseId` support).
+
+### 2026-09-22 — Receipts/Expenses row actions unified onto shared `RowActions`
+- **What:** Receipts and Expenses pages' inline Edit/Delete row icons replaced with the shared
+  `RowActions` component already used elsewhere, per the user's request to consolidate the toolbar
+  ecosystem into shared components. Wage Run/Salary Run/Transfer deliberately left out of scope for
+  now (user chose to defer those).
+- **Files:** `frontend/src/components/RowActions.tsx` (added optional `editDisabledTitle`/
+  `deleteDisabledTitle`, backward compatible), `frontend/src/pages/ReceiptsPage.tsx`,
+  `frontend/src/pages/ExpensesPage.tsx`.
+
+### 2026-09-22 — New button: Detail-scope now adds a line to the same voucher, not a full reset
+- **What:** across all 8 data-entry pages (Sale Bill, Sale Return, Purchase, Purchase Return,
+  Journal Voucher, Stock Voucher, Receipts, Expenses): after unposting a voucher, if the edit-scope
+  radio is on **Detail** and the user clicks **New**, the app now clears just the entry row and
+  refocuses the first entry field on the *same* voucher — no need to click Edit first. **Master**
+  scope's New is unchanged (full reset). Confirmed with the user this should be uniform across all 8
+  pages the same way.
+- **Files:** `frontend/src/pages/{SaleBillPage,SaleReturnPage,PurchasePage,PurchaseReturnPage,
+  JournalVoucherPage,StockVoucherPage,ReceiptsPage,ExpensesPage}.tsx` — new branch at the top of each
+  page's `handleNew()`/`startNewVoucher()`.
+
+### 2026-09-22 — Two small verified bugs from the "post-Done, buttons should un-grey" audit
+- **What:** (1) Receipts: clicking a voucher's row-level Done triggered the browser's native "Please
+  fill out this field" popup on the empty re-armed entry strip instead of the app's own flash
+  message — `<form id="receipt-entry-form">` was missing `noValidate` that every sibling page's
+  equivalent form already has. (2) Settings page showed a hardcoded fake `v1.0.4 (Stable)` badge
+  instead of the real installed version, and the auto-update check only ran after a manual button
+  click — now runs automatically on opening the Updates tab, and the badge shows "Checking…" until
+  the real version resolves, never a fallback fake number.
+- **Files:** `frontend/src/pages/ReceiptsPage.tsx` (`noValidate`; also fixed Save/Done toolbar
+  buttons staying enabled after a row is deleted — `disabled: isViewMode || deletedPlaceholder !=
+  null`), `frontend/src/pages/SettingsPage.tsx`.
+
+---
+
 ## Receipts Post/Unpost UI-wiring regression test (Top 8 #4)
 
 ### 2026-09-20 — static source check that Post/Unpost are actually wired to a button

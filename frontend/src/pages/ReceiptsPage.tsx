@@ -3,6 +3,7 @@ import { useApp, formatCurrency } from '@/context/AppContext';
 import { exportRowsToExcel } from '@/lib/export';
 import AppLayout from '@/components/AppLayout';
 import DocumentToolbar from '@/components/DocumentToolbar';
+import RowActions from '@/components/RowActions';
 import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
 import PageToasts from '@/components/PageToasts';
@@ -11,7 +12,7 @@ import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRo
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
 import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
-import { Edit, Trash2, ChevronDown, Undo2, CheckCircle2 } from 'lucide-react';
+import { ChevronDown, Undo2, CheckCircle2 } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
@@ -836,7 +837,16 @@ export default function ReceiptsPage() {
   // RJ-03: abandon the voucher on screen and start a blank one. Nothing is deleted — an unposted
   // voucher with lines still exists and is reachable from the records list; this just stops
   // pointing at it. The next Done allocates a new C.Book No.
+  //
+  // With Detail scope selected on an already-open, unposted voucher, New means "add another line
+  // to THIS voucher" instead — clearEntryRow() is the exact existing "ready for the next line"
+  // reset (used after Done commits a line), so this reuses it rather than abandoning the voucher.
+  // Only Master scope (or no voucher open yet) gets the full reset below.
   const startNewVoucher = () => {
+    if (mode === 'edit' && editScope === 'detail' && voucher) {
+      clearEntryRow();
+      return;
+    }
     setVoucher(null);
     setVoucherRemarks('');
     setVoucherResult(null);
@@ -1464,8 +1474,8 @@ const nextVoucherNo = useMemo(
               },
               disabled: deletedPlaceholder != null || !voucher || voucher.status === 'POSTED',
             }}
-            save={{ submit: true, form: 'receipt-entry-form', title: 'Save this entry into the voucher' }}
-            done={{ submit: true, form: 'receipt-entry-form', title: isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done — add this entry to the voucher' }}
+            save={{ submit: true, form: 'receipt-entry-form', disabled: isViewMode || deletedPlaceholder != null, title: 'Save this entry into the voucher' }}
+            done={{ submit: true, form: 'receipt-entry-form', disabled: isViewMode || deletedPlaceholder != null, title: isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done — add this entry to the voucher' }}
             cancel={{ onClick: () => { clearEntryRow(); setMode('new'); }, disabled: mode !== 'edit', title: 'Cancel Edit' }}
             first={{ onClick: handleNavFirst, disabled: !canNavPrevious }}
             prev={{ onClick: handleNavPrevious, disabled: !canNavPrevious, title: 'Previous' }}
@@ -1632,8 +1642,26 @@ const nextVoucherNo = useMemo(
                   Cheque No / Date on Cheque render only for CHEQUE and Received Into / Ref. Code
                   only for ONLINE. They are left as EMPTY grid cells rather than collapsed, so
                   Amount stays pinned to the right-hand column in every mode — the ref pic's own
-                  placement — and the boxes never shift under the user as the mode changes. */}
-              <form id="receipt-entry-form" onSubmit={handleDone} className="flex flex-col gap-2 shrink-0">
+                  placement — and the boxes never shift under the user as the mode changes.
+
+                  noValidate: without it, the browser's own "Please fill out this field" popup on
+                  the required Amount input blocks form submission BEFORE handleDone's own JS ever
+                  runs — silently defeating its entryRowUntouched escape hatch (Done on a blank row
+                  = "I'm finished", not "commit this row"). Every other entry-strip page (Journal
+                  Voucher, Purchase, Purchase Return, Stock Voucher) already has this; Receipts'
+                  Done button routes through this form's submit (DocumentToolbar's `done={{
+                  submit: true, form: 'receipt-entry-form' }}`), unlike Expenses' own Done (a plain
+                  onClick, never touches its form) — which is exactly why only THIS page hit it
+                  (reported by the user, 2026-09-21: clicking Done with one entry already saved got
+                  "Please fill out this field" instead of finishing the voucher). All real
+                  validation already happens in JS (buildPayload()'s own checks), so native
+                  validation was never doing anything the app doesn't already do better, with a
+                  proper in-app error message instead of a browser tooltip. */}
+              <form
+                id="receipt-entry-form" onSubmit={handleDone}
+                noValidate
+                className="flex flex-col gap-2 shrink-0"
+              >
                 <div
                   className="grid gap-x-2 gap-y-1.5"
                   style={{
@@ -2144,33 +2172,20 @@ const nextVoucherNo = useMemo(
                                     the backend rejects editing or deleting it, so showing the
                                     buttons would only produce an error. */}
                                 {line.status === 'DRAFT' && (
-                                  <>
-                                    {/* Detail-scope interaction — locked while mid-correction of a
-                                        DIFFERENT line with Master selected (2026-08-31), same
-                                        mirror-image gate as the entry strip fields below. */}
-                                    <button
-                                      type="button"
-                                      // stopPropagation: the row itself now selects on click, and
-                                      // without this the row handler fires too and fights this one.
-                                      onClick={e => { e.stopPropagation(); if (!detailFieldsLocked) handleEditLine(line); }}
-                                      disabled={detailFieldsLocked}
-                                      title={detailFieldsLocked ? 'Select Detail to edit voucher entries' : 'Pull this entry back into the form to correct it'}
-                                      className="text-slate-500 hover:text-slate-800 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                                    >
-                                      <Edit size={14} />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={e => { e.stopPropagation(); if (detailFieldsLocked) return; setDeleteTarget(line.draft_id != null
-                                        ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
-                                        : { kind: 'receipt', id: line.receipt_id as number, amount: Number(line.amount) }); }}
-                                      disabled={detailFieldsLocked}
-                                      title={detailFieldsLocked ? 'Select Detail to delete voucher entries' : 'Delete this entry (asks for your password)'}
-                                      className="text-rose-500 hover:text-rose-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                                    >
-                                      <Trash2 size={14} />
-                                    </button>
-                                  </>
+                                  // Detail-scope interaction — locked while mid-correction of a
+                                  // DIFFERENT line with Master selected (2026-08-31), same
+                                  // mirror-image gate as the entry strip fields below.
+                                  <RowActions
+                                    onEdit={() => handleEditLine(line)}
+                                    onDelete={() => setDeleteTarget(line.draft_id != null
+                                      ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
+                                      : { kind: 'receipt', id: line.receipt_id as number, amount: Number(line.amount) })}
+                                    disabled={detailFieldsLocked}
+                                    editTitle="Pull this entry back into the form to correct it"
+                                    deleteTitle="Delete this entry (asks for your password)"
+                                    editDisabledTitle="Select Detail to edit voucher entries"
+                                    deleteDisabledTitle="Select Detail to delete voucher entries"
+                                  />
                                 )}
                               </div>
                             </td>

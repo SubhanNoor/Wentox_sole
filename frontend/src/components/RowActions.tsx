@@ -13,7 +13,7 @@ import { Edit2, Trash2 } from 'lucide-react';
  */
 export default function RowActions({
   onEdit, onDelete, disabled = false, editTitle = 'Edit this row', deleteTitle = 'Delete this row',
-  disabledTitle,
+  disabledTitle, editDisabledTitle, deleteDisabledTitle,
 }: {
   onEdit: () => void;
   onDelete: () => void;
@@ -22,6 +22,11 @@ export default function RowActions({
   deleteTitle?: string;
   /** Shown on both buttons while `disabled` — says WHY, rather than leaving a dead control. */
   disabledTitle?: string;
+  /** Per-button override of disabledTitle, for a page whose edit/delete are disabled for
+   * different reasons (e.g. Receipts/Expenses: "Select Detail to edit/delete voucher entries").
+   * Falls back to disabledTitle, then editTitle/deleteTitle, same as before. */
+  editDisabledTitle?: string;
+  deleteDisabledTitle?: string;
 }) {
   return (
     <div className="flex items-center justify-center gap-1" data-no-print>
@@ -29,7 +34,7 @@ export default function RowActions({
         type="button"
         onClick={e => { e.stopPropagation(); if (!disabled) onEdit(); }}
         disabled={disabled}
-        title={disabled ? (disabledTitle ?? editTitle) : editTitle}
+        title={disabled ? (editDisabledTitle ?? disabledTitle ?? editTitle) : editTitle}
         className="p-1 text-blue-600 hover:text-blue-800 transition-colors disabled:text-slate-400 disabled:opacity-40 disabled:cursor-not-allowed"
       >
         <Edit2 size={14} />
@@ -38,7 +43,7 @@ export default function RowActions({
         type="button"
         onClick={e => { e.stopPropagation(); if (!disabled) onDelete(); }}
         disabled={disabled}
-        title={disabled ? (disabledTitle ?? deleteTitle) : deleteTitle}
+        title={disabled ? (deleteDisabledTitle ?? disabledTitle ?? deleteTitle) : deleteTitle}
         className="p-1 text-rose-600 hover:text-rose-800 transition-colors disabled:text-slate-400 disabled:opacity-40 disabled:cursor-not-allowed"
       >
         <Trash2 size={14} />

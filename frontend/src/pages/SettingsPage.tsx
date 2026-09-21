@@ -36,10 +36,13 @@ export default function SettingsPage() {
   // Updates State
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
   const [updateMessage, setUpdateMessage] = useState('');
-  const [updateInfo, setUpdateInfo] = useState<{ currentVersion?: string; latestVersion?: string }>({
-    currentVersion: '1.0.4',
-    latestVersion: '1.0.4'
-  });
+  // No hardcoded fallback version here on purpose (previously '1.0.4', a fake placeholder shown
+  // to the user before any real check ran — reported 2026-09-21: the client saw "v1.0.4 (Stable)"
+  // and assumed the app hadn't actually updated, when in fact it was just this badge never having
+  // been populated yet). Genuinely unknown until handleCheckForUpdates() resolves — see the
+  // useEffect below, which now runs that automatically the moment this tab becomes active, instead
+  // of requiring a manual "Check for Updates" click just to see what's currently installed.
+  const [updateInfo, setUpdateInfo] = useState<{ currentVersion?: string; latestVersion?: string }>({});
 
   const handleUpdateCredentials = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,7 +102,10 @@ export default function SettingsPage() {
     }
 
     const data = res.data!;
-    setUpdateInfo({ currentVersion: data.currentVersion || '1.0.4', latestVersion: data.latestVersion || '1.0.4' });
+    // data.currentVersion is always app.getVersion() — the backend sets it unconditionally on
+    // every path, network failure included — so no fake fallback here either; if it's ever
+    // genuinely missing, showing nothing is honest, a fake number is not.
+    setUpdateInfo({ currentVersion: data.currentVersion, latestVersion: data.latestVersion });
     if (data.updateAvailable) {
       setUpdateStatus('update-available');
     } else if (data.checkError) {
@@ -113,6 +119,17 @@ export default function SettingsPage() {
       setUpdateMessage(data.packaged === false ? 'Update checking is enabled for packaged desktop releases.' : "You are running the latest version of WentoX.");
     }
   };
+
+  // Runs the same check automatically the moment the Updates tab becomes active, so the version
+  // badge shows the REAL installed version on sight — not a placeholder requiring a manual
+  // "Check for Updates" click first. Guarded on updateStatus === 'idle' so switching away and back
+  // doesn't re-fire a network call on top of a check already in flight or completed.
+  useEffect(() => {
+    if (activeTab === 'updates' && updateStatus === 'idle') {
+      handleCheckForUpdates();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   const handleInstallUpdate = async () => {
     setUpdateStatus('downloading');
@@ -678,7 +695,9 @@ export default function SettingsPage() {
 
                 <div className="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="text-xs font-mono font-bold text-slate-700">v{updateInfo.currentVersion || '1.0.4'} (Stable)</span>
+                  <span className="text-xs font-mono font-bold text-slate-700">
+                    {updateInfo.currentVersion ? `v${updateInfo.currentVersion} (Stable)` : 'Checking…'}
+                  </span>
                 </div>
               </div>
 

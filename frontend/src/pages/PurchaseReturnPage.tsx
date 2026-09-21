@@ -712,7 +712,19 @@ const nextSystemBillNo = useMemo(
   const masterFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
   const detailFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
 
+  // With Detail scope selected on an already-open, unposted return, New means "add another line to
+  // THIS return", not "abandon it and start over" — only Master scope (or no return open yet) gets
+  // the full reset below. Same reset shape used after committing a line, since the outcome is
+  // identical: an empty, focused entry row, return untouched.
   const handleNew = () => {
+    if (mode === 'edit' && editScope === 'detail' && returnId != null) {
+      setCurrentRow(emptyCurrentRow());
+      setEditingUid(null);
+      setSelectedUid(null);
+      setErrorMsg('');
+      requestAnimationFrame(() => materialNameRef.current?.focus());
+      return;
+    }
     setMode('new');
     setHasClickedNew(false);
     setReturnId(null);

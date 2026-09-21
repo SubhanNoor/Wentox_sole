@@ -814,7 +814,19 @@ const nextSystemReturnNo = useMemo(
   const finalTotalValue = useMemo(() => Math.max(0, itemsTotalValue - invoiceDiscount), [itemsTotalValue, invoiceDiscount]);
 
   // Toolbar Actions
+  // With Detail scope selected on an already-open, unposted return, New means "add another line to
+  // THIS return", not "abandon it and start over" — only Master scope (or no return open yet) gets
+  // the full reset below. Same reset shape used after committing a line, since the outcome is
+  // identical: an empty, focused entry row, return untouched.
   const handleNew = () => {
+    if (mode === 'edit' && editScope === 'detail' && returnId != null) {
+      setEntry(newUiItem());
+      setEditingIndex(null);
+      setSelectedIndex(null);
+      setErrorMsg('');
+      requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
+      return;
+    }
     setMode('new');
     setHasClickedNew(false);
     setEditScope('master');

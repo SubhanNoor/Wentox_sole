@@ -519,7 +519,19 @@ const nextSystemBillNo = useMemo(
   // any existing purchase. Same rule as SaleBillPage's SB-05.
   const createdInThisRun = useRef(false);
 
+  // With Detail scope selected on an already-open, unposted purchase, New means "add another line
+  // to THIS purchase", not "abandon it and start over" — only Master scope (or no purchase open
+  // yet) gets the full reset below. Same reset shape used after committing a line, since the
+  // outcome is identical: an empty, focused entry row, purchase untouched.
   const handleNew = () => {
+    if (mode === 'edit' && editScope === 'detail' && purchaseId != null) {
+      setCurrentRow(emptyCurrentRow());
+      setEditingUid(null);
+      setSelectedUid(null);
+      setErrorMsg('');
+      requestAnimationFrame(() => materialNameRef.current?.focus());
+      return;
+    }
     setMode('new');
     setHasClickedNew(false);
     // P-02: a blank form has nothing saved in it yet, so nothing to clear on post.

@@ -143,7 +143,31 @@ function paymentNarration(mode, chequeNo, dueDate) {
 // ── Shared ledger + balance helpers ─────────────────────────────────────────────────────────
 // UC-35 Khaata row shape — reused by account-ledger, business-ledger's detail view, and the two
 // new reports (overall-trail drill-down, overall-search drill-down).
-function formatLedgerRow(r) {
+// ONLINE payment posted directly to a specific business account (migration 028/029's online_ba_id)
+// rather than a generic bank — names that counter-party, since the 2026-09-18 "never show the
+// account name, the counter side is noise" rule only holds when that counter side is always the
+// same generic bank. Once it can be any specific party (e.g. a customer's receipt paid straight
+// into a vendor's account), that name IS the information, not noise — reported 2026-09-21: both
+// ledgers showed a bare "Bank Transfer", telling neither side who the other party actually was.
+//
+// mainFlowsOut distinguishes which side of the pair "originates" the money, since the two callers
+// are mirror images: a RECEIPT's own party (rc_ba, the customer) is the SOURCE — money flows OUT
+// of them onward to online_ba — so viewing the customer's ledger says "to <online_ba>" and viewing
+// online_ba's ledger says "from <customer>". An EXPENSE's own party (ex_ba, who got paid) is the
+// DESTINATION — money flows IN from online_ba — so it's the exact reverse: viewing ex_ba's ledger
+// says "from <online_ba>", viewing online_ba's ledger says "to <ex_ba>".
+function namedOnlineCounterparty(base, {
+  paymentMode, onlineBaId, onlineBaName, mainName, viewedBaId, mainBaId, mainFlowsOut,
+}) {
+  if (paymentMode !== 'ONLINE' || !onlineBaId || !viewedBaId) return base;
+  const viewingMain = viewedBaId === mainBaId;
+  const viewingSource = viewingMain ? mainFlowsOut : !mainFlowsOut;
+  const otherName = viewingMain ? onlineBaName : mainName;
+  if (!otherName) return base;
+  return `${base} — ${viewingSource ? 'to' : 'from'} ${otherName}`;
+}
+
+function formatLedgerRow(r, viewedBaId) {
   let type = r.source_type;
   let inv_no = null;
   let bill_no = null;
@@ -166,6 +190,12 @@ function formatLedgerRow(r) {
       // receipt's own remarks, or the reversal row would misleadingly look like a normal receipt.
       const isReversal = r.narration && /reversal/i.test(r.narration);
       narration = isReversal ? r.narration : paymentNarration(paymentModeLabelFor(r) || 'Receipt', r.cheque_no, r.cheque_date);
+      if (!isReversal) {
+        narration = namedOnlineCounterparty(narration, {
+          paymentMode: r.rc_payment_mode, onlineBaId: r.rc_online_ba_id, onlineBaName: r.rc_online_ba_name,
+          mainName: r.rc_account_name, viewedBaId, mainBaId: r.rc_ba_id, mainFlowsOut: true,
+        });
+      }
       if (r.cheque_no) { cheque_no = r.cheque_no; cheque_date = r.cheque_date; cheque_received_date = r.cheque_received_date; }
       break;
     }
@@ -179,6 +209,10 @@ function formatLedgerRow(r) {
         r.ex_payment_mode === 'CHEQUE_ISSUED' ? r.ex_issued_cheque_no : r.ex_cheque_no,
         r.ex_payment_mode === 'CHEQUE_ISSUED' ? r.ex_issued_cheque_date : r.ex_cheque_date,
       );
+      narration = namedOnlineCounterparty(narration, {
+        paymentMode: r.ex_payment_mode, onlineBaId: r.ex_online_ba_id, onlineBaName: r.ex_online_ba_name,
+        mainName: r.ex_ba_name, viewedBaId, mainBaId: r.ex_ba_id, mainFlowsOut: false,
+      });
       break;
     case 'WAGE_RUN':
       type = 'Wage Run'; narration = 'HISAB';
@@ -302,7 +336,7 @@ async function accountLedger({ ba_id, ac_id }, filters = {}, session) {
   let totalDebit = 0;
   let totalCredit = 0;
   const mapped = rows.map((r) => {
-    const row = formatLedgerRow(r);
+    const row = formatLedgerRow(r, ba_id);
     running += row.debit - row.credit;
     totalDebit += row.debit;
     totalCredit += row.credit;
