@@ -715,7 +715,7 @@ async function cashBookChequeDeposits({ date_from, date_to }) {
      JOIN dbo.receipts rc ON rc.receipt_id = ca.receipt_id
      JOIN dbo.business_accounts rc_ba ON rc_ba.ba_id = rc.ba_id
      LEFT JOIN dbo.cheques ch ON ch.cheque_id = rc.cheque_id
-     LEFT JOIN dbo.bank_accounts bank ON bank.bank_id = ch.bank_id
+     LEFT JOIN dbo.bank_accounts bank ON bank.bank_id = ca.bank_id
      WHERE ca.status = 'ACTIVE' AND ca.disposition_type = 'DEPOSIT'
        AND ca.allocation_date >= @dateFrom AND ca.allocation_date <= @dateTo
      ORDER BY ca.allocation_date, ca.allocation_id`,

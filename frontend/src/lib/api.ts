@@ -1147,6 +1147,9 @@ export interface ChequeAllocationRow {
   disposition_type: ChequeDispositionType;
   target_vendor_id: number | null;
   target_ba_id: number | null;
+  /** Set only for a DEPOSIT allocation — which bank THIS allocation was banked into (a cheque can
+   *  now be split across more than one bank, so this lives per-allocation, not on the cheque). */
+  bank_id: number | null;
   expense_id: number | null;
   amount: number;
   allocation_date: string;
@@ -1154,6 +1157,7 @@ export interface ChequeAllocationRow {
   status: 'ACTIVE' | 'REVERSED';
   vendor_name?: string;
   target_name?: string;
+  bank_name?: string;
   cheque_id?: number;
   cheque_no?: string;
   /** The date written on the cheque — its due date (see IX_cheques_due). */

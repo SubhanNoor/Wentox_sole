@@ -153,6 +153,7 @@ async function insertAllocation(transaction, allocation) {
     dispositionType: { type: sql.VarChar(20), value: allocation.disposition_type },
     targetVendorId: { type: sql.Int, value: allocation.target_vendor_id ?? null },
     targetBaId: { type: sql.Int, value: allocation.target_ba_id ?? null },
+    bankId: { type: sql.Int, value: allocation.bank_id ?? null },
     expenseId: { type: sql.Int, value: allocation.expense_id ?? null },
     amount: { type: sql.Decimal(14, 2), value: allocation.amount },
     allocationDate: { type: sql.Date, value: allocation.allocation_date },
@@ -161,12 +162,12 @@ async function insertAllocation(transaction, allocation) {
   });
   const result = await request.query(`
     INSERT INTO dbo.cheque_allocations (
-      receipt_id, disposition_type, target_vendor_id, target_ba_id, expense_id, amount,
+      receipt_id, disposition_type, target_vendor_id, target_ba_id, bank_id, expense_id, amount,
       allocation_date, remarks, status, created_by
     )
     OUTPUT inserted.allocation_id
     VALUES (
-      @receiptId, @dispositionType, @targetVendorId, @targetBaId, @expenseId, @amount,
+      @receiptId, @dispositionType, @targetVendorId, @targetBaId, @bankId, @expenseId, @amount,
       @allocationDate, @remarks, 'ACTIVE', @createdBy
     )
   `);
@@ -217,10 +218,11 @@ async function detachAllocationFromExpense(transaction, allocationId) {
 
 async function listAllocations(receiptId) {
   const result = await query(
-    `SELECT ca.*, v.name AS vendor_name, ba.name AS target_name
+    `SELECT ca.*, v.name AS vendor_name, ba.name AS target_name, bank.name AS bank_name
      FROM dbo.cheque_allocations ca
      LEFT JOIN dbo.vendors v ON v.vendor_id = ca.target_vendor_id
      LEFT JOIN dbo.business_accounts ba ON ba.ba_id = ca.target_ba_id
+     LEFT JOIN dbo.bank_accounts bank ON bank.bank_id = ca.bank_id
      WHERE ca.receipt_id = @receiptId
      ORDER BY ca.allocation_id`,
     { receiptId: { type: sql.Int, value: receiptId } },

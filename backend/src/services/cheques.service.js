@@ -91,15 +91,13 @@ async function recomputeStatus(transaction, cheque, closingDispositionType) {
 // does for every other money movement, and it is what reports.repository.js#cashBookNonCashRows
 // already documented a deposit as being.
 //
-// "One cheque is never deposited into two different banks" (§9.3) — if the cheque already carries a
-// bank_id, a second deposit must use the same one.
+// A cheque's balance can be deposited across more than one bank (client request 2026-09-22,
+// reversing the earlier §9.3 "one cheque, one bank" rule) — each deposit allocation now carries its
+// own bank_id (migration 037), so nothing here compares against a prior deposit's bank.
 async function deposit(chequeId, payload, userId, session) {
   const cheque = await getById(chequeId);
   const amount = await assertDisposable(cheque, payload.amount);
   if (!payload.bank_id) throw ApiError.badRequest('bank_id is required');
-  if (cheque.bank_id && cheque.bank_id !== payload.bank_id) {
-    throw ApiError.badRequest('This cheque is already tied to a different bank — one cheque is never split across banks');
-  }
   const bank = await bankAccountsService.getById(payload.bank_id); // 404s if it doesn't exist
   if (!bank.ba_id) throw ApiError.conflict('Bank account has no linked ledger account yet', 'NO_BANK_ACCOUNT');
   // UC-03: every bank sits under the restricted BANK ACCOUNTS head, so this is the guard that keeps
@@ -114,6 +112,7 @@ async function deposit(chequeId, payload, userId, session) {
     const allocationId = await repository.insertAllocation(transaction, {
       receipt_id: cheque.receipt_id,
       disposition_type: 'DEPOSIT',
+      bank_id: payload.bank_id,
       amount,
       allocation_date: payload.allocation_date,
       remarks: payload.remarks,
@@ -123,6 +122,8 @@ async function deposit(chequeId, payload, userId, session) {
       { entry_date: payload.allocation_date, ba_id: bank.ba_id, debit: amount, credit: 0, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration: `Cheque #${chequeId} deposited into ${bank.name}` },
       { entry_date: payload.allocation_date, ac_id: chequesInHand.ac_id, debit: 0, credit: amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration: `Cheque #${chequeId} deposited into ${bank.name}` },
     ]);
+    // Still set on the first-ever deposit only, as a "primary bank" display fallback for the
+    // common single-bank case — no longer authoritative once a cheque is split (see allocation.bank_id).
     if (!cheque.bank_id) await repository.setBank(transaction, chequeId, payload.bank_id);
     await recomputeStatus(transaction, cheque, 'DEPOSIT');
   });
@@ -239,12 +240,12 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
     for (const allocation of reversedAllocations) {
       // Every disposition now carries a ledger pair (Dr somewhere / Cr CHEQUES IN HAND), so every
       // one of them reverses the same way — only the "somewhere" differs. A DEPOSIT's other side is
-      // the bank the cheque was banked into, which lives on the cheque itself rather than on the
-      // allocation (cheque_allocations has no bank column; CK_cheque_allocations_target is what
-      // limits target_vendor_id/target_ba_id to the endorsement types).
+      // the bank THAT allocation was deposited into (allocation.bank_id, migration 037) — not
+      // cheque.bank_id, which only ever reflects the cheque's first-ever deposit and would resolve
+      // every reversal to the wrong bank once a cheque is split across more than one.
       let targetBaId;
       if (allocation.disposition_type === 'DEPOSIT') {
-        const bank = await bankAccountsService.getById(cheque.bank_id);
+        const bank = await bankAccountsService.getById(allocation.bank_id);
         if (!bank.ba_id) throw ApiError.conflict('Bank account has no linked ledger account yet', 'NO_BANK_ACCOUNT');
         targetBaId = bank.ba_id;
       } else {

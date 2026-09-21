@@ -23,6 +23,46 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Cheque deposits: allowed to split across more than one bank
+
+### 2026-09-22 — a single cheque's balance can now be deposited into different banks
+- **What:** client request — "Cheq should be allowed to split across multiple banks." Previously
+  `cheques.service.js#deposit()` rejected a second deposit allocation that named a different bank
+  than the cheque's first one ("This cheque is already tied to a different bank — one cheque is
+  never split across banks"), because the bank lived once on `dbo.cheques.bank_id`, set on the
+  cheque's first-ever deposit. Now each DEPOSIT allocation carries its own `bank_id`.
+- **How:** migration 037 adds `cheque_allocations.bank_id` (+ FK to `bank_accounts`), backfills it
+  from each existing allocation's cheque (the only bank it could ever have gone to before this),
+  and widens `CK_cheque_allocations_target` to require `bank_id` set iff `disposition_type =
+  'DEPOSIT'` — mirroring how `target_vendor_id`/`target_ba_id` already work for the other two
+  disposition types. `deposit()`'s same-bank guard is removed; the allocation's own `bank_id` is
+  inserted every time. `dbo.cheques.bank_id` itself is kept as a "primary bank" display fallback
+  (still set on the first-ever deposit only) but is no longer read by any validation or reversal
+  logic. The one place this had to get right: **`reverseCheque()`** (bounce/return) resolved a
+  DEPOSIT allocation's bank via `cheque.bank_id` — if left alone, every reversed deposit on a split
+  cheque would credit back whichever bank got deposited into FIRST, not the bank that allocation
+  actually went to. Fixed to read `allocation.bank_id` instead (available via `reverseAllocations()`,
+  which already does `SELECT *`). `reports.repository.js#cashBookChequeDeposits()`'s Cash Book row
+  and `listAllocations()` (feeds the Cheques tab's history + `ChequeLedgerContent.tsx`) both updated
+  to join the allocation's own bank rather than the cheque's. Frontend: `ChequesTab.tsx`'s allocation
+  history now reads "Bank deposit — Meezan Bank" per row instead of a bare "Bank deposit";
+  `ChequeLedgerContent.tsx` reads each row's own bank instead of always the cheque's first one.
+- **Tested:** `backend/test/cheques.splitDeposit.test.js` — split-deposit succeeds across two banks,
+  and (the sharp case) a bounce on a split cheque reverses each deposit against its OWN bank, not
+  always the first. Negative-control run confirmed: reverting the `reverseCheque()` fix alone made
+  the bounce-reversal test fail with the exact "wrong bank" assertion, restored → passes. Full
+  backend suite 21/21. Also live-verified in the running Electron app (Playwright `_electron`):
+  deposited a real 150,000 cheque as 90,000 into Meezan Bank then 60,000 into HBL Bank with no
+  rejection, and the Cheque Ledger correctly showed two distinct-bank rows instead of one bank
+  repeated on both.
+- **Files:** `backend/src/db/migrations/037_cheque_allocation_bank_split.sql` (new),
+  `backend/src/repositories/cheques.repository.js`, `backend/src/services/cheques.service.js`,
+  `backend/src/repositories/reports.repository.js`, `backend/test/cheques.splitDeposit.test.js`
+  (new), `frontend/src/lib/api.ts`, `frontend/src/components/ChequesTab.tsx`,
+  `frontend/src/pages/ChequeLedgerContent.tsx`.
+
+---
+
 ## Online-payment counter-party narration + toolbar/New-button consistency pass
 
 ### 2026-09-22 — Receipt/Expense ONLINE narration now names the actual counter-party

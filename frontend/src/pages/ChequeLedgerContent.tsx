@@ -68,7 +68,10 @@ function receivedEvents(c: ChequeRow, allocations: ChequeAllocationRow[]): Ledge
       date: toDateInputValue(a.allocation_date),
       eventType,
       party: a.vendor_name || a.target_name || '-',
-      bank: a.disposition_type === 'DEPOSIT' ? (c.bank_name || '-') : '-',
+      // Each DEPOSIT allocation reads its OWN bank — a cheque can now be split across more than one
+      // bank, so falling back to the cheque-level c.bank_name would show the same (wrong, except
+      // for one) bank on every split deposit.
+      bank: a.disposition_type === 'DEPOSIT' ? (a.bank_name || '-') : '-',
       amount: a.amount,
       reversed: a.status === 'REVERSED',
     });

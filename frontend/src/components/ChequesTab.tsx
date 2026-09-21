@@ -294,7 +294,7 @@ export default function ChequesTab() {
   );
 
   function allocTargetName(a: ChequeAllocationRow): string {
-    if (a.disposition_type === 'DEPOSIT') return 'Bank deposit';
+    if (a.disposition_type === 'DEPOSIT') return a.bank_name ? `Bank deposit — ${a.bank_name}` : 'Bank deposit';
     return a.vendor_name || a.target_name || 'Vendor';
   }
 
