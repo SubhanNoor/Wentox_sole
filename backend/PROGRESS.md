@@ -61,6 +61,38 @@ Log every completed task here (newest first within its milestone). Format:
   (new), `frontend/src/lib/api.ts`, `frontend/src/components/ChequesTab.tsx`,
   `frontend/src/pages/ChequeLedgerContent.tsx`.
 
+### 2026-09-22 — INCIDENT: migration 037 broke every cheque deposit for the client the day it shipped
+- **What:** hours after v1.6.7 shipped, the client hit "Internal error" on a plain, non-split cheque
+  deposit — not the split-bank feature at all, EVERY deposit was broken. Root cause: migration 037's
+  new `CK_cheque_allocations_target` constraint was added as trusted (validates existing rows), and
+  it required `bank_id IS NOT NULL` for every DEPOSIT allocation. The backfill step that sets
+  `bank_id` from each allocation's cheque only fills rows where the cheque's OWN `bank_id` is also
+  non-null — real production data had at least one older DEPOSIT allocation whose cheque never had a
+  `bank_id` set (root cause of *that* not traced; treat production data as always messier than any
+  dev/test DB). That left one row's `bank_id` NULL after backfill, the CHECK-ADD then failed
+  validating it, the whole migration transaction rolled back, `cheque_allocations.bank_id` never
+  actually got created on the client's DB — while the already-downloaded new app code unconditionally
+  wrote `bank_id` into every `INSERT`, so literally every deposit failed with SQL 207 ("Invalid
+  column name 'bank_id'"), sanitized to a bare "Internal error" by `wrap.js`. A later-numbered
+  migration could NOT have fixed this: `migrate()` throws out of its whole loop on the first failure,
+  so 037 failing on every retry would have permanently blocked 038+ from ever running too — the fix
+  had to go into 037 itself.
+- **Fix:** both `ADD CONSTRAINT` statements in migration 037 (the FK and the CHECK) now use `WITH
+  NOCHECK` — the constraint is still created and still fully enforced on every row inserted or
+  updated from that point on (confirmed: a fresh invalid INSERT is still rejected), it just doesn't
+  retroactively validate rows that existed before the migration ran. Reproduced the exact failure
+  first (reverted the test DB to pre-037, manually inserted a DEPOSIT allocation with a NULL-bank_id
+  cheque exactly like the suspected production shape, re-ran the unmodified migration, got the
+  identical SQL 207 chain), then confirmed the `WITH NOCHECK` version applies cleanly over that same
+  broken data while still protecting all new writes. Full suite still 21/21 after.
+- **Lesson for future migrations:** any `ADD CONSTRAINT` on a table with real production history
+  should default to `WITH NOCHECK` unless there's a specific reason to require the whole table to
+  already comply — a dev/test DB's data can never be trusted to represent the shape of years of real
+  production data, and a strict constraint add is an all-or-nothing gate that can permanently block
+  every later migration behind it, not just fail gracefully.
+- **Files:** `backend/src/db/migrations/037_cheque_allocation_bank_split.sql` (edited in place — see
+  note above on why a later migration couldn't substitute).
+
 ---
 
 ## Online-payment counter-party narration + toolbar/New-button consistency pass
