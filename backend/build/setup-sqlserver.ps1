@@ -209,6 +209,16 @@ try {
     Write-Log "WARNING: TCP registry key missing under $mssqlPath - skipped protocol config"
   }
 
+  # Force Automatic startup on EVERY run, not just a fresh install (which already gets this via
+  # setup's own /SQLSVCSTARTUPTYPE=Automatic argument above — this covers the repair path too,
+  # which never touched it before). Without this, a service whose startup type got flipped to
+  # Manual (or Disabled) by a Windows Update, a conflicting install, or manual tinkering restarts
+  # fine right now but goes right back to not starting on the client's next reboot — the same
+  # ESOCKET outage recurring for a reason this script silently didn't fix. Set BEFORE
+  # Restart-Service: a Disabled service can't be restarted at all until its start mode changes.
+  Write-Log "forcing service $($inst.Service) to Automatic startup ..."
+  Set-Service -Name $inst.Service -StartupType Automatic
+
   Write-Log "restarting service $($inst.Service) ..."
   Restart-Service -Name $inst.Service -Force
   Start-Sleep -Seconds 5   # service reports Running before the engine accepts logins
