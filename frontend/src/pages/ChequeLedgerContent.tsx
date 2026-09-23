@@ -102,7 +102,12 @@ function issuedEvents(e: IssuedChequeRow): LedgerEvent[] {
     key: `issued-${e.expense_id}-issued`,
     chequeType: 'Issued',
     chequeNo: e.issued_cheque_no || '-',
-    date: toDateInputValue(e.issued_cheque_date || e.expense_date),
+    // The date of the ISSUED event is when the cheque was written (the expense's own date), not
+    // when it falls due — a post-dated cheque was dated into the future and so fell outside the
+    // ledger's own From/To range (which ends today by default), making it invisible the day it
+    // was issued (per the user, 2026-09-23: cheque 989080 was "not there"). The due date still
+    // shows in its own column below. Mirrors receivedEvents(), which dates on the received date.
+    date: toDateInputValue(e.expense_date || e.issued_cheque_date),
     dueDate: e.issued_cheque_date,
     eventType: 'Issued',
     party: e.ba_name || '-',

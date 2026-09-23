@@ -156,7 +156,13 @@ async function ledgerRows(filters = {}) {
   const result = await query(
     `SELECT
        le.entry_id, le.entry_date, le.source_type, le.source_id, le.debit, le.credit,
-       le.pairs, le.narration,
+       le.pairs, le.narration, le.ba_id,
+       -- Direct Settlement: the ledger line has to say what the settlement WAS — who it was with,
+       -- how it was paid, and any remarks (per the user, 2026-09-22: "Settlement #1" said nothing).
+       st.from_ba_id AS st_from_ba_id, st.to_ba_id AS st_to_ba_id,
+       st_from.name AS st_from_name, st_to.name AS st_to_name,
+       st.payment_mode AS st_payment_mode, st.cheque_no AS st_cheque_no,
+       st.cheque_date AS st_cheque_date, st.remarks AS st_remarks,
        sb.bill_id AS sb_inv_no, sb.bill_no AS sb_bill_no,
        -- The number users actually know each document by (2026-09-18): ledgers showed internal ids
        -- ("Sale bill #5026") that SQL Server's identity cache had pushed far past the System No.
@@ -235,6 +241,9 @@ async function ledgerRows(filters = {}) {
      LEFT JOIN dbo.purchases pu     ON le.source_type = 'PURCHASE'        AND pu.purchase_id = le.source_id
      LEFT JOIN dbo.purchase_returns pr ON le.source_type = 'PURCHASE_RETURN' AND pr.return_id = le.source_id
      LEFT JOIN dbo.journal_vouchers jv ON le.source_type = 'JOURNAL_VOUCHER' AND jv.jv_id = le.source_id
+     LEFT JOIN dbo.settlements st   ON le.source_type = 'SETTLEMENT'      AND st.settlement_id = le.source_id
+     LEFT JOIN dbo.business_accounts st_from ON st_from.ba_id = st.from_ba_id
+     LEFT JOIN dbo.business_accounts st_to   ON st_to.ba_id   = st.to_ba_id
      LEFT JOIN dbo.cheque_allocations cal ON le.source_type = 'CHEQUE_ALLOCATION' AND cal.allocation_id = le.source_id
      LEFT JOIN dbo.receipts cal_rc  ON cal_rc.receipt_id = cal.receipt_id
      LEFT JOIN dbo.cheques cal_ch   ON cal_ch.cheque_id = cal_rc.cheque_id

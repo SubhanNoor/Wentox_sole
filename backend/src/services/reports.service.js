@@ -231,10 +231,24 @@ function formatLedgerRow(r, viewedBaId) {
     // The stored narration already names the other side ("Settled directly to/by X") — that is the
     // whole point of the document, so it wins over the user's free-text remarks rather than the
     // usual remarks-first order. Remarks are appended when present.
-    case 'SETTLEMENT':
-      // The stored narration names the other party ("Settled directly by X") — dropped (2026-09-18).
-      type = 'Direct Settlement'; narration = `Settlement #${r.source_id}`;
+    case 'SETTLEMENT': {
+      // "Settlement #1" told the reader nothing (per the user, 2026-09-22). A direct settlement is
+      // one party paying another on our behalf, so the line has to say WHICH way it went, WITH
+      // WHOM, HOW it was paid (cheque number and due date included) and any remarks typed on it.
+      // The other party is the substance of the document here, not the "counter account name"
+      // dropped from payment rows on 2026-09-18.
+      type = 'Direct Settlement';
+      const paidOut = r.ba_id != null && r.st_from_ba_id === r.ba_id;
+      const other = paidOut ? r.st_to_name : r.st_from_name;
+      const mode = r.st_payment_mode === 'CHEQUE'
+        ? paymentNarration('Cheque', r.st_cheque_no, r.st_cheque_date)
+        : (PAYMENT_MODE_LABELS[r.st_payment_mode] || null);
+      const parts = [other ? `Settled ${paidOut ? 'to' : 'by'} ${other}` : `Settlement #${r.source_id}`];
+      if (mode) parts.push(mode);
+      if (r.st_remarks) parts.push(r.st_remarks);
+      narration = parts.join(' — ');
       break;
+    }
     // The stored narration already carries the reason and the other side, so it stands as-is —
     // showing a bare "Journal Voucher" would hide exactly the thing a JV row needs to explain.
     case 'JOURNAL_VOUCHER':

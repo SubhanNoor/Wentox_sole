@@ -3,9 +3,139 @@ const config = require('../config');
 
 let poolPromise = null;
 
+// ── Connection resilience (2026-09-23) ───────────────────────────────────────────────────────
+// "Internal error (ConnectionError · ESOCKET)" kept coming back, most often at login. Three
+// separate faults, all here:
+//
+//   1. A FAILED first connect was cached forever. `poolPromise` held the rejected promise, so every
+//      later call got the same failure until the app was restarted. Logging in right after the PC
+//      boots hits this constantly: Electron starts before the SQL Server service finishes starting,
+//      the first connect fails, and the app is then permanently broken for that session.
+//   2. A DROPPED connection was never recycled. A socket idled out by Windows/the network stayed in
+//      the pool and the next query died on it.
+//   3. No retry anywhere, so any single blip surfaced as a hard error to the user.
+//
+// Now: a failed connect is never cached, connecting retries with backoff (covers a service still
+// starting), a pool that errors is discarded so the next call reconnects, and a query that fails on
+// a dead connection is retried once on a fresh pool.
+
+const CONNECT_ATTEMPTS = 5;
+const CONNECT_BACKOFF_MS = [500, 1000, 2000, 4000, 8000];
+
+// Faults that mean "the connection is gone", not "your SQL is wrong" — only these are retried.
+const TRANSIENT_CODES = new Set(['ESOCKET', 'ECONNCLOSED', 'ENOTOPEN', 'ETIMEOUT', 'ENOCONN']);
+function isTransientConnectionError(err) {
+  if (!err) return false;
+  if (TRANSIENT_CODES.has(err.code)) return true;
+  return /connection is closed|connection lost|socket hang up|not connected|closed the connection/i
+    .test(err.message || '');
+}
+
+const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+async function connectWithRetry() {
+  let lastError;
+  for (let attempt = 0; attempt < CONNECT_ATTEMPTS; attempt += 1) {
+    try {
+      const pool = await new sql.ConnectionPool(config.db).connect();
+      // A pool-level error (server restarted, cable pulled) must not leave a dead pool cached.
+      pool.on('error', (err) => {
+        console.error('SQL pool error — dropping the pool so the next call reconnects:', err.message);
+        if (poolPromise) { poolPromise = null; pool.close().catch(() => {}); }
+      });
+      return pool;
+    } catch (err) {
+      lastError = err;
+      if (!isTransientConnectionError(err) || attempt === CONNECT_ATTEMPTS - 1) break;
+      console.error(`SQL connect attempt ${attempt + 1} failed (${err.code || err.message}) — retrying…`);
+      await delay(CONNECT_BACKOFF_MS[attempt]);
+    }
+  }
+  throw lastError;
+}
+
 function getPool() {
-  if (!poolPromise) poolPromise = new sql.ConnectionPool(config.db).connect();
+  if (!poolPromise) {
+    poolPromise = connectWithRetry().catch((err) => {
+      // Never cache a rejection — the next caller gets a fresh attempt (fault 1 above).
+      poolPromise = null;
+      throw err;
+    });
+  }
   return poolPromise;
+}
+
+// ── Keep-alive heartbeat ─────────────────────────────────────────────────────────────────────
+// Reconnecting when a user hits a dead connection still costs that user a failed action. The
+// heartbeat instead proves the connection every 20s and repairs it in the background, so by the
+// time anyone presses Login the pool is already good. TCP keep-alive (tedious, 30s) stops an idle
+// socket being dropped in the first place; this catches everything it cannot — the SQL Server
+// service restarting, a laptop waking from sleep, a network that dropped while the app sat idle.
+const HEARTBEAT_INTERVAL_MS = 20000;
+let heartbeatTimer = null;
+
+async function pingDatabase() {
+  const pool = await getPool();
+  await pool.request().query('SELECT 1 AS ok');
+}
+
+// Connects (retrying) and confirms the connection actually answers. Called once at startup so the
+// app waits for a still-starting SQL Server instead of failing the first login against it.
+async function ensureConnected() {
+  return withConnectionRetry(pingDatabase);
+}
+
+function startHeartbeat(intervalMs = HEARTBEAT_INTERVAL_MS) {
+  if (heartbeatTimer) return;
+  heartbeatTimer = setInterval(async () => {
+    try {
+      await pingDatabase();
+    } catch (err) {
+      console.error('Heartbeat: database did not answer — reconnecting:', err.code || err.message);
+      await discardPool();
+      // Re-open straight away rather than waiting for the next user action to pay for it.
+      try {
+        await ensureConnected();
+        console.error('Heartbeat: reconnected.');
+      } catch (reconnectErr) {
+        console.error('Heartbeat: reconnect failed, will try again next tick:', reconnectErr.code || reconnectErr.message);
+      }
+    }
+  }, intervalMs);
+  // Never hold the process open just for the heartbeat.
+  if (heartbeatTimer.unref) heartbeatTimer.unref();
+}
+
+function stopHeartbeat() {
+  if (!heartbeatTimer) return;
+  clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
+}
+
+// Throws away the current pool so the next getPool() dials a new connection.
+async function discardPool() {
+  const promise = poolPromise;
+  poolPromise = null;
+  if (!promise) return;
+  try {
+    const pool = await promise;
+    await pool.close();
+  } catch {
+    // Already broken — nothing to close.
+  }
+}
+
+// Runs `fn`, and on a dead-connection failure reconnects and runs it exactly once more. Only for
+// work that is safe to repeat: a single query, or a transaction that never got as far as begin().
+async function withConnectionRetry(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (!isTransientConnectionError(err)) throw err;
+    console.error('SQL connection lost — reconnecting and retrying once:', err.code || err.message);
+    await discardPool();
+    return fn();
+  }
 }
 
 // Closes the app's own pooled connections and forgets the singleton, so the NEXT getPool() call
@@ -52,18 +182,26 @@ function isDirty() {
 // query('SELECT * FROM dbo.cities WHERE city_id = @id', { id: { type: sql.Int, value: 5 } })
 // Each value may be a plain value (type inferred by mssql) or { type, value } for an explicit sql.* type.
 async function query(text, params = {}) {
-  const pool = await getPool();
-  const request = pool.request();
-  applyParams(request, params);
-  return request.query(text);
+  return withConnectionRetry(async () => {
+    const pool = await getPool();
+    const request = pool.request();
+    applyParams(request, params);
+    return request.query(text);
+  });
 }
 
 // Runs fn(request) inside a transaction; commits on success, rolls back on any thrown error.
 // All multi-write operations (bill + items, post/unpost) must use this.
 async function withTransaction(fn) {
-  const pool = await getPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin();
+  // Retry covers ONLY getting a connection and starting the transaction — never the body. Once
+  // begin() succeeds, work may have been written, and re-running it could post the same document
+  // twice; a failure from there on is reported as-is.
+  const transaction = await withConnectionRetry(async () => {
+    const pool = await getPool();
+    const tx = new sql.Transaction(pool);
+    await tx.begin();
+    return tx;
+  });
   try {
     const result = await fn(transaction);
     await transaction.commit();
@@ -141,5 +279,6 @@ function applyParams(request, params) {
 
 module.exports = {
   sql, getPool, closePool, query, withTransaction, requestWithParams, nextSequenceValue, acquireAppLock,
+  isTransientConnectionError, ensureConnected, startHeartbeat, stopHeartbeat,
   consumeDirty, isDirty,
 };

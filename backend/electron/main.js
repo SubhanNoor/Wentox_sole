@@ -2,6 +2,7 @@ const { app, BrowserWindow, Menu } = require('electron');
 const registerIpcHandlers = require('../src/ipc');
 const alertsService = require('../src/services/alerts.service');
 const backupService = require('../src/services/backup.service');
+const { ensureConnected, startHeartbeat } = require('../src/db/pool');
 const migrate = require('../src/db/migrate');
 const seed = require('../src/db/seeds/run');
 const { createAppWindow } = require('./windowManager');
@@ -65,6 +66,19 @@ app.whenReady().then(async () => {
   // schema.sql creates, and schema.sql always applies first, so it is worth attempting even when a
   // later migration failed: a database missing one migration is recoverable, one with no users is
   // not.
+  // Wait for the database BEFORE anything else touches it (2026-09-23, per the user: logging in
+  // took "5-6 attempts"). On a PC that has just booted, SQL Server is often still starting when
+  // Electron is already up; ensureConnected() retries with backoff until it answers, so migrate(),
+  // seed() and the first login all meet a live connection instead of racing the service. The
+  // heartbeat then keeps that connection proven every 20s and repairs it in the background, so a
+  // dropped connection is fixed before anyone presses a button rather than after.
+  try {
+    await ensureConnected();
+  } catch (err) {
+    console.error('Startup: SQL Server did not answer yet — the heartbeat will keep trying:', err.code || err.message);
+  }
+  startHeartbeat();
+
   try {
     await migrate();
   } catch (err) {
