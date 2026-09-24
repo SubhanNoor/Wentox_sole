@@ -11,7 +11,7 @@ const chartAccountsRepository = require('../repositories/chartAccounts.repositor
 const deletedNumbersRepository = require('../repositories/deletedDocumentNumbers.repository');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
-const { buildLines, validateBalance } = require('./journalVouchers.math');
+const { buildLines, validatePostable } = require('./journalVouchers.math');
 const CODES = require('../constants/reservedAccounts');
 
 // The frontend's smart default: an untouched second line auto-fills to this account to balance
@@ -35,7 +35,13 @@ function validateHeader(payload) {
 async function resolveLines(payload, session) {
   validateHeader(payload);
   const lines = buildLines(payload.lines);
-  validateBalance(lines);
+  // NO validatePostable here (2026-09-24, per the user: "we can press done button and make it
+  // unposted without balancing the debit/credit amount although it will not be posted until that
+  // amount is balanced"). Saving parks a DRAFT; nothing has reached the ledger yet, so an
+  // unbalanced one is harmless and is exactly the half-finished voucher a user wants to come back
+  // to. post() below is the gate that still enforces it, which is the point at which the money
+  // actually moves. buildLines' own per-line checks stay — those mirror CK_jvl_one_side/
+  // CK_jvl_nonzero, so a malformed line would be rejected by the table regardless.
 
   for (const line of lines) {
     await businessAccountsService.getById(line.ba_id); // 404s if it doesn't exist
@@ -119,8 +125,9 @@ async function post(jvId, userId, session) {
   for (const line of jv.lines) {
     await businessAccountsService.assertAccessible(line.ba_id, session);
   }
-  // Defensive re-check: the lines were valid when saved, but re-validate before the money moves.
-  validateBalance(jv.lines);
+  // The gate that create/update deliberately skip: a draft may be single-line or out of
+  // balance, but nothing reaches the ledger until it is neither (2026-09-24).
+  validatePostable(jv.lines);
 
   await withTransaction(async (transaction) => {
     await repository.insertLedgerEntries(transaction, {

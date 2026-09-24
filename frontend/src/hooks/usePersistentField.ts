@@ -125,18 +125,34 @@ function isFilled(v: unknown): boolean {
  *     the page's own persisted fields that count as that (party, bill no., lines…). Leftover state
  *     (a record that was merely being viewed, defaults like date/store, a bare New click) does not.
  *
+ * `emptiedEditCountsAsWork` (opt-in, JV only for now) covers the one case `workKeys` alone cannot
+ * see: a SAVED document opened for editing whose work fields the user has since EMPTIED — deleting
+ * every line, say. `isFilled([])` is false, exactly as it is for a page nobody has touched, so the
+ * draft read as "nothing here", the auto-open below was not suppressed, and it re-fetched the saved
+ * copy from the database — putting every deleted line back. Reported by the user (2026-09-24):
+ * "when i delete entries row by row and delete all entries and close window and open again that
+ * deleted entries are still there". `mode === 'edit'` is the signal, since it only ever means an
+ * already-saved record is open and unlocked; a blank 'new' form has nothing to lose either way.
+ *
  * `hasRealDraftAtMount` gates the page's auto-open effect. `hasClickedNew` gates the No. preview
  * and the lock; the page's own handleNew() resets it to false, and only a New button/tab calls
  * `markNewClicked()` — which also records the click in the draft store so it survives a page
  * switch. That write is queued on a 0ms timeout because handleNew() has just cleared the draft,
  * and write-through stays suppressed until the clear's own 0ms timeout releases (queued first).
  */
-export function useNewDocGate(pageKey: string, workKeys: string[]) {
+export function useNewDocGate(
+  pageKey: string,
+  workKeys: string[],
+  { emptiedEditCountsAsWork = false }: { emptiedEditCountsAsWork?: boolean } = {},
+) {
   const { state, dispatch } = useApp();
   const [hasRealDraftAtMount] = useState(() => {
     const d = state.pageDrafts[pageKey] as Record<string, unknown> | undefined;
     if (!d || d.mode === 'view') return false;
-    return workKeys.some(k => isFilled(d[k]));
+    if (workKeys.some(k => isFilled(d[k]))) return true;
+    // Every work field is empty. That is either "never touched" or "the user just emptied it" —
+    // see the note above. Only an opted-in page treats the latter as work worth keeping.
+    return emptiedEditCountsAsWork && d.mode === 'edit';
   });
   const [hasClickedNew, setHasClickedNew] = useState(() => {
     const d = state.pageDrafts[pageKey] as Record<string, unknown> | undefined;

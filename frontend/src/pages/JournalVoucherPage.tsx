@@ -121,7 +121,7 @@ export default function JournalVoucherPage() {
     // `handleNew()` ever resets `status` to 'DRAFT', so it can never be true while there's genuine
     // unsaved new-document work to protect.
     refreshUnposted().then(data => {
-      if (data && data.length === 0 && isPosted) handleNew();
+      if (data && data.length === 0 && isPosted) resetToNewVoucher();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshUnposted]);
@@ -145,7 +145,7 @@ export default function JournalVoucherPage() {
     // whatever was on screen is done either way — either it just posted (so showing it as if
     // still pending would be stale) or it wasn't part of this run and stays saved regardless.
     const workingDate = date;
-    handleNew();
+    resetToNewVoucher();
     setDate(workingDate);
     focusNewButton();
   };
@@ -166,8 +166,10 @@ export default function JournalVoucherPage() {
   // The posted/unposted/System No. rule (per the user, 2026-09-18) — see useNewDocGate for all of
   // it. hasPageDraftAtMount gates the auto-open further down (only genuine unsaved typing skips
   // it); hasClickedNew gates the No. preview and the awaitingNew lock; only New calls markNewClicked.
+  // emptiedEditCountsAsWork: deleting every line off a saved voucher and closing the window must
+  // not silently resurrect them on reopen (2026-09-24) — see useNewDocGate's own note.
   const { hasRealDraftAtMount: hasPageDraftAtMount, hasClickedNew, setHasClickedNew, markNewClicked } =
-    useNewDocGate('journal-voucher', ['reason', 'lines']);
+    useNewDocGate('journal-voucher', ['reason', 'lines'], { emptiedEditCountsAsWork: true });
   const [jvId, setJvId] = usePersistentField<number | null>('journal-voucher', 'jvId', null);
   // The system-generated Number (JV-01, changes-14-09-26.md) — distinct from jvId (the internal
   // identity used for API calls). Persisted alongside jvId/status/mode for the same reason.
@@ -183,7 +185,23 @@ export default function JournalVoucherPage() {
   // Detail half (entry strip + grid) shut even when that's what had been unlocked and typed
   // into — reported by the user (2026-09-04) as "all the buttons are disable except New".
   const [editScope, setEditScope] = usePersistentField<'master' | 'detail'>('journal-voucher', 'editScope', 'master');
-  // Keeps the radios pointing at whichever half is being worked in — see the hook.
+  // WHICH half is actually unlocked right now — as opposed to `editScope` above, which is only
+  // which half New/Edit will ACT on. The two were one thing until 2026-09-24, when the user split
+  // New's and Edit's jobs apart (see the flow note on handleNew):
+  //
+  //   - the radio alone must never unlock anything. It follows the user's clicks
+  //     (useAutoEditScope), so deriving the lock from it meant a stray click in the header
+  //     unlocked the header — exactly what "adding a line leaves the header locked" forbids.
+  //   - so unlocking is an explicit act: only the toolbar's Edit (either half) or New (detail,
+  //     to append a line) ever sets this, and it is cleared whenever the document is re-opened,
+  //     posted, unposted or reset.
+  //
+  // Only meaningful while `mode === 'edit'` — a 'new' document has both halves open, a 'view' one
+  // has neither. Persisted for the same reason mode/jvId/editScope are: a page switch and back
+  // used to reset it, locking the half that was actually being typed into.
+  const [editTarget, setEditTarget] = usePersistentField<'master' | 'detail' | null>('journal-voucher', 'editTarget', null);
+  // Keeps the radios pointing at whichever half is being worked in — see the hook. Note this moves
+  // the RADIO only; it deliberately cannot unlock a half (that's `editTarget`, above).
   const autoEditScope = useAutoEditScope(setEditScope);
   // A New Journal Voucher's own in-progress fields persist across switching pages AND an app
   // restart (usePersistentField — see src/hooks/usePersistentField.ts). Deliberately NOT applied
@@ -202,13 +220,14 @@ export default function JournalVoucherPage() {
 
   const isViewMode = mode === 'view';
   const isPosted = status === 'CONFIRMED';
-  // Derived from editScope — applied to every master/detail field's `disabled` below (2026-08-31).
+  // Derived from editTarget — applied to every master/detail field's `disabled` below (2026-08-31;
+  // switched from editScope to editTarget 2026-09-24, see editTarget's own comment above).
   // A blank voucher reached any way other than New (first open with nothing unposted, after Post,
   // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
   const awaitingNew = mode === 'new' && voucherNo == null && !hasClickedNew;
   useEffect(() => { if (awaitingNew) focusNewButton(); }, [awaitingNew]);
-  const masterLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
-  const detailLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
+  const masterLocked = awaitingNew || (mode === 'edit' && editTarget !== 'master');
+  const detailLocked = awaitingNew || (mode === 'edit' && editTarget !== 'detail');
 
   const accountOptions = useMemo(
     // Business accounts show their PARENT chart account inline, appended to the same field with an em-dash rather than in a field of its own (2026-08-30, per the user). Matches how ReceiptsPage's own account picker already reads. `ac_name` is joined in by businessAccounts.repository.js's list().
@@ -222,20 +241,12 @@ export default function JournalVoucherPage() {
     [accounts]
   );
 
-  // With Detail scope selected on an already-open, unposted voucher, New means "add another line
-  // to THIS voucher" — the exact reason Un Post now lands straight in edit mode (see handleUnpost's
-  // own comment) — not "abandon it and start over." Only Master scope (or no voucher open yet)
-  // gets the full reset below. Same reset shape handleCommitLine already uses after committing a
-  // line, since the outcome is identical: an empty, focused entry strip, voucher untouched.
-  const handleNew = () => {
-    if (mode === 'edit' && editScope === 'detail' && jvId != null) {
-      setEntry(emptyEntry());
-      setEditingIndex(null);
-      setSelectedIndex(null);
-      setErrorMsg('');
-      requestAnimationFrame(() => entryAccountTriggerRef.current?.focus());
-      return;
-    }
+  // Blanks the screen back to an untouched new voucher. Split out of handleNew() (2026-09-24)
+  // because handleNew() is no longer unconditionally a reset — it adds a LINE under Detail scope
+  // (below) — while Post/Post All/Delete/Unposted-with-nothing-there still mean "blank the form"
+  // and nothing else. They call this directly; routing them through handleNew() would have them
+  // silently append a line to the voucher that was just posted or deleted instead.
+  const resetToNewVoucher = () => {
     setMode('new'); setHasClickedNew(false); setJvId(null); setVoucherNo(null); setStatus('DRAFT');
     setDate(getTodayDate()); setReason('');
     setLines([]);
@@ -245,11 +256,50 @@ export default function JournalVoucherPage() {
     setLastEnteredIndex(null);
     setErrorMsg('');
     setEditScope('master');
+    setEditTarget(null);
     clearJournalVoucherDraft();
     // Explicit focus, not just a mode-change effect: clicking New while already on a blank/new JV
     // (mode is already 'new') wouldn't otherwise re-trigger any such effect, so focus would stay
     // wherever it was (same fix as SaleBillPage/SaleReturnPage's own handleNew).
     requestAnimationFrame(() => firstFieldRef.current?.focus());
+  };
+
+  // New's two jobs, picked by the Master/Detail radio (per the user, 2026-09-24):
+  //
+  //   Detail + an open, unposted voucher -> "add another line to THIS voucher"
+  //   Master (or nothing open yet)       -> "start a whole new voucher"
+  //
+  // The Detail branch used to also require `mode === 'edit'`, i.e. the toolbar's Edit had to be
+  // pressed before a line could be added — a press that had nothing to do with adding. Adding is
+  // now Edit-free: New alone does it from view mode, unlocking the detail half itself
+  // (`setEditTarget('detail')`) and deliberately leaving the header locked, since the user never
+  // asked to edit the header. Edit keeps only its real job — changing what is already there.
+  //
+  // `!isPosted` is the guard that replaces the old `mode === 'edit'`: a posted voucher takes no
+  // new lines, it has to be unposted first.
+  const handleNew = () => {
+    // "Is there a voucher on screen to add a line TO?" — a saved one (jvId), or an unsaved new one
+    // the user has already started typing (lines). The guard was `jvId != null` alone until
+    // 2026-09-24, which quietly made Detail+New DESTRUCTIVE while building a new voucher: three
+    // lines typed, press New for the fourth, and because nothing was saved yet it fell through to
+    // resetToNewVoucher() and wiped all three. Reported as "when i set radio button to detail and
+    // click new it creates a new voucher instead adding row".
+    const voucherOnScreen = !awaitingNew && !isPosted && (jvId != null || lines.length > 0);
+    if (editScope === 'detail' && voucherOnScreen) {
+      // Only a SAVED voucher needs unlocking; an unsaved new one already has both halves open, and
+      // flipping it to 'edit' would lock its header mid-entry (same reasoning as beginDetailEdit).
+      if (jvId != null) {
+        setMode('edit');
+        setEditTarget('detail');
+      }
+      setEntry(emptyEntry());
+      setEditingIndex(null);
+      setSelectedIndex(null);
+      setErrorMsg('');
+      requestAnimationFrame(() => entryAccountTriggerRef.current?.focus());
+      return;
+    }
+    resetToNewVoucher();
   };
 
   // ── Entry strip (ref-pic jv2.0's own bound-record pattern, 2026-08-26 per the user: "we select
@@ -267,10 +317,16 @@ export default function JournalVoucherPage() {
   const [entry, setEntry] = usePersistentField<EntryLine>('journal-voucher', 'entry', emptyEntry());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   // G-08 (changes-14-09-26.md, 2026-09-15): a click on a detail row must produce no visible change
-  // at all — no edit load, no highlight. It only records which row Delete/Edit Row will act on
-  // internally; `editingIndex` (the actually-loaded-for-editing row, and the only thing that
-  // drives the blue highlight) is set exclusively by the Edit Row button now, never by a row click
-  // directly. Cleared whenever `editingIndex` takes over so the two never point at different rows.
+  // at all — no edit load, no highlight. The no-edit-load half still holds: a row click NEVER
+  // readies a line for editing, it only records which row Delete/Edit Row will act on, and
+  // `editingIndex` (the actually-loaded-for-editing row, which owns the blue highlight) is set
+  // exclusively by the Edit Row/Edit buttons, never by a row click directly. Cleared whenever
+  // `editingIndex` takes over so the two never point at different rows.
+  //
+  // The no-highlight half is superseded (per the user, 2026-09-24): a clicked row now shows a
+  // neutral grey background, distinct from the editing blue, so the selection is visible. Without
+  // it there was no feedback that a row had been picked, and no clue why the toolbar's Edit
+  // Row/Delete had come alive. See the grid's own row className below for all three row states.
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   // G-05 (changes-14-09-26.md, 2026-09-15): the row most recently ADDED or UPDATED via the entry
   // strip — a pure position indicator (the ▶ gutter marker below), never a selection. Deliberately
@@ -361,31 +417,69 @@ export default function JournalVoucherPage() {
     const row = lines[idx];
     setEntry({ baId: row.baId, baSearchText: row.baSearchText, amount: debitCreditToAmount(row.debit, row.credit), narration: row.narration });
     setEditingIndex(idx);
-    setSelectedIndex(null);
+    // The selection FOLLOWS the row into editing rather than being cleared (2026-09-24). Clearing
+    // it meant that straight after pressing Edit there was no selected row at all, so the toolbar's
+    // Edit went back to refusing with "click the line you want to edit first" on the very line
+    // already sitting in the strip. The row reads as blue either way — the editing highlight wins
+    // over the selected one in the grid below.
+    setSelectedIndex(idx);
     requestAnimationFrame(() => entryAccountTriggerRef.current?.focus());
   };
 
-  // G-08: now the Edit Row toolbar button's handler, not the row's own onClick — a row click just
-  // records `selectedIndex` (see the grid below), and this only runs once the user presses Edit Row.
+  // Shared by every "I'm changing this voucher's lines" entry point — the row's Edit and Delete
+  // buttons, Edit Row, and the toolbar's Edit under Detail scope. Unlocks the detail half, which
+  // is Edit's whole job now (2026-09-24).
+  //
+  // An unsaved NEW voucher is the one exception: both halves are already open and there is no
+  // saved copy to edit against, so there is nothing to unlock. Flipping it to 'edit' would lock
+  // the header mid-entry on a voucher the user is still typing from scratch.
+  const beginDetailEdit = () => {
+    if (mode === 'new' && jvId == null) return;
+    setMode('edit');
+    setEditTarget('detail');
+  };
+
+  // THE one "edit this existing line" path. All three ways in are the same job, per the user
+  // (2026-09-24): the toolbar's Edit with Detail scope selected, the toolbar's Edit Row, and the
+  // row's own edit button in the grid. All three land here, all three are kept.
+  //
+  // Unlocking the detail half is this function's own doing (`setEditTarget('detail')`) — Edit IS
+  // the unlock now, so there is no longer a prior mode to require or a scope to check first. The
+  // old `mode === 'edit' && editScope !== 'detail'` guard is gone with it: the radio only picks
+  // what the toolbar's Edit acts on, and the row's own button names its target outright.
   const handleRowClick = (idx: number) => {
-    // Detail locked (scope is Master while already editing) — grid rows stay inert, per the
-    // Master/Detail edit-scope split (2026-08-31). New/view-mode behavior is untouched.
-    if (mode === 'edit' && editScope !== 'detail') return;
-    // JV-04 (changes-14-09-26.md, 2026-09-15): a posted voucher must never enter edit mode from a
-    // row click — the toolbar's own Edit button is already disabled once posted
-    // (`disabled={!isViewMode || jvId == null || isPosted}`), but this bypassed that guard, so
-    // clicking a row on a POSTED JV would flip mode to 'edit', which in turn enabled the Delete
-    // and Save buttons. Deleting a row then "worked" visually but Save always failed with
+    // JV-04 (changes-14-09-26.md, 2026-09-15): a posted voucher must never enter edit mode from
+    // here. Before the guard existed, editing a row on a POSTED JV flipped mode to 'edit', which
+    // enabled Delete and Save; deleting a row then "worked" visually but Save always failed with
     // POSTED_LOCK ("Unpost the Journal Voucher before editing") — the reported broken delete.
-    if (isViewMode) {
-      if (isPosted) return;
-      setMode('edit');
-    }
+    if (isPosted) return;
+    beginDetailEdit();
     loadLineIntoEntry(idx);
   };
 
   const handleEditSelectedRow = () => {
     if (selectedIndex != null) handleRowClick(selectedIndex);
+  };
+
+  // The toolbar's Edit — "change what is already there", the counterpart to New's "add something"
+  // (per the user, 2026-09-24). The radio decides which half that means:
+  //   Master -> unlock the header fields (Date/Remarks) and nothing else
+  //   Detail -> edit the pointed-at line, identical to Edit Row / the row's own edit button
+  // Unlike before, this works from 'edit' mode too, not just 'view': since a click no longer
+  // unlocks a half, pressing Edit is the only way to move the unlock to the other half.
+  const handleEdit = () => {
+    if (jvId == null || isPosted) return;
+    if (editScope === 'detail') {
+      if (selectedIndex == null) {
+        fail('Click the line you want to edit first, then press Edit.');
+        return;
+      }
+      handleRowClick(selectedIndex);
+      return;
+    }
+    setMode('edit');
+    setEditTarget('master');
+    requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
 
   const removeLine = (idx: number) => {
@@ -430,26 +524,45 @@ export default function JournalVoucherPage() {
     return { totalDebit, totalCredit, difference: round2(totalDebit - totalCredit) };
   }, [lines]);
 
-  // Net Total must be exactly 0 before Save is even reachable — per the user: "the net total must
-  // be 0 if yes we can save it otherwise not".
+  // What it takes to SAVE — deliberately NOT balance (per the user, 2026-09-24: "we can press done
+  // button and make it unposted without balancing the debit/credit amount although it will not be
+  // posted until that amount is balanced"). This supersedes the earlier rule that Net Total had to
+  // be 0 before Save was reachable at all ("the net total must be 0 if yes we can save it
+  // otherwise not"): a half-typed voucher is a legitimate draft to come back to, and forcing it to
+  // balance before it could be parked meant losing the work or inventing a filler line.
+  //
+  // The structural rules still hold, because they are what the TABLE itself enforces
+  // (CK_jvl_one_side/CK_jvl_nonzero) — an unbalanced draft is storable, a malformed line is not.
   const isValid = useMemo(() => {
     if (awaitingNew) return false;
     if (!date) return false;
-    if (lines.length < 2) return false;
-    if (!lines.every(l => l.baId && ((Number(l.debit) || 0) > 0 || (Number(l.credit) || 0) > 0))) return false;
-    return totals.difference === 0;
-  }, [awaitingNew, date, lines, totals]);
+    // At least ONE line, not two (2026-09-24). Two was the old floor, and it contradicted the rule
+    // above: a single line is the most unbalanced a voucher can be, so refusing to save it while
+    // happily saving an unbalanced pair made no sense — it was the actual thing blocking Done in
+    // the user's report, not the balance check. Two lines is a POSTING rule now, with balance.
+    //
+    // Still one rather than zero: Save allocates the System No., and an empty voucher would burn a
+    // number on nothing (see pool.js's never-reuse-a-number invariant). To get rid of every line,
+    // delete the voucher itself.
+    if (lines.length < 1) return false;
+    return lines.every(l => l.baId && ((Number(l.debit) || 0) > 0 || (Number(l.credit) || 0) > 0));
+  }, [awaitingNew, date, lines]);
+
+  // What it takes to POST, on top of isValid — real double-entry: at least two lines, netting to
+  // zero. The ledger must never take a one-sided entry, so this gates Post and Save+Post.
+  // journalVouchers.service.js#post re-checks both server-side; this only keeps the buttons honest
+  // so the user isn't offered an action that will fail.
+  const isPostable = lines.length >= 2 && totals.difference === 0;
 
   const buildPayload = (): JournalVoucherCreateInput | null => {
     if (!date) { setErrorMsg('Please pick a date.'); return null; }
-    if (lines.length < 2) { setErrorMsg('A Journal Voucher needs at least 2 lines.'); return null; }
+    if (lines.length < 1) { setErrorMsg('Add at least one line before saving.'); return null; }
     if (!lines.every(l => l.baId)) { setErrorMsg('Every line needs an account.'); return null; }
     if (!lines.every(l => (Number(l.debit) || 0) > 0 || (Number(l.credit) || 0) > 0)) {
       setErrorMsg('Every line needs a debit or credit amount greater than 0.'); return null;
     }
-    if (totals.difference !== 0) {
-      setErrorMsg(`Net Total must be 0 — total debit (${totals.totalDebit}) must equal total credit (${totals.totalCredit}).`); return null;
-    }
+    // No balance check here: saving an out-of-balance voucher is allowed and leaves it unposted
+    // (2026-09-24). Post is where the two sides have to meet — see handlePost/isPostable.
     const payloadLines: JournalVoucherLineInput[] = lines.map(l => ({
       ba_id: Number(l.baId),
       debit: Number(l.debit) || 0,
@@ -480,7 +593,8 @@ export default function JournalVoucherPage() {
     setStatus(result.data.status);
     setErrorMsg('');
     flash('Journal Voucher saved — Post it to update every line\'s ledger.');
-    if (finalize) setMode('view');
+    // Done/Save-and-finish closes the document back to read-only, so the unlock goes with it.
+    if (finalize) { setMode('view'); setEditTarget(null); }
     clearJournalVoucherDraft();
     refresh();
     refreshUnposted();
@@ -496,7 +610,7 @@ export default function JournalVoucherPage() {
 
   // Cancel Edit — drops back to the saved copy, same as Purchase's own Cancel (2026-09-20).
   const handleCancelEdit = async () => {
-    if (jvId == null) { handleNew(); return; }
+    if (jvId == null) { resetToNewVoucher(); return; }
     await loadJv(jvId);
     setMode('view');
   };
@@ -512,9 +626,11 @@ export default function JournalVoucherPage() {
   // Posting finishes this JV and readies the form for the next one — same convention as Sale
   // Bill/Purchase's own "clear straight back to blank so the next can be typed immediately" (per
   // the user, 2026-08-26: "when I press the post... auto focus goes to the date alike... new
-  // bill"). Reuses handleNew() (which already focuses Date itself) rather than repeating its
-  // field list, then restores the working date — handleNew() snaps to today, and a run of JVs
-  // entered for an earlier date would otherwise reset on every one.
+  // bill"). Reuses resetToNewVoucher() (which already focuses Date itself) rather than repeating
+  // its field list, then restores the working date — the reset snaps to today, and a run of JVs
+  // entered for an earlier date would otherwise reset on every one. resetToNewVoucher(), NOT
+  // handleNew(): handleNew() with Detail scope selected would append a line to the voucher that
+  // was just posted instead of blanking the form (2026-09-24).
   // `idOverride` lets Save+Post post the voucher it has just saved, before the id state has
   // re-rendered (toolbar standardisation, 2026-09-20).
   const handlePost = async (idOverride?: number) => {
@@ -528,7 +644,7 @@ export default function JournalVoucherPage() {
     refreshNav();
     setBalanceRefreshKey(k => k + 1);
     const workingDate = date;
-    handleNew();
+    resetToNewVoucher();
     setDate(workingDate);
     focusNewButton();
   };
@@ -546,9 +662,14 @@ export default function JournalVoucherPage() {
     // It's a draft again now, so the window follows it back to the Unposted view (per the user,
     // 2026-08-30) rather than staying on Posted looking at a record that no longer belongs there.
     setBrowseFilter('unposted');
-    // Land on the editable screen straight away (toolbar standardisation, 2026-09-20) — adding a
-    // row to a just-unposted document is the whole reason for unposting it.
-    setMode('edit');
+    // Lands in VIEW mode (per the user, 2026-09-24). It used to drop straight into 'edit'
+    // (2026-09-20) because adding a row to a just-unposted document is the whole reason for
+    // unposting it — but back then adding a row REQUIRED edit mode. Now New adds one from view
+    // mode by itself, so Un Post no longer has to pre-unlock anything: unposting just unposts, and
+    // New/Edit then behave exactly as they do on any other unposted voucher. Un Post staying an
+    // unlock would make it the one action that bypasses Edit.
+    setMode('view');
+    setEditTarget(null);
   };
 
   // Listing rows only carry rolled-up totals (line_count/total_debit/total_credit), not the
@@ -576,6 +697,10 @@ export default function JournalVoucherPage() {
     setLastEnteredIndex(null);
     setErrorMsg('');
     setEditScope('master');
+    // Opening a record always opens it READ-ONLY — nothing is unlocked until Edit (or New, for a
+    // line) says so. Without this an editTarget left over from the previous voucher would carry
+    // across and silently unlock a half of the one just opened (2026-09-24).
+    setEditTarget(null);
     setMode('view');
   };
 
@@ -597,7 +722,7 @@ export default function JournalVoucherPage() {
     const res = await api.journalVouchers.remove(targetId, password);
     if (!res.ok) { fail('Failed to delete: ' + res.error.message); return; }
     flash('Journal Voucher deleted successfully.');
-    if (jvId === targetId) handleNew();
+    if (jvId === targetId) resetToNewVoucher();
     refresh();
     refreshUnposted();
     refreshNav();
@@ -705,7 +830,7 @@ export default function JournalVoucherPage() {
       const freshUnposted = await refreshUnposted();
       const latest = (freshUnposted ?? unpostedJvs).slice(-1)[0];
       if (latest) await loadJv(latest.jv_id);
-      else handleNew();
+      else resetToNewVoucher();
       focusNewButton();
     } else {
       const fresh = await refreshNav();
@@ -790,8 +915,12 @@ const nextJvNoPreview = useMemo(
 
   const tabBar = (
     <div className="flex gap-1.5" data-no-print>
+      {/* resetToNewVoucher(), not handleNew(): this tab is labelled "New Journal Voucher", so it
+          always means a whole new voucher. Routed through handleNew() it would instead append a
+          line whenever the Master/Detail radio happened to sit on Detail — the toolbar's New is
+          the dual-purpose one, this tab is not (2026-09-24). */}
       <button
-        onClick={() => { setActiveTab('entry'); handleNew(); markNewClicked(); }}
+        onClick={() => { setActiveTab('entry'); resetToNewVoucher(); markNewClicked(); }}
         className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
@@ -813,11 +942,6 @@ const nextJvNoPreview = useMemo(
     <AppLayout pageTitle="Journal Voucher" headerAction={tabBar}>
       <div className="mx-auto relative" style={{ maxWidth: 1200 }} {...autoEditScope}>
 
-        {/* Master/Detail edit-scope — which half of the document the toolbar's Edit button
-            unlocks (per the user, 2026-08-31). Two bare radios parked in the margin just left
-            of the toolbar's New button, outside the card: absolute, so the centre card never
-            moves, and behind no width gate, so no zoom level can hide them (per the user,
-            2026-09-03). */}
         <PasswordPromptModal
           isOpen={isPasswordModalOpen}
           onClose={() => { setIsPasswordModalOpen(false); pendingDeleteJvId.current = null; }}
@@ -892,16 +1016,22 @@ const nextJvNoPreview = useMemo(
               disabled: jvId == null || isPosted,
               title: 'Delete this whole voucher — every line on it goes too (asks for your password)',
             }}
-            editRow={{ onClick: handleEditSelectedRow, disabled: selectedIndex == null || editingIndex != null || (isViewMode && isPosted) || (mode === 'edit' && editScope !== 'detail'), title: 'Edit selected line' }}
+            editRow={{
+              onClick: handleEditSelectedRow,
+              // No `jvId == null` here, unlike the toolbar's Edit below: a line on an unsaved NEW
+              // voucher is still editable, it just has nothing to unlock (see handleRowClick).
+              // No `editingIndex != null` (2026-09-24): with row 1 in the strip you must still be
+              // able to click row 2 and press Edit Row to switch to it, which is the whole point of
+              // the selection staying live while editing.
+              disabled: selectedIndex == null || isPosted,
+              title: 'Edit selected line',
+            }}
             edit={{
-              onClick: () => {
-                setMode('edit');
-                requestAnimationFrame(() => {
-                  if (editScope === 'detail') entryAccountTriggerRef.current?.focus();
-                  else firstFieldRef.current?.focus();
-                });
-              },
-              disabled: !isViewMode || jvId == null || isPosted,
+              onClick: handleEdit,
+              // No longer `!isViewMode` — Edit is the only way to move the unlock from one half to
+              // the other, so it has to stay live while already editing (2026-09-24).
+              disabled: jvId == null || isPosted,
+              title: editScope === 'detail' ? 'Edit the selected line' : 'Edit the header fields',
             }}
             save={{ onClick: async () => { await doSave(false); }, disabled: isViewMode || !isValid, title: 'Save — keep editing this voucher' }}
             done={{ submit: true, form: 'jv-entry-form', disabled: isViewMode || !isValid, title: 'Done — finish this voucher, then Post it' }}
@@ -913,9 +1043,19 @@ const nextJvNoPreview = useMemo(
             print={{ onClick: () => window.print(), disabled: mode !== 'view' || jvId == null }}
             find={{ onClick: () => setIsFindOpen(true) }}
             unpost={{ onClick: handleUnpost, disabled: !isViewMode || jvId == null || !isPosted, title: 'Un Post — move this posted voucher back to unposted' }}
-            post={{ onClick: async () => { await handlePost(); focusNewButton(); }, disabled: !isViewMode || jvId == null || isPosted }}
+            // `!isPostable` blocks Post but NOT Save/Done — an out-of-balance or single-line voucher is a
+            // legitimate unposted draft, it just can't reach the ledger (2026-09-24).
+            post={{
+              onClick: async () => { await handlePost(); focusNewButton(); },
+              disabled: !isViewMode || jvId == null || isPosted || !isPostable,
+              title: !isPostable ? 'Needs at least two lines, with debit and credit matching, before posting' : 'Post',
+            }}
             exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
-            saveAndPost={{ onClick: handleSaveAndPost, disabled: isViewMode || !isValid, title: 'Save & Post' }}
+            saveAndPost={{
+              onClick: handleSaveAndPost,
+              disabled: isViewMode || !isValid || !isPostable,
+              title: !isPostable ? 'Needs at least two lines, with debit and credit matching, before posting' : 'Save & Post',
+            }}
             postAll={{ onClick: async () => { await handlePostAll(); focusNewButton(); }, disabled: postAllBusy || browseFilter === 'posted' || unpostedJvs.length === 0, title: postAllBusy ? 'Posting…' : `Post All (${unpostedJvs.length})` }}
             pdf={{ onClick: () => window.print(), disabled: mode !== 'view' || jvId == null, title: 'Export PDF — choose "Save as PDF" in the print dialog' }}
             excel={{
@@ -927,45 +1067,63 @@ const nextJvNoPreview = useMemo(
 
           {/* Posted/Unposted — picks which list First/Prev./Next/Last page through. Same row as
               the toolbar icons. Unposted (default) = add/post new JVs; Posted = browse
-              already-posted ones to Un Post one (per the user, 2026-08-30). */}
+              already-posted ones to Un Post one (per the user, 2026-08-30).
+
+              shrink-0: a flex item shrinks by default, so on a narrow window this got squeezed
+              until its own text clipped to "Unpo…" (2026-09-24). The toolbar already scrolls
+              horizontally when it runs out of room; the select rides that rather than collapsing. */}
           <select
             value={browseFilter}
             onChange={e => handleBrowseFilterChange(e.target.value as 'posted' | 'unposted')}
-            className="soleria-input soleria-input-compact cursor-pointer font-semibold"
+            className="soleria-input soleria-input-compact cursor-pointer font-semibold shrink-0"
             style={{ width: 'auto' }}
             title="Unposted = add new JVs. Posted = browse posted JVs to Un Post one."
             data-no-print
           >
-            <option value="unposted">Unposted</option>
-            <option value="posted">Posted</option>
+            {/* Counts shown the same way SaleBillPage's own dropdown does (per the user,
+                2026-09-24). Deliberately navUnpostedList/navPostedList rather than the raw
+                unpostedJvs/navVouchers arrays: these are the exact lists First/Pre./Next/Last
+                page through, so the number always matches what the nav buttons will actually
+                walk — navVouchers holds posted AND unposted together, so its raw length would
+                have overcounted Posted. */}
+            <option value="unposted">Unposted ({navUnpostedList.length})</option>
+            <option value="posted">Posted ({navPostedList.length})</option>
           </select>
 
-          {/* Post All's outcome. Was shown inside the left-hand Pending Posting panel; that panel
-              is gone (per the user, 2026-09-03), so it lands here under the toolbar instead. A run
-              can post 8 of 10, and the two that failed are the whole point — it stays until
-              dismissed. */}
-          {postAllResult && (
-            <div className="w-full mt-2 pt-2 border-t text-xs" style={{ borderColor: 'var(--border-color)' }}>
-              <p className="font-semibold text-slate-700">
-                {postAllResult.posted.length} of {postAllResult.attempted} posted
-                {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
-                <button type="button" onClick={() => setPostAllResult(null)} className="ml-2 text-slate-500 hover:text-slate-700 font-semibold">Dismiss</button>
-              </p>
-              {postAllResult.failed.length > 0 && (
-                <ul className="mt-1 space-y-0.5">
-                  {postAllResult.failed.map((fail, i) => (
-                    <li key={i} className="text-rose-700">{fail.message}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
         </div>
 
-        {/* Master/Detail edit-scope — which half of the document the toolbar's Edit button
-            unlocks (per the user, 2026-08-31). Centred directly under the toolbar rather than
-            out in the page margin where it used to sit, so it reads as part of the same
-            control strip as the Edit button it modifies (per the user, 2026-09-04). */}
+        {/* Post All's outcome. Was shown inside the left-hand Pending Posting panel; that panel is
+            gone (per the user, 2026-09-03), so it lands under the toolbar instead. A run can post
+            8 of 10, and the two that failed are the whole point — it stays until dismissed.
+
+            A SIBLING of the toolbar row, not a child of it (2026-09-24). Inside, its `w-full` could
+            never do what it was written for: the toolbar is `flex-nowrap overflow-x-auto`, so the
+            banner became just another item on that one row, pushed the buttons into horizontal
+            overflow and squeezed the Posted/Unposted select down to "Unpo…" — reported by the user
+            as the toolbar overlapping. Out here it gets a row of its own, as intended. */}
+        {postAllResult && (
+          <div className="mb-1 p-2 rounded-xl border text-xs" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
+            <p className="font-semibold text-slate-700">
+              {postAllResult.posted.length} of {postAllResult.attempted} posted
+              {postAllResult.failed.length > 0 && ` · ${postAllResult.failed.length} failed`}
+              <button type="button" onClick={() => setPostAllResult(null)} className="ml-2 text-slate-500 hover:text-slate-700 font-semibold">Dismiss</button>
+            </p>
+            {postAllResult.failed.length > 0 && (
+              <ul className="mt-1 space-y-0.5">
+                {postAllResult.failed.map((fail, i) => (
+                  <li key={i} className="text-rose-700">{fail.message}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* Master/Detail edit-scope — which half of the document New and Edit act on (per the
+            user, 2026-08-31; New joined Edit 2026-09-24 — Detail+New appends a line, Master+New
+            starts a new voucher, and see `editTarget` above for why the radio itself can never
+            unlock anything). Centred directly under the toolbar rather than out in the page
+            margin where it used to sit, so it reads as part of the same control strip as the
+            buttons it modifies (per the user, 2026-09-04). */}
         <EditScopeRadios name="jv-edit-scope" value={editScope} onChange={setEditScope} />
 
         {/* This <form> IS the entry card — height pinned to the remaining viewport space (see
@@ -1179,21 +1337,59 @@ const nextJvNoPreview = useMemo(
                   // Both row buttons work straight from view mode (per the user, 2026-09-20: "why do
                   // I have to click a row then it enables the edit/delete button") — pressing either
                   // switches the voucher into edit mode itself, exactly as a row click used to. Only a
-                  // POSTED voucher (unpost first), a line already loaded for editing, or the
-                  // Master/Detail switch sitting on Master disables them.
-                  const rowActionsEnabled = !isPosted && editingIndex == null && !(mode === 'edit' && editScope !== 'detail');
+                  // POSTED voucher (unpost first) or a line already loaded for editing disables them.
+                  // The Master/Detail switch no longer does (2026-09-24): the radio picks what the
+                  // TOOLBAR's Edit acts on, while these buttons name their own row outright, so
+                  // greying them out because the radio sat on Master was a lock with no meaning.
+                  // Live whenever the voucher is unposted. `editingIndex == null` used to be part
+                  // of this, which greyed out every row's buttons the moment any line was loaded
+                  // into the strip — so the row you had just clicked could not be acted on
+                  // (2026-09-24). removeLine() already re-points editingIndex when a row above the
+                  // edited one goes, so deleting from under an in-progress edit stays consistent.
+                  const rowActionsEnabled = !isPosted;
                   return (
                     <tr
                       key={line.uid}
                       ref={el => { rowRefs.current[idx] = el; }}
                       onClick={() => {
-                        // G-08: a click must produce no visible change — it only records which
-                        // row the Delete/Edit Row toolbar buttons act on next. Inert entirely
-                        // while another row is actually loaded for editing.
-                        if (editingIndex != null) return;
+                        // A click SELECTS the row and does nothing else — it does not load the
+                        // line for editing, it only records which row the toolbar's Edit
+                        // Row/Delete act on next (per the user, 2026-09-24: "clicking the row only
+                        // highlights it and it does not do anything else like readying it for
+                        // edit"). Clicking it again clears the selection.
+                        //
+                        // The no-side-effects half of this is G-08 (changes-14-09-26.md,
+                        // 2026-09-15) unchanged; what G-08 ALSO forbade was any visible feedback
+                        // ("no highlight"), and that part is superseded — a selection the user
+                        // cannot see gave no clue why Edit Row/Delete were suddenly live.
+                        //
+                        // Live in EVERY state, including while another row is loaded in the entry
+                        // strip (per the user, 2026-09-24: "say I'm editing row 1 and its detail
+                        // are fetched, now I click row 2 then it only highlights row 2, if I wanna
+                        // edit it then I click edit button — but highlight works whole time").
+                        // An earlier `if (editingIndex != null) return;` guard here is exactly why
+                        // the highlight looked broken: after Edit, clicks did nothing at all.
                         setSelectedIndex(prev => prev === idx ? null : idx);
                       }}
-                      className={`border-b cursor-pointer hover:bg-slate-50/55 transition-colors ${idx === editingIndex ? 'bg-blue-50' : ''}`}
+                      aria-selected={idx === selectedIndex}
+                      // Three row states, deliberately three different looks so none can be
+                      // mistaken for another: loaded-for-editing (blue), merely selected (brand
+                      // gold), and the G-05 just-entered position marker (the ▶ gutter cell below,
+                      // never a background). Hover only shows on rows that are neither, so it
+                      // can't wash out the selection.
+                      //
+                      // They differ in HUE, not just weight, and each carries a solid 4px left bar
+                      // (per the user, 2026-09-24: "both seems highlighted not distinguisable").
+                      // The first attempt paired bg-blue-50 with bg-slate-100 — near-identical
+                      // lightness and both washed out, so a selected row and an editing row read
+                      // as the same colour side by side. The bar also means the two are still
+                      // tellable apart without relying on colour alone. Unselected rows keep a
+                      // transparent bar of the same width so nothing shifts as it turns on.
+                      className={`border-b cursor-pointer transition-colors border-l-4 ${
+                        idx === editingIndex ? 'bg-blue-100 border-l-blue-600'
+                          : idx === selectedIndex ? 'bg-[#B08D57]/15 border-l-[#B08D57]'
+                          : 'border-l-transparent hover:bg-slate-50/55'
+                      }`}
                       style={{ borderColor: 'var(--border-table)' }}
                     >
                       {/* G-05: a pure position indicator — never a background/highlight, so it
@@ -1210,12 +1406,12 @@ const nextJvNoPreview = useMemo(
                       <td className="p-2 text-right font-mono text-sm text-slate-700">{line.credit > 0 ? `(${formatCurrency(line.credit)})` : '-'}</td>
                       <td className="p-2 text-center whitespace-nowrap">
                         <RowActions
-                          onEdit={() => { if (isViewMode) setMode('edit'); handleRowClick(idx); }}
-                          onDelete={() => { if (isViewMode) setMode('edit'); removeLine(idx); }}
+                          onEdit={() => handleRowClick(idx)}
+                          onDelete={() => { beginDetailEdit(); removeLine(idx); }}
                           disabled={!rowActionsEnabled}
                           editTitle="Edit this line"
                           deleteTitle="Delete this line"
-                          disabledTitle="Unpost the voucher (Detail scope) to change its lines"
+                          disabledTitle="Unpost the voucher to change its lines"
                         />
                       </td>
                     </tr>
@@ -1266,7 +1462,7 @@ const nextJvNoPreview = useMemo(
           </div>
           {totals.difference !== 0 && (
             <p className="shrink-0 text-xs font-semibold text-rose-600 text-right mt-1">
-              Out of balance by {formatCurrency(Math.abs(totals.difference))} — debit and credit must match before saving.
+              Out of balance by {formatCurrency(Math.abs(totals.difference))} — you can still save this as an unposted draft; debit and credit must match before it can be posted.
             </p>
           )}
         </form>

@@ -8054,3 +8054,78 @@ House, Malik Traders, etc.). `node --check` clean; `npx tsc -b --force` clean.
 
 **Files:** `backend/src/repositories/businessAccounts.repository.js`, `frontend/src/lib/api.ts`,
 `frontend/src/pages/BusinessAcSetupPage.tsx`.
+
+## 2026-09-24 — Journal Voucher: New/Edit split, always-visible row selection, drafts need not balance
+
+**Requested by the user across one session, stated as a standing baseline for JV that later work
+must not undo, and to be rolled out to the other document pages only after JV is tested.**
+
+**1. New and Edit each got one job.** Previously the toolbar's Edit had to be pressed before a line
+could be added — a press that had nothing to do with adding. Now the Master/Detail radio only
+selects WHICH half New and Edit act on, and never unlocks anything itself: New+Detail appends a
+line (header stays locked), New+Master starts a voucher, Edit+Master unlocks the header, Edit+Detail
+edits the pointed-at row (the same job as Edit Row and the row's own edit button — all three kept,
+per the user). Un Post now lands in view mode instead of pre-unlocking the detail half.
+
+The lock could no longer be derived from the radio, because `useAutoEditScope` moves the radio on
+any click — a stray click in the header would have unlocked it. So `editTarget` ('master' |
+'detail' | null) was added as explicit state, set only by Edit or New, and `masterLocked`/
+`detailLocked` now derive from it. `resetToNewVoucher()` was split out of `handleNew()` because
+Post/Post All/Delete/"browse Unposted with nothing there" still mean "blank the form": routed
+through the new `handleNew()` they would have appended a line to the voucher just posted or
+deleted. The "New Journal Voucher" tab calls it directly too, since its label admits no other
+meaning.
+
+**2. Row selection is now visible, and live at all times.** G-08 (2026-09-15) required a row click
+to produce no visible change at all; the user reversed the no-highlight half — an invisible
+selection gave no clue why Edit Row/Delete had come alive. A click still never loads a line for
+editing. Three row states are kept visually distinct by HUE, not weight, each with a 4px left bar:
+loaded-for-editing `bg-blue-100`/blue-600, selected `bg-[#B08D57]/15`/gold, and G-05's ▶ gutter
+marker. A first attempt (`bg-blue-50` vs `bg-slate-100`) was rejected by the user as "not
+distinguisable" — near-identical lightness. Selection also had to stay live while another row sits
+in the entry strip, so `loadLineIntoEntry` now keeps the selection instead of clearing it, and the
+row/Edit Row buttons no longer disable themselves when `editingIndex != null`.
+
+**3. Balance and line count became POSTING rules, not saving rules.** Per the user: a voucher "can
+remain unposted and done button can be used" whether or not it balances. `validateBalance` became
+`validatePostable` (>= 2 lines AND debit == credit) and is called only by `post()`;
+`resolveLines()` no longer calls it, so create/update store an unbalanced draft. `validateLines`
+dropped its own >= 2 floor to >= 1 — that floor, not the balance check, was what actually blocked
+Done on the user's single-line voucher, and refusing to save the most unbalanced shape possible
+while saving an unbalanced pair made no sense. One line is still required: Save allocates the
+System No., and an empty voucher would burn a number on nothing. Frontend mirrors this exactly —
+`isValid` (Save/Done) vs `isPostable` (Post/Save+Post).
+
+**4. Deleting every line no longer resurrects them.** `usePersistentField` did persist the emptied
+`lines: []`, but `useNewDocGate`'s `isFilled([])` is false — identical to a page never touched — so
+the auto-open effect ran and re-fetched the saved copy from the database. `useNewDocGate` gained an
+opt-in `emptiedEditCountsAsWork`, used only by the JV page, which treats a persisted `mode ===
+'edit'` as genuine unsaved work. The other six pages using the hook are untouched.
+
+**5. Two layout fixes.** The Post All result banner was a child of the toolbar row, which is
+`flex-nowrap overflow-x-auto` — so its `w-full` could never wrap and it instead pushed the buttons
+into horizontal overflow and squeezed the Posted/Unposted select to "Unpo…". Moved to a sibling
+below the toolbar; the select got `shrink-0`. The dropdown also now shows counts like Sale Bill's,
+from `navUnpostedList`/`navPostedList` (NOT raw `navVouchers`, which holds posted and unposted
+together and would have overcounted Posted).
+
+**Verified:** `npx tsc -b` clean; `npx eslint` unchanged at the 4 pre-existing React Compiler
+errors (confirmed identical on the original file by stashing); `node --check` clean on both backend
+files; `npm run build` clean. Tailwind arbitrary classes `border-l-[#B08D57]` and
+`bg-[#B08D57]/15` confirmed present in the generated CSS rather than assumed. NOT verified by
+driving the UI — screenshots are blocked under GNOME/Wayland (x11grab returns black, the Screenshot
+D-Bus method returns AccessDenied); the user tested each round by hand.
+
+**Note on the round trips:** several fixes appeared not to work because the running Electron had no
+`VITE_DEV_SERVER_URL`, so `windowManager.js:94` was serving a `frontend/dist` bundle built hours
+earlier while Vite ran unread alongside it. `backend/npm run dev` (`electron .`) always does this;
+`npm run electron:dev` is the one with HMR. Worth making the dev path fail loudly.
+
+**Workflow deviation:** `backend/CLAUDE.md` requires the `debugger` subagent after coding; that
+agent type is not registered in this session ("Agent type 'debugger' not found"), so the diff was
+self-reviewed instead — checked for stale `isBalanced`/`validateBalance` references (none), stray
+`handleNew()` callers meaning "blank the form" (none left), and frontend/backend rule agreement
+(save >= 1 line, post >= 2 + balanced).
+
+**Files:** `frontend/src/pages/JournalVoucherPage.tsx`, `frontend/src/hooks/usePersistentField.ts`,
+`backend/src/services/journalVouchers.service.js`, `backend/src/services/journalVouchers.math.js`.
