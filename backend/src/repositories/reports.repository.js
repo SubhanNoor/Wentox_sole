@@ -553,7 +553,7 @@ async function paymentTrailRows(filters = {}) {
 // report). One business_accounts row is claimed by at most one party table, so the CASE below is
 // unambiguous; a row nothing claims is a generic head (e.g. Business Running Expenses, Directors
 // Drawings) shown under its own chart-account name.
-async function businessAccountsWithCategory() {
+async function businessAccountsWithCategory(bankAccountsChartCode) {
   const result = await query(
     `SELECT
        ba.ba_id, ba.code, ba.name, ba.city_id, ci.name AS city_name,
@@ -562,7 +562,13 @@ async function businessAccountsWithCategory() {
          WHEN cu.customer_id IS NOT NULL THEN 'CUSTOMER'
          WHEN ve.vendor_id   IS NOT NULL THEN 'VENDOR'
          WHEN em.employee_id IS NOT NULL THEN 'EMPLOYEE'
-         WHEN bk.bank_id     IS NOT NULL THEN 'BANK'
+         -- A business account under the BANK ACCOUNTS chart head IS a bank, whether or not it also
+         -- carries a dbo.bank_accounts detail row. Every real bank has one; CHEQUES IN HAND
+         -- (migration 038, a business account under BANK ACCOUNTS with no bank_accounts row) does
+         -- not, and without the parent-chart test below it fell into BUSINESS_ACCOUNT instead of
+         -- grouping with the banks (reported by the user, 2026-09-26). The bank_accounts test stays
+         -- as a belt-and-braces fallback for anything not under the reserved head.
+         WHEN bk.bank_id IS NOT NULL OR ca.code = @bankChartCode THEN 'BANK'
          ELSE 'BUSINESS_ACCOUNT'
        END AS category,
        em.employee_type
@@ -575,6 +581,7 @@ async function businessAccountsWithCategory() {
      LEFT JOIN dbo.bank_accounts bk ON bk.ba_id = ba.ba_id
      WHERE ba.status = 'ACTIVE'
      ORDER BY ca.code, ba.code`,
+    { bankChartCode: { type: sql.VarChar(20), value: bankAccountsChartCode } },
   );
   return result.recordset;
 }
@@ -639,21 +646,26 @@ async function chartAccountsWithActivity() {
 // the mode. A draft can be malformed in ways a posted row cannot (no CHECK constraints on the
 // draft tables), so the far side may come back NULL — the caller renders that rather than dropping
 // the row, since a broken draft is exactly what someone reading this report needs to see.
-async function cashBookUnpostedSides({ date_from, date_to }, { cashAcId, chequesAcId }) {
+// chequesBaId (not a chart ac_id anymore): CHEQUES IN HAND became a business account under BANK
+// ACCOUNTS in migration 038, so a cheque draft's destination is resolved through business_accounts
+// (chq join below) rather than chart_of_accounts. CASH still resolves through chart_of_accounts
+// (cashAcId), unchanged.
+async function cashBookUnpostedSides({ date_from, date_to }, { cashAcId, chequesBaId }) {
   const result = await query(
     `SELECT 'RECEIPT' AS kind, dr.draft_id AS source_id, dr.receipt_date AS entry_date, dr.created_at, dr.amount,
             dr.payment_mode, dr.remarks, dr.cheque_no,
             payer.name AS party_name, payer.code AS party_code,
-            COALESCE(oba.name, bba.name, ca.name)  AS money_name,
-            COALESCE(oba.code, bba.code, ca.code)  AS money_code,
+            COALESCE(oba.name, bba.name, chq.name, ca.name)  AS money_name,
+            COALESCE(oba.code, bba.code, chq.code, ca.code)  AS money_code,
             CASE WHEN dr.payment_mode = 'CASH' THEN 1 ELSE 0 END AS touches_cash
      FROM dbo.draft_receipts dr
      LEFT JOIN dbo.business_accounts payer ON payer.ba_id = dr.ba_id
      LEFT JOIN dbo.business_accounts oba   ON oba.ba_id   = dr.online_ba_id
      LEFT JOIN dbo.bank_accounts     bk    ON bk.bank_id  = dr.bank_id
      LEFT JOIN dbo.business_accounts bba   ON bba.ba_id   = bk.ba_id
+     LEFT JOIN dbo.business_accounts chq   ON chq.ba_id   = CASE dr.payment_mode WHEN 'CHEQUE' THEN @chequesBaId END
      LEFT JOIN dbo.chart_of_accounts ca
-            ON ca.ac_id = CASE dr.payment_mode WHEN 'CASH' THEN @cashAcId WHEN 'CHEQUE' THEN @chequesAcId END
+            ON ca.ac_id = CASE dr.payment_mode WHEN 'CASH' THEN @cashAcId END
      WHERE dr.receipt_date >= @dateFrom AND dr.receipt_date <= @dateTo
      UNION ALL
      SELECT 'EXPENSE', de.draft_id, de.expense_date, de.created_at, de.amount,
@@ -664,8 +676,8 @@ async function cashBookUnpostedSides({ date_from, date_to }, { cashAcId, cheques
             -- with an empty Cheque No column.
             COALESCE(de.issued_cheque_no, dch.cheque_no),
             payee.name, payee.code,
-            COALESCE(oba.name, bba.name, ca.name),
-            COALESCE(oba.code, bba.code, ca.code),
+            COALESCE(oba.name, bba.name, chq.name, ca.name),
+            COALESCE(oba.code, bba.code, chq.code, ca.code),
             CASE WHEN de.payment_mode = 'CASH' THEN 1 ELSE 0 END
      FROM dbo.draft_expenses de
      LEFT JOIN dbo.business_accounts payee ON payee.ba_id = de.ba_id
@@ -673,17 +685,16 @@ async function cashBookUnpostedSides({ date_from, date_to }, { cashAcId, cheques
      LEFT JOIN dbo.bank_accounts     bk    ON bk.bank_id  = de.bank_id
      LEFT JOIN dbo.business_accounts bba   ON bba.ba_id   = bk.ba_id
      LEFT JOIN dbo.cheques dch ON dch.cheque_id = de.cheque_id
+     LEFT JOIN dbo.business_accounts chq   ON chq.ba_id   = CASE de.payment_mode WHEN 'CHEQUE_ENDORSED' THEN @chequesBaId END
      LEFT JOIN dbo.chart_of_accounts ca
-            ON ca.ac_id = CASE de.payment_mode
-                            WHEN 'CASH' THEN @cashAcId
-                            WHEN 'CHEQUE_ENDORSED' THEN @chequesAcId END
+            ON ca.ac_id = CASE de.payment_mode WHEN 'CASH' THEN @cashAcId END
      WHERE de.expense_date >= @dateFrom AND de.expense_date <= @dateTo
      ORDER BY entry_date, kind, source_id`,
     {
       dateFrom: { type: sql.Date, value: date_from },
       dateTo: { type: sql.Date, value: date_to },
       cashAcId: { type: sql.Int, value: cashAcId },
-      chequesAcId: { type: sql.Int, value: chequesAcId },
+      chequesBaId: { type: sql.Int, value: chequesBaId },
     },
   );
   return result.recordset;

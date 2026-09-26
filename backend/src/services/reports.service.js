@@ -492,7 +492,7 @@ async function paymentTrail(filters = {}, session) {
 async function businessLedger(filters = {}, session) {
   // Restricted accounts drop out of the directory itself, so a USER's list never names them — and
   // the detail view goes through accountLedger, which rejects one asked for by id regardless.
-  const accounts = visibleTo(session, await repository.businessAccountsWithCategory());
+  const accounts = visibleTo(session, await repository.businessAccountsWithCategory(CODES.BANK_ACCOUNTS));
   const filtered = filters.ba_id ? accounts.filter((a) => a.ba_id === filters.ba_id) : accounts;
 
   if (filters.view === 'detail') {
@@ -596,8 +596,13 @@ async function cashBook(filters = {}) {
   }
 
   // The other two money heads, needed to scope the both-sides query below to money movements.
+  // CHEQUES IN HAND is a business account under BANK ACCOUNTS now (migration 038), so it is
+  // resolved as a ba, not a chart head. In the POSTED both-sides query its movements are already
+  // caught by bankAcId (its parent ac_id IS BANK ACCOUNTS), so passing its parent ac_id as
+  // chequesAcId is redundant-but-correct; in the UNPOSTED query it names the destination of a
+  // cheque draft, which is now that ba, so we pass chequesBaId there.
   const bankAc = await findByCode(CODES.BANK_ACCOUNTS);
-  const chequesAc = await findByCode(CODES.CHEQUES_IN_HAND);
+  const chequesBa = await businessAccountsService.getChequesInHandAccount();
 
   const [opening, ledgerRaw, sidesRaw, unpostedRaw, bankTransfersRaw, chequeDepositsRaw] = await Promise.all([
     repository.netBalance({
@@ -607,11 +612,11 @@ async function cashBook(filters = {}) {
     repository.cashBookTransactionSides(range, {
       cashAcId: cash.ac_id,
       bankAcId: bankAc ? bankAc.ac_id : -1,
-      chequesAcId: chequesAc ? chequesAc.ac_id : -1,
+      chequesAcId: chequesBa.ac_id,
     }),
     repository.cashBookUnpostedSides(range, {
       cashAcId: cash.ac_id,
-      chequesAcId: chequesAc ? chequesAc.ac_id : -1,
+      chequesBaId: chequesBa.ba_id,
     }),
     repository.cashBookBankTransfers(cashBa.ba_id, range),
     repository.cashBookChequeDeposits(range),
@@ -979,7 +984,7 @@ async function overallTrail(filters = {}, session) {
   // A trial balance for a USER simply omits the restricted accounts. The totals it prints are then
   // the totals of what they can see — which is the point of the restriction, not a defect in it.
   const [accountsRaw, chartAccountsRaw, baBalances, acBalances] = await Promise.all([
-    repository.businessAccountsWithCategory(),
+    repository.businessAccountsWithCategory(CODES.BANK_ACCOUNTS),
     repository.chartAccountsWithActivity(),
     repository.businessAccountBalancesAsOf(asOf),
     repository.chartAccountBalancesAsOf(asOf),

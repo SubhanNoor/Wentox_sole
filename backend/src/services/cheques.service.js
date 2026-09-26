@@ -105,8 +105,9 @@ async function deposit(chequeId, payload, userId, session) {
   await businessAccountsService.assertAccessible(bank.ba_id, session);
   if (!payload.allocation_date) throw ApiError.badRequest('allocation_date is required');
 
-  const chequesInHand = await chartAccountsRepository.findByCode(CODES.CHEQUES_IN_HAND);
-  if (!chequesInHand) throw new Error(`Reserved chart account CHEQUES IN HAND (code ${CODES.CHEQUES_IN_HAND}) not found — run npm run seed`);
+  // CHEQUES IN HAND is a business account under BANK ACCOUNTS now (migration 038), so this posts a
+  // ba_id, exactly like the bank side of a deposit does — not the old chart ac_id.
+  const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
   await withTransaction(async (transaction) => {
     const allocationId = await repository.insertAllocation(transaction, {
@@ -120,7 +121,7 @@ async function deposit(chequeId, payload, userId, session) {
     });
     await repository.insertLedgerEntries(transaction, [
       { entry_date: payload.allocation_date, ba_id: bank.ba_id, debit: amount, credit: 0, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration: `Cheque #${chequeId} deposited into ${bank.name}` },
-      { entry_date: payload.allocation_date, ac_id: chequesInHand.ac_id, debit: 0, credit: amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration: `Cheque #${chequeId} deposited into ${bank.name}` },
+      { entry_date: payload.allocation_date, ba_id: chequesInHand.ba_id, debit: 0, credit: amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration: `Cheque #${chequeId} deposited into ${bank.name}` },
     ]);
     // Still set on the first-ever deposit only, as a "primary bank" display fallback for the
     // common single-bank case — no longer authoritative once a cheque is split (see allocation.bank_id).
@@ -143,8 +144,9 @@ async function endorseToVendor(chequeId, payload, userId, session) {
   const vendor = await vendorsService.getById(payload.vendor_id);
   if (!vendor.ba_id) throw ApiError.conflict('Vendor has no linked account yet', 'NO_VENDOR_ACCOUNT');
   await businessAccountsService.assertAccessible(vendor.ba_id, session);
-  const chequesInHand = await chartAccountsRepository.findByCode(CODES.CHEQUES_IN_HAND);
-  if (!chequesInHand) throw new Error(`Reserved chart account CHEQUES IN HAND (code ${CODES.CHEQUES_IN_HAND}) not found — run npm run seed`);
+  // CHEQUES IN HAND is a business account under BANK ACCOUNTS now (migration 038), so this posts a
+  // ba_id, exactly like the bank side of a deposit does — not the old chart ac_id.
+  const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
   await withTransaction(async (transaction) => {
     const allocationId = await repository.insertAllocation(transaction, {
@@ -158,7 +160,7 @@ async function endorseToVendor(chequeId, payload, userId, session) {
     });
     await repository.insertLedgerEntries(transaction, [
       { entry_date: payload.allocation_date, ba_id: vendor.ba_id, debit: amount, credit: 0, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration: `Cheque #${chequeId} to vendor` },
-      { entry_date: payload.allocation_date, ac_id: chequesInHand.ac_id, debit: 0, credit: amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration: `Cheque #${chequeId} to vendor` },
+      { entry_date: payload.allocation_date, ba_id: chequesInHand.ba_id, debit: 0, credit: amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration: `Cheque #${chequeId} to vendor` },
     ]);
     await recomputeStatus(transaction, cheque, 'VENDOR_PAYMENT');
   });
@@ -178,8 +180,9 @@ async function endorseToExpense(chequeId, payload, userId, session) {
   // target_ba_id is any business account the operator picks, Directors Drawings included — this is
   // the same account-level guard receipts/expenses/settlements/JV already apply.
   await businessAccountsService.assertAccessible(payload.target_ba_id, session);
-  const chequesInHand = await chartAccountsRepository.findByCode(CODES.CHEQUES_IN_HAND);
-  if (!chequesInHand) throw new Error(`Reserved chart account CHEQUES IN HAND (code ${CODES.CHEQUES_IN_HAND}) not found — run npm run seed`);
+  // CHEQUES IN HAND is a business account under BANK ACCOUNTS now (migration 038), so this posts a
+  // ba_id, exactly like the bank side of a deposit does — not the old chart ac_id.
+  const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
   await withTransaction(async (transaction) => {
     const allocationId = await repository.insertAllocation(transaction, {
@@ -194,7 +197,7 @@ async function endorseToExpense(chequeId, payload, userId, session) {
     });
     await repository.insertLedgerEntries(transaction, [
       { entry_date: payload.allocation_date, ba_id: target.ba_id, debit: amount, credit: 0, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration: `Cheque #${chequeId} to expense` },
-      { entry_date: payload.allocation_date, ac_id: chequesInHand.ac_id, debit: 0, credit: amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration: `Cheque #${chequeId} to expense` },
+      { entry_date: payload.allocation_date, ba_id: chequesInHand.ba_id, debit: 0, credit: amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration: `Cheque #${chequeId} to expense` },
     ]);
     await recomputeStatus(transaction, cheque, 'EXPENSE_PAYMENT');
   });
@@ -231,8 +234,9 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
   if (!date) throw ApiError.badRequest('date is required');
 
   const receipt = await receiptsService.getById(cheque.receipt_id);
-  const chequesInHand = await chartAccountsRepository.findByCode(CODES.CHEQUES_IN_HAND);
-  if (!chequesInHand) throw new Error(`Reserved chart account CHEQUES IN HAND (code ${CODES.CHEQUES_IN_HAND}) not found — run npm run seed`);
+  // CHEQUES IN HAND is a business account under BANK ACCOUNTS now (migration 038), so this posts a
+  // ba_id, exactly like the bank side of a deposit does — not the old chart ac_id.
+  const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
   await withTransaction(async (transaction) => {
     const reversedAllocations = await repository.reverseAllocations(transaction, cheque.receipt_id);
@@ -256,7 +260,7 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
       // Opposite of the original allocation entry (Dr target / Cr CHEQUES IN HAND): here we credit
       // target and debit CHEQUES IN HAND back.
       await repository.insertLedgerEntries(transaction, [
-        { entry_date: date, ac_id: chequesInHand.ac_id, debit: allocation.amount, credit: 0, source_type: 'CHEQUE_ALLOCATION', source_id: allocation.allocation_id, narration: `${mode} reversal of allocation #${allocation.allocation_id}` },
+        { entry_date: date, ba_id: chequesInHand.ba_id, debit: allocation.amount, credit: 0, source_type: 'CHEQUE_ALLOCATION', source_id: allocation.allocation_id, narration: `${mode} reversal of allocation #${allocation.allocation_id}` },
         { entry_date: date, ba_id: targetBaId, debit: 0, credit: allocation.amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocation.allocation_id, narration: `${mode} reversal of allocation #${allocation.allocation_id}` },
       ]);
     }
@@ -335,8 +339,9 @@ async function reverseAllocation(allocationId, payload, userId) {
   }
   if (!payload.date) throw ApiError.badRequest('date is required');
 
-  const chequesInHand = await chartAccountsRepository.findByCode(CODES.CHEQUES_IN_HAND);
-  if (!chequesInHand) throw new Error(`Reserved chart account CHEQUES IN HAND (code ${CODES.CHEQUES_IN_HAND}) not found — run npm run seed`);
+  // CHEQUES IN HAND is a business account under BANK ACCOUNTS now (migration 038), so this posts a
+  // ba_id, exactly like the bank side of a deposit does — not the old chart ac_id.
+  const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
   const targetBaId = allocation.target_vendor_id
     ? (await vendorsService.getById(allocation.target_vendor_id)).ba_id
@@ -346,7 +351,7 @@ async function reverseAllocation(allocationId, payload, userId) {
   await withTransaction(async (transaction) => {
     await repository.reverseOneAllocation(transaction, allocationId);
     await repository.insertLedgerEntries(transaction, [
-      { entry_date: payload.date, ac_id: chequesInHand.ac_id, debit: allocation.amount, credit: 0, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration },
+      { entry_date: payload.date, ba_id: chequesInHand.ba_id, debit: allocation.amount, credit: 0, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration },
       { entry_date: payload.date, ba_id: targetBaId, debit: 0, credit: allocation.amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration },
     ]);
 

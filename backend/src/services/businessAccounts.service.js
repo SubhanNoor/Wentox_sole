@@ -67,6 +67,19 @@ function getByAcId(acId) {
   return repository.findByAcId(acId);
 }
 
+// CHEQUES IN HAND — a business account under BANK_ACCOUNTS since migration 038, resolved by its
+// stable link_code marker rather than by parent ac_id (BANK_ACCOUNTS holds many accounts) or a
+// fixed code (serial-assigned). Every cheque posting (receipts.service, cheques.service) and the
+// cash-book/trial-balance reports resolve the cheques head through here now, in place of the old
+// findByCode(CODES.CHEQUES_IN_HAND) chart lookup.
+async function getChequesInHandAccount() {
+  const account = await repository.findByLinkCode(CODES.CHEQUES_IN_HAND_BA_LINK);
+  if (!account) {
+    throw new Error('CHEQUES IN HAND business account not found — run npm run seed (it sits under BANK ACCOUNTS since migration 038)');
+  }
+  return account;
+}
+
 // ── UC-17 setup screen (list/get/create/update/remove) ──────────────────────────────────────
 // getById() above stays a plain, unrestricted lookup — every cross-feature caller (transfers,
 // cheques, reports) already depends on that exact shape. These add the setup screen's own
@@ -368,7 +381,7 @@ async function permanentDelete(baId, session) {
 }
 
 module.exports = {
-  createUnderChartCode, renameLinked, getById, getCashAccount, getByAcId, setOpening, validateOpeningPair,
+  createUnderChartCode, renameLinked, getById, getCashAccount, getByAcId, getChequesInHandAccount, setOpening, validateOpeningPair,
   createBatch,
   syncOpeningEntries,
   list, getForSetup, assertAccessible, create, update, remove, reactivate, permanentDelete,

@@ -8129,3 +8129,184 @@ self-reviewed instead — checked for stale `isBalanced`/`validateBalance` refer
 
 **Files:** `frontend/src/pages/JournalVoucherPage.tsx`, `frontend/src/hooks/usePersistentField.ts`,
 `backend/src/services/journalVouchers.service.js`, `backend/src/services/journalVouchers.math.js`.
+
+## 2026-09-26 — Cheque Returns: hide CLEARED (and BOUNCED/RETURNED) endorsed cheques
+
+**Bug (user-reported):** "Marked clear" cheques were still listed under Cheque > Returns.
+
+**Cause:** `cheques.repository.js#listEndorsedAllocations` filtered on `ca.status = 'ACTIVE'`
+(the ENDORSEMENT lifecycle) but not on `ch.cheque_status` (the CHEQUE lifecycle) — two independent
+things. `cheques.service.js#markCleared` is a pure status flip that sets `cheque_status='CLEARED'`
+and never reverses the allocation, so the allocation stays ACTIVE and the row kept appearing.
+Confirmed in data: 10 such rows in wentox_prod (8 VENDOR_PAYMENT + 2 EXPENSE_PAYMENT), 2 in
+wentox_db. The Return action itself was already guarded — `reverseAllocation()` rejects any cheque
+in `TERMINAL_STATUSES = ['BOUNCED','RETURNED','CLEARED']` — so this was a misleading list, never a
+bad posting.
+
+**Fix:** added `"ch.cheque_status NOT IN ('CLEARED','BOUNCED','RETURNED')"` to the query's
+conditions, mirroring that guard exactly. Leaves the genuinely returnable ENDORSED/
+PARTIALLY_ENDORSED states. Query-side only — no schema/data change, no migration, corrects both
+databases immediately. The issued-cheque source (`expenses.repository.js#listReturnableIssuedCheques`)
+was already correct (`issued_cheque_status='PENDING'`; issued cheques have no CLEARED state).
+
+**Verified:** `node --check` clean; live count before/after — wentox_prod 34 -> 24 (10 cleared
+hidden), wentox_db 3 -> 1 (2 hidden); the 24 remaining in prod are exactly the ENDORSED rows.
+
+**Workflow note:** plan was presented to the user and approved ("implement it") before coding, per
+backend/CLAUDE.md rule 1. The rule-2 `debugger` subagent is not registered in this session, so the
+change was self-reviewed instead.
+
+**Files:** `backend/src/repositories/cheques.repository.js`.
+
+## 2026-09-26 — Receipts/Jamma: endorsements (settlements) now use the standard toolbar like a receipt
+
+**Bug (user-reported):** endorsing a cheque from one bank to another "does nothing" — after
+composing it, pressing Enter/clicking Post had no effect.
+
+**Cause (frontend only — backend verified fine):** an endorsement saves as a standalone
+`dbo.settlements` row (no voucher). The standard toolbar Post was hardwired to the receipt voucher
+(`handlePostVoucher`, `if (!voucher) return;` and `disabled: !voucher`), so it was a dead button
+for a settlement. The only working Post was a SEPARATE "Post Endorsement" button appended at the
+far right, which looked identical and was easy to miss — so clicking the obvious Post did nothing.
+A prior fix had added that separate button without removing the dead standard one, which is why it
+kept being reported. Backend confirmed correct end-to-end: created + posted a bank->bank CHEQUE
+settlement via `settlements.service` against wentox_db (id 2002, POST -> CONFIRMED), then cleaned it
+up (unpost + remove; verified 0 leftover settlement/ledger rows). wentox_prod NOT touched.
+
+**Fix (per the user: "treat endorsement/settlement as a receipt also like a normal receipt"):** the
+standard toolbar Post/Un Post/Edit/Delete now route to the settlement handlers when a settlement is
+on screen (`isSettlementDoc = docKind === 'SETTLEMENT' && receiptId != null`):
+- Post -> `handlePost` (settlements.post); enabled in view mode when unposted.
+- Un Post -> `handleUnpost` (settlements.unpost); enabled in view mode when posted.
+- Edit -> unlocks the fields; `handleDone` already routes to settlements.update.
+- Delete -> password modal -> `api.settlements.remove` (DRAFT-only, no password backend-side; the
+  modal still gates the irreversible action). Added `'settlement'` to the `PendingDelete` kind and a
+  branch in `handleDeleteConfirmed` (resets to a new voucher when the deleted settlement was open).
+The separate "Post/Unpost Endorsement" buttons were removed, so there is exactly one Post button
+that always does the right thing. Removed the now-unused `Undo2`/`CheckCircle2` imports.
+
+**Verified:** `npx tsc -b` clean; `npx eslint` shows the same 8 pre-existing React Compiler errors
+as the pristine file (confirmed by stashing); `npm run build` clean. Not driven in the UI
+(screenshots blocked under Wayland) — the backend path was exercised directly instead.
+
+**Files:** `frontend/src/pages/ReceiptsPage.tsx`.
+
+## 2026-09-26 — Current Stock full-colour matrix: add per-article Total (Ctn/Prs)
+
+**Requested:** in the Current Finished Stock full-colour matrix report, add a total cartons figure
+for each article — expressed as cartons/loose-pairs in the same shape each colour cell uses ("not
+full carton like it is for each colour"), summed across all of the article's colours.
+
+**Implementation (`frontend/src/pages/ReportStockPage.tsx`):** `colorReportRows` now also carries
+`totalCartons`/`totalLoosePairs`, RE-NORMALISED against the article's packing
+(`effective_packing`) rather than naively summing each colour's cartons and extra_pairs — a colour's
+loose pairs summed across colours can add up to whole cartons (e.g. article 100: BROWN 9/6 + BLUE
+15/6 = 300 pairs -> 25/0 at packing 12, not 24/12). Safe because packing is uniform across a single
+article's colours (verified on live data: 0 of 104 articles mix packing); a `packing > 0` guard
+falls back to a plain sum otherwise. Added a "Total (Ctn/Prs)" column before "Total Pairs" in all
+three render sites: the printable current-stock matrix (the one in the report screenshot), the
+modal's own print block, and the on-screen full-report modal table, plus the Excel export. The
+grand-total ("Report Total") row shows "—" for that column on purpose: cartons are only meaningful
+within one packing, so summing them across articles of different packing would be a meaningless
+number; the pairs grand total is unchanged.
+
+**Verified:** carton math checked against live data (article 100 -> 25/0); `npx tsc -b` clean;
+`npx eslint` shows the same 4 pre-existing React Compiler errors as the pristine file (confirmed by
+stashing); `npm run build` clean. wentox_prod read-only (SELECT only). Not driven in the UI
+(screenshots blocked under Wayland).
+
+**Files:** `frontend/src/pages/ReportStockPage.tsx`.
+
+## 2026-09-26 — CHEQUES IN HAND moved from its own chart head to a business account under BANKS
+
+**Requested by the user (investigated and approved first):** make CHEQUES IN HAND a business
+account under the BANK ACCOUNTS chart head, move all its existing ledger there, and post future
+entries there — "cheque in hand will be an account under banks." Decisions: fresh account (not the
+client's stray hand-made "CHECKS IN HAND" ba 209), and close the old 100004 chart account.
+
+**Background:** CHEQUES IN HAND was chart account 100004 that ledger_entries posted to via `ac_id`
+directly (unlike banks, which are business accounts under 100003 reached via `ba_id`). On
+wentox_prod it held 203 entries (122 RECEIPT + 81 CHEQUE_ALLOCATION), net 5,497,000. The client had
+also hand-created an empty "CHECKS IN HAND" bank sub-account — the duplication this resolves.
+
+**Resolution mechanism:** the new business account sits under BANK ACCOUNTS (many accounts), so it
+can't be found by parent ac_id like Cash is, and its 10-digit code is serial-assigned. It is marked
+with `business_accounts.link_code = 'CHEQUES_IN_HAND'` (a column nothing else uses) and resolved by
+`businessAccounts.service#getChequesInHandAccount()`. New constant `CODES.CHEQUES_IN_HAND_BA_LINK`.
+
+**Code (all posting/report reads switched from the chart ac_id to the ba):**
+- `cheques.service.js` — 5 sites (deposit, endorseToVendor, endorseToExpense, reverse, reverseAllocation): `ac_id` → `ba_id`.
+- `receipts.service.js#resolveDebitSide` — CHEQUE mode returns the ba now.
+- `reports.service.js` / `reports.repository.js#cashBookUnpostedSides` — cheque head resolved as the ba; the posted cash-book both-sides query needs no change (a cheque movement's parent ac_id IS BANK ACCOUNTS, already caught by bankAcId).
+- `businessAccounts.repository.js#findByLinkCode`, `businessAccounts.service#getChequesInHandAccount`.
+- `db/seeds/run.js` — removed the 100004 chart account; added `ensureChequesInHandAccount()` (idempotent by link_code) under BANK ACCOUNTS.
+
+**Migration `038_cheques_in_hand_under_banks.sql`:** existing DBs only (gated on 100004 being
+ACTIVE, so fresh installs skip and re-runs are clean no-ops). Creates the ba (next serial under
+100003, link_code marker), repoints every `ac_id=100004` ledger row to `ba_id`/`ac_id=NULL` in one
+statement, guards that nothing remains on the old head and the net balance is unchanged, then closes
+100004. Relies on tedious's default QUOTED_IDENTIFIER ON for the filtered-index DML (same as
+migration 019).
+
+**Frontend:** no change. 100004 stays in `RESERVED_ACCOUNT_CODES` so the closed legacy head stays
+badged and locked from edit/delete in Chart of Accounts; the new CHEQUES IN HAND shows under banks.
+
+**Verified on a COPY of wentox_prod** (backed up copy-only, restored as wentox_migtest, dropped
+after — prod never touched): migration moved all 203 entries, net 5,497,000 preserved, 0 left on
+100004, 100004 CLOSED, trial balance still 0; re-run is a clean no-op; seed creates no duplicate;
+`getChequesInHandAccount()` resolves ba 1000030016 under BANK ACCOUNTS. Full backend suite 21/21
+pass (incl. cheque disposal, split-deposit, reports). `node --check` clean on all 8 changed files.
+
+**NOT YET RUN ON wentox_prod** — the user runs migrate against prod when ready (per the read-only
+rule). Files: `backend/src/db/migrations/038_cheques_in_hand_under_banks.sql`,
+`backend/src/services/{cheques,receipts,businessAccounts,reports}.service.js`,
+`backend/src/repositories/{businessAccounts,reports}.repository.js`, `backend/src/db/seeds/run.js`,
+`backend/src/constants/reservedAccounts.js`.
+
+## 2026-09-26 — Overall Trail: group CHEQUES IN HAND (and any bare bank-chart account) under BANK
+
+**Bug (user-reported after migration 038):** on the Overall Trail report, CHEQUES IN HAND showed
+under the "BUSINESS ACCOUNT" section instead of "BANK", even though it sits under the BANK ACCOUNTS
+chart head.
+
+**Cause:** `reports.repository.js#businessAccountsWithCategory` classified the section by PARTY
+LINKAGE — a business account counts as BANK only if it has a `dbo.bank_accounts` detail row. Every
+real bank (and the client's holding buckets like PDCS, DEPOSIT AT IRFAN) has one; the new CHEQUES IN
+HAND business account (migration 038) does not, so it fell to BUSINESS_ACCOUNT.
+
+**Fix:** classify by PARENT CHART too — `WHEN bk.bank_id IS NOT NULL OR ca.code = @bankChartCode
+THEN 'BANK'`. A business account under the BANK ACCOUNTS head is a bank whether or not it carries a
+bank_accounts row. Verified on live data this moves ONLY CHEQUES IN HAND (every other under-bank
+account already had a bank row and was already BANK) — zero side effects, report-only, no data
+change, and it does not make the account a selectable deposit target (pickers query bank_accounts,
+not this category). The bank chart code is passed from the service (CODES.BANK_ACCOUNTS), not
+hardcoded in the repository. Both call sites updated (overallTrail + the business-ledger directory).
+
+**Deployed to prod:** backend-only change; app restarted on the new code (single instance). No
+frontend change (Overall Trail groups by the category the backend returns). `node --check` clean.
+
+**Files:** `backend/src/repositories/reports.repository.js`, `backend/src/services/reports.service.js`.
+
+## 2026-09-26 — Journal Voucher: deleting the last line deletes the voucher
+
+**Bug (user-reported):** unpost a JV, delete its lines row by row until none remain, navigate away
+and back — the "deleted" lines reappear. Delete didn't persist.
+
+**Cause:** a row's Delete is a LOCAL edit (`removeLine` filters the `lines` array); it persists only
+on the next Save (`api.journalVouchers.update` sends the whole line set). But a JV must have >= 1
+line (`isValid`/`buildPayload`/backend all require it), so once the last line is deleted Save and
+Done go disabled — there is no way to persist "now empty." Navigating back re-fetches the voucher
+from the DB, restoring every line.
+
+**Fix (user chose "delete the whole voucher"):** new `handleRowDelete(idx)` — on a SAVED unposted
+voucher, deleting the LAST line routes to the existing password-gated whole-voucher delete
+(`handleDeleteAction`) instead of a local `removeLine` that can never be saved. An unsaved new
+voucher's last row just clears locally (nothing persisted); deleting a non-last row is the ordinary
+local edit that persists on the next Save (unchanged). The password prompt's subtitle is
+context-aware (`emptyingViaLastRow`): it explains the row delete is removing the whole voucher
+because a voucher can't be empty.
+
+**Deployed to prod:** frontend-only; dist rebuilt, app restarted (single instance). `npx tsc -b`
+clean; `npx eslint` unchanged at the 4 pre-existing React Compiler errors.
+
+**Files:** `frontend/src/pages/JournalVoucherPage.tsx`.

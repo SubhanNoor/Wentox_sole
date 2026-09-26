@@ -6,6 +6,16 @@ module.exports = {
   VENDORS_ACCOUNTS: '200001',
   CASH_IN_HAND: '100002',
   BANK_ACCOUNTS: '100003', // renamed from CASH_AT_BANKS — see cash_and_bank.md §11 item 6 (naming correction)
+  // CHEQUES IN HAND used to be a chart head of its own (code 100004) that ledger_entries posted to
+  // directly via ac_id. As of migration 038 it is instead a BUSINESS account sitting UNDER
+  // BANK_ACCOUNTS (per the user, 2026-09-26: "cheque in hand will be an account under banks"), so
+  // it rolls up with the banks and postings use ba_id like every real bank. Because BANK_ACCOUNTS
+  // holds many business accounts, that one can't be found by its parent ac_id (the way Cash's is)
+  // and its 10-digit code is serial-assigned (unpredictable across databases). It is marked instead
+  // with this stable token in business_accounts.link_code (a column nothing else uses) and resolved
+  // by it — see businessAccounts.service#getChequesInHandAccount. The old 100004 chart account is
+  // closed by migration 038, not deleted (its historical rows were moved onto the new ba_id).
+  CHEQUES_IN_HAND_BA_LINK: 'CHEQUES_IN_HAND',
   SALES: '300001',
   PURCHASES: '400001',
   COMMISSION_ALLOWED: '400002',

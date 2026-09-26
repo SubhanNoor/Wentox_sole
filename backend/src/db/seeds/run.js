@@ -49,6 +49,32 @@ async function ensureNamedBusinessAccount(pool, acId, chartCode, name) {
   return inserted.recordset[0].ba_id;
 }
 
+// CHEQUES IN HAND — a business account UNDER BANK ACCOUNTS (migration 038), not a chart head of its
+// own any more. Kept idempotent by its link_code marker (nothing else uses business_accounts.link_code),
+// not by ac_id (BANK ACCOUNTS holds many accounts) and not by code (serial-assigned). The reserved
+// business-account code is the next free serial under BANK ACCOUNTS, exactly like a real bank.
+async function ensureChequesInHandAccount(pool, bankAcId) {
+  const existing = await pool.request()
+    .input('link', sql.VarChar, CODES.CHEQUES_IN_HAND_BA_LINK)
+    .query('SELECT ba_id FROM dbo.business_accounts WHERE link_code = @link');
+  if (existing.recordset.length) return existing.recordset[0].ba_id;
+
+  const serialRow = await pool.request()
+    .input('chartCode', sql.VarChar, CODES.BANK_ACCOUNTS)
+    .query(`SELECT ISNULL(MAX(TRY_CAST(RIGHT(code, 4) AS INT)), 0) + 1 AS serial
+            FROM dbo.business_accounts WHERE LEN(code) = 10 AND LEFT(code, 6) = @chartCode`);
+  const code = CODES.BANK_ACCOUNTS + String(serialRow.recordset[0].serial).padStart(4, '0');
+  const inserted = await pool.request()
+    .input('code', sql.VarChar, code)
+    .input('name', sql.NVarChar, 'CHEQUES IN HAND')
+    .input('acId', sql.Int, bankAcId)
+    .input('link', sql.VarChar, CODES.CHEQUES_IN_HAND_BA_LINK)
+    .query(`INSERT INTO dbo.business_accounts (code, name, ac_id, link_code)
+            OUTPUT inserted.ba_id VALUES (@code, @name, @acId, @link)`);
+  console.log('seeded business account: CHEQUES IN HAND (under BANK ACCOUNTS)');
+  return inserted.recordset[0].ba_id;
+}
+
 async function ensureChartAccount(pool, { code, name, groupId, isRestricted = false }) {
   const existing = await pool.request()
     .input('code', sql.VarChar, code)
@@ -130,13 +156,16 @@ async function seed() {
   // Cash needs one exactly as every bank does — schema.sql's own comment on
   // business_accounts.opening_balance says so, and cash_and_bank.md §9 decisions 4/5 require it.
   await ensureNamedBusinessAccount(pool, cashAcId, CODES.CASH_IN_HAND, 'CASH IN HAND');
-  await ensureChartAccount(pool, {
+  const bankAcId = await ensureChartAccount(pool, {
     code: CODES.BANK_ACCOUNTS, name: 'BANK ACCOUNTS', groupId: assetsGroup, isRestricted: true,
   });
   await ensureChartAccount(pool, { code: CODES.SALES, name: 'SALES', groupId: incomeGroup });
   await ensureChartAccount(pool, { code: CODES.PURCHASES, name: 'PURCHASES', groupId: expensesGroup });
   await ensureChartAccount(pool, { code: CODES.COMMISSION_ALLOWED, name: 'COMMISSION ALLOWED', groupId: expensesGroup });
-  await ensureChartAccount(pool, { code: CODES.CHEQUES_IN_HAND, name: 'CHEQUES IN HAND', groupId: assetsGroup });
+  // CHEQUES IN HAND is a business account UNDER BANK ACCOUNTS now (migration 038), not its own chart
+  // head. On a fresh install this is the only place it is created; on an upgraded database migration
+  // 038 has already created it and moved the historical ledger, so this is an idempotent no-op.
+  await ensureChequesInHandAccount(pool, bankAcId);
 
   // --- Payment Trail chart accounts (TASK-17) ---
   await ensureChartAccount(pool, {

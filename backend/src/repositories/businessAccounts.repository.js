@@ -68,6 +68,19 @@ async function findByAcId(acId) {
   return result.recordset[0] || null;
 }
 
+// Resolves a reserved business account by its stable link_code marker — used for CHEQUES IN HAND,
+// which sits under BANK_ACCOUNTS (so it can't be found by parent ac_id, unlike Cash) and has a
+// serial-assigned code (so it can't be hardcoded). link_code is otherwise unused on
+// business_accounts. Only one row should carry a given marker (migration 038 / seed both dedupe on
+// it); TOP 1 by ba_id is a defensive tie-break, never expected to matter.
+async function findByLinkCode(linkCode) {
+  const result = await query(
+    'SELECT TOP 1 * FROM dbo.business_accounts WHERE link_code = @linkCode ORDER BY ba_id',
+    { linkCode: { type: sql.VarChar(20), value: linkCode } },
+  );
+  return result.recordset[0] || null;
+}
+
 // UC-17 setup screen. excludeRestrictedParent hides rows whose parent chart account is
 // is_restricted (Cash at Banks / Directors Drawings, TASK-14) for a non-ADMIN session;
 // excludeClosed hides CLOSED rows for an expense-head selection-list caller (milestone8.md).
@@ -264,6 +277,6 @@ async function hardDelete(transaction, baId) {
 }
 
 module.exports = {
-  nextSerial, insert, updateName, findById, findByAcId, list, findByIdWithRestriction, update, updateOpening,
+  nextSerial, insert, updateName, findById, findByAcId, findByLinkCode, list, findByIdWithRestriction, update, updateOpening,
   setStatus, isPartyLinked, hasLedgerActivity, hasAnyReference, hardDelete, replaceOpeningEntries, allWithOpening,
 };

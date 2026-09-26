@@ -219,10 +219,10 @@ async function resolveDebitSide(paymentMode, bankId, onlineBaId = null) {
     if (!bank.ba_id) throw ApiError.conflict('Bank account has no linked ledger account yet', 'NO_BANK_ACCOUNT');
     return { ba_id: bank.ba_id };
   }
-  // CHEQUE
-  const cheques = await chartAccountsRepository.findByCode(CODES.CHEQUES_IN_HAND);
-  if (!cheques) throw new Error(`Reserved chart account CHEQUES IN HAND (code ${CODES.CHEQUES_IN_HAND}) not found — run npm run seed`);
-  return { ac_id: cheques.ac_id };
+  // CHEQUE — CHEQUES IN HAND is a business account under BANK ACCOUNTS now (migration 038), so the
+  // debit side is a ba_id like every other payment mode, not the old chart ac_id.
+  const cheques = await businessAccountsService.getChequesInHandAccount();
+  return { ba_id: cheques.ba_id };
 }
 
 // Does the actual ledger-writing + status flip inside the CALLER's transaction — factored out of
