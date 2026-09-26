@@ -518,6 +518,23 @@ export default function JournalVoucherPage() {
     setIsPasswordModalOpen(true);
   };
 
+  // A grid row's own Delete. On a SAVED voucher, deleting the LAST line empties it — and a voucher
+  // can't have zero lines, so there is no way to persist "now empty" (Save needs >= 1 line). Rather
+  // than the delete silently doing nothing on reload, deleting the last line deletes the whole
+  // voucher, through the same password prompt the toolbar Delete uses (per the user, 2026-09-26:
+  // "delete entries row by row and delete all... then go back it shows them, delete doesn't
+  // happen"). An UNSAVED new voucher has nothing persisted, so its last row just clears locally;
+  // deleting a non-last row is the ordinary local edit that persists on the next Save.
+  const handleRowDelete = (idx: number) => {
+    if (lines.length === 1 && jvId != null && !isPosted) {
+      setEmptyingViaLastRow(true);
+      handleDeleteAction();
+      return;
+    }
+    beginDetailEdit();
+    removeLine(idx);
+  };
+
   const totals = useMemo(() => {
     const totalDebit = round2(lines.reduce((s, l) => s + (Number(l.debit) || 0), 0));
     const totalCredit = round2(lines.reduce((s, l) => s + (Number(l.credit) || 0), 0));
@@ -712,10 +729,15 @@ export default function JournalVoucherPage() {
   // reverse-never-erase trail, same guard level used on Sale Bill/Sale Return/Purchase.
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const pendingDeleteJvId = useRef<number | null>(null);
+  // True when the whole-voucher delete was reached by deleting the LAST line (not the toolbar's own
+  // Delete) — only changes the confirmation wording so the user understands why a row delete is
+  // about to remove the whole voucher (per the user, 2026-09-26).
+  const [emptyingViaLastRow, setEmptyingViaLastRow] = useState(false);
 
 
   const handleDeletePasswordSuccess = async (password: string) => {
     setIsPasswordModalOpen(false);
+    setEmptyingViaLastRow(false);
     const targetId = pendingDeleteJvId.current;
     pendingDeleteJvId.current = null;
     if (targetId == null) return;
@@ -944,10 +966,12 @@ const nextJvNoPreview = useMemo(
 
         <PasswordPromptModal
           isOpen={isPasswordModalOpen}
-          onClose={() => { setIsPasswordModalOpen(false); pendingDeleteJvId.current = null; }}
+          onClose={() => { setIsPasswordModalOpen(false); pendingDeleteJvId.current = null; setEmptyingViaLastRow(false); }}
           onSuccess={handleDeletePasswordSuccess}
           title="Delete Unposted Journal Voucher"
-          subtitle="This deletes the WHOLE voucher and every line on it — not a single row. It cannot be undone. Enter your password to confirm."
+          subtitle={emptyingViaLastRow
+            ? 'That was the voucher’s last line — a voucher can’t be empty, so deleting it removes the WHOLE voucher. It cannot be undone. Enter your password to confirm.'
+            : 'This deletes the WHOLE voucher and every line on it — not a single row. It cannot be undone. Enter your password to confirm.'}
         />
 
         {/* Find Journal Voucher Modal — jump to any posted or unposted JV by number or reason. */}
@@ -1407,7 +1431,7 @@ const nextJvNoPreview = useMemo(
                       <td className="p-2 text-center whitespace-nowrap">
                         <RowActions
                           onEdit={() => handleRowClick(idx)}
-                          onDelete={() => { beginDetailEdit(); removeLine(idx); }}
+                          onDelete={() => handleRowDelete(idx)}
                           disabled={!rowActionsEnabled}
                           editTitle="Edit this line"
                           deleteTitle="Delete this line"

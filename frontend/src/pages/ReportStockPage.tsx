@@ -199,7 +199,18 @@ export default function ReportStockPage() {
       const byColor: Record<string, { cartons: number; extraPairs: number }> = {};
       group.rows.forEach(r => { byColor[r.color] = { cartons: r.cartons, extraPairs: r.extra_pairs }; });
       const totalPairs = group.rows.reduce((sum, r) => sum + r.total_pairs, 0);
-      return { articleId: group.articleId, commonName: group.commonName, categoryName: group.categoryName, byColor, totalPairs };
+      // Article-level cartons/pairs total (per the user, 2026-09-26): the same cartons/loose-pairs
+      // shape every colour cell uses, but summed across all of the article's colours. A colour's
+      // loose extra_pairs summed across colours can add up to whole cartons, so we RE-NORMALISE
+      // against the article's packing rather than just summing cartons and extra_pairs — that's
+      // what "not full carton like it is for each colour" means. Safe because packing
+      // (effective_packing = COALESCE(article_colors.packing, articles.packing)) is uniform across
+      // a single article's colours in the data (verified: 0 of 104 articles mix packing); the
+      // `packing > 0` guard falls back to a plain sum if that ever stops being true.
+      const packing = group.rows[0]?.effective_packing ?? 0;
+      const totalCartons = packing > 0 ? Math.floor(totalPairs / packing) : group.rows.reduce((sum, r) => sum + r.cartons, 0);
+      const totalLoosePairs = packing > 0 ? totalPairs % packing : group.rows.reduce((sum, r) => sum + r.extra_pairs, 0);
+      return { articleId: group.articleId, commonName: group.commonName, categoryName: group.categoryName, byColor, totalPairs, totalCartons, totalLoosePairs };
     });
   }, [groupedArticles]);
 
@@ -303,10 +314,11 @@ export default function ReportStockPage() {
 
   const handleExportExcel = () => {
     if (activeStockTab === 'current') {
-      const headers = ['Article', 'Category', ...allColorsAcrossArticles.map(c => `${c} (Ctn/Prs)`), 'Total Pairs'];
+      const headers = ['Article', 'Category', ...allColorsAcrossArticles.map(c => `${c} (Ctn/Prs)`), 'Total (Ctn/Prs)', 'Total Pairs'];
       const rows = colorReportRows.map(r => [
         r.commonName, r.categoryName,
         ...allColorsAcrossArticles.map(c => `${r.byColor[c]?.cartons ?? 0}/${r.byColor[c]?.extraPairs ?? 0}`),
+        `${r.totalCartons}/${r.totalLoosePairs}`,
         r.totalPairs
       ]);
       exportRowsToExcel('current-stock-full-report', headers, rows);
@@ -401,6 +413,9 @@ export default function ReportStockPage() {
                 {allColorsAcrossArticles.map(c => (
                   <th key={c} style={{ border: '1px solid #000000', padding: '6px', fontSize: '10.5px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>{c}</th>
                 ))}
+                {/* Total (Ctn/Prs): the article's whole stock in the same cartons/loose-pairs shape
+                    the colour cells use, summed across every colour (per the user, 2026-09-26). */}
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '10.5px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Total (Ctn/Prs)</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '10.5px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Total Pairs</th>
               </tr>
             </thead>
@@ -417,11 +432,16 @@ export default function ReportStockPage() {
                       </td>
                     );
                   })}
+                  <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{`${row.totalCartons}/${row.totalLoosePairs}`}</td>
                   <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{row.totalPairs.toLocaleString()}</td>
                 </tr>
               ))}
               <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
                 <td colSpan={2 + allColorsAcrossArticles.length} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>TOTAL PAIRS ACROSS ALL ARTICLES & COLORS</td>
+                {/* No grand-total cartons here: cartons are only meaningful within one article's
+                    packing, so summing them across articles with different packing would be a
+                    meaningless number. The pairs grand total below stays. */}
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right' }}>—</td>
                 <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{colorReportTotalPairs.toLocaleString()}</td>
               </tr>
             </tbody>
@@ -1372,6 +1392,7 @@ export default function ReportStockPage() {
                 {allColorsAcrossArticles.map(color => (
                   <th key={color} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'center' }}>{color}</th>
                 ))}
+                <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right' }}>Total (Ctn/Prs)</th>
                 <th style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', fontWeight: 'bold', textAlign: 'right' }}>Total Pairs</th>
               </tr>
             </thead>
@@ -1389,11 +1410,14 @@ export default function ReportStockPage() {
                       </td>
                     );
                   })}
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold' }}>{`${r.totalCartons}/${r.totalLoosePairs}`}</td>
                   <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold' }}>{r.totalPairs.toLocaleString()}</td>
                 </tr>
               ))}
               <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2', fontSize: '12px' }}>
                 <td colSpan={3 + allColorsAcrossArticles.length} style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', textTransform: 'uppercase' }}>Report Total:</td>
+                {/* cartons aren't summable across articles of different packing — pairs only */}
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right' }}>—</td>
                 <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', borderBottom: '3px double #000000' }}>{colorReportTotalPairs.toLocaleString()}</td>
               </tr>
             </tbody>
@@ -1463,6 +1487,7 @@ export default function ReportStockPage() {
                     {allColorsAcrossArticles.map(color => (
                       <th key={color} className="p-3 text-center whitespace-nowrap">{color}</th>
                     ))}
+                    <th className="p-3 text-right whitespace-nowrap">Total (Ctn/Prs)</th>
                     <th className="sticky right-0 z-10 bg-slate-50 p-3 text-right whitespace-nowrap border-l" style={{ borderColor: 'var(--border-color)' }}>Total Pairs</th>
                   </tr>
                 </thead>
@@ -1490,6 +1515,9 @@ export default function ReportStockPage() {
                             </td>
                           );
                         })}
+                        <td className="p-3 text-right font-mono font-bold text-slate-800 whitespace-nowrap">
+                          {`${r.totalCartons}/${r.totalLoosePairs}`}
+                        </td>
                         <td className={`sticky right-0 z-10 bg-white p-3 text-right font-bold whitespace-nowrap border-l ${r.totalPairs <= 0 ? 'text-red-600' : 'text-slate-900'}`} style={{ borderColor: 'var(--border-table)' }}>
                           {r.totalPairs.toLocaleString()}
                         </td>
@@ -1500,6 +1528,8 @@ export default function ReportStockPage() {
                 <tfoot>
                   <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
                     <td colSpan={2 + allColorsAcrossArticles.length} className="p-4 text-left font-lora">REPORT TOTAL</td>
+                    {/* cartons aren't summable across articles of different packing — pairs only */}
+                    <td className="p-4 text-right text-slate-400">—</td>
                     <td className="sticky right-0 z-10 bg-slate-50 p-4 text-right text-lg whitespace-nowrap border-l" style={{ color: 'var(--brand-gold)', borderColor: 'var(--border-color)' }}>
                       {colorReportTotalPairs.toLocaleString()} Pairs
                     </td>

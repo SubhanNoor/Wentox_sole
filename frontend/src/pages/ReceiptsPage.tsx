@@ -12,7 +12,7 @@ import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRo
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
 import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
-import { ChevronDown, Undo2, CheckCircle2 } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import WeeklyReceiptsTab from '@/components/WeeklyReceiptsTab';
 import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
@@ -226,7 +226,7 @@ export default function ReceiptsPage() {
   // individual receipts (corrected per the user, 2026-08-26). Only reachable while the whole
   // voucher is UNPOSTED (receiptVouchers.remove() rejects a PARTIAL one — some of its lines already
   // have ledger entries).
-  type PendingDelete = { kind: 'draft' | 'receipt' | 'voucher'; id: number; amount: number };
+  type PendingDelete = { kind: 'draft' | 'receipt' | 'voucher' | 'settlement'; id: number; amount: number };
   const [deleteTarget, setDeleteTarget] = useState<PendingDelete | null>(null);
   // G-05 (changes-14-09-26.md, 2026-09-15): the line most recently ADDED or UPDATED via Done — a
   // pure position indicator (the ▶ gutter marker below), never a selection. Keyed by
@@ -241,21 +241,28 @@ export default function ReceiptsPage() {
   }, [lastEnteredLineId]);
   const handleDeleteConfirmed = async (password: string) => {
     if (!deleteTarget) return;
-    const res = deleteTarget.kind === 'draft'
+    // A settlement is DRAFT-only hard-deleted and its backend remove takes no password (see
+    // settlements.service.js#remove) — the modal still gates it for the same irreversible-action
+    // confirmation every other delete on this page gets.
+    const res = deleteTarget.kind === 'settlement'
+      ? await api.settlements.remove(deleteTarget.id)
+      : deleteTarget.kind === 'draft'
       ? await api.draftReceipts.remove(deleteTarget.id, password)
       : deleteTarget.kind === 'voucher'
       ? await api.receiptVouchers.remove(deleteTarget.id, password)
       : await api.receipts.remove(deleteTarget.id, password);
     setDeleteTarget(null);
     if (!res.ok) return fail('Failed to delete: ' + res.error.message);
-    flash(deleteTarget.kind === 'voucher' ? 'Voucher deleted.' : 'Receipt deleted.');
+    flash(deleteTarget.kind === 'voucher' ? 'Voucher deleted.' : deleteTarget.kind === 'settlement' ? 'Endorsement deleted.' : 'Receipt deleted.');
     refreshAllVouchers();
+    if (deleteTarget.kind === 'settlement') refreshAllSettlements();
     // Only a whole-voucher delete touches voucher_no — a single line's deletion never does.
     if (deleteTarget.kind === 'voucher') refreshDeletedNumbers();
     setBalanceRefreshKey(k => k + 1);
-    // The deleted voucher may be the one open on screen — reset rather than leave the form
-    // pointed at a voucher that no longer exists. Any other delete just re-reads it.
-    if (deleteTarget.kind === 'voucher' && voucher?.voucher_id === deleteTarget.id) startNewVoucher();
+    // The deleted doc may be the one open on screen — reset rather than leave the form pointed at a
+    // record that no longer exists. Any other delete just re-reads the voucher.
+    if (deleteTarget.kind === 'settlement' && receiptId === deleteTarget.id) startNewVoucher();
+    else if (deleteTarget.kind === 'voucher' && voucher?.voucher_id === deleteTarget.id) startNewVoucher();
     else if (voucher) await refreshVoucher(voucher.voucher_id);
     // G-05: the deleted line may have been the pointer — startNewVoucher (above) already clears it
     // via handleNew, this covers the single-line-delete path.
@@ -382,6 +389,14 @@ export default function ReceiptsPage() {
 
   const isViewMode = mode === 'view';
   const isPosted = receiptStatus === 'CONFIRMED';
+  // A saved endorsement (settlement) is the document on screen. Its standard toolbar actions
+  // (Post/Un Post/Edit/Delete) route to the settlement handlers so it behaves like any other
+  // record instead of leaving the standard buttons dead — they were hardwired to the receipt
+  // voucher, so a settlement (which has no voucher) fell through them and only a second, separate
+  // "Post Endorsement" button worked, which the user kept missing (reported 2026-09-26: "nothing
+  // happens even after clicking post"; then "treat endorsement/settlement as a receipt also like a
+  // normal receipt"). Those separate buttons are removed now that the standard ones cover it.
+  const isSettlementDoc = docKind === 'SETTLEMENT' && receiptId != null;
   // Derived from editScope — applied to the header fields and to the entry strip/entries-table
   // interactivity below (2026-08-31). Header fields (Date/Remarks) used to be locked forever once
   // a voucher existed at all (`!!voucher`, regardless of mode/scope) — a genuine bug, since it left
@@ -1450,9 +1465,17 @@ const nextVoucherNo = useMemo(
           <DocumentToolbar
             newAction={{ onClick: () => { startNewVoucher(); markNewClicked(); }, title: 'New Voucher', ref: newButtonRef }}
             remove={{
-              onClick: handleDeleteVoucherClick,
-              disabled: deletedPlaceholder != null || !voucher || voucher.status !== 'UNPOSTED',
-              title: 'Delete this whole voucher — every entry on it goes too (asks for your password)',
+              onClick: () => {
+                if (isSettlementDoc) { setDeleteTarget({ kind: 'settlement', id: receiptId!, amount }); return; }
+                handleDeleteVoucherClick();
+              },
+              // A posted settlement must be unposted first, same as a voucher; only a DRAFT one deletes.
+              disabled: isSettlementDoc
+                ? isPosted
+                : (deletedPlaceholder != null || !voucher || voucher.status !== 'UNPOSTED'),
+              title: isSettlementDoc
+                ? 'Delete this endorsement'
+                : 'Delete this whole voucher — every entry on it goes too (asks for your password)',
             }}
             editRow={{
               onClick: () => {
@@ -1465,6 +1488,9 @@ const nextVoucherNo = useMemo(
             edit={{
               onClick: () => {
                 setMode('edit');
+                // A settlement has no voucher header/Master-Detail split — Edit just unlocks its
+                // fields for an update, which handleDone already routes to settlements.update.
+                if (isSettlementDoc) { requestAnimationFrame(() => firstFieldRef.current?.focus()); return; }
                 if (editScope === 'master' && voucher) {
                   setDate(voucher.voucher_date);
                   setVoucherRemarks(voucher.remarks ?? '');
@@ -1472,7 +1498,9 @@ const nextVoucherNo = useMemo(
                 if (editScope === 'detail') requestAnimationFrame(() => firstEntryFieldRef.current?.focus());
                 else requestAnimationFrame(() => firstFieldRef.current?.focus());
               },
-              disabled: deletedPlaceholder != null || !voucher || voucher.status === 'POSTED',
+              disabled: isSettlementDoc
+                ? (!isViewMode || isPosted)
+                : (deletedPlaceholder != null || !voucher || voucher.status === 'POSTED'),
             }}
             save={{ submit: true, form: 'receipt-entry-form', disabled: isViewMode || deletedPlaceholder != null, title: 'Save this entry into the voucher' }}
             done={{ submit: true, form: 'receipt-entry-form', disabled: isViewMode || deletedPlaceholder != null, title: isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done — add this entry to the voucher' }}
@@ -1483,8 +1511,20 @@ const nextVoucherNo = useMemo(
             last={{ onClick: handleNavLast, disabled: !canNavNext }}
             print={{ onClick: () => window.print(), disabled: !voucher }}
             find={{ onClick: () => setIsFindOpen(true) }}
-            unpost={{ onClick: handleUnpostVoucher, disabled: deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy, title: 'Unpost Voucher' }}
-            post={{ onClick: async () => { await handlePostVoucher(); focusNewButton(); }, disabled: deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy, title: 'Post Voucher' }}
+            unpost={{
+              onClick: () => { if (isSettlementDoc) { handleUnpost(); return; } handleUnpostVoucher(); },
+              disabled: isSettlementDoc
+                ? (!isViewMode || !isPosted)
+                : (deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy),
+              title: isSettlementDoc ? 'Un Post Endorsement' : 'Unpost Voucher',
+            }}
+            post={{
+              onClick: async () => { if (isSettlementDoc) { await handlePost(); return; } await handlePostVoucher(); focusNewButton(); },
+              disabled: isSettlementDoc
+                ? (!isViewMode || isPosted)
+                : (deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy),
+              title: isSettlementDoc ? 'Post Endorsement' : 'Post Voucher',
+            }}
             exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
             saveAndPost={{ disabled: true, title: 'Not used here — each entry is saved as you add it; press Post when the voucher is complete' }}
             postAll={{ onClick: async () => { await handlePostAllVouchers(); focusNewButton(); }, disabled: navUnpostedVouchers.length === 0 || postAllVouchersBusy || navFilter === 'posted', title: `Post All (${navUnpostedVouchers.length})` }}
@@ -1499,21 +1539,10 @@ const nextVoucherNo = useMemo(
               title: 'Export Excel',
             }}
           >
-            {/* Endorsements post on their own, not with a voucher — page-specific, so they sit
-                after the standard set rather than inside it. */}
-            {docKind === 'SETTLEMENT' && mode === 'view' && receiptId != null && deletedPlaceholder == null && (
-              isPosted ? (
-                <button type="button" onClick={handleUnpost} title="Unpost Endorsement" className="toolbar-btn">
-                  <Undo2 size={20} strokeWidth={2.5} className="text-rose-600" />
-                  <span>Unpost</span>
-                </button>
-              ) : (
-                <button type="button" onClick={handlePost} title="Post Endorsement" className="toolbar-btn">
-                  <CheckCircle2 size={20} strokeWidth={2.5} className="text-emerald-600" />
-                  <span>Post</span>
-                </button>
-              )
-            )}
+            {/* The endorsement's Post/Un Post used to be separate buttons here — removed 2026-09-26.
+                The standard Post/Un Post above now route to handlePost/handleUnpost for a settlement
+                (isSettlementDoc), so there is one Post button that always does the right thing
+                instead of a dead standard one plus a separate working one. */}
           </DocumentToolbar>
 
               {/* Posted/Unposted — picks which list Previous/Next/First/Last page through. Unposted

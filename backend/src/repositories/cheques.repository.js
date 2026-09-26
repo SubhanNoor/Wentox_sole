@@ -248,7 +248,19 @@ async function findAllocationById(allocationId) {
 // allocations only (DEPOSIT is excluded on purpose; returning a deposit is "move it to a different
 // bank," a different action, not this one).
 async function listEndorsedAllocations(filters = {}) {
-  const conditions = ["ca.status = 'ACTIVE'", "ca.disposition_type IN ('VENDOR_PAYMENT','EXPENSE_PAYMENT')"];
+  // ca.status is the ENDORSEMENT's lifecycle (ACTIVE/REVERSED); ch.cheque_status is the CHEQUE's
+  // (PENDING/ENDORSED/CLEARED/BOUNCED/RETURNED…) — two independent things. Filtering on ca.status
+  // alone let a CLEARED endorsed cheque keep showing in Cheque > Returns: markCleared() is a pure
+  // status flip that never reverses the allocation, so it stays ACTIVE (reported 2026-09-26, 10
+  // such rows in production). The cheque_status guard mirrors cheques.service.js#reverseAllocation's
+  // own TERMINAL_STATUSES ['BOUNCED','RETURNED','CLEARED'] check exactly — that action already
+  // rejected these, so this only stops the list offering a row the action would refuse, leaving the
+  // genuinely returnable ENDORSED/PARTIALLY_ENDORSED states.
+  const conditions = [
+    "ca.status = 'ACTIVE'",
+    "ca.disposition_type IN ('VENDOR_PAYMENT','EXPENSE_PAYMENT')",
+    "ch.cheque_status NOT IN ('CLEARED','BOUNCED','RETURNED')",
+  ];
   const params = {};
 
   if (filters.date_from) {
