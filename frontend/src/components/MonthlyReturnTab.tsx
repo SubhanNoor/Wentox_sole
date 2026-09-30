@@ -3,14 +3,14 @@ import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { SaleReturnRow, CustomerRow, SubCustomerRow, CityRow } from '@/lib/api';
 import { formatDate, formatCartons } from '@/lib/utils';
-import { Calendar, Search, ArrowLeft, FileText, Edit2, Printer, ChevronDown, Check, MapPin } from 'lucide-react';
+import { Calendar, Search, ArrowLeft, FileText, Printer, ChevronDown, Check, MapPin, Eye } from 'lucide-react';
 
 interface MonthlyReturnTabProps {
-  onEditReturn: (ret: SaleReturnRow) => void;
+  onOpenReturn: (ret: SaleReturnRow) => void;
   onPrintReturn: (ret: SaleReturnRow) => void;
 }
 
-export default function MonthlyReturnTab({ onEditReturn, onPrintReturn }: MonthlyReturnTabProps) {
+export default function MonthlyReturnTab({ onOpenReturn, onPrintReturn }: MonthlyReturnTabProps) {
   const [returns, setReturns] = useState<SaleReturnRow[]>([]);
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [subCustomers, setSubCustomers] = useState<SubCustomerRow[]>([]);
@@ -213,11 +213,11 @@ export default function MonthlyReturnTab({ onEditReturn, onPrintReturn }: Monthl
                         <div className="flex justify-center items-center gap-2">
                           <button
                             type="button"
-                            onClick={() => onEditReturn(ret)}
-                            title="Edit Return"
+                            onClick={() => onOpenReturn(ret)}
+                            title="Open Return — posted returns can't be edited; Un Post it first"
                             className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
                           >
-                            <Edit2 size={15} />
+                            <Eye size={15} />
                           </button>
                           <button
                             type="button"

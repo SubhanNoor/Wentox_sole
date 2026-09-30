@@ -99,35 +99,22 @@ function list(filters = {}) {
   });
 }
 
-// Editing a not-yet-posted return just replaces header/items (nothing posted yet, nothing to
-// reverse). Editing an already-posted return reverses its live ledger/stock rows and reapplies
-// them against the new totals in the same transaction — the unpost-edit-repost cycle collapsed
-// into one atomic step so "posted" (derived from ledger_entries — see repository.isPosted) never
-// visibly flips off from the user's perspective (see saleReturns.ipc.js for the password guard,
-// which only applies to this already-posted-edit branch).
+// Posted returns can't be edited anywhere (per the user, 2026-09-28) — Un Post (unconfirm) moves
+// the return back to a draft, which is edited through draftSaleReturns.service.js and posted again.
+// sale_returns only ever holds posted rows, so this only replaces a header/items for a row that
+// somehow isn't posted.
 async function update(id, payload) {
   const existing = await getById(id);
+  if (existing.is_posted) {
+    throw ApiError.conflict('A posted return can\'t be edited — Un Post it first', 'POSTED_NOT_EDITABLE');
+  }
   const { lines, totals } = await resolveLinesAndTotals(payload);
   const ret = buildReturnFields(payload, totals);
 
   await withTransaction(async (transaction) => {
-    if (existing.is_posted) {
-      await repository.deleteLedgerAndStock(transaction, id);
-    }
-
     await repository.updateHeader(transaction, id, ret);
     await repository.deleteItems(transaction, id);
     await repository.insertItems(transaction, id, lines);
-
-    if (existing.is_posted) {
-      await postLedgerAndStock(transaction, {
-        returnId: id,
-        customerId: ret.customer_id,
-        netValue: totals.netValue,
-        returnDate: ret.return_date,
-        items: lines,
-      });
-    }
   });
 
   return getById(id);

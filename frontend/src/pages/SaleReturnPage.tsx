@@ -5,7 +5,7 @@ import WeeklyReturnTab from '@/components/WeeklyReturnTab';
 import MonthlyReturnTab from '@/components/MonthlyReturnTab';
 import OverallReturnTab from '@/components/OverallReturnTab';
 import FindReturnTab from '@/components/FindReturnTab';
-import { Plus, X, ChevronDown } from 'lucide-react';
+import { Plus, ChevronDown } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, nextSystemNoPreview, mergeWithDeleted } from '@/lib/utils';
@@ -18,11 +18,14 @@ import wentoxLogo from '@/assets/wentox_logo.png';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
 import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
+import { useBrowseFilterFollowsDocument } from '@/hooks/useBrowseFilterFollowsDocument';
+import { useLatestOnly } from '@/hooks/useLatestOnly';
 import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
   SaleReturnRow, SaleReturnCreateInput, SaleReturnItemInput,
-  DraftSaleReturnRow, ConfirmAllResult, SaleBillRow, SaleBillItemRow, DeletedNumberRow
+  DraftSaleReturnRow, ConfirmAllResult, DeletedNumberRow,
+  RegionRow, CityRow, BusinessAccountRow, StockRow
 } from '@/lib/api';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
@@ -63,9 +66,12 @@ function newUiItem(): UiItem {
 
 function recalcItem(item: UiItem): UiItem {
   const pairs = pairsFor(item.cartons, item.packing);
-  const gross = pairs * item.rate;
-  const discountValue = Math.round(gross * (item.discountPercent / 100));
-  const value = Math.max(0, gross - discountValue);
+  // Rounded to paisa exactly as the backend does (saleReturnMath.js round2) — rounding to whole
+  // rupees here made the screen's Value differ from what gets saved.
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const gross = round2(pairs * item.rate);
+  const discountValue = round2(gross * (item.discountPercent / 100));
+  const value = Math.max(0, round2(gross - discountValue));
   return { ...item, pairs, discountValue, value };
 }
 
@@ -89,13 +95,21 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [stores, setStores] = useState<StoreRow[]>([]);
   const [addas, setAddas] = useState<AddaRow[]>([]);
+  const [regions, setRegions] = useState<RegionRow[]>([]);
+  const [cities, setCities] = useState<CityRow[]>([]);
+  const [stockRows, setStockRows] = useState<StockRow[]>([]);
+  // "Main A/C" — the customer's linked business account's PARENT chart account, same readout as
+  // Sale Bill's (per the user, 2026-09-28: Sale Return mirrors Sale Bill's layout exactly).
+  const [businessAccounts, setBusinessAccounts] = useState<BusinessAccountRow[]>([]);
   const [variantsByArticle, setVariantsByArticle] = useState<Record<number, ProductVariantRow[]>>({});
   const [lookupError, setLookupError] = useState('');
 
   useEffect(() => {
     (async () => {
-      const [c, sc, p, st, ad] = await Promise.all([
-        api.listCustomers(), api.listSubCustomers(), api.listProducts(), api.listStores(), api.listAddas()
+      const [c, sc, p, st, ad, rg, ct, stRes, baRes] = await Promise.all([
+        api.listCustomers(), api.listSubCustomers(), api.listProducts(),
+        api.listStores(), api.listAddas(), api.listRegions(), api.listCities(),
+        api.reports.stock(), api.listBusinessAccounts()
       ]);
       const failures: string[] = [];
       if (c.ok) setCustomers(c.data); else failures.push(c.error.message);
@@ -103,8 +117,17 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       if (p.ok) setProducts(p.data); else failures.push(p.error.message);
       if (st.ok) setStores(st.data); else failures.push(st.error.message);
       if (ad.ok) setAddas(ad.data); else failures.push(ad.error.message);
+      if (rg.ok) setRegions(rg.data); else failures.push(rg.error.message);
+      if (ct.ok) setCities(ct.data); else failures.push(ct.error.message);
+      if (stRes.ok) setStockRows(stRes.data);
+      if (baRes.ok) setBusinessAccounts(baRes.data);
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
+  }, []);
+
+  const refreshStock = useCallback(async () => {
+    const res = await api.reports.stock();
+    if (res.ok) setStockRows(res.data);
   }, []);
 
   const fetchVariants = useCallback(async (articleId: number) => {
@@ -136,7 +159,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   // Password Modal Protection State
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
-  const [passwordActionType, setPasswordActionType] = useState<'save_return' | 'save_and_post' | 'post_return' | 'delete_unposted_return' | null>(null);
+  const [passwordActionType, setPasswordActionType] = useState<'save_and_post' | 'post_return' | 'delete_unposted_return' | null>(null);
 
   // Draft persistence — see src/hooks/usePersistentField.ts. Only real in-progress entry data is
   // persisted; which EXISTING record is loaded (returnId/currentReturnIsPosted/mode) is
@@ -180,24 +203,98 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // Line items state
   const [items, setItems] = usePersistentField<UiItem[]>('sale-return', 'items', []);
 
+  // Sale Bill's "Delivery" field: a typed code where "1" means SAME/direct and anything else
+  // unlocks Sub Cust. (Delivery Agent). sale_returns has no delivery_type column — a return with no
+  // sub_customer_id IS a SAME delivery — so this is derived on load and never saved on its own.
+  const [deliveryType, setDeliveryType] = usePersistentField<'1' | 'custom'>('sale-return', 'deliveryType', '1');
+  const [deliveryCode, setDeliveryCode] = usePersistentField('sale-return', 'deliveryCode', '1');
+  const handleDeliveryCodeChange = (code: string) => {
+    setDeliveryCode(code);
+    const same = code.trim() === '1';
+    setDeliveryType(same ? '1' : 'custom');
+    if (same) setSubCustomerId('');
+  };
+  const applyDeliveryFromSubCustomer = (subCustId: number | null) => {
+    setDeliveryType(subCustId != null ? 'custom' : '1');
+    setDeliveryCode(subCustId != null ? '2' : '1');
+  };
+  // True only for a return created (first saved) during this sitting — posting one of those drops
+  // straight to a fresh return for the next one, same as Sale Bill's createdInThisRun. Opening an
+  // existing draft/return resets it, so posting an older one leaves it on screen.
+  const createdInThisRun = useRef(false);
+
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [isPrintingSingle, setIsPrintingSingle] = useState(false);
 
   const selectedCustomer = useMemo(() => customers.find(c => c.customer_id === Number(customerId)), [customers, customerId]);
 
-  const sortedCustomers = useMemo(() => [...customers].sort((a, b) => a.name.localeCompare(b.name)), [customers]);
-
-  // Option lists for the fields converted off native <select>. citiesInRegion keeps the dependent
-  // filtering the select had: pick a region and the city list narrows to it, no region means all.
   const storeOptions = useMemo(
     () => stores.map(st => ({ value: String(st.store_id), label: st.name })),
     [stores]
   );
-  const customerOptions = useMemo(
-    () => sortedCustomers.map(c => ({ value: String(c.customer_id), label: c.name })),
-    [sortedCustomers]
-  );
+  const customerOptions = useMemo(() => {
+    const regionName = (id: number) => regions.find(r => r.region_id === id)?.name || '';
+    const cityName = (id: number | null) => cities.find(ct => ct.city_id === id)?.name || '';
+    return [...customers]
+      .sort((a, b) => {
+        const regionCmp = regionName(a.region_id).localeCompare(regionName(b.region_id));
+        if (regionCmp !== 0) return regionCmp;
+        return cityName(a.city_id).localeCompare(cityName(b.city_id));
+      })
+      .map(c => ({
+        value: String(c.customer_id),
+        label: `${c.name} — ${regionName(c.region_id) || 'No Region'} / ${cityName(c.city_id) || 'No City'}`
+      }));
+  }, [customers, regions, cities]);
+
+  const selectedMainAc = useMemo(() => {
+    if (selectedCustomer?.ba_id == null) return null;
+    return businessAccounts.find(b => b.ba_id === selectedCustomer.ba_id) ?? null;
+  }, [businessAccounts, selectedCustomer]);
+
+  // Customer — Sale Bill's typable SearchModal lookup (was a SearchableSelect dropdown here).
+  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
+  const customerTriggerRef = useRef<HTMLInputElement>(null);
+  const [customerSearchText, setCustomerSearchText] = useState('');
+  const [customerModalSeed, setCustomerModalSeed] = useState('');
+  useEffect(() => {
+    const opt = customerOptions.find(o => o.value === customerId);
+    setCustomerSearchText(opt?.label ?? selectedCustomer?.name ?? '');
+  }, [customerId, customerOptions, selectedCustomer]);
+  const openCustomerModal = () => { if (isViewMode) return; setCustomerModalSeed(''); setIsCustomerModalOpen(true); };
+  function handleCustomerTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); openCustomerModal(); }
+    else if (e.key === 'Enter') {
+      e.preventDefault(); e.stopPropagation();
+      // One Enter is enough when the typed text already names exactly one customer.
+      const direct = findDirectMatch(customerOptions, customerSearchText);
+      if (direct) { selectCustomer(direct); return; }
+      setCustomerModalSeed(customerSearchText); setIsCustomerModalOpen(true);
+    }
+  }
+  // Shared by the modal's own pick and the direct-match Enter above.
+  function selectCustomer(val: string) {
+    setCustomerId(val);
+    setDeliveryType('1');
+    setDeliveryCode('1');
+    setSubCustomerId('');
+    setIsCustomerModalOpen(false);
+    requestAnimationFrame(() => focusNextField(customerTriggerRef.current));
+  }
+
+  // Add new customer modal — same as Sale Bill's.
+  const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false);
+  const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerRegionId, setNewCustomerRegionId] = useState('');
+  const [newCustomerCityId, setNewCustomerCityId] = useState('');
+  const closeAddCustomer = () => {
+    setIsAddCustomerOpen(false);
+    setNewCustomerName('');
+    setNewCustomerRegionId('');
+    setNewCustomerCityId('');
+  };
+  useEscapeToClose(isAddCustomerOpen, closeAddCustomer);
 
   // TO Store — typable <input> opening the same centered SearchModal popup as every other lookup
   // on this form (same pattern as Purchase's Vendor field / Sale Bill's Store field, 2026-08-26).
@@ -210,7 +307,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setStoreSearchText(opt?.label ?? '');
   }, [storeId, storeOptions]);
   const openStoreModal = () => {
-    if (isViewMode || isCopiedFromBill) return;
+    if (isViewMode) return;
     setStoreModalSeed('');
     setIsStoreModalOpen(true);
   };
@@ -226,11 +323,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (isViewMode || isCopiedFromBill) return;
+      if (isViewMode) return;
       setStoreModalSeed(storeSearchText);
       setIsStoreModalOpen(true);
     }
   }
+
 
   // Delivery Agent (Sub Customer) — same typable pattern, replacing SearchableSelect's rounded
   // dropdown (per the user, 2026-08-26: matched against SaleBillPage's own Sub Cust. field).
@@ -247,7 +345,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setSubCustSearchText(opt?.label ?? '');
   }, [subCustomerId, subCustomerOptions]);
   const openSubCustModal = () => {
-    if (isViewMode || isCopiedFromBill) return;
+    if (isViewMode || deliveryType === '1') return;
     setSubCustModalSeed('');
     setIsSubCustModalOpen(true);
   };
@@ -259,7 +357,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (isViewMode || isCopiedFromBill) return;
+      if (isViewMode) return;
       setSubCustModalSeed(subCustSearchText);
       setIsSubCustModalOpen(true);
     }
@@ -270,16 +368,16 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   const [isAddaModalOpen, setIsAddaModalOpen] = useState(false);
   const [addaSearchText, setAddaSearchText] = useState('');
   const [addaModalSeed, setAddaModalSeed] = useState('');
-  const addaOptions = useMemo(
-    () => addas.map(ad => ({ value: String(ad.adda_id), label: ad.name })),
-    [addas]
-  );
+  const addaOptions = useMemo(() => [
+    { value: '', label: 'Not set yet (fill in later)' },
+    ...addas.map(ad => ({ value: String(ad.adda_id), label: ad.name })),
+  ], [addas]);
   useEffect(() => {
     const opt = addaOptions.find(o => o.value === addaId);
     setAddaSearchText(opt?.label ?? '');
   }, [addaId, addaOptions]);
   const openAddaModal = () => {
-    if (isViewMode || isCopiedFromBill) return;
+    if (isViewMode) return;
     setAddaModalSeed('');
     setIsAddaModalOpen(true);
   };
@@ -291,7 +389,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (isViewMode || isCopiedFromBill) return;
+      if (isViewMode) return;
       setAddaModalSeed(addaSearchText);
       setIsAddaModalOpen(true);
     }
@@ -358,6 +456,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       row = res.data;
     }
 
+    createdInThisRun.current = false;
     setReturnId(row.return_id);
     setCurrentSystemNo(row.system_no);
     setCurrentReturnIsPosted(row.is_posted);
@@ -365,6 +464,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setStoreId(row.store_id != null ? String(row.store_id) : '');
     setCustomerId(String(row.customer_id));
     setSubCustomerId(row.sub_customer_id != null ? String(row.sub_customer_id) : '');
+    applyDeliveryFromSubCustomer(row.sub_customer_id ?? null);
     setBillNo(row.bill_no);
     setGpNo(row.gp_no || '');
     setBiltyNo(row.bilty_no || '');
@@ -394,10 +494,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     setSelectedIndex(null);
     setLastEnteredIndex(null);
     loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
-    // Same reasoning as loadDraftIntoForm below — a saved return carries no record of which
-    // original bill it might have been linked to, so reopening it is always unlocked/manual.
-    setCopyFromBillId('');
-    setSourceBillItems([]);
     setErrorMsg('');
   };
 
@@ -409,6 +505,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // new returns from. Posted is purely a browse mode over already-posted returns (First/Prev./
   // Next/Last + Un Post).
   const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('unposted');
+  // Dropdown follows whatever document is on screen — see the hook for why.
+  useBrowseFilterFollowsDocument(returnId, currentReturnIsPosted, setBrowseFilter);
   const [postedReturns, setPostedReturns] = useState<SaleReturnRow[]>([]);
 
   const refreshPostedReturns = useCallback(async () => {
@@ -478,24 +576,31 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // - To Unposted: load the most recently saved draft (or a blank New return if there isn't one),
   //   then focus New — Enter on it clicks New and lands on Date, ready to type the next return.
   // - To Posted: re-fetch and jump straight to the most recently posted return for browsing.
-  const handleBrowseFilterChange = async (next: 'posted' | 'unposted') => {
+  // Queued via useLatestOnly: the page's own auto-open runs this same handler, and a choice made
+  // while that is still loading must not be overwritten when it finishes (2026-09-30).
+  const filterChanges = useLatestOnly();
+  const handleBrowseFilterChange = (next: 'posted' | 'unposted', opts: { auto?: boolean } = {}) => {
+    // The page's own auto-open never overrides a choice the user already made.
+    if (opts.auto && filterChanges.hasRun()) return Promise.resolve(undefined);
     setBrowseFilter(next);
-    if (next === 'unposted') {
-      // Re-fetch first, exactly like the Posted branch below — reading the list straight out
-      // of state meant a draft posted or deleted since it was last loaded was still in it, so
-      // switching to Unposted opened a "draft" that no longer exists (2026-09-04).
-      const fresh = await refreshDrafts();
-      const list = [...(fresh ?? drafts)].sort((a, b) => a.system_no - b.system_no);
-      const latest = list[list.length - 1];
-      const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
-      if (!opened) handleNew();
-      requestAnimationFrame(() => newButtonRef.current?.focus());
-    } else {
-      const fresh = await refreshPostedReturns();
-      const list = [...(fresh ?? postedReturns)].sort((a, b) => a.system_no - b.system_no);
-      const latest = list[list.length - 1];
-      if (latest) { await loadReturnRow(latest); setMode('view'); }
-    }
+    return filterChanges.run(async () => {
+      if (next === 'unposted') {
+        // Re-fetch first, exactly like the Posted branch below — reading the list straight out
+        // of state meant a draft posted or deleted since it was last loaded was still in it, so
+        // switching to Unposted opened a "draft" that no longer exists (2026-09-04).
+        const fresh = await refreshDrafts();
+        const list = [...(fresh ?? drafts)].sort((a, b) => a.system_no - b.system_no);
+        const latest = list[list.length - 1];
+        const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
+        if (!opened) handleNew();
+        requestAnimationFrame(() => newButtonRef.current?.focus());
+      } else {
+        const fresh = await refreshPostedReturns();
+        const list = [...(fresh ?? postedReturns)].sort((a, b) => a.system_no - b.system_no);
+        const latest = list[list.length - 1];
+        if (latest) { await loadReturnRow(latest); setMode('view'); }
+      }
+    });
   };
 
   // Toolbar's Find button — a quick jump to any return (posted or unposted) by bill number or
@@ -528,230 +633,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     }
   };
 
-  // ── Original Sale Bill linkage (2026-08-26, per the user — same architecture as
-  // PurchaseReturnPage's isCopiedFromPurchase/sourcePurchaseItems, adapted stronger per this
-  // page's own spec): "Manual entry" (default) vs picking an actual bill to return against.
-  //
-  // - Manual entry + typing a Manual Invoice No. that matches a posted Sale Bill's own bill_no
-  //   (on blur): ALL master fields auto-fill FROM that bill and lock (non-editable) — Store,
-  //   Customer, Delivery Agent, Adda, GP No., Bilty No., Remarks — so they can't quietly drift
-  //   from the document being returned. Articles are still added one at a time by hand below;
-  //   each is checked against the matched bill's own items (by variant) as it's picked, and takes
-  //   that line's exact rate — non-editable — while cartons stays free to type (a return can be
-  //   partial).
-  // - Picking an actual bill via "Find Bill to Return" instead: same field-lock, but ALSO copies
-  //   every one of that bill's items in at once (still individually re-editable/removable, still
-  //   validated+priced against the source if touched).
-  //
-  // Both paths funnel through this one function — `copyItems` is the only difference between them.
-  const [copyFromBillId, setCopyFromBillId] = usePersistentField('sale-return', 'copyFromBillId', '');
-  const [sourceBillItems, setSourceBillItems] = usePersistentField<SaleBillItemRow[]>('sale-return', 'sourceBillItems', []);
-  const isCopiedFromBill = !!copyFromBillId;
-
-  const [priorBills, setPriorBills] = useState<SaleBillRow[]>([]);
-  useEffect(() => {
-    (async () => {
-      const res = await api.saleBills.list();
-      if (res.ok) setPriorBills(res.data);
-    })();
-  }, []);
-  const priorBillOptions = useMemo(() => priorBills.map(b => ({
-    value: String(b.bill_id),
-    label: `#${b.bill_id} · ${b.bill_no || 'No Bill No.'} · ${formatDate(b.bill_date)} — ${formatCurrency(b.net_value)}`
-  })), [priorBills]);
-
-  const handleCopyFromBill = async (billIdStr: string, copyItems: boolean) => {
-    setCopyFromBillId(billIdStr);
-    if (!billIdStr) {
-      setSourceBillItems([]);
-      return;
-    }
-    const res = await api.saleBills.get(Number(billIdStr));
-    if (!res.ok) {
-      setErrorMsg('Failed to load original bill: ' + res.error.message);
-      return;
-    }
-    const bill = res.data;
-    // Manual Invoice No. itself has to reflect whichever bill is now linked too — picking one via
-    // "Find Bill to Return" (copyItems=true) previously left this field untouched/blank, so typing
-    // over it afterward had nothing correct to compare against (per the user, 2026-08-26: "when I
-    // select specific it did not fill the invoice number"). The manual-match path (copyItems=false)
-    // already got here BECAUSE this field held the matching text, so this is a no-op there.
-    setBillNo(bill.bill_no);
-    setStoreId(bill.store_id != null ? String(bill.store_id) : '');
-    setCustomerId(String(bill.customer_id));
-    setSubCustomerId(bill.sub_customer_id != null ? String(bill.sub_customer_id) : '');
-    setGpNo(bill.gp_no || '');
-    setBiltyNo(bill.bilty_no || '');
-    setAddaId(bill.adda_id != null ? String(bill.adda_id) : '');
-    setRemarks(`Return from Sale Bill No. ${bill.bill_no}`);
-    setInvoiceDiscount(bill.invoice_discount || 0);
-    setSourceBillItems(bill.items);
-
-    if (copyItems) {
-      // Explicit "Find Bill to Return" pick — every item copies in at once, same as the master
-      // fields (per the user: "if user select non manual and any bill then all the articles
-      // appear along with every field").
-      const mappedItems: UiItem[] = bill.items.map(it => {
-        const article = products.find(p => p.article_id === it.article_id);
-        return recalcItem({
-          uid: 'row_' + Date.now() + '_' + it.item_id,
-          articleId: article?.article_id ?? null,
-          variantId: it.variant_id,
-          label: `${it.article_name || 'Article'} — ${it.color || ''}`,
-          packing: it.pairs && it.cartons ? it.pairs / it.cartons : 0,
-          cartons: it.cartons,
-          pairs: it.pairs,
-          rate: it.rate,
-          discountPercent: it.discount_percent,
-          discountValue: it.discount_value,
-          value: it.value
-        });
-      });
-      setItems(mappedItems);
-      mappedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
-    } else {
-      // Manual entry, auto-matched by typed Manual Invoice No. — master fields only; articles
-      // are still added one at a time through the entry strip below, each checked against
-      // sourceBillItems (see articleAgainstBillError).
-      setItems([]);
-    }
-    setEntry(newUiItem());
-    setEditingIndex(null);
-    setSelectedIndex(null);
-    setLastEnteredIndex(null);
-    setSuccessMsg(`Linked to Sale Bill No. ${bill.bill_no}${copyItems ? ' — items copied' : ' — master fields filled, add articles below'}`);
-    setTimeout(() => setSuccessMsg(''), 3000);
-  };
-
-  // Manual-entry auto-lookup by typed Manual Invoice No. — fires on Tab/Enter/blur (not every
-  // keystroke) so it doesn't fight the user mid-type. An exact, case-insensitive match against a
-  // posted Sale Bill's own bill_no reuses handleCopyFromBill with copyItems=false. The field stays
-  // editable even once locked (2026-08-26, per the user: "we can change the bill number for
-  // another bill") — typing a DIFFERENT bill no. here and committing re-runs this same lookup and
-  // re-locks to whichever bill now matches; committing one that matches nothing instead falls back
-  // to Clear Link, unlocking everything (there's nothing left to stay locked to).
-  //
-  // `fallbackFocusEl` (2026-08-26, per the user — Customer's dropdown was popping open uninvited):
-  // the field's own onKeyDown below intercepts Tab/Enter and preventDefault()s the browser's
-  // native focus-advance, specifically so it CAN'T land on Customer while this async lookup is
-  // still in flight — Customer's SearchableSelect auto-opens its panel on focus, and the browser's
-  // default Tab lands there well before setCustomerId's disabled-state update actually commits.
-  // With the native advance suppressed, focus now moves only once WE decide where — straight to
-  // the first article field on a match, or normally onward via fallbackFocusEl when there's none.
-  const prefillFromSaleBill = (typedBillNo: string, fallbackFocusEl?: HTMLInputElement | null) => {
-    const typed = typedBillNo.trim().toLowerCase();
-    if (!typed) {
-      if (isCopiedFromBill) handleClearBillLink();
-      if (fallbackFocusEl) requestAnimationFrame(() => focusNextField(fallbackFocusEl));
-      return;
-    }
-    const match = priorBills.find(b => (b.bill_no || '').trim().toLowerCase() === typed);
-    if (match) {
-      setErrorMsg('');
-      void handleCopyFromBill(String(match.bill_id), false).then(() => {
-        // Master fields are done (just auto-filled and locked) — jump straight to the first
-        // article field so the user can start typing articles right away, per the user
-        // (2026-08-26): "the mouse goes to the first article field" (mirrors
-        // PurchaseReturnPage's identical handleBillNoBlur behavior).
-        requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
-      });
-    } else {
-      // No match — every Manual Invoice No. has to reference a real Sale Bill (per the user,
-      // 2026-08-26: "if user enter some kind of invoice number that not exist show error and do
-      // not move on further"). If this was previously locked to a bill, unlock everything first —
-      // there's nothing left to stay locked to — then block here: show the error and put focus
-      // straight back on the field instead of letting Tab/blur carry it onward, so the user has to
-      // either fix the number or clear it before doing anything else.
-      if (isCopiedFromBill) handleClearBillLink();
-      setErrorMsg(`No Sale Bill found with Manual Invoice No. "${typedBillNo.trim()}".`);
-      if (fallbackFocusEl) requestAnimationFrame(() => fallbackFocusEl.focus());
-    }
-  };
-  // Tab/Enter already triggered the lookup above (and preventDefault()ed the native focus-advance)
-  // — the field's onBlur below must not also re-run it when that programmatic focus change fires
-  // its own blur a moment later. Cleared right after use; a genuine mouse-click-elsewhere blur
-  // (this ref still false) still runs prefillFromSaleBill exactly as before.
-  const billNoHandledRef = useRef(false);
-
-  // Validates one row's article+color+rate against `sourceBillItems` — only while isCopiedFromBill
-  // (plain Manual entry with no bill linked is unrestricted). Keyed on variant_id+rate together,
-  // same reasoning as PurchaseReturnPage: the same variant can appear on the source bill twice at
-  // two different rates (rare, but possible across edited lines), and each is its own pool of
-  // cartons to return against. `excludeUid` leaves the row being edited out of the "already used"
-  // running total, so re-editing a row's own cartons doesn't count itself twice.
-  function articleAgainstBillError(variantId: number | null, cartons: number, rate: number, excludeUid?: string | null): string | null {
-    if (!isCopiedFromBill || variantId == null) return null;
-    const sourceItem = sourceBillItems.find(it => it.variant_id === variantId && it.rate === rate);
-    if (!sourceItem) {
-      const sameVariantDifferentRate = sourceBillItems.some(it => it.variant_id === variantId);
-      if (sameVariantDifferentRate) {
-        return 'This article/color was sold at a different rate on the original bill — match that rate to return it.';
-      }
-      return 'This article/color was not on the original bill — it can\'t be returned against it.';
-    }
-    const alreadyUsed = items
-      .filter(it => it.uid !== excludeUid && it.variantId === variantId && it.rate === rate)
-      .reduce((s, it) => s + it.cartons, 0);
-    const remaining = sourceItem.cartons - alreadyUsed;
-    if (cartons > remaining) {
-      return `Only ${formatCartons(remaining)} carton(s) left to return (sold ${formatCartons(sourceItem.cartons)}, already used ${formatCartons(alreadyUsed)}).`;
-    }
-    return null;
-  }
-
-  // "Find Bill to Return" — the same big centered SearchModal popup as Customer, typable (type a
-  // bill no./customer substring then Enter opens it seeded; Arrow Up/Down or the chevron button
-  // open it blank). Defaults to reading "Manual entry" when nothing's picked, same as
-  // PurchaseReturnPage's own "Find Purchase to Return".
-  const findBillTriggerRef = useRef<HTMLInputElement>(null);
-  const [isFindBillModalOpen, setIsFindBillModalOpen] = useState(false);
-  const [findBillSearchText, setFindBillSearchText] = useState('');
-  const [findBillModalSeed, setFindBillModalSeed] = useState('');
-  useEffect(() => {
-    const opt = priorBillOptions.find(o => o.value === copyFromBillId);
-    setFindBillSearchText(opt?.label ?? '');
-  }, [copyFromBillId, priorBillOptions]);
-  const openFindBillModal = () => {
-    if (isViewMode) return;
-    setFindBillModalSeed('');
-    setIsFindBillModalOpen(true);
-  };
-  function handleFindBillTriggerKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      e.stopPropagation();
-      openFindBillModal();
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      e.stopPropagation();
-      if (isViewMode) return;
-      setFindBillModalSeed(findBillSearchText);
-      setIsFindBillModalOpen(true);
-    }
-  }
-  async function handleFindBillSelect(billIdStr: string) {
-    setIsFindBillModalOpen(false);
-    // The modal's own "Manual entry (default)" row comes through as value '' — same as picking
-    // it clears the link rather than trying to "copy from" a non-existent bill.
-    if (!billIdStr) {
-      handleClearBillLink();
-      requestAnimationFrame(() => focusNextField(findBillTriggerRef.current));
-      return;
-    }
-    await handleCopyFromBill(billIdStr, true);
-    // Master fields are done (all just auto-filled and locked) — jump straight to the article
-    // entry strip, same as the manual-match path (per the user, 2026-08-26), instead of just
-    // walking to whatever field happens to sit next in DOM order.
-    requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
-  }
-  // Switches back to full Manual entry from a locked state — clears the link and unlocks every
-  // master field, but leaves whatever items/fields are already typed as-is (nothing is erased).
-  const handleClearBillLink = () => {
-    setCopyFromBillId('');
-    setSourceBillItems([]);
-  };
-
   const isNecessaryFieldsFilled = useMemo(() => {
     if (awaitingNew) return false;
     if (!customerId) return false;
@@ -760,10 +641,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     if (!billNo) return false;
     if (items.length === 0) return false;
     if (items.some(it => !it.variantId || it.cartons <= 0 || it.rate <= 0)) return false;
-    // Linked to an original bill — every row also has to actually be returnable against it.
-    if (isCopiedFromBill && items.some(it => articleAgainstBillError(it.variantId, it.cartons, it.rate, it.uid))) return false;
     return true;
-  }, [awaitingNew, customerId, date, storeId, billNo, items, isCopiedFromBill, sourceBillItems]);
+  }, [awaitingNew, customerId, date, storeId, billNo, items]);
 
   // Preview of the Return No. a brand-new return will get. This number is now assigned once at
   // draft-save time and carried through posting unchanged (per the user, 2026-09-05) — a real SQL
@@ -786,13 +665,13 @@ const nextSystemReturnNo = useMemo(
     }
   }, [activeTab, mode]);
 
-  // No password prompt here — Save (handleSave, mode==='edit') already asks for one before the
-  // update actually goes through, so gating entry into edit mode too meant asking twice for one
-  // edit (reported directly by the user: edit then update each prompted separately).
-  const handleEditSpecificReturn = async (ret: SaleReturnRow) => {
+  // Report tabs' Open — posted returns can't be edited anywhere (per the user, 2026-09-28): the
+  // return opens read-only on the Posted list, and Un Post is the way back to an editable draft.
+  const handleOpenSpecificReturn = async (ret: SaleReturnRow) => {
     await loadReturnRow(ret);
+    setBrowseFilter('posted');
     setActiveTab('return');
-    setMode('edit');
+    setMode('view');
   };
 
   // Loads the target return, then opens the preview modal on it — see renderReturnPrintable above.
@@ -827,8 +706,11 @@ const nextSystemReturnNo = useMemo(
       requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
       return;
     }
+    // A blank document is an unposted one — back to the Unposted view (see useBrowseFilterFollowsDocument).
+    setBrowseFilter('unposted');
     setMode('new');
     setHasClickedNew(false);
+    createdInThisRun.current = false;
     setEditScope('master');
     setReturnId(null);
     setCurrentSystemNo(null);
@@ -837,9 +719,11 @@ const nextSystemReturnNo = useMemo(
     setStoreId(stores[0] ? String(stores[0].store_id) : '');
     setCustomerId('');
     setSubCustomerId('');
+    setDeliveryType('1');
+    setDeliveryCode('1');
     // Blank by default (per the user, 2026-08-26) — was auto-generated as "RET-1234", but this
     // field doubles as the manual lookup key against an original Sale Bill's own bill_no
-    // (prefillFromSaleBill), so a random pre-filled value only got in the way of typing a real one.
+    // so a random pre-filled value only got in the way of typing a real one.
     setBillNo('');
     setGpNo('');
     setBiltyNo('');
@@ -853,8 +737,6 @@ const nextSystemReturnNo = useMemo(
     setEditingIndex(null);
     setSelectedIndex(null);
     setLastEnteredIndex(null);
-    setCopyFromBillId('');
-    setSourceBillItems([]);
     setErrorMsg('');
     clearSaleReturnDraft();
     // Explicit focus, not just the G-01 mode-change effect below: clicking New while already on
@@ -865,6 +747,14 @@ const nextSystemReturnNo = useMemo(
   };
   // New button / New tab — the only path that marks New as deliberately clicked (useNewDocGate).
   const pressNew = () => { handleNew(); markNewClicked(); };
+  // After posting a return created in this sitting: a fresh return, same working date (Sale Bill's
+  // readyForNextBill).
+  const readyForNextReturn = () => {
+    const workingDate = date;
+    handleNew();
+    setDate(workingDate);
+    requestAnimationFrame(() => firstFieldRef.current?.focus());
+  };
 
   const buildPayload = (): SaleReturnCreateInput | null => {
     if (!date) { setErrorMsg('Date is required.'); return null; }
@@ -880,12 +770,6 @@ const nextSystemReturnNo = useMemo(
       const rowCartonsIssue = cartonsProblem(it.cartons, it.packing);
       if (rowCartonsIssue) { setErrorMsg(`Row ${i + 1}: ${rowCartonsIssue}`); return null; }
       if (it.rate <= 0) { setErrorMsg(`Rate must be greater than 0 at row ${i + 1}.`); return null; }
-      // Linked to an original bill (manual-matched or explicitly picked) — every row must
-      // actually be returnable against it: same article/color, same rate, within what's left.
-      if (isCopiedFromBill) {
-        const err = articleAgainstBillError(it.variantId, it.cartons, it.rate, it.uid);
-        if (err) { setErrorMsg(`Row ${i + 1}: ${err}`); return null; }
-      }
     }
 
     const itemsPayload: SaleReturnItemInput[] = items.map(it => ({
@@ -897,13 +781,14 @@ const nextSystemReturnNo = useMemo(
 
     return {
       customer_id: Number(customerId),
-      sub_customer_id: subCustomerId ? Number(subCustomerId) : null,
+      sub_customer_id: deliveryType === 'custom' && subCustomerId ? Number(subCustomerId) : null,
       store_id: Number(storeId),
       return_date: date,
       bill_no: billNo,
       gp_no: gpNo,
       bilty_no: biltyNo,
-      adda_id: Number(addaId),
+      // Blank Adda must go as no value, not Number('') = 0 — 0 violates FK_draft_sale_returns_adda.
+      adda_id: addaId ? Number(addaId) : undefined,
       remarks: remarks || undefined,
       invoice_discount: invoiceDiscount,
       items: itemsPayload
@@ -913,35 +798,22 @@ const nextSystemReturnNo = useMemo(
   // Whichever return is on screen, `returnId`/`currentReturnIsPosted` route to one of two
   // entirely different tables now: a POSTED document is a real sale_returns row (returnId =
   // return_id); anything else is a draft_sale_return row (returnId = draft_id) — the real table
-  // strictly never holds an unposted document.
-  const isEditingPostedReturn = mode === 'edit' && currentReturnIsPosted;
+  // strictly never holds an unposted document. Only drafts are ever saved from this form.
 
   // `finalize` decides what the form does AFTER a successful save, and nothing else:
   //   true  ("Done")  -> lock to view mode; the return stays fully on screen and Post lights up.
   //   false ("Save")  -> stay editable so more articles can be added to the SAME return.
   // Mirrors SaleBillPage's own executeSave — see its comment for why the non-finalize path flips
   // mode to 'edit' rather than leaving it 'new' (otherwise the next Save creates a duplicate).
-  const executeSave = async (password?: string, finalize: boolean = true): Promise<SaleReturnRow | DraftSaleReturnRow | null> => {
+  const executeSave = async (finalize: boolean = true): Promise<SaleReturnRow | DraftSaleReturnRow | null> => {
     // Backstop for the awaitingNew lock — every save path funnels through here.
     if (awaitingNew) { setErrorMsg('Click New to start a return first.'); return null; }
     const payload = buildPayload();
     if (!payload) return null;
 
-    if (isEditingPostedReturn && returnId != null) {
-      const result = await api.saleReturns.update(returnId, password ? { ...payload, password } : payload);
-      if (!result.ok) {
-        setErrorMsg('Failed to save return: ' + result.error.message);
-        return null;
-      }
-      setReturnId(result.data.return_id);
-      setCurrentSystemNo(result.data.system_no);
-      setCurrentReturnIsPosted(true);
-      setSuccessMsg('Sale return updated successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
-      setMode(finalize ? 'view' : 'edit');
-      setErrorMsg('');
-      return result.data;
-    }
+    // Posted returns can't be edited (per the user, 2026-09-28) — Un Post first. The toolbar's
+    // Edit is already disabled for them; this is the backstop.
+    if (currentReturnIsPosted) { setErrorMsg('A posted return can\'t be edited — Un Post it first.'); return null; }
 
     // Every other save — a brand-new return, or editing one that's still a draft — goes through
     // the draft table now (draftSaleReturns.service.js), not sale_returns directly.
@@ -962,8 +834,9 @@ const nextSystemReturnNo = useMemo(
     setTimeout(() => setSuccessMsg(''), 3000);
     setMode(finalize ? 'view' : 'edit');
     setErrorMsg('');
-    if (wasNew) clearSaleReturnDraft();
+    if (wasNew) { createdInThisRun.current = true; clearSaleReturnDraft(); }
     refreshDrafts();
+    refreshStock();
     return result.data;
   };
 
@@ -975,14 +848,8 @@ const nextSystemReturnNo = useMemo(
   // there was never a chance to review the finished return before it was committed. Posting is
   // its own deliberate step now, matching Sale Bill (per the user, 2026-08-27).
   const handleSave = (finalize: boolean = true) => {
-    // Only editing an ALREADY-POSTED return needs a password — editing a draft (complete or not)
-    // never did.
-    if (isEditingPostedReturn) {
-      setPasswordActionType('save_return');
-      setIsPasswordModalOpen(true);
-    } else {
-      executeSave(undefined, finalize);
-    }
+    // Drafts only — posted returns aren't editable, so no password is ever needed to save.
+    executeSave(finalize);
   };
 
   // (handleSaveAndPost removed 2026-08-27: the Done button was its only caller, and Done now saves
@@ -991,6 +858,7 @@ const nextSystemReturnNo = useMemo(
 
   const handlePostCurrentReturn = async () => {
     if (returnId == null) return;
+    const postedBillNo = billNo;
     const res = await api.draftSaleReturns.confirm(returnId);
     if (!res.ok) {
       setErrorMsg('Failed to post return: ' + res.error.message);
@@ -998,9 +866,47 @@ const nextSystemReturnNo = useMemo(
       setReturnId(res.data.return_id);
       setCurrentSystemNo(res.data.system_no);
       setCurrentReturnIsPosted(true);
-      setSuccessMsg('Return posted successfully.');
-      setTimeout(() => setSuccessMsg(''), 3000);
       refreshDrafts();
+      refreshPostedReturns();
+      if (createdInThisRun.current) {
+        setSuccessMsg(`Return ${postedBillNo} posted. Ready for the next one.`);
+        readyForNextReturn();
+      } else {
+        setSuccessMsg('Return posted successfully.');
+      }
+      setTimeout(() => setSuccessMsg(''), 3000);
+    }
+  };
+
+  // Save & Post in one click — same as Sale Bill's.
+  const saveAndPost = async () => {
+    const saved = await executeSave();
+    if (saved && 'draft_id' in saved) {
+      const postRes = await api.draftSaleReturns.confirm(saved.draft_id);
+      if (!postRes.ok) {
+        setErrorMsg('Return was saved, but posting failed: ' + postRes.error.message);
+      } else {
+        setReturnId(postRes.data.return_id);
+        setCurrentSystemNo(postRes.data.system_no);
+        setCurrentReturnIsPosted(true);
+        setSuccessMsg(`Return ${postRes.data.bill_no} saved & posted. Ready for the next one.`);
+        setTimeout(() => setSuccessMsg(''), 3000);
+        refreshDrafts();
+        refreshPostedReturns();
+        if (createdInThisRun.current) readyForNextReturn();
+      }
+    }
+  };
+  const handleSaveAndPost = async () => {
+    try {
+      await saveAndPost();
+    } catch (err) {
+      console.error('[Wentox] Save & Post threw:', err);
+      setErrorMsg(
+        'Save & Post failed unexpectedly: ' +
+        (err instanceof Error ? `${err.name}: ${err.message}` : String(err)) +
+        ' — please screenshot this.'
+      );
     }
   };
 
@@ -1031,7 +937,7 @@ const nextSystemReturnNo = useMemo(
   // Entering edit mode never needs its own password prompt anymore — Save (handleSave,
   // mode==='edit') already asks for one before the update actually goes through, so gating entry
   // into edit mode too meant asking twice for one edit (reported by the user for both this
-  // button and handleEditSpecificReturn above).
+  // button and the report tabs).
   // Edit — lands focus on the first field of whichever scope is picked (per the user, 2026-08-31).
   const handleEditCurrentReturn = () => {
     setMode('edit');
@@ -1069,9 +975,7 @@ const nextSystemReturnNo = useMemo(
 
   const handlePasswordSuccess = async (password: string) => {
     setIsPasswordModalOpen(false);
-    if (passwordActionType === 'save_return') {
-      await executeSave(password);
-    } else if (passwordActionType === 'delete_unposted_return') {
+    if (passwordActionType === 'delete_unposted_return') {
       const targetId = pendingDeleteReturnId.current;
       pendingDeleteReturnId.current = null;
       if (targetId != null) {
@@ -1124,6 +1028,7 @@ const nextSystemReturnNo = useMemo(
       draft = res.data;
     }
     // Opening a different record must not carry over a stale scope from the last edit.
+    createdInThisRun.current = false;
     setEditScope('master');
     setReturnId(draft.draft_id);
     setCurrentSystemNo(draft.system_no);
@@ -1132,6 +1037,7 @@ const nextSystemReturnNo = useMemo(
     setStoreId(draft.store_id != null ? String(draft.store_id) : '');
     setCustomerId(String(draft.customer_id));
     setSubCustomerId(draft.sub_customer_id != null ? String(draft.sub_customer_id) : '');
+    applyDeliveryFromSubCustomer(draft.sub_customer_id ?? null);
     setBillNo(draft.bill_no || '');
     setGpNo(draft.gp_no || '');
     setBiltyNo(draft.bilty_no || '');
@@ -1161,10 +1067,6 @@ const nextSystemReturnNo = useMemo(
     setSelectedIndex(null);
     setLastEnteredIndex(null);
     loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
-    // A draft carries no record of which original bill it might have been linked to when saved
-    // (not a stored column) — always reopens fully unlocked/manual, same as loadReturnRow below.
-    setCopyFromBillId('');
-    setSourceBillItems([]);
 
     setMode(opts.mode ?? 'edit');
     setErrorMsg('');
@@ -1254,7 +1156,7 @@ const nextSystemReturnNo = useMemo(
     // No mode/returnId check: a restored view of an older record must be replaced too (2026-09-18).
     if (activeTab === 'return' && stores.length > 0 && addas.length > 0) {
       didAutoOpenRef.current = true;
-      handleBrowseFilterChange('unposted');
+      handleBrowseFilterChange('unposted', { auto: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, mode, returnId, stores, addas]);
@@ -1283,7 +1185,6 @@ const nextSystemReturnNo = useMemo(
       variantId: null,
       label: product?.name || '',
       packing: product?.packing || 0,
-      rate: isCopiedFromBill ? prev.rate : (product?.sale_price ?? prev.rate)
     }));
     if (articleId != null) await fetchVariants(articleId);
   };
@@ -1296,30 +1197,19 @@ const nextSystemReturnNo = useMemo(
     setProductSearchText(product?.code ?? '');
   }, [entry.articleId, products]);
 
-  // SR-01: prefer the rate this customer actually paid last time for this variant over the
-  // article's current predefined sale_price — unless linked to an original bill, where the rate
-  // MUST be that bill's own line rate instead (non-editable — see the Rate cell's own lock below).
-  const handleEntryVariantChange = async (variantIdStr: string) => {
+  // Rate is never auto-filled — it's typed by hand on every line (per the user, 2026-09-28:
+  // Sale Return is an independent voucher now, not priced from a Sale Bill or last-sold rate).
+  const handleEntryVariantChange = (variantIdStr: string) => {
     if (entry.articleId == null) return;
     const variantId = variantIdStr ? Number(variantIdStr) : null;
     const variant = variantsByArticle[entry.articleId]?.find(v => v.variant_id === variantId);
     const product = products.find(p => p.article_id === entry.articleId);
 
-    let rate = product?.sale_price ?? entry.rate;
-    if (isCopiedFromBill) {
-      const sourceItem = variantId != null ? sourceBillItems.find(it => it.variant_id === variantId) : undefined;
-      if (sourceItem) rate = sourceItem.rate;
-    } else if (variantId != null && customerId) {
-      const res = await api.saleBills.lastSoldRate(Number(customerId), variantId);
-      if (res.ok && res.data != null) rate = res.data;
-    }
-
     setEntry(prev => recalcItem({
       ...prev,
       variantId,
       label: variant ? `${product?.name || ''} — ${variant.color}` : (product?.name || ''),
-      packing: variant?.packing ?? product?.packing ?? prev.packing,
-      rate
+      packing: variant?.packing ?? product?.packing ?? prev.packing
     }));
   };
 
@@ -1337,18 +1227,17 @@ const nextSystemReturnNo = useMemo(
     });
   };
 
-  // Live validation of the strip's own current article/color/rate against the linked original
-  // bill (see articleAgainstBillError above) — same rule Save re-checks, surfaced here so a
-  // mismatch is obvious before the row is even added.
-  const entryBillError = useMemo(
-    () => articleAgainstBillError(entry.variantId, entry.cartons, entry.rate, editingIndex != null ? entry.uid : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [entry, isCopiedFromBill, sourceBillItems, items, editingIndex]
-  );
-
   // Commits the strip's current entry into the table — appends a new row, or overwrites
   // `editingIndex` when the strip is re-editing a row clicked open from the table. Linked-bill
   // mismatches refuse to commit at all, same as SaleBillPage's stock-limit rule.
+  // Stock In Hand — current on-hand stock for the picked color, as Sale Bill shows it. Display only:
+  // a return ADDS stock, so unlike Sale Bill there is no limit to check against it.
+  const entryStockInHand = useMemo(() => {
+    if (entry.variantId == null) return null;
+    const row = stockRows.find(r => r.variant_id === entry.variantId);
+    return row ? { cartons: row.cartons, pairs: row.total_pairs } : { cartons: 0, pairs: 0 };
+  }, [entry.variantId, stockRows]);
+
   const handleCommitEntryRow = () => {
     if (entry.articleId == null || entry.variantId == null) {
       setErrorMsg('Select an article and color before adding the row.');
@@ -1360,10 +1249,6 @@ const nextSystemReturnNo = useMemo(
     const cartonsIssue = cartonsProblem(entry.cartons, entry.packing);
     if (cartonsIssue) { setErrorMsg(cartonsIssue); return; }
     if (entry.rate <= 0) { setErrorMsg('Rate must be greater than 0.'); return; }
-    if (entryBillError) {
-      setErrorMsg(`Cannot add row: ${entryBillError}`);
-      return;
-    }
     setErrorMsg('');
     // Same article/color already on the return — merge cartons into it instead of adding a
     // duplicate row (per the user, 2026-08-30). Excludes the row being edited itself, so
@@ -1493,11 +1378,6 @@ const nextSystemReturnNo = useMemo(
     return () => window.removeEventListener('resize', recompute);
   }, [mode, lookupError, successMsg, errorMsg]);
 
-
-  // Products this customer previously bought — derived from any posted Sale Bill lookup by
-  // customer. Kept simple: only fires when the user explicitly searches by bill_no via prefill;
-  // no bulk customer-history fetch endpoint exists yet.
-
   const isViewMode = mode === 'view';
   // Master/Detail edit-scope split (per the user, 2026-08-31): once Edit is already reachable
   // (isViewMode false, mode 'edit'), the radio narrows WHICH half actually unlocks — this does not
@@ -1505,6 +1385,30 @@ const nextSystemReturnNo = useMemo(
   // top of it. A brand-new return (mode 'new') is unaffected — everything stays editable there.
   const masterFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
   const detailFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
+
+  const handleCreateCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCustomerName.trim()) { setErrorMsg('Customer name is required.'); return; }
+    if (!newCustomerRegionId) { setErrorMsg('Region is required.'); return; }
+
+    const res = await api.createCustomer({
+      name: newCustomerName.trim(),
+      region_id: Number(newCustomerRegionId),
+      city_id: newCustomerCityId ? Number(newCustomerCityId) : undefined
+    });
+    if (!res.ok) {
+      setErrorMsg('Failed to create customer: ' + res.error.message);
+      return;
+    }
+    setCustomers(prev => [...prev, res.data]);
+    setCustomerId(String(res.data.customer_id));
+    setDeliveryType('1');
+    setDeliveryCode('1');
+    setSubCustomerId('');
+    closeAddCustomer();
+    setSuccessMsg('New customer added successfully.');
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
 
   const handleCreateSubCustomer = async () => {
     if (!newSubCustomerName.trim()) { setErrorMsg('Sub-customer name is required.'); return; }
@@ -1528,9 +1432,6 @@ const nextSystemReturnNo = useMemo(
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
-  // Regions/cities are only needed here for the inline "+ Add Sub-Customer" modal.
-  const [regions, setRegions] = useState<{ region_id: number; name: string }[]>([]);
-  const [cities, setCities] = useState<{ city_id: number; name: string; region_id: number | null }[]>([]);
 
   const regionOptions = useMemo(
     () => regions.map(r => ({ value: String(r.region_id), label: r.name })),
@@ -1543,13 +1444,6 @@ const nextSystemReturnNo = useMemo(
         .map(c => ({ value: String(c.city_id), label: c.name })),
     [cities]
   );
-  useEffect(() => {
-    (async () => {
-      const [rg, ct] = await Promise.all([api.listRegions(), api.listCities()]);
-      if (rg.ok) setRegions(rg.data);
-      if (ct.ok) setCities(ct.data);
-    })();
-  }, []);
 
   const [isAddSubCustomerOpen, setIsAddSubCustomerOpen] = useState(false);
   const [newSubCustomerName, setNewSubCustomerName] = useState('');
@@ -1575,6 +1469,13 @@ const nextSystemReturnNo = useMemo(
     const storeObj = stores.find(s => s.store_id === Number(storeId));
     const storeName = storeObj ? storeObj.name : (storeId || 'N/A');
     const statusLabel = currentReturnIsPosted ? 'Posted' : 'Unposted';
+    // Same dispatch readouts as Sale Bill's printed invoice.
+    const addaObj = addas.find(a => a.adda_id === Number(addaId));
+    const addaName = addaObj ? addaObj.name : 'N/A';
+    const subCustomerObj = subCustomers.find(sc => sc.sub_customer_id === Number(subCustomerId));
+    const deliveryDestination = deliveryType === 'custom'
+      ? (subCustomerObj ? subCustomerObj.name : 'Custom Agent')
+      : 'SAME (Direct)';
 
     return (
       <div className="excel-print-container" style={{
@@ -1636,6 +1537,23 @@ const nextSystemReturnNo = useMemo(
           <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Customer Name</label>
             <span>{customerName}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Delivery Destination</label>
+            <span>{deliveryDestination}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Transport Adda</label>
+            <span>{addaName}</span>
+          </div>
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Gate Pass (GP) No.</label>
+            <span>{gpNo || 'N/A'}</span>
+          </div>
+
+          <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px' }}>
+            <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Bilty No.</label>
+            <span>{biltyNo || 'N/A'}</span>
           </div>
           <div style={{ border: '1px solid #000000', padding: '5px 8px', fontSize: '11px', gridColumn: 'span 3' }}>
             <label style={{ fontWeight: 'bold', display: 'block', marginBottom: '2px', textTransform: 'uppercase', fontSize: '9px', color: '#333333' }}>Remarks</label>
@@ -1791,10 +1709,10 @@ const nextSystemReturnNo = useMemo(
             2026-09-03). */}
         {/* Tab contents (records & find) */}
         <div>
-          {activeTab === 'weekly' && <WeeklyReturnTab onEditReturn={handleEditSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
-          {activeTab === 'monthly' && <MonthlyReturnTab onEditReturn={handleEditSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
-          {activeTab === 'overall' && <OverallReturnTab onEditReturn={handleEditSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
-          {activeTab === 'find' && <FindReturnTab onEditReturn={handleEditSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
+          {activeTab === 'weekly' && <WeeklyReturnTab onOpenReturn={handleOpenSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
+          {activeTab === 'monthly' && <MonthlyReturnTab onOpenReturn={handleOpenSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
+          {activeTab === 'overall' && <OverallReturnTab onOpenReturn={handleOpenSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
+          {activeTab === 'find' && <FindReturnTab onOpenReturn={handleOpenSpecificReturn} onPrintReturn={handlePrintSpecificReturn} />}
         </div>
 
         <form onSubmit={e => e.preventDefault()} className={activeTab === 'return' ? 'block' : 'hidden'}>
@@ -1815,7 +1733,10 @@ const nextSystemReturnNo = useMemo(
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2 p-2.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex items-center flex-nowrap overflow-x-auto gap-2">
           <DocumentToolbar
-            newAction={{ onClick: pressNew, disabled: browseFilter === 'posted', ref: newButtonRef }}
+            /* New works from either view (it used to be disabled on Posted, which greyed it out right
+               after posting a document that stays on screen — 2026-09-30). A blank document returns the
+               dropdown to Unposted inside handleNew, same as Receipts/Expenses. */
+            newAction={{ onClick: pressNew, ref: newButtonRef }}
             remove={{
               onClick: handleDeleteAction,
               disabled: deletedPlaceholder != null || returnId == null || currentReturnIsPosted,
@@ -1839,6 +1760,7 @@ const nextSystemReturnNo = useMemo(
             unpost={{ onClick: handleUnpostCurrentReturn, disabled: deletedPlaceholder != null || mode !== 'view' || returnId == null || !currentReturnIsPosted, title: 'Un Post — move this posted return back to drafts' }}
             post={{ onClick: async () => { await handlePostCurrentReturn(); focusNewButton(); }, disabled: deletedPlaceholder != null || mode !== 'view' || returnId == null || currentReturnIsPosted }}
             exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
+            saveAndPost={{ onClick: async () => { await handleSaveAndPost(); focusNewButton(); }, disabled: deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || currentReturnIsPosted, title: 'Save & Post' }}
             postAll={{ onClick: async () => { await handlePostAllDrafts(); focusNewButton(); }, disabled: postAllDraftsBusy || browseFilter === 'posted' || drafts.length === 0, title: `Post All (${drafts.length})` }}
             pdf={{ onClick: () => setIsPrintingSingle(true), disabled: deletedPlaceholder != null || mode !== 'view' || returnId == null, title: 'Export PDF' }}
             excel={{
@@ -1916,7 +1838,7 @@ const nextSystemReturnNo = useMemo(
           {/* Print Title (Visible only when printing) */}
           <div className="hidden print:flex items-center justify-between mb-6 pb-4 border-b">
             <div>
-              <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTO ERP</h1>
+              <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTOX WEARHOUSE</h1>
               <p className="text-xs font-inter uppercase tracking-widest text-slate-500">Footwear Wholesale Distribution</p>
             </div>
             <div className="text-right">
@@ -1925,95 +1847,45 @@ const nextSystemReturnNo = useMemo(
             </div>
           </div>
 
-          {/* Header fields — one dense grid, label-left per field (matches SaleBillPage's
-              compact redesign), instead of stacked label-above-input fields split across
-              bordered cards. */}
-          <div className="shrink-0 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5 mb-2 pb-2 border-b" style={{ borderColor: 'var(--border-table)' }} data-edit-scope="master">
-            <div className="flex items-center gap-1.5">
-              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
-                Return No.
-              </label>
-              <input type="text" value={currentSystemNo != null ? `#${currentSystemNo}` : hasClickedNew ? `#${nextSystemReturnNo}` : ''} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
-            </div>
-            <div className="flex items-center gap-1.5">
+          {/* Master section — Sale Bill's own grid (per the user, 2026-09-28: Sale Return mirrors Sale
+              Bill's placing and interaction exactly; only its labels are its own). Explicit
+              `gridArea` per field, so the visual cell is independent of DOM order; the JSX is in
+              TAB order — Date → Store → Customer → Remarks → Delivery → Delivery Agent → Manual
+              Invoice No. → GP No. → Bilty No. → Adda — same walk as Sale Bill's. */}
+          <div
+            className="shrink-0 grid gap-x-3 gap-y-1.5 mb-2 pb-2 border-b"
+            data-edit-scope="master"
+            style={{
+              borderColor: 'var(--border-table)',
+              gridTemplateColumns: '1fr 1fr 1fr 190px',
+              gridTemplateAreas: `
+                "sysno     date       store      billno"
+                "custcode  custname   custname   gpno"
+                "maincode  mainname   mainname   biltyno"
+                "remarks   remarks    remarks    addacode"
+                "delivcode delivname  delivname  ."
+                "subcust   subcust    subcust    ."
+              `
+            }}
+          >
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'date' }}>
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 Date <span className="text-red-500 font-bold">*</span>
               </label>
               <input type="date" ref={firstFieldRef} required
             value={date} disabled={isViewMode || masterFieldsLocked} onChange={e => setDate(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
-
-            {/* Entry Mode — right after Date (per the user, 2026-08-26), same position as
-                PurchaseReturnPage's own "Find Purchase to Return". "Manual entry" (default, shown
-                as a real selectable option inside the popup — same as Purchase Return's "Manual
-                entry (default)" row) vs an explicit pick. Typing a bill no./customer substring
-                then Enter opens the popup seeded with it; picking an actual bill copies EVERY
-                field and article in at once (isCopiedFromBill locks the master fields below).
-                Manual Invoice No. further down still does its own thing — typing an exact bill_no
-                there and tabbing out auto-fills just the master fields, leaving articles to be
-                added by hand, each checked against the matched bill as it's picked. */}
-            <div className="flex items-center gap-1.5 md:col-span-2">
-              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                Find Bill to Return
-              </label>
-              <div className="flex-1 relative">
-                <input
-                  ref={findBillTriggerRef}
-                  type="text"
-                  disabled={isViewMode || masterFieldsLocked}
-                  value={findBillSearchText}
-                  onChange={e => setFindBillSearchText(e.target.value)}
-                  onKeyDown={handleFindBillTriggerKeyDown}
-                  placeholder="Manual entry — or type a bill no./customer to search..."
-                  className="soleria-input soleria-input-compact pr-9"
-                  style={{ fontSize: '13px' }}
-                />
-                <button
-                  type="button"
-                  disabled={isViewMode || masterFieldsLocked}
-                  onClick={openFindBillModal}
-                  title="Browse all posted Sale Bills"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <ChevronDown size={16} />
-                </button>
-                <SearchModal
-                  isOpen={isFindBillModalOpen}
-                  title="Select Bill to Return"
-                  options={[{ value: '', label: 'Manual entry (default)' }, ...priorBillOptions]}
-                  value={copyFromBillId}
-                  onSelect={handleFindBillSelect}
-                  onClose={() => setIsFindBillModalOpen(false)}
-                  searchPlaceholder="Search by bill no. or customer..."
-                  initialSearch={findBillModalSeed}
-                />
-              </div>
-              {isCopiedFromBill && !isViewMode && (
-                <button
-                  type="button"
-                  onClick={handleClearBillLink}
-                  title="Unlock the master fields and switch back to fully manual entry"
-                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg transition-all cursor-pointer shrink-0"
-                >
-                  <X size={11} />
-                  <span>Clear Link</span>
-                </button>
-              )}
-            </div>
-
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'store' }}>
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
                 TO Store <span className="text-red-500 font-bold">*</span>
               </label>
-              {/* Typable — same centered SearchModal popup as every other lookup on this form
-                  (was SearchableSelect's small anchored dropdown; per the user, 2026-08-26). */}
               <div className="flex-1 relative">
                 <input
                   ref={storeTriggerRef}
                   type="text"
+                  data-field-nav="true"
                   required
-                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
-                  title={isCopiedFromBill ? 'Set by the bill you picked above — Clear Link to change it' : undefined}
+                  disabled={isViewMode || masterFieldsLocked}
                   value={storeSearchText}
                   onChange={e => setStoreSearchText(e.target.value)}
                   onKeyDown={handleStoreTriggerKeyDown}
@@ -2021,13 +1893,7 @@ const nextSystemReturnNo = useMemo(
                   className="soleria-input soleria-input-compact pr-9"
                   style={{ fontSize: '13px' }}
                 />
-                <button
-                  type="button"
-                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
-                  onClick={openStoreModal}
-                  title="Browse all stores"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
+                <button type="button" disabled={isViewMode || masterFieldsLocked} onClick={openStoreModal} title="Browse all stores" className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed">
                   <ChevronDown size={16} />
                 </button>
                 <SearchModal
@@ -2046,52 +1912,37 @@ const nextSystemReturnNo = useMemo(
                 />
               </div>
             </div>
-            <div className="flex items-center gap-1.5">
-              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
-                Manual Invoice No. <span className="text-red-500 font-bold">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                value={billNo}
-                disabled={isViewMode || masterFieldsLocked}
-                title={isCopiedFromBill ? 'Linked to this bill — type a different one to switch, or clear it to go fully manual' : undefined}
-                onChange={e => setBillNo(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key !== 'Tab' && e.key !== 'Enter') return;
-                  if (mode !== 'new') return;
-                  const val = e.currentTarget.value.trim();
-                  if (!val && !isCopiedFromBill) return;
-                  // Own the focus move ourselves — see prefillFromSaleBill's own comment above for
-                  // why the native Tab-advance can't be allowed to land on Customer here.
-                  e.preventDefault();
-                  billNoHandledRef.current = true;
-                  prefillFromSaleBill(val, e.currentTarget);
-                }}
-                onBlur={e => {
-                  if (billNoHandledRef.current) { billNoHandledRef.current = false; return; }
-                  const val = e.target.value.trim();
-                  if (mode === 'new' && (val !== '' || isCopiedFromBill)) {
-                    prefillFromSaleBill(val, e.target);
-                  }
-                }}
-                className="soleria-input soleria-input-compact"
-              />
-            </div>
 
-            <div className="flex items-center gap-1.5 md:col-span-2">
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'custname' }}>
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Customer <span className="text-red-500 font-bold">*</span>
               </label>
-              <div className="flex-1">
-                <SearchableSelect
+              <div className="flex-1 relative">
+                <input
+                  ref={customerTriggerRef}
+                  type="text"
+                  data-field-nav="true"
+                  required
+                  disabled={isViewMode || masterFieldsLocked}
+                  value={customerSearchText}
+                  onChange={e => setCustomerSearchText(e.target.value)}
+                  onKeyDown={handleCustomerTriggerKeyDown}
+                  placeholder="Type a customer name, or press Enter to search..."
+                  className="soleria-input pr-9"
+                  style={{ fontSize: '13px' }}
+                />
+                <button type="button" disabled={isViewMode || masterFieldsLocked} onClick={openCustomerModal} title="Browse all customers" className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed">
+                  <ChevronDown size={16} />
+                </button>
+                <SearchModal
+                  isOpen={isCustomerModalOpen}
+                  title="Select Customer"
                   options={customerOptions}
                   value={customerId}
-                  onChange={val => { setCustomerId(val); setSubCustomerId(''); }}
-                  placeholder="Select customer..."
-                  searchPlaceholder="Search customers..."
-                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
-                  required
+                  onSelect={selectCustomer}
+                  onClose={() => setIsCustomerModalOpen(false)}
+                  searchPlaceholder="Search customer by name..."
+                  initialSearch={customerModalSeed}
                 />
                 {selectedCustomer && selectedCustomer.ba_id == null && (
                   <p className="text-[10px] text-amber-600 mt-0.5 font-semibold">
@@ -2099,13 +1950,50 @@ const nextSystemReturnNo = useMemo(
                   </p>
                 )}
               </div>
+              {!isViewMode && (
+                <button type="button" onClick={() => setIsAddCustomerOpen(true)} className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102 shrink-0">
+                  <Plus size={11} className="text-blue-600" />
+                  <span>New</span>
+                </button>
+              )}
             </div>
-            {/* Paired with Customer on the same row (both span 2 of 4 columns) so this row packs
-                fully at 4-up, same as SaleBillPage's own row-2 packing — keeping Delivery Agent's
-                natural place after Customer here (rather than after Customer Code) is what makes
-                the header take exactly as many rows as Sale Bill's, instead of leaving Customer
-                Code's row half-empty and pushing Bilty No. onto an orphan 4th row. */}
-            <div className="flex items-center gap-2 md:col-span-2">
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'custcode' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Customer Code
+              </label>
+              <input type="text" value={selectedCustomer?.account_code ?? ''} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
+            </div>
+
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'remarks' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Remarks
+              </label>
+              <input type="text" value={remarks} disabled={isViewMode || masterFieldsLocked} onChange={e => setRemarks(e.target.value)} placeholder="Enter return reasons or remarks..." className="soleria-input soleria-input-compact" />
+            </div>
+
+            {/* Delivery: a typed code, "1" = SAME (direct) — anything else unlocks Delivery Agent.
+                The box beside it shows the resolved name, read-only (Sale Bill's pattern). */}
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'delivcode' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Delivery
+              </label>
+              <input
+                type="text"
+                value={deliveryCode}
+                disabled={isViewMode || masterFieldsLocked}
+                onChange={e => handleDeliveryCodeChange(e.target.value)}
+                className="soleria-input soleria-input-compact"
+              />
+            </div>
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'delivname' }}>
+              <input
+                type="text"
+                value={deliveryType === '1' ? 'SAME' : (subCustomers.find(sc => String(sc.sub_customer_id) === subCustomerId)?.name || '')}
+                disabled
+                className="soleria-input soleria-input-compact bg-emerald-50 text-emerald-700 font-semibold border-emerald-200"
+              />
+            </div>
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'subcust' }}>
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Delivery Agent <span className="text-slate-400 font-normal normal-case">— optional</span>
               </label>
@@ -2113,21 +2001,16 @@ const nextSystemReturnNo = useMemo(
                 <input
                   ref={subCustTriggerRef}
                   type="text"
-                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
+                  data-field-nav="true"
+                  disabled={isViewMode || deliveryType === '1' || masterFieldsLocked}
                   value={subCustSearchText}
                   onChange={e => setSubCustSearchText(e.target.value)}
                   onKeyDown={handleSubCustTriggerKeyDown}
-                  placeholder="SAME (Direct) — type a name, or press Enter to search..."
-                  className="soleria-input pr-9"
+                  placeholder="Type a sub-customer name, or press Enter to search..."
+                  className="soleria-input soleria-input-compact pr-9"
                   style={{ fontSize: '13px' }}
                 />
-                <button
-                  type="button"
-                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
-                  onClick={openSubCustModal}
-                  title="Browse all sub-customers"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
+                <button type="button" disabled={isViewMode || deliveryType === '1' || masterFieldsLocked} onClick={openSubCustModal} title="Browse all sub-customers" className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed">
                   <ChevronDown size={16} />
                 </button>
                 <SearchModal
@@ -2145,24 +2028,33 @@ const nextSystemReturnNo = useMemo(
                   initialSearch={subCustModalSeed}
                 />
               </div>
-              {!isViewMode && !isCopiedFromBill && (
-                <button
-                  type="button"
-                  onClick={() => setIsAddSubCustomerOpen(true)}
-                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102 shrink-0"
-                >
+              {!isViewMode && deliveryType !== '1' && (
+                <button type="button" onClick={() => setIsAddSubCustomerOpen(true)} className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-blue-700 bg-blue-50/80 hover:bg-blue-100/90 border border-blue-200/80 rounded-lg transition-all cursor-pointer shadow-2xs hover:scale-102 shrink-0">
                   <Plus size={11} className="text-blue-600" />
                   <span>New</span>
                 </button>
               )}
             </div>
-            <div className="flex items-center gap-1.5">
-              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                Customer Code
+
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'billno' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
+                Manual Invoice No. <span className="text-red-500 font-bold">*</span>
               </label>
-              <input type="text" value={customerId} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
+              <input type="text" required value={billNo} disabled={isViewMode || masterFieldsLocked} onChange={e => setBillNo(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'gpno' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                GP No. <span className="text-slate-400 font-normal normal-case">— optional</span>
+              </label>
+              <input type="text" value={gpNo} disabled={isViewMode || masterFieldsLocked} onChange={e => setGpNo(e.target.value)} className="soleria-input soleria-input-compact" />
+            </div>
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'biltyno' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Bilty No. <span className="text-slate-400 font-normal normal-case">— optional</span>
+              </label>
+              <input type="text" value={biltyNo} disabled={isViewMode || masterFieldsLocked} onChange={e => setBiltyNo(e.target.value)} className="soleria-input soleria-input-compact" />
+            </div>
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'addacode' }}>
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Transport Adda <span className="text-slate-400 font-normal normal-case">— optional</span>
               </label>
@@ -2170,7 +2062,8 @@ const nextSystemReturnNo = useMemo(
                 <input
                   ref={addaTriggerRef}
                   type="text"
-                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
+                  data-field-nav="true"
+                  disabled={isViewMode || masterFieldsLocked}
                   value={addaSearchText}
                   onChange={e => setAddaSearchText(e.target.value)}
                   onKeyDown={handleAddaTriggerKeyDown}
@@ -2178,13 +2071,7 @@ const nextSystemReturnNo = useMemo(
                   className="soleria-input soleria-input-compact pr-9"
                   style={{ fontSize: '13px' }}
                 />
-                <button
-                  type="button"
-                  disabled={isViewMode || isCopiedFromBill || masterFieldsLocked}
-                  onClick={openAddaModal}
-                  title="Browse all Addas"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
+                <button type="button" disabled={isViewMode || masterFieldsLocked} onClick={openAddaModal} title="Browse all Addas" className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed">
                   <ChevronDown size={16} />
                 </button>
                 <SearchModal
@@ -2203,17 +2090,23 @@ const nextSystemReturnNo = useMemo(
                 />
               </div>
             </div>
-            <div className="flex items-center gap-1.5">
+
+            {/* Main A/C and Return No. — read-only, placed after Adda in DOM so they never interrupt
+                the Enter walk (both are disabled), same as Sale Bill. */}
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'maincode' }}>
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                GP No. <span className="text-slate-400 font-normal normal-case">— optional</span>
+                Main A/C
               </label>
-              <input type="text" value={gpNo} disabled={isViewMode || isCopiedFromBill || masterFieldsLocked} onChange={e => setGpNo(e.target.value)} className="soleria-input soleria-input-compact" />
+              <input type="text" value={selectedMainAc?.ac_code ?? ''} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
             </div>
-            <div className="flex items-center gap-1.5">
-              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                Bilty No. <span className="text-slate-400 font-normal normal-case">— optional</span>
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'mainname' }}>
+              <input type="text" value={selectedMainAc?.ac_name ?? ''} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500" />
+            </div>
+            <div className="flex items-center gap-1.5" style={{ gridArea: 'sysno' }}>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
+                Return No.
               </label>
-              <input type="text" value={biltyNo} disabled={isViewMode || isCopiedFromBill || masterFieldsLocked} onChange={e => setBiltyNo(e.target.value)} className="soleria-input soleria-input-compact" />
+              <input type="text" value={currentSystemNo != null ? `#${currentSystemNo}` : hasClickedNew ? `#${nextSystemReturnNo}` : ''} disabled className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200" />
             </div>
           </div>
 
@@ -2224,7 +2117,7 @@ const nextSystemReturnNo = useMemo(
               table row loads it back in here for editing. */}
           {!isViewMode && (
           <div className="shrink-0 mb-2 p-2 rounded-lg border bg-slate-50/60" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="grid gap-x-3 gap-y-1.5 mb-1.5" style={{ gridTemplateColumns: '1fr 1fr 1fr 130px' }}>
+            <div className="grid gap-x-3 gap-y-1.5 mb-1.5" style={{ gridTemplateColumns: '1fr 1fr 1fr 190px' }}>
               <div ref={entryProductCellRef} className="flex items-center gap-1.5">
                 <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Article <span className="text-red-500 font-bold">*</span></label>
                 <div className="flex-1">
@@ -2288,9 +2181,15 @@ const nextSystemReturnNo = useMemo(
                   />
                 </div>
               </div>
-              <div className="flex flex-col gap-0.5">
-                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Packing</label>
-                <input type="text" value={entry.packing || '-'} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 text-center" />
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Packing</label>
+                  <input type="text" value={entry.packing || '-'} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 text-center" />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Stock In Hand</label>
+                  <input type="text" value={entryStockInHand ? `${formatCartons(entryStockInHand.cartons)} Ctn / ${entryStockInHand.pairs} Prs` : '-'} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 text-center" />
+                </div>
               </div>
             </div>
             <div className="grid grid-cols-3 md:grid-cols-6 gap-2 items-end">
@@ -2304,7 +2203,7 @@ const nextSystemReturnNo = useMemo(
                   required
                   disabled={detailFieldsLocked}
                   onChange={v => updateEntryNumericField('cartons', v)}
-                  className={`soleria-input soleria-input-compact text-center font-mono ${entryBillError ? 'border-2 border-red-500 bg-rose-50 text-red-700 font-bold' : ''}`}
+                  className="soleria-input soleria-input-compact text-center font-mono"
                 />
               </div>
               <div className="flex flex-col gap-0.5">
@@ -2312,21 +2211,15 @@ const nextSystemReturnNo = useMemo(
                 <input type="text" value={entry.pairs || '-'} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-500 text-center" />
               </div>
               <div className="flex flex-col gap-0.5">
-                {/* Rate — locked once linked to an original bill: the return must credit exactly
-                    what was charged on that bill, not whatever gets typed here.
-                    handleEntryVariantChange already fills it from sourceBillItems the moment a
-                    matching color is picked. */}
                 <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Rate <span className="text-red-500 font-bold">*</span></label>
                 <input
                   type="number"
                   required
                   value={entry.rate || ''}
-                  disabled={isCopiedFromBill || detailFieldsLocked}
-                  title={isCopiedFromBill ? 'Locked to the original bill\'s own rate for this article/color' : undefined}
+                  disabled={detailFieldsLocked}
                   min={0}
                   onChange={e => updateEntryNumericField('rate', parseInt(e.target.value) || 0)}
                   className="soleria-input soleria-input-compact text-right font-mono"
-                  style={{ background: isCopiedFromBill ? '#f8fafc' : undefined }}
                 />
               </div>
               <div className="flex flex-col gap-0.5">
@@ -2358,11 +2251,6 @@ const nextSystemReturnNo = useMemo(
                 <input type="text" value={formatCurrency(entry.value)} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-600 text-right font-semibold" />
               </div>
             </div>
-            {entryBillError && (
-              <div className="mt-1.5 text-[11px] font-bold text-red-600 flex items-center gap-1">
-                <span>{entryBillError} — row will not be added.</span>
-              </div>
-            )}
             {/* Editing banner, per pages_design.md §4 — the row stays visible (highlighted) in
                 the grid below the whole time it's being edited, not pulled out; Cancel here
                 discards the in-progress edit, same as the toolbar's Cancel Edit for the return as
@@ -2453,25 +2341,11 @@ const nextSystemReturnNo = useMemo(
             </table>
           </div>
 
-          {/* Bottom Section: Remarks + ref-pic's flat totals row (Total Cartons | Total Pairs |
-              Invoice Discount | Total Value | Rs.) — replaces the old dark "Calculations" box,
-              which isn't in the ref pic; matches SaleBillPage's own bottom section exactly (per
-              the user, 2026-08-26 — spotted the dark box as a clear diff from Sale Bill). */}
+          {/* Bottom Section: ref-pic's flat totals row (Total Cartons | Total Pairs | Invoice
+              Discount | Total Value | Net Total) — matches SaleBillPage's own bottom section. */}
           <div className="shrink-0 flex flex-wrap items-end justify-between gap-3 mt-2 pt-2 border-t" style={{ borderColor: 'var(--border-table)' }}>
-            <div className="flex flex-col gap-1 flex-1 min-w-[220px]">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Return Reason / Remarks
-              </label>
-              <input
-                type="text"
-                value={remarks}
-                disabled={isViewMode || masterFieldsLocked}
-                onChange={e => setRemarks(e.target.value)}
-                placeholder="Enter return reasons or remarks..."
-                className="soleria-input"
-                style={{ fontSize: '13px' }}
-              />
-            </div>
+            {/* Left empty — Sale Bill's Payment Due Date slot; returns have no due date. */}
+            <div />
 
             <div className="flex flex-wrap items-end gap-3">
               <div className="flex flex-col gap-0.5">
@@ -2621,6 +2495,66 @@ const nextSystemReturnNo = useMemo(
       )}
 
       {/* Security Password Protection Modal */}
+      {/* Add New Customer Modal — same as Sale Bill's */}
+      {isAddCustomerOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
+          <form onSubmit={handleCreateCustomer} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-lg mx-4 animate-scaleUp">
+            <h3 className="font-lora font-bold text-lg text-slate-800 mb-4">
+              Add New Customer
+            </h3>
+
+            <div className="mb-4">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                Customer Name <span className="text-red-500 font-bold">*</span>
+              </label>
+              <input type="text" value={newCustomerName} onChange={e => setNewCustomerName(e.target.value)} placeholder="Enter customer name..." className="soleria-input font-semibold" autoFocus required />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Select Region <span className="text-red-500 font-bold">*</span>
+                </label>
+                <SearchableSelect
+                  options={regionOptions}
+                  value={newCustomerRegionId}
+                  onChange={val => { setNewCustomerRegionId(val); setNewCustomerCityId(''); }}
+                  placeholder="Select Region..."
+                  searchPlaceholder="Search regions..."
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Select City
+                </label>
+                <SearchableSelect
+                  options={citiesInRegion(newCustomerRegionId)}
+                  value={newCustomerCityId}
+                  onChange={setNewCustomerCityId}
+                  placeholder="Select City..."
+                  searchPlaceholder="Search cities..."
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 text-sm font-semibold">
+              <button
+                type="button"
+                onClick={closeAddCustomer}
+                className="px-4 py-2 border rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button type="submit" className="px-4 py-2 bg-[#111c2a] text-[#B08D57] rounded-lg hover:opacity-90 transition-opacity">
+                Save Customer
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       <PasswordPromptModal
         isOpen={isPasswordModalOpen}
         onClose={() => {
@@ -2631,7 +2565,9 @@ const nextSystemReturnNo = useMemo(
         title={
           passwordActionType === 'post_return'
             ? 'Authorization Required to Post Return'
-            : 'Authorization Required to Save Return Changes'
+            : passwordActionType === 'delete_unposted_return'
+              ? 'Authorization Required to Delete Return'
+              : 'Authorization Required to Save Return Changes'
         }
         subtitle={passwordActionType === 'delete_unposted_return'
           ? `This deletes the WHOLE return and every article on it — not a single row. It cannot be undone. Enter the password for user '${state.currentUsername || 'user'}' to confirm.`
