@@ -1,7 +1,6 @@
 // IPC layer: registers ipcMain.handle channels for sale-returns — no business logic, no SQL.
 const { ipcMain } = require('electron');
 const service = require('../services/saleReturns.service');
-const authService = require('../services/auth.service');
 const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
 
@@ -30,26 +29,16 @@ module.exports = function register() {
     }),
   );
 
-  // Editing a DRAFT return needs no password (nothing posted yet). Editing a CONFIRMED return
-  // reverses+reapplies its live ledger/stock in the same update() call (see saleReturns.service.js),
-  // so the password is required only in that branch — checked here, before the write, once we
-  // know the return's current status.
+  // Posted returns can't be edited (service.update rejects them) — Un Post first.
   ipcMain.handle(
     'sale-returns:update',
-    wrap(async (payload) => {
-      const session = requireSession();
-      const existing = await service.getById(payload.id);
-      if (existing.is_posted) {
-        await authService.verifyPassword(session.userId, payload.password);
-      }
+    wrap((payload) => {
+      requireSession();
       return service.update(payload.id, payload);
     }),
   );
 
-  // Posting needs NO password (per explicit client instruction). Editing an ALREADY-POSTED
-  // return still does — see update() above — because that silently reverses and reapplies a live
-  // ledger and stock effect, which is the destructive case the guard was there for. Posting a
-  // return you have just reviewed on screen is not.
+  // Posting needs NO password (per explicit client instruction).
   ipcMain.handle(
     'sale-returns:post',
     wrap(async (payload) => {
@@ -58,8 +47,7 @@ module.exports = function register() {
     }),
   );
 
-  // Standalone unpost (not part of the edit flow — editing a CONFIRMED return now
-  // reverses+reapplies internally within update()).
+  // Standalone unpost (removes the ledger/stock rows but leaves the row in sale_returns).
   ipcMain.handle(
     'sale-returns:unpost',
     wrap((payload) => {

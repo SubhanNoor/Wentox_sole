@@ -233,7 +233,7 @@ async function listAllocations(receiptId) {
 async function findAllocationById(allocationId) {
   const result = await query(
     `SELECT ca.*, v.name AS vendor_name, ba.name AS target_name, ch.cheque_id, ch.cheque_status,
-            ch.cheque_no
+            ch.cheque_no, ch.cheque_date
      FROM dbo.cheque_allocations ca
      LEFT JOIN dbo.vendors v ON v.vendor_id = ca.target_vendor_id
      LEFT JOIN dbo.business_accounts ba ON ba.ba_id = ca.target_ba_id

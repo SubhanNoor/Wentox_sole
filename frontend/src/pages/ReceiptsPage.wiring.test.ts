@@ -33,10 +33,12 @@ describe('ReceiptsPage: Post/Unpost are actually wired to the backend, not just 
   });
 
   it('wires handlePost to an actual button — not defined-and-never-called, the 2026-08-09 bug', () => {
-    expect(source).toMatch(/onClick=\{handlePost\}/);
+    // The toolbar's shared Post button calls it from a closure (settlement vs voucher routing),
+    // so match a handlePost() call inside an onClick, not only a bare onClick={handlePost}.
+    expect(source).toMatch(/onClick(?:=\{|: )[^\n]*\bhandlePost\b/);
   });
 
   it('wires handleUnpost to an actual button — not defined-and-never-called', () => {
-    expect(source).toMatch(/onClick=\{handleUnpost\}/);
+    expect(source).toMatch(/onClick(?:=\{|: )[^\n]*\bhandleUnpost\b/);
   });
 });

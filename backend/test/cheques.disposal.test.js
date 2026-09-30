@@ -13,6 +13,8 @@
 //     reverseAllocation() must never flip the underlying receipt back to DRAFT.
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -165,6 +167,29 @@ test('cheques: reverseAllocation() undoes one endorsement only, freeing the cheq
   const totalDebit = ledgerRows.reduce((s, r) => s + Number(r.debit), 0);
   const totalCredit = ledgerRows.reduce((s, r) => s + Number(r.credit), 0);
   assert.equal(totalDebit, totalCredit, 'the endorsement and its reversal together must net to zero for this allocation');
+
+  // The vendor has to see WHICH cheque came back: its number and due date, not the allocation id.
+  const [{ narration }] = await query(
+    "SELECT TOP 1 narration FROM dbo.ledger_entries WHERE source_type = 'CHEQUE_ALLOCATION' AND source_id = @id AND narration LIKE '%reversal%'",
+    { id: allocation.allocation_id },
+  ).then((r) => r.recordset);
+  assert.equal(narration, `Endorsement reversal — Cheque #${cheque.cheque_no} — Due 09/01/2026`);
+
+  // Migration 039 rewrites reversals stored in the old "of allocation #N" wording the same way,
+  // keeping any remarks. Put this row back to the old wording and run the migration's SQL on it.
+  await query(
+    "UPDATE dbo.ledger_entries SET narration = @old WHERE source_type = 'CHEQUE_ALLOCATION' AND source_id = @id AND narration LIKE '%reversal%'",
+    { id: allocation.allocation_id, old: `Endorsement reversal of allocation #${allocation.allocation_id} — returned by vendor` },
+  );
+  await query(fs.readFileSync(path.join(__dirname, '..', 'src', 'db', 'migrations', '039_cheque_reversal_narration.sql'), 'utf8'));
+  const migrated = await query(
+    "SELECT narration FROM dbo.ledger_entries WHERE source_type = 'CHEQUE_ALLOCATION' AND source_id = @id AND narration LIKE '%reversal%'",
+    { id: allocation.allocation_id },
+  );
+  assert.equal(migrated.recordset.length, 2);
+  for (const row of migrated.recordset) {
+    assert.equal(row.narration, `Endorsement reversal — Cheque #${cheque.cheque_no} — Due 09/01/2026 — returned by vendor`);
+  }
 
   const receiptAfter = await receiptsService.getById(receiptId);
   assert.equal(receiptAfter.status, 'CONFIRMED', 'reverseAllocation() must never touch the underlying receipt');

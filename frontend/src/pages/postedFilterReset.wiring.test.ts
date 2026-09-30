@@ -24,9 +24,11 @@ import stockVoucherSource from './StockVoucherPage.tsx?raw';
 // asserts three things: the reset effect calls the list refresh, the callback is gated on
 // "list is empty AND the posted flag" (not `mode === 'view'` alone, the original bug), and it
 // actually calls handleNew() when both hold.
-function assertGuardedReset(source: string, isPostedFlag: string, refreshCall: string) {
+// resetCall defaults to handleNew; JournalVoucherPage resets through resetToNewVoucher() instead,
+// since its New button was split from Edit (commit 9cca45f8, 2026-09-24).
+function assertGuardedReset(source: string, isPostedFlag: string, refreshCall: string, resetCall = 'handleNew') {
   const guardPattern = new RegExp(
-    `${refreshCall}\\([^)]*\\)\\.then\\(data => \\{\\s*if \\(data && data\\.length === 0 && ${isPostedFlag}\\) handleNew\\(\\);`,
+    `${refreshCall}\\([^)]*\\)\\.then\\(data => \\{\\s*if \\(data && data\\.length === 0 && ${isPostedFlag}\\) ${resetCall}\\(\\);`,
   );
   expect(source).toMatch(guardPattern);
 }
@@ -49,7 +51,7 @@ describe('G-06: Posted/Unposted reset-on-reopen is gated on the persisted posted
   });
 
   it('JournalVoucherPage uses isPosted, not mode === \'view\' alone', () => {
-    assertGuardedReset(journalVoucherSource, 'isPosted', 'refreshUnposted');
+    assertGuardedReset(journalVoucherSource, 'isPosted', 'refreshUnposted', 'resetToNewVoucher');
   });
 
   it('StockVoucherPage uses isPosted, not mode === \'view\' alone', () => {

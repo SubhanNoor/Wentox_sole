@@ -211,7 +211,7 @@ export interface SaleReturnCreateInput {
   bill_no: string;
   gp_no: string;
   bilty_no: string;
-  adda_id: number;
+  adda_id?: number; // optional since migration 018 — omit when no Adda is picked
   remarks?: string;
   invoice_discount?: number;
   items: SaleReturnItemInput[];

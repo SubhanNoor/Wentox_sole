@@ -8310,3 +8310,139 @@ because a voucher can't be empty.
 clean; `npx eslint` unchanged at the 4 pre-existing React Compiler errors.
 
 **Files:** `frontend/src/pages/JournalVoucherPage.tsx`.
+
+## 2026-09-28 — Sale Return becomes an independent voucher (no Sale Bill link) + 3 fixes
+
+**Why:** per the user, a Sale Return is now its own voucher like Sale Bill. Articles are entered by
+hand, with no link to or limits from any Sale Bill. Decisions: Manual Invoice No. stays required but
+accepts any text; Rate starts blank (no auto-fill); Delivery Agent/Adda/GP/Bilty stay, all
+optional; posted returns can't be edited anywhere (Un Post first).
+
+**Frontend (`SaleReturnPage.tsx`):** removed "Find Bill to Return", the Manual Invoice No. match
+against Sale Bills, the header lock from a linked bill, Clear Link, the per-line article/rate/
+cartons checks against the bill (`articleAgainstBillError`/`entryBillError`), the loading of every
+Sale Bill (`saleBills.list`), and the rate auto-fill (sale price / `lastSoldRate` / bill rate).
+Fixes:
+- (#1) a blank Adda was sent as `Number('')` = 0, violating `FK_draft_sale_returns_adda`, so every
+  return without an Adda failed to save. It is now sent as `undefined`.
+- (#3) report tabs' Edit → **Open** (read-only, on the Posted list); the save-a-posted-return
+  password path is removed.
+- (#4) `recalcItem` rounded discounts to whole rupees while the backend rounds to paisa; it now
+  rounds to paisa like `saleReturnMath.round2`.
+
+**Backend:** `saleReturns.service.update()` rejects posted returns (`POSTED_NOT_EDITABLE`), and the
+reverse-and-repost branch is gone. `sale-returns:update` no longer asks for a password.
+Old issue #2 (returning more than the bill had) goes away with the redesign.
+
+**Verified:** new `test/saleReturns.independent.test.js`: saves with no Adda and a free-text invoice
+no. → post (stock +24 net, customer credited 2400) → update rejected → un-post (same System No.,
+ledger gone, stock still +24) → delete (stock back to 0). Full suite 22/22 pass. `npx tsc -b`
+clean. `npx eslint` on the page went from 13 to 11 pre-existing React Compiler findings, none new.
+NOT verified by driving the UI. `debugger` subagent not registered in this session, so the diff was
+self-reviewed.
+
+**Files:** `frontend/src/pages/SaleReturnPage.tsx`, `frontend/src/components/{Weekly,Monthly,Overall,Find}ReturnTab.tsx`,
+`frontend/src/lib/api.ts`, `backend/src/services/saleReturns.service.js`,
+`backend/src/ipc/saleReturns.ipc.js`, `backend/test/saleReturns.independent.test.js`.
+
+## 2026-09-28 — Sale Return mirrors Sale Bill's layout and interactions
+
+**Why:** per the user, Sale Return should be an exact copy of Sale Bill's placing and interaction,
+with its own functionality. The user approved the change list before any code was written.
+Return-specific choices: keep Return's labels (TO Store / Manual Invoice No. / Transport Adda /
+Delivery Agent / Article), Rate stays blank, bracketed credit values stay, and the footer's left
+slot stays empty.
+
+**What changed (`frontend/src/pages/SaleReturnPage.tsx` only):**
+- Header uses Sale Bill's `gridTemplateAreas` grid and Enter order: Date → Store → Customer →
+  Remarks → Delivery → Delivery Agent → Manual Invoice No. → GP → Bilty → Adda. Remarks moved up
+  from the footer.
+- Customer uses Sale Bill's typable SearchModal: region-sorted "Name — Region / City" labels,
+  pick-on-single-match, and the + New customer modal.
+- Customer Code now shows `account_code`; it used to show the internal `customer_id`.
+- Main A/C (code and name) added.
+- Delivery code field: `1` = SAME and locks Delivery Agent. It is derived from `sub_customer_id`
+  on load; no DB column.
+- Adda gets the "Not set yet (fill in later)" row. My earlier Enter-to-skip / blur helpers were
+  removed in favour of this.
+- Entry strip shows Stock In Hand (display only; returns add stock) and uses the 190px right
+  column.
+- Save & Post button added.
+- Posting a return created in this sitting drops to a fresh return with the same date
+  (`createdInThisRun` / `readyForNextReturn`).
+- Stock is refreshed after saves.
+- Print gains Delivery Destination, Transport Adda, GP No. and Bilty No., and the header reads
+  "WENTOX WEARHOUSE".
+
+**Verified:** `npx tsc -b` clean and `npm run build` clean. eslint on the page went from 11 to 10
+pre-existing React Compiler findings; the "used before declared" pair is gone and one new
+set-state-in-effect is the customer-text sync, the same pattern as Sale Bill's. Backend 22/22. NOT
+verified by driving the UI.
+
+## 2026-09-30 — Cheque-return narration, Posted/Unposted dropdown, no Login flash, real-screen tests
+
+**Cheque returned from a vendor (Endorsement reversal):** the ledger/cash book line said
+"Endorsement reversal of allocation #47" (an internal id). Per the user it now names the cheque:
+"Endorsement reversal — Cheque #68795 — Due 15/10/2026" (+ " — remarks"). Same for the allocation
+legs of a bounce/return-to-sender. `cheques.service.js#chequeRef`; `findAllocationById` now also
+selects `ch.cheque_date`. Migration **039_cheque_reversal_narration.sql** rewrites every row still in
+the old wording (idempotent; keeps remarks). Numbered 039, not 038: `main` already has
+`038_cheques_in_hand_under_banks.sql`. Test: `test/cheques.disposal.test.js`.
+
+**Posted/Unposted dropdown matches the document on screen** (8 pages: Sale Bill, Sale Return,
+Purchase, Purchase Return, JV, Stock Voucher, Receipts, Expenses):
+- `hooks/useBrowseFilterFollowsDocument.ts` — the loaded document is persisted but the dropdown was
+  plain state, so a restored/posted-in-place/unposted document could sit under the wrong label.
+- New is no longer disabled on Posted (it greyed out right after posting a document that stays on
+  screen — every Purchase Return post). Each page's full-reset New branch sets Unposted (not the
+  Detail-scope "add a line" branch, which must keep a posted bill's label).
+- `hooks/useLatestOnly.ts` — filter changes are queued; the page auto-open (`{ auto: true }`) never
+  overrides a choice already made. Found by the new real-screen test: picking Posted as a page
+  opened was undone when the auto-open of the newest draft finished later.
+
+**No Login flash in new windows:** `AppContext.sessionChecked` — App renders nothing until the
+"already logged in?" IPC check answers (Login only if not). `windowManager.js`: windows start
+hidden on the app background colour and show on `ready-to-show` (3 s fallback).
+
+**Real-screen (e2e) tests — `npm run test:e2e`:** Playwright (`playwright-core`, now a declared
+devDependency, pinned 1.62.1) drives the real Electron app against `wentox_test` and the built
+frontend, with a throwaway Electron profile. `e2e/harness.js` refuses to run unless the app process
+reports `DB_NAME=wentox_test` and no installer app-config.json exists. Suites:
+`e2e/saleBill.browseFilter.e2e.js`, `e2e/purchaseReturn.browseFilter.e2e.js`. Each fix above was
+reverted one at a time to confirm the suite fails without it. Stale wiring tests updated
+(`ReceiptsPage.wiring.test.ts`, `postedFilterReset.wiring.test.ts`).
+
+**Debugger review fixes:** the e2e harness now refuses at load time — before any fixture row is
+written — unless this process's RESOLVED database (installer app-config.json beats DB_NAME) is
+wentox_test. Migration 039 wraps the new narration in `LEFT(..., 500)` (NVARCHAR(500); a row with
+long remarks would otherwise fail the migration on every start) and joins cheques via
+`cheques.receipt_id` like `findAllocationById`; `reverseAllocation` caps its narration at 500.
+Known, not fixed: picking Posted when there are NO posted documents still leaves the current one
+under "Posted" (pre-existing `if (latest)` with no else, all 8 pages); the mount-time G-06 reset
+isn't queued, so a Posted pick made within that first IPC round-trip can still be reset.
+
+**Files:** `src/services/cheques.service.js`, `src/repositories/cheques.repository.js`,
+`src/services/reports.service.js`, `src/db/migrations/039_cheque_reversal_narration.sql`,
+`test/cheques.disposal.test.js`, `electron/windowManager.js`, `e2e/*`, `package.json`,
+`package-lock.json`; frontend `hooks/useBrowseFilterFollowsDocument.ts`, `hooks/useLatestOnly.ts`,
+`context/AppContext.tsx`, `App.tsx`, the 8 pages above, `pages/ReceiptsPage.wiring.test.ts`,
+`pages/postedFilterReset.wiring.test.ts`.
+
+### 2026-10-01 — Real-screen tests for the other 6 document pages
+- **What:** `e2e/{saleReturn,purchase,journalVoucher,stockVoucher,receipts,expenses}.browseFilter.e2e.js`
+  — `npm run test:e2e` now covers all 8 document pages (8 tests, ~2 min).
+- **How:** one shared workflow, `harness.browseFilterScenario()`: open in a new window (no Login
+  frame) → pick Posted at once (must stick) → New (clickable, lands on Unposted) → pick Unposted
+  (our draft) → Post (label matches the screen, New still clickable) → pick Posted → Un Post (back
+  to Unposted), checking after each step that the dropdown matches the screen ("Un Post" clickable
+  ⇔ "Posted"). Each file only supplies its menu entry and fixtures (one posted + one newer
+  unposted document via the backend services) plus FK-safe cleanup of everything its own
+  customer/vendor/variant ended up with. Expense-voucher `post()` needs a session object (it reads
+  `session.userId`), so the fixture passes an admin one. Tests must run serially — each page
+  auto-opens the newest draft in the whole DB.
+- **Verified by reverting fixes on these 6 pages:** New-disabled-on-Posted is caught on all 4 pages
+  that had it; removing useBrowseFilterFollowsDocument is caught on Sale Return and Purchase only
+  (JV/Stock/Receipts/Expenses already set the filter explicitly on every path this workflow takes —
+  the hook only matters there on a reopen with unsaved work, which isn't covered); the auto-open
+  race guard is NOT caught on these 6 (their auto-open starts before the test can pick, and the
+  queue alone orders that) — only Sale Bill's test catches it. Full suite passed twice in a row.

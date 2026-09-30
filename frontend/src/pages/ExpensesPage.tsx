@@ -13,6 +13,8 @@ import type {
 } from '@/lib/api';
 import { focusNextField } from '@/lib/fieldNav';
 import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
+import { useBrowseFilterFollowsDocument } from '@/hooks/useBrowseFilterFollowsDocument';
+import { useLatestOnly } from '@/hooks/useLatestOnly';
 import { ChevronDown } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import WeeklyExpensesTab from '@/components/WeeklyExpensesTab';
@@ -218,6 +220,8 @@ export default function ExpensesPage() {
   // Created LAZILY, on the first Done — voucher_no ("C.Book No") is allocated MAX+1, so creating one
   // when the page opens would burn a number every time somebody merely visited and walked away.
   const [voucher, setVoucher] = useState<ExpenseVoucherRow | null>(null);
+  // Dropdown follows whatever document is on screen — see the hook for why.
+  useBrowseFilterFollowsDocument(voucher?.voucher_id, voucher?.status === 'POSTED', setNavFilter);
   const [voucherRemarks, setVoucherRemarks] = usePersistentField('expenses', 'voucherRemarks', '');
   const [voucherBusy, setVoucherBusy] = useState(false);
   // The ACTION is stored with the result, not inferred from it. When every line fails, both the
@@ -907,26 +911,33 @@ export default function ExpensesPage() {
   // - To Unposted: open the most recently saved unposted/partial voucher (or start a blank new
   //   one if there isn't one), then focus New — Enter on it clicks New and lands on Date.
   // - To Posted: re-fetch and jump straight to the most recently posted voucher for browsing.
-  const handleNavFilterChange = async (next: 'posted' | 'unposted') => {
+  // Queued via useLatestOnly: the page's own auto-open runs this same handler, and a choice made
+  // while that is still loading must not be overwritten when it finishes (2026-09-30).
+  const filterChanges = useLatestOnly();
+  const handleNavFilterChange = (next: 'posted' | 'unposted', opts: { auto?: boolean } = {}) => {
+    // The page's own auto-open never overrides a choice the user already made.
+    if (opts.auto && filterChanges.hasRun()) return Promise.resolve(undefined);
     setNavFilter(next);
-    if (next === 'unposted') {
-      // Re-fetch first, like the Posted branch below — reading the list straight out of state
-      // meant one posted or deleted since it was last loaded was still in it, so Unposted
-      // opened something that is no longer unposted (2026-09-04).
-      const freshAll = await refreshAllVouchers();
-      const unposted = (freshAll ?? allVouchers).filter(v => v.status !== 'POSTED')
-        .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no);
-      const latest = unposted[unposted.length - 1];
-      if (latest) await openVoucherInEntry(latest.voucher_id);
-      else startNewVoucher();
-      requestAnimationFrame(() => newButtonRef.current?.focus());
-    } else {
-      const fresh = await refreshAllVouchers();
-      const list = [...(fresh ?? allVouchers).filter(v => v.status === 'POSTED')]
-        .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no);
-      const latest = list[list.length - 1];
-      if (latest) await openVoucherInEntry(latest.voucher_id);
-    }
+    return filterChanges.run(async () => {
+      if (next === 'unposted') {
+        // Re-fetch first, like the Posted branch below — reading the list straight out of state
+        // meant one posted or deleted since it was last loaded was still in it, so Unposted
+        // opened something that is no longer unposted (2026-09-04).
+        const freshAll = await refreshAllVouchers();
+        const unposted = (freshAll ?? allVouchers).filter(v => v.status !== 'POSTED')
+          .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no);
+        const latest = unposted[unposted.length - 1];
+        if (latest) await openVoucherInEntry(latest.voucher_id);
+        else startNewVoucher();
+        requestAnimationFrame(() => newButtonRef.current?.focus());
+      } else {
+        const fresh = await refreshAllVouchers();
+        const list = [...(fresh ?? allVouchers).filter(v => v.status === 'POSTED')]
+          .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no);
+        const latest = list[list.length - 1];
+        if (latest) await openVoucherInEntry(latest.voucher_id);
+      }
+    });
   };
 
   // Preview of the System Voucher No. a brand-new voucher will get — voucher_no is ONE sequence
@@ -975,7 +986,7 @@ export default function ExpensesPage() {
   useEffect(() => {
     if (hasPageDraftAtMount || didAutoOpenRef.current) return;
     didAutoOpenRef.current = true;
-    handleNavFilterChange('unposted');
+    handleNavFilterChange('unposted', { auto: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

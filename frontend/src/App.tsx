@@ -48,6 +48,10 @@ import './App.css';
 export default function App() {
   const { state } = useApp();
 
+  // Still asking whether this window is already logged in elsewhere — draw nothing (just the body's
+  // own background) rather than a Login page that would flash and vanish. See State.sessionChecked.
+  if (!state.sessionChecked) return null;
+
   if (!state.isLoggedIn) {
     return <LoginPage />;
   }

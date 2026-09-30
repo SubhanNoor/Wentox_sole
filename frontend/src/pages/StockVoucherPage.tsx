@@ -7,6 +7,8 @@ import RowActions from '@/components/RowActions';
 import SearchModal from '@/components/SearchModal';
 import { focusNextField } from '@/lib/fieldNav';
 import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
+import { useBrowseFilterFollowsDocument } from '@/hooks/useBrowseFilterFollowsDocument';
+import { useLatestOnly } from '@/hooks/useLatestOnly';
 import * as api from '@/lib/api';
 import type {
   ProductRow, ProductVariantRow, StoreRow, StockVoucherRow, StockVoucherLineInput,
@@ -303,6 +305,8 @@ export default function StockVoucherPage() {
       requestAnimationFrame(() => entryArticleTriggerRef.current?.focus());
       return;
     }
+    // A blank document is an unposted one — back to the Unposted view (see useBrowseFilterFollowsDocument).
+    setBrowseFilter('unposted');
     setMode('new'); setHasClickedNew(false); setSvId(null); setStatus('DRAFT');
     setDate(getTodayDate()); setStoreId(''); setRemarks('');
     // Fixed to STOCK TRANSFER, never blank — the auto-populate effect above also covers this once
@@ -950,6 +954,8 @@ export default function StockVoucherPage() {
   // Prev./Next/Last + Un Post) — switching into it never blocks entry, it's just a different lens
   // on the same record list.
   const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('unposted');
+  // Dropdown follows whatever document is on screen — see the hook for why.
+  useBrowseFilterFollowsDocument(svId, isPosted, setBrowseFilter);
   const [navVouchers, setNavVouchers] = useState<StockVoucherRow[]>([]);
 
   const [navVouchersLoaded, setNavVouchersLoaded] = useState(false);
@@ -1000,23 +1006,30 @@ export default function StockVoucherPage() {
   //   isn't one), then focus New — Enter on it clicks New and lands on Date, ready to type the
   //   next voucher, same as today.
   // - To Posted: re-fetch and jump straight to the most recently posted voucher for browsing.
-  const handleBrowseFilterChange = async (next: 'posted' | 'unposted') => {
+  // Queued via useLatestOnly: the page's own auto-open runs this same handler, and a choice made
+  // while that is still loading must not be overwritten when it finishes (2026-09-30).
+  const filterChanges = useLatestOnly();
+  const handleBrowseFilterChange = (next: 'posted' | 'unposted', opts: { auto?: boolean } = {}) => {
+    // The page's own auto-open never overrides a choice the user already made.
+    if (opts.auto && filterChanges.hasRun()) return Promise.resolve(undefined);
     setBrowseFilter(next);
-    if (next === 'unposted') {
-      // Re-fetch first, like the Posted branch below — reading the list straight out of state
-      // meant one posted or deleted since it was last loaded was still in it, so Unposted
-      // opened something that is no longer unposted (2026-09-04).
-      const freshUnposted = await refreshUnposted();
-      const latest = (freshUnposted ?? unpostedSvs).slice(-1)[0];
-      if (latest) await loadSv(latest.stock_voucher_id);
-      else handleNew();
-      requestAnimationFrame(() => newButtonRef.current?.focus());
-    } else {
-      const fresh = await refreshNav();
-      const list = [...(fresh ?? navVouchers)].filter(v => v.status === 'CONFIRMED').reverse();
-      const latest = list[list.length - 1];
-      if (latest) await loadSv(latest.stock_voucher_id);
-    }
+    return filterChanges.run(async () => {
+      if (next === 'unposted') {
+        // Re-fetch first, like the Posted branch below — reading the list straight out of state
+        // meant one posted or deleted since it was last loaded was still in it, so Unposted
+        // opened something that is no longer unposted (2026-09-04).
+        const freshUnposted = await refreshUnposted();
+        const latest = (freshUnposted ?? unpostedSvs).slice(-1)[0];
+        if (latest) await loadSv(latest.stock_voucher_id);
+        else handleNew();
+        requestAnimationFrame(() => newButtonRef.current?.focus());
+      } else {
+        const fresh = await refreshNav();
+        const list = [...(fresh ?? navVouchers)].filter(v => v.status === 'CONFIRMED').reverse();
+        const latest = list[list.length - 1];
+        if (latest) await loadSv(latest.stock_voucher_id);
+      }
+    });
   };
 
   // Landing on the page with nothing in progress: the Posted/Unposted dropdown already reads
@@ -1038,7 +1051,7 @@ export default function StockVoucherPage() {
   useEffect(() => {
     if (hasPageDraftAtMount || didAutoOpenRef.current) return;
     didAutoOpenRef.current = true;
-    handleBrowseFilterChange('unposted');
+    handleBrowseFilterChange('unposted', { auto: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1189,7 +1202,10 @@ export default function StockVoucherPage() {
             own: New/Delete/Edit/Done, First/Previous/Next/Last, Print/Find, Un Post/Post. */}
         <div className="flex items-center flex-nowrap overflow-x-auto justify-between gap-2 mb-1 p-1.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <DocumentToolbar
-            newAction={{ onClick: () => { handleNew(); markNewClicked(); }, disabled: browseFilter === 'posted', ref: newButtonRef }}
+            /* New works from either view (it used to be disabled on Posted, which greyed it out right
+               after posting a document that stays on screen — 2026-09-30). A blank document returns the
+               dropdown to Unposted inside handleNew, same as Receipts/Expenses. */
+            newAction={{ onClick: () => { handleNew(); markNewClicked(); }, ref: newButtonRef }}
             remove={{
               onClick: handleDeleteAction,
               disabled: svId == null || isPosted,

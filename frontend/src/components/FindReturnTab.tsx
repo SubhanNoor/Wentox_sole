@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { SaleReturnRow, SaleReturnItemRow, CustomerRow, SubCustomerRow, ProductRow } from '@/lib/api';
-import { Search, Printer, Calendar, FileText, User, Edit2, Package, Layers, RotateCcw, Eye } from 'lucide-react';
+import { Search, Printer, Calendar, FileText, User, Package, Layers, RotateCcw, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime, formatCartons } from '@/lib/utils';
 import wentoxLogo from '@/assets/wentox_logo.png';
@@ -10,11 +10,11 @@ import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreview
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 
 interface FindReturnTabProps {
-  onEditReturn: (ret: SaleReturnRow) => void;
+  onOpenReturn: (ret: SaleReturnRow) => void;
   onPrintReturn: (ret: SaleReturnRow) => void;
 }
 
-export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindReturnTabProps) {
+export default function FindReturnTab({ onOpenReturn, onPrintReturn }: FindReturnTabProps) {
   const [returns, setReturns] = useState<SaleReturnRow[]>([]);
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [subCustomers, setSubCustomers] = useState<SubCustomerRow[]>([]);
@@ -484,11 +484,11 @@ export default function FindReturnTab({ onEditReturn, onPrintReturn }: FindRetur
                         <td className="p-3.5 text-center pr-4" onClick={e => e.stopPropagation()}>
                           <div className="flex justify-center items-center gap-1.5">
                             <button
-                              onClick={() => onEditReturn(ret)}
-                              title="Edit Return"
+                              onClick={() => onOpenReturn(ret)}
+                              title="Open Return — posted returns can't be edited; Un Post it first"
                               className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer"
                             >
-                              <Edit2 size={15} />
+                              <Eye size={15} />
                             </button>
                             <button
                               onClick={() => onPrintReturn(ret)}
