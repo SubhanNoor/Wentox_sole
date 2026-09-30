@@ -56,12 +56,24 @@ function createAppWindow(page, tab, { child = false, params = {} } = {}) {
     width,
     height,
     ...nextCascadePosition(width, height),
+    // Hidden until its first paint, on the app's own --app-bg (frontend/src/index.css) — a window
+    // shown immediately flashed white, then the Login page, before landing on the page it was
+    // opened for (reported by the user, 2026-09-30). The Login half of that is fixed in the
+    // renderer (AppContext.tsx's sessionChecked); this covers the empty-window half.
+    show: false,
+    backgroundColor: '#FAF8F3',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
+
+  // ready-to-show never fires if the page fails to load, so a fallback timer makes sure a window
+  // can never stay invisible.
+  const showTimer = setTimeout(() => { if (!win.isDestroyed() && !win.isVisible()) win.show(); }, 3000);
+  win.once('ready-to-show', () => { clearTimeout(showTimer); win.show(); });
+  win.on('closed', () => clearTimeout(showTimer));
 
   if (child) {
     childWindows.add(win);

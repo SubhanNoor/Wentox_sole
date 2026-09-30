@@ -735,6 +735,10 @@ const demoSalaryRuns: SalaryRun[] = [
 
 export interface State {
   isLoggedIn: boolean;
+  // False until the mount-time "already logged in elsewhere?" check below has answered. App.tsx
+  // draws nothing until then — otherwise every new window flashed the Login page for the moment
+  // that IPC round-trip took before jumping to its page (reported by the user, 2026-09-30).
+  sessionChecked: boolean;
   currentUserRole: UserRole | null;
   currentUsername: string | null;
   currentPage: string;
@@ -791,6 +795,8 @@ type Action =
   // Dispatched only after a real `api.login(...)` round-trip has already resolved
   // successfully (see LoginPage.tsx) — the reducer never touches credentials itself.
   | { type: 'LOGIN_SUCCESS'; payload: { username: string; role: UserRole } }
+  // Mount-time session check found no existing session — show Login.
+  | { type: 'SESSION_CHECKED' }
   // Multi-window support: a freshly opened window found the app already logged in elsewhere
   // (session is one shared value for the whole Electron process, not per-window — see
   // api.currentSession()) and lands directly on `page`/`tab` instead of Home, since it was opened
@@ -903,6 +909,7 @@ function savePageDrafts(drafts: Record<string, Record<string, unknown>>) {
 
 const initialState: State = {
   isLoggedIn: false,
+  sessionChecked: false,
   currentUserRole: null,
   currentUsername: null,
   currentPage: 'login',
@@ -959,9 +966,12 @@ function reducer(state: State, action: Action): State {
         currentPage: 'home',
         homeAlertsCardClosed: false
       };
+    case 'SESSION_CHECKED':
+      return { ...state, sessionChecked: true };
     case 'RESTORE_SESSION':
       return {
         ...state,
+        sessionChecked: true,
         isLoggedIn: true,
         currentUserRole: action.payload.role,
         currentUsername: action.payload.username,
@@ -1311,13 +1321,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const params = new URLSearchParams(window.location.search);
       const page = params.get('page');
       const tab = params.get('tab');
-      const res = await api.currentSession();
-      if (res.ok && res.data) {
-        dispatch({
-          type: 'RESTORE_SESSION',
-          payload: { username: res.data.username, role: res.data.role, page: page || 'home', tab },
-        });
+      try {
+        const res = await api.currentSession();
+        if (res.ok && res.data) {
+          dispatch({
+            type: 'RESTORE_SESSION',
+            payload: { username: res.data.username, role: res.data.role, page: page || 'home', tab },
+          });
+          return;
+        }
+      } catch {
+        // No answer is treated as "not logged in" — the window must never be left blank.
       }
+      dispatch({ type: 'SESSION_CHECKED' });
     })();
     // One-time bootstrap check on mount, not a live subscription — intentionally no deps to watch.
   }, []);
