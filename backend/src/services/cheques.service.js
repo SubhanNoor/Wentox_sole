@@ -218,6 +218,17 @@ async function markCleared(chequeId) {
   return getById(chequeId);
 }
 
+// "Cheque #123456 — Due 20/09/2026" — the same wording the ledger report uses for a cheque
+// (reports.service.js#paymentNarration), so a reversal row reads like its original endorsement.
+function chequeRef(chequeNo, dueDate) {
+  const parts = [chequeNo ? `Cheque #${chequeNo}` : 'Cheque'];
+  const d = dueDate ? new Date(dueDate) : null;
+  if (d && !Number.isNaN(d.getTime())) {
+    parts.push(`Due ${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`);
+  }
+  return parts.join(' — ');
+}
+
 // Shared reversal mechanics for both BOUNCED and RETURNED (database_schema_v4.3.md §6.1: a bounce
 // reverses, never erases). Reverses every ACTIVE allocation (Dr CHEQUES IN HAND / Cr whatever it
 // had debited — the opposite of the original entry), then reverses the original receipt itself
@@ -256,8 +267,8 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
       // Opposite of the original allocation entry (Dr target / Cr CHEQUES IN HAND): here we credit
       // target and debit CHEQUES IN HAND back.
       await repository.insertLedgerEntries(transaction, [
-        { entry_date: date, ac_id: chequesInHand.ac_id, debit: allocation.amount, credit: 0, source_type: 'CHEQUE_ALLOCATION', source_id: allocation.allocation_id, narration: `${mode} reversal of allocation #${allocation.allocation_id}` },
-        { entry_date: date, ba_id: targetBaId, debit: 0, credit: allocation.amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocation.allocation_id, narration: `${mode} reversal of allocation #${allocation.allocation_id}` },
+        { entry_date: date, ac_id: chequesInHand.ac_id, debit: allocation.amount, credit: 0, source_type: 'CHEQUE_ALLOCATION', source_id: allocation.allocation_id, narration: `${mode} reversal — ${chequeRef(cheque.cheque_no, cheque.cheque_date)}` },
+        { entry_date: date, ba_id: targetBaId, debit: 0, credit: allocation.amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocation.allocation_id, narration: `${mode} reversal — ${chequeRef(cheque.cheque_no, cheque.cheque_date)}` },
       ]);
     }
 
@@ -341,7 +352,10 @@ async function reverseAllocation(allocationId, payload, userId) {
   const targetBaId = allocation.target_vendor_id
     ? (await vendorsService.getById(allocation.target_vendor_id)).ba_id
     : allocation.target_ba_id;
-  const narration = `Endorsement reversal of allocation #${allocationId}${payload.remarks ? ` — ${payload.remarks}` : ''}`;
+  // Cheque no. and due date, not the internal allocation id (per the user, 2026-09-30) — the
+  // vendor's ledger has to say WHICH cheque came back.
+  // Capped to ledger_entries.narration's NVARCHAR(500) — remarks have no length limit of their own.
+  const narration = `Endorsement reversal — ${chequeRef(allocation.cheque_no, allocation.cheque_date)}${payload.remarks ? ` — ${payload.remarks}` : ''}`.slice(0, 500);
 
   await withTransaction(async (transaction) => {
     await repository.reverseOneAllocation(transaction, allocationId);
