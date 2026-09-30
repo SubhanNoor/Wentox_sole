@@ -16,6 +16,7 @@
     "check:ipc-bridge": "node scripts/check-ipc-bridge.js",
     "test:setup": "cross-env DB_NAME=wentox_test node scripts/setup-test-db.js",
     "test": "cross-env DB_NAME=wentox_test node --test --test-concurrency=1",
+    "test:e2e": "npm --prefix ../frontend run build && cross-env DB_NAME=wentox_test node --test --test-concurrency=1 \"e2e/*.e2e.js\"",
     "dist:win": "npm run check:ipc-bridge && npm run download:sqlserver && npm run build:frontend && electron-builder --win",
     "release:win": "npm run check:ipc-bridge && npm run download:sqlserver && npm run build:frontend && electron-builder --win --publish always"
   },
@@ -30,7 +31,8 @@
     "cross-env": "^7.0.3",
     "electron": "^33.4.11",
     "electron-builder": "^25.0.0",
-    "nodemon": "^3.1.4"
+    "nodemon": "^3.1.4",
+    "playwright-core": "1.62.1"
   },
   "build": {
     "appId": "com.wentox.erp",
