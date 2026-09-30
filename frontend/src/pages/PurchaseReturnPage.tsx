@@ -16,6 +16,8 @@ import { Plus, Undo2, CheckCircle2, ChevronDown } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
 import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
+import { useBrowseFilterFollowsDocument } from '@/hooks/useBrowseFilterFollowsDocument';
+import { useLatestOnly } from '@/hooks/useLatestOnly';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
@@ -725,6 +727,8 @@ const nextSystemBillNo = useMemo(
       requestAnimationFrame(() => materialNameRef.current?.focus());
       return;
     }
+    // A blank document is an unposted one — back to the Unposted view (see useBrowseFilterFollowsDocument).
+    setNavFilter('unposted');
     setMode('new');
     setHasClickedNew(false);
     setReturnId(null);
@@ -1030,6 +1034,8 @@ const nextSystemBillNo = useMemo(
   // new returns from. Posted is purely a browse mode over already-posted returns (First/Prev./
   // Next/Last + Un Post).
   const [navFilter, setNavFilter] = useState<'posted' | 'unposted'>('unposted');
+  // Dropdown follows whatever document is on screen — see the hook for why.
+  useBrowseFilterFollowsDocument(returnId, currentIsPosted, setNavFilter);
 
   // Sorted by system_no (creation order), NOT sortedReturns' own date-based order (right for the
   // "Recorded Purchase Returns" listing below, wrong here) — same fix as PurchasePage/SaleBillPage,
@@ -1217,24 +1223,31 @@ const nextSystemBillNo = useMemo(
   // - To Unposted: load the most recently saved draft (or a blank New return if there isn't one),
   //   then focus New — Enter on it clicks New and lands on Date, ready for the next one.
   // - To Posted: re-fetch and jump straight to the most recently posted return for browsing.
-  const handleNavFilterChange = async (next: 'posted' | 'unposted') => {
+  // Queued via useLatestOnly: the page's own auto-open runs this same handler, and a choice made
+  // while that is still loading must not be overwritten when it finishes (2026-09-30).
+  const filterChanges = useLatestOnly();
+  const handleNavFilterChange = (next: 'posted' | 'unposted', opts: { auto?: boolean } = {}) => {
+    // The page's own auto-open never overrides a choice the user already made.
+    if (opts.auto && filterChanges.hasRun()) return Promise.resolve(undefined);
     setNavFilter(next);
-    if (next === 'unposted') {
-      // Re-fetch first, exactly like the Posted branch below — reading the list straight out
-      // of state meant a draft posted or deleted since it was last loaded was still in it, so
-      // switching to Unposted opened a "draft" that no longer exists (2026-09-04).
-      const fresh = await refreshUnposted();
-      const list = [...(fresh ?? unpostedReturns)].sort((a, b) => a.system_no - b.system_no);
-      const latest = list[list.length - 1];
-      const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
-      if (!opened) startNewReturn();
-      requestAnimationFrame(() => newButtonRef.current?.focus());
-    } else {
-      const fresh = await refreshReturns();
-      const list = [...(fresh ?? returns).filter(r => r.is_posted)].sort((a, b) => a.system_no - b.system_no);
-      const latest = list[list.length - 1];
-      if (latest) await loadReturnRow(latest);
-    }
+    return filterChanges.run(async () => {
+      if (next === 'unposted') {
+        // Re-fetch first, exactly like the Posted branch below — reading the list straight out
+        // of state meant a draft posted or deleted since it was last loaded was still in it, so
+        // switching to Unposted opened a "draft" that no longer exists (2026-09-04).
+        const fresh = await refreshUnposted();
+        const list = [...(fresh ?? unpostedReturns)].sort((a, b) => a.system_no - b.system_no);
+        const latest = list[list.length - 1];
+        const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
+        if (!opened) startNewReturn();
+        requestAnimationFrame(() => newButtonRef.current?.focus());
+      } else {
+        const fresh = await refreshReturns();
+        const list = [...(fresh ?? returns).filter(r => r.is_posted)].sort((a, b) => a.system_no - b.system_no);
+        const latest = list[list.length - 1];
+        if (latest) await loadReturnRow(latest);
+      }
+    });
   };
 
   // Landing on the page with nothing in progress: the Posted/Unposted dropdown already reads
@@ -1255,7 +1268,7 @@ const nextSystemBillNo = useMemo(
   useEffect(() => {
     if (hasPageDraftAtMount || didAutoOpenRef.current) return;
     didAutoOpenRef.current = true;
-    handleNavFilterChange('unposted');
+    handleNavFilterChange('unposted', { auto: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1320,7 +1333,10 @@ const nextSystemBillNo = useMemo(
             this. */}
         <div className="flex items-center flex-nowrap overflow-x-auto justify-between gap-2 mb-1 p-1.5 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }} data-no-print>
           <DocumentToolbar
-            newAction={{ onClick: () => { startNewReturn(); markNewClicked(); }, disabled: navFilter === 'posted', ref: newButtonRef, title: 'New' }}
+            /* New works from either view (it used to be disabled on Posted, which greyed it out right
+               after posting a document that stays on screen — 2026-09-30). A blank document returns the
+               dropdown to Unposted inside handleNew, same as Receipts/Expenses. */
+            newAction={{ onClick: () => { startNewReturn(); markNewClicked(); }, ref: newButtonRef, title: 'New' }}
             remove={{
               onClick: deleteSelectedArticle,
               disabled: deletedPlaceholder != null || returnId == null || currentIsPosted,

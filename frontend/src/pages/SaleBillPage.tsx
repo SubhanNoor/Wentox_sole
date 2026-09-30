@@ -18,6 +18,8 @@ import RowActions from '@/components/RowActions';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import PageToasts from '@/components/PageToasts';
 import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
+import { useBrowseFilterFollowsDocument } from '@/hooks/useBrowseFilterFollowsDocument';
+import { useLatestOnly } from '@/hooks/useLatestOnly';
 import * as api from '@/lib/api';
 import type {
   CustomerRow, SubCustomerRow, ProductRow, ProductVariantRow, StoreRow, AddaRow,
@@ -787,6 +789,8 @@ const nextSystemBillNo = useMemo(
   // new bills from. Posted is purely a browse mode over already-posted bills (First/Prev./Next/
   // Last + Un Post).
   const [browseFilter, setBrowseFilter] = useState<'posted' | 'unposted'>('unposted');
+  // Dropdown follows whatever document is on screen — see the hook for why.
+  useBrowseFilterFollowsDocument(billId, currentBillIsPosted, setBrowseFilter);
 
   const refreshPosted = useCallback(async () => {
     const res = await api.saleBills.list();
@@ -861,27 +865,34 @@ const nextSystemBillNo = useMemo(
   // - To Unposted: load the most recently saved draft (or a blank New bill if there isn't one),
   //   then focus New — Enter on it clicks New and lands on Date, ready to type the next bill.
   // - To Posted: re-fetch and jump straight to the most recently posted bill for browsing.
-  const handleBrowseFilterChange = async (next: 'posted' | 'unposted') => {
+  // Queued via useLatestOnly: the page's own auto-open runs this same handler, and a choice made
+  // while that is still loading must not be overwritten when it finishes (2026-09-30).
+  const filterChanges = useLatestOnly();
+  const handleBrowseFilterChange = (next: 'posted' | 'unposted', opts: { auto?: boolean } = {}) => {
+    // The page's own auto-open never overrides a choice the user already made.
+    if (opts.auto && filterChanges.hasRun()) return Promise.resolve(undefined);
     setBrowseFilter(next);
-    if (next === 'unposted') {
-      // Re-fetch first, exactly like the Posted branch below. Reading the list straight out of
-      // state meant a draft posted or deleted since it was last loaded was still in it, so
-      // switching to Unposted opened a "draft" that no longer exists — the user (2026-09-04) saw
-      // that as Unposted "still showing me the posted bill", since posting is precisely what turns
-      // a draft into one. With a fresh list the entry is gone, so there is nothing to open and the
-      // blank New bill below is what shows.
-      const fresh = await refreshUnposted();
-      const list = [...(fresh ?? unpostedBills)].sort((a, b) => a.system_no - b.system_no);
-      const latest = list[list.length - 1];
-      const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
-      if (!opened) handleNew();
-      requestAnimationFrame(() => newButtonRef.current?.focus());
-    } else {
-      const fresh = await refreshPosted();
-      const list = [...(fresh ?? postedBills)].sort((a, b) => a.system_no - b.system_no);
-      const latest = list[list.length - 1];
-      if (latest) { await loadBillRow(latest); setMode('view'); }
-    }
+    return filterChanges.run(async () => {
+      if (next === 'unposted') {
+        // Re-fetch first, exactly like the Posted branch below. Reading the list straight out of
+        // state meant a draft posted or deleted since it was last loaded was still in it, so
+        // switching to Unposted opened a "draft" that no longer exists — the user (2026-09-04) saw
+        // that as Unposted "still showing me the posted bill", since posting is precisely what turns
+        // a draft into one. With a fresh list the entry is gone, so there is nothing to open and the
+        // blank New bill below is what shows.
+        const fresh = await refreshUnposted();
+        const list = [...(fresh ?? unpostedBills)].sort((a, b) => a.system_no - b.system_no);
+        const latest = list[list.length - 1];
+        const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
+        if (!opened) handleNew();
+        requestAnimationFrame(() => newButtonRef.current?.focus());
+      } else {
+        const fresh = await refreshPosted();
+        const list = [...(fresh ?? postedBills)].sort((a, b) => a.system_no - b.system_no);
+        const latest = list[list.length - 1];
+        if (latest) { await loadBillRow(latest); setMode('view'); }
+      }
+    });
   };
 
   // Toolbar's Find button — a quick jump to any bill (posted or unposted) by bill number or
@@ -978,6 +989,8 @@ const nextSystemBillNo = useMemo(
       requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
       return;
     }
+    // A blank document is an unposted one — back to the Unposted view (see useBrowseFilterFollowsDocument).
+    setBrowseFilter('unposted');
     clearSaleBillDraft();
     setMode('new');
     setHasClickedNew(false);
@@ -1372,7 +1385,7 @@ const nextSystemBillNo = useMemo(
     // No mode/billId check: a restored view of an older record must be replaced too (2026-09-18).
     if (stores.length > 0) {
       didAutoOpenRef.current = true;
-      handleBrowseFilterChange('unposted');
+      handleBrowseFilterChange('unposted', { auto: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, billId, stores]);
@@ -1835,7 +1848,10 @@ const nextSystemBillNo = useMemo(
               neutral, amber = navigation. */}
           <div className="flex items-center flex-nowrap overflow-x-auto gap-2">
           <DocumentToolbar
-            newAction={{ onClick: pressNew, disabled: browseFilter === 'posted', ref: newButtonRef }}
+            /* New works from either view (it used to be disabled on Posted, which greyed it out right
+               after posting a document that stays on screen — 2026-09-30). A blank document returns the
+               dropdown to Unposted inside handleNew, same as Receipts/Expenses. */
+            newAction={{ onClick: pressNew, ref: newButtonRef }}
             remove={{
               onClick: handleDeleteAction,
               disabled: deletedPlaceholder != null || billId == null || currentBillIsPosted,
