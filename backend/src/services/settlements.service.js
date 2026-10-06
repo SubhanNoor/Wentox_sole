@@ -8,6 +8,10 @@
 // instrument at all.
 const repository = require('../repositories/settlements.repository');
 const businessAccountsService = require('./businessAccounts.service');
+const receiptVouchersRepository = require('../repositories/receiptVouchers.repository');
+// Same weekly/monthly window as receipts.list() — the Receipts records tabs fetch both and put a
+// voucher's endorsed lines on its card, so the two must cover exactly the same dates.
+const { resolveDateRange } = require('./receipts.service');
 const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 
@@ -43,7 +47,7 @@ async function validate(payload, session) {
 }
 
 function list(filters = {}) {
-  return repository.list(filters);
+  return repository.list({ ...filters, ...resolveDateRange(filters) });
 }
 
 async function getById(settlementId) {
@@ -67,10 +71,22 @@ function buildFields(payload) {
 
 // Always created DRAFT — post() is the only thing that writes ledger_entries, same shape as
 // transfers/receipts/expenses/purchases.
+//
+// `voucher_id` (optional): the receipt voucher this endorsement is a line of (migration 041). It
+// then takes the voucher's date — the header owns the date on that screen, same as a receipt line —
+// and posts/unposts/deletes with the voucher (receiptVouchers.service.js).
 async function create(payload, userId, session) {
   await validate(payload, session);
+  const fields = buildFields(payload);
+  let voucherId = null;
+  if (payload.voucher_id) {
+    const voucher = await receiptVouchersRepository.findById(payload.voucher_id);
+    if (!voucher) throw ApiError.notFound('Receipt voucher not found');
+    voucherId = voucher.voucher_id;
+    fields.settlement_date = voucher.voucher_date;
+  }
   const id = await withTransaction((transaction) => (
-    repository.insert(transaction, { ...buildFields(payload), created_by: userId })
+    repository.insert(transaction, { ...fields, created_by: userId, voucher_id: voucherId })
   ));
   return getById(id);
 }
@@ -82,7 +98,10 @@ async function update(settlementId, payload, session) {
     throw ApiError.conflict('Unpost the settlement before editing', 'POSTED_LOCK');
   }
   await validate(payload, session);
-  await repository.update(settlementId, buildFields(payload));
+  const fields = buildFields(payload);
+  // A voucher line keeps the voucher's date whatever the entry row sent.
+  if (existing.voucher_id != null) fields.settlement_date = existing.settlement_date;
+  await repository.update(settlementId, fields);
   return getById(settlementId);
 }
 
@@ -120,7 +139,10 @@ async function post(settlementId, userId, session) {
       toName: settlement.to_name,
       amount: settlement.amount,
     });
-    await repository.setStatus(transaction, settlementId, 'CONFIRMED', userId);
+    // Conditional flip — if a concurrent post already flipped it, this throws and the ledger rows
+    // inserted above roll back with the transaction.
+    const changed = await repository.setStatus(transaction, settlementId, 'CONFIRMED', userId);
+    if (!changed) throw ApiError.conflict('Settlement is already posted', 'ALREADY_POSTED');
   });
 
   return getById(settlementId);
@@ -135,8 +157,9 @@ async function unpost(settlementId, userId, session) {
   }
 
   await withTransaction(async (transaction) => {
+    const changed = await repository.setStatus(transaction, settlementId, 'DRAFT', userId);
+    if (!changed) throw ApiError.conflict('Settlement is not posted', 'NOT_POSTED');
     await repository.deleteLedgerEntries(transaction, settlementId);
-    await repository.setStatus(transaction, settlementId, 'DRAFT', userId);
   });
 
   return getById(settlementId);

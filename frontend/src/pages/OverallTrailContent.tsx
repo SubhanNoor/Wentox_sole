@@ -48,10 +48,13 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
   const [searchQuery, setSearchQuery] = useState(() => getWindowParam('searchQuery') || '');
   const [selectedGroup, setSelectedGroup] = useState<AccountGroupType>(() => (getWindowParam('selectedGroup') as AccountGroupType) || initialGroup);
   const [reportVisible, setReportVisible] = useState(true);
+  // "Skip Zero Balances": when on, accounts whose balance nets to zero are left out of the report.
+  const [skipZero, setSkipZero] = useState(() => getWindowParam('skipZero') === '1');
 
   const handleClearFilters = () => {
     setSearchQuery('');
     setSelectedGroup(initialGroup);
+    setSkipZero(false);
     setAsOfDate(getTodayDate());
     setReportVisible(false);
   };
@@ -119,6 +122,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
   const filteredBalances = useMemo(() => {
     return trailBalances.filter(r => {
       if (selectedGroup !== 'all' && r.type !== selectedGroup) return false;
+      if (skipZero && Math.abs(r.debit - r.credit) < 0.005) return false;
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase();
       return (
@@ -127,7 +131,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
         r.type_label.toLowerCase().includes(q)
       );
     });
-  }, [trailBalances, selectedGroup, searchQuery]);
+  }, [trailBalances, selectedGroup, searchQuery, skipZero]);
 
   const groupedBalances = useMemo(() => {
     const map = new Map<string, OverallTrailRow[]>();
@@ -205,7 +209,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
   // "Show Print Preview" opens a new window on this same tab (per the user, 2026-09-03), instead
   // of an in-page overlay — behaves like the app's other "open in new window" child windows.
   const handleShowPrintPreview = () => {
-    api.openWindow('reports', ownTab, { asOfDate, selectedGroup, searchQuery, autoPreview: '1' });
+    api.openWindow('reports', ownTab, { asOfDate, selectedGroup, searchQuery, skipZero: skipZero ? '1' : '0', autoPreview: '1' });
   };
 
   const handleShowLedgerPrintPreview = () => {
@@ -522,6 +526,19 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
                   {grp === 'all' ? 'All Accounts' : grp === 'customer' ? 'Customers' : grp === 'vendor' ? 'Vendors' : grp === 'employee' ? 'Employees' : grp === 'bank' ? 'Banks' : grp === 'chart_account' ? 'Chart Accounts' : 'Business Accounts'}
                 </button>
               ))}
+              {/* A single on/off option drawn as a radio — click again to turn it back off. */}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={skipZero}
+                onClick={() => setSkipZero(v => !v)}
+                className="ml-2 flex items-center gap-1.5 px-2 py-1 text-[11px] font-semibold text-slate-600 rounded-md hover:bg-slate-50 cursor-pointer"
+              >
+                <span className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center ${skipZero ? 'border-[#111c2a]' : 'border-slate-300'}`}>
+                  {skipZero && <span className="w-1.5 h-1.5 rounded-full bg-[#111c2a]" />}
+                </span>
+                Skip Zero Balances
+              </button>
             </div>
           </div>
 

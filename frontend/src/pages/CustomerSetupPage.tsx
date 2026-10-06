@@ -182,6 +182,9 @@ export default function CustomerSetupPage() {
     };
 
     if (editingCustomerId) {
+      // The date field is pre-filled with today, so a blank balance on edit means "leave the
+      // opening balance alone" — send neither key, and a name/region/city edit is not refused.
+      if (!openingBalance.trim()) { delete payload.opening_balance; delete payload.opening_date; }
       const res = await api.customers.update(editingCustomerId, payload);
       if (!res.ok) return setErrorMsg(res.error.message);
       flash('Customer details updated successfully.');
@@ -663,6 +666,7 @@ export default function CustomerSetupPage() {
                   onBalanceChange={setOpeningBalance}
                   onDateChange={setOpeningDate}
                   isExisting={editingCustomerId != null}
+                  blankKeepsExisting
                 />
 
                 <div className="flex justify-end gap-2.5 pt-4 border-t border-slate-100">

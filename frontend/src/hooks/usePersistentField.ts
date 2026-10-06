@@ -125,7 +125,7 @@ function isFilled(v: unknown): boolean {
  *     the page's own persisted fields that count as that (party, bill no., lines…). Leftover state
  *     (a record that was merely being viewed, defaults like date/store, a bare New click) does not.
  *
- * `emptiedEditCountsAsWork` (opt-in, JV only for now) covers the one case `workKeys` alone cannot
+ * `emptiedEditCountsAsWork` (opt-in; every page whose lines stay on screen until Save) covers the one case `workKeys` alone cannot
  * see: a SAVED document opened for editing whose work fields the user has since EMPTIED — deleting
  * every line, say. `isFilled([])` is false, exactly as it is for a page nobody has touched, so the
  * draft read as "nothing here", the auto-open below was not suppressed, and it re-fetched the saved

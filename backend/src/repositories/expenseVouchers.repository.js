@@ -5,18 +5,13 @@
 // receiptVouchers.repository.js. The entry lines live in dbo.expenses and are read through this
 // file only for display (listLines); anything that WRITES a line still goes through
 // expenses.repository, so there is one definition of how an expense row is written.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, nextSequenceValue } = require('../db/pool');
 
-// PN-01: "C.Book No" — MAX + 1, allocated inside the caller's transaction so the read and the
-// insert that consumes it cannot be split. Numbered independently of receipt vouchers: a payment
-// voucher and a receipt voucher are different documents and the client's screens number them
-// separately.
-async function nextVoucherNo(transaction) {
-  const request = requestWithParams(transaction, {});
-  const result = await request.query(
-    'SELECT ISNULL(MAX(voucher_no), 0) + 1 AS nextNo FROM dbo.expense_vouchers',
-  );
-  return result.recordset[0].nextNo;
+// The voucher's System No. — from dbo.seq_expense_voucher_no (migration 042), NO CACHE and never reused, same as
+// every other document type (standard §9; it was MAX(voucher_no)+1 until 2026-10-06, which
+// re-issued a deleted newest voucher's number). Called inside the creating transaction.
+function nextVoucherNo(transaction) {
+  return nextSequenceValue(transaction, 'dbo.seq_expense_voucher_no');
 }
 
 async function insert(transaction, voucher) {

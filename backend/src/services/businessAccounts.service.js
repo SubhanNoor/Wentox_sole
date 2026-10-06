@@ -292,12 +292,18 @@ async function update(baId, payload, session) {
   if (!payload.name || !payload.name.trim()) throw ApiError.badRequest('name is required');
   const name = payload.name.trim();
 
+  const existing = await repository.findById(baId);
   const opening = validateOpeningPair(payload);
   // Previously dropped silently: the screen showed the opening-balance fields on an existing
   // account, accepted an edit, reported success and changed nothing.
   await repository.update(baId, {
     name, region_id: payload.region_id, city_id: payload.city_id, ...opening,
   });
+  // Keep customers.name / vendors.name in sync so voucher screens (Sale Bill, Receipts, Payments)
+  // show the new name. Both UPDATEs are no-ops when there is no linked party row.
+  if (existing && name !== existing.name) {
+    await repository.syncLinkedPartyName(baId, name);
+  }
   await syncOpeningEntries(baId);
   return repository.findById(baId);
 }

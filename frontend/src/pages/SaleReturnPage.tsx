@@ -8,7 +8,7 @@ import FindReturnTab from '@/components/FindReturnTab';
 import { Plus, ChevronDown } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
-import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, nextSystemNoPreview, mergeWithDeleted } from '@/lib/utils';
+import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, nextSystemNoPreview, asNavEntries } from '@/lib/utils';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal, { findDirectMatch } from '@/components/SearchModal';
@@ -31,7 +31,6 @@ import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import CartonsInput from '@/components/CartonsInput';
-import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
 import { getWindowParam } from '@/lib/windowParams';
 
 interface UiItem {
@@ -154,6 +153,10 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // Detail half (entry strip + grid) shut even when that's what had been unlocked and typed
   // into — reported by the user (2026-09-04) as "all the buttons are disable except New".
   const [editScope, setEditScope] = usePersistentField<'master' | 'detail'>('sale-return', 'editScope', 'master');
+  // Which half Edit (or New, for a line) has actually UNLOCKED — separate from the radio, which
+  // only picks what New/Edit act on and can never unlock anything by itself (standard §6, ported
+  // from the Journal Voucher 2026-10-06). null = nothing unlocked.
+  const [editTarget, setEditTarget] = usePersistentField<'master' | 'detail' | null>('sale-return', 'editTarget', null);
   // Keeps the radios pointing at whichever half is being worked in — see the hook.
   const autoEditScope = useAutoEditScope(setEditScope);
 
@@ -169,7 +172,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // auto-open below (only genuine unsaved typing skips it); hasClickedNew gates the No. preview and
   // the awaitingNew lock, and only the New button/tab sets it (pressNew).
   const { hasRealDraftAtMount: hasSaleReturnDraft, hasClickedNew, setHasClickedNew, markNewClicked } =
-    useNewDocGate('sale-return', ['customerId', 'billNo', 'items']);
+    useNewDocGate('sale-return', ['customerId', 'billNo', 'items'], { emptiedEditCountsAsWork: true });
 
   // Form State
   //
@@ -413,12 +416,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // (2026-09-16, found on SaleBillPage's own equivalent bug): an edit-on-a-posted-record flow can
   // leave `mode: 'edit'` while the loaded record is still posted, so `mode === 'view'` alone
   // under-triggers. `currentReturnIsPosted` (persisted) is the direct, unambiguous signal — true
-  // iff an actual posted record is loaded, in EITHER 'view' or 'edit' mode; only `handleNew()` ever
+  // iff an actual posted record is loaded, in EITHER 'view' or 'edit' mode; only `resetToNewReturn()` ever
   // sets it false, so it can never be true while there's genuine unsaved new-document work to
   // protect.
   useEffect(() => {
     refreshDrafts().then(data => {
-      if (data && data.length === 0 && currentReturnIsPosted) handleNew();
+      if (data && data.length === 0 && currentReturnIsPosted) resetToNewReturn();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshDrafts]);
@@ -432,16 +435,6 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   }, []);
   useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
 
-  // Set when First/Prev/Next/Last lands on a deleted number — DeletedDocumentOverlay renders while
-  // this is non-null. Cleared as soon as a real document loads (see the returnId effect below).
-  const [deletedPlaceholder, setDeletedPlaceholder] = useState<number | null>(null);
-  // navIndex normally tracks the loaded return's own position via returnId — a deleted marker has
-  // no returnId to match, so this overrides it while a placeholder is on screen.
-  const [navIndexOverride, setNavIndexOverride] = useState<number | null>(null);
-  useEffect(() => {
-    setDeletedPlaceholder(null);
-    setNavIndexOverride(null);
-  }, [returnId]);
 
   const loadReturnRow = async (rowIn: SaleReturnRow) => {
     // list() rows never carry items (only get() does) — the tabs pass those straight through,
@@ -457,6 +450,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     }
 
     createdInThisRun.current = false;
+    setEditScope('master');
+    setEditTarget(null);
     setReturnId(row.return_id);
     setCurrentSystemNo(row.system_no);
     setCurrentReturnIsPosted(row.is_posted);
@@ -521,12 +516,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
   // SaleBillPage.tsx's navPostedList for why (a backdated document's date can otherwise put it
   // next to an unrelated one when browsing, reported by the user, 2026-09-07).
   const navPostedList = useMemo(
-    () => mergeWithDeleted([...postedReturns].sort((a, b) => a.system_no - b.system_no), deletedNumbers),
-    [postedReturns, deletedNumbers],
+    () => asNavEntries([...postedReturns].sort((a, b) => a.system_no - b.system_no)),
+    [postedReturns],
   );
   const navUnpostedList = useMemo(
-    () => mergeWithDeleted([...drafts].sort((a, b) => a.system_no - b.system_no), deletedNumbers),
-    [drafts, deletedNumbers],
+    () => asNavEntries([...drafts].sort((a, b) => a.system_no - b.system_no)),
+    [drafts],
   );
 
   // Whichever list the dropdown selects — this is what the nav buttons page through.
@@ -534,31 +529,23 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
 
   // -1 when the return on screen isn't in the ACTIVE list (unsaved, or a draft while the dropdown
   // is on Posted and vice versa); the handlers treat that as "start from the beginning".
-  // navIndexOverride wins while a deleted-number placeholder is on screen — see SaleBillPage.tsx's
-  // navIndex for why.
   const derivedNavIndex = useMemo(() => {
     if (returnId == null) return -1;
     return browseFilter === 'posted'
       ? (currentReturnIsPosted ? navPostedList.findIndex(e => e.kind === 'doc' && e.row.return_id === returnId) : -1)
       : (!currentReturnIsPosted ? navUnpostedList.findIndex(e => e.kind === 'doc' && e.row.draft_id === returnId) : -1);
   }, [returnId, currentReturnIsPosted, browseFilter, navPostedList, navUnpostedList]);
-  const navIndex = navIndexOverride ?? derivedNavIndex;
+  const navIndex = derivedNavIndex;
 
   const canBrowse = navList.length > 0;
   const canNavPrevious = canBrowse && navIndex !== 0;
   const canNavNext = canBrowse && navIndex !== navList.length - 1;
 
   // Posted rows come from sale_returns, unposted ones from draft_sale_returns — each needs its
-  // own loader. Both open read-only; Edit stays a separate deliberate click. A 'deleted' entry
-  // shows DeletedDocumentOverlay instead of loading anything.
+  // own loader. Both open read-only; Edit stays a separate deliberate click.
   const goToNavIndex = async (idx: number) => {
     if (idx < 0 || idx >= navList.length) return;
     const entry = navList[idx];
-    if (entry.kind === 'deleted') {
-      setNavIndexOverride(idx);
-      setDeletedPlaceholder(entry.system_no);
-      return;
-    }
     if (browseFilter === 'posted') {
       await loadReturnRow(entry.row as SaleReturnRow);
       setMode('view');
@@ -592,7 +579,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
         const list = [...(fresh ?? drafts)].sort((a, b) => a.system_no - b.system_no);
         const latest = list[list.length - 1];
         const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
-        if (!opened) handleNew();
+        if (!opened) resetToNewReturn();
         requestAnimationFrame(() => newButtonRef.current?.focus());
       } else {
         const fresh = await refreshPostedReturns();
@@ -638,11 +625,10 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     if (!customerId) return false;
     if (!date) return false;
     if (!storeId) return false;
-    if (!billNo) return false;
     if (items.length === 0) return false;
     if (items.some(it => !it.variantId || it.cartons <= 0 || it.rate <= 0)) return false;
     return true;
-  }, [awaitingNew, customerId, date, storeId, billNo, items]);
+  }, [awaitingNew, customerId, date, storeId, items]);
 
   // Preview of the Return No. a brand-new return will get. This number is now assigned once at
   // draft-save time and carried through posting unchanged (per the user, 2026-09-05) — a real SQL
@@ -698,7 +684,15 @@ const nextSystemReturnNo = useMemo(
   // the full reset below. Same reset shape used after committing a line, since the outcome is
   // identical: an empty, focused entry row, return untouched.
   const handleNew = () => {
-    if (mode === 'edit' && editScope === 'detail' && returnId != null) {
+    // Detail + an unposted return on screen (saved, or new with articles typed) adds an article —
+    // no Edit needed, header stays locked. Never wipes articles already typed (standard §6).
+    const returnOnScreen = !awaitingNew && !currentReturnIsPosted && (returnId != null || items.length > 0);
+    if (editScope === 'detail' && returnOnScreen) {
+      // Only a SAVED return needs unlocking; a new one already has both halves open.
+      if (returnId != null) {
+        setMode('edit');
+        setEditTarget('detail');
+      }
       setEntry(newUiItem());
       setEditingIndex(null);
       setSelectedIndex(null);
@@ -706,12 +700,20 @@ const nextSystemReturnNo = useMemo(
       requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
       return;
     }
+    resetToNewReturn();
+  };
+
+  // A whole new, blank return. Everything that is not the New button itself (Post, Delete, the New
+  // tab, an empty Unposted list…) resets through this, never through handleNew(), which with
+  // Detail selected would add an article to the return still on screen instead.
+  const resetToNewReturn = () => {
     // A blank document is an unposted one — back to the Unposted view (see useBrowseFilterFollowsDocument).
     setBrowseFilter('unposted');
     setMode('new');
     setHasClickedNew(false);
     createdInThisRun.current = false;
     setEditScope('master');
+    setEditTarget(null);
     setReturnId(null);
     setCurrentSystemNo(null);
     setCurrentReturnIsPosted(false);
@@ -747,11 +749,13 @@ const nextSystemReturnNo = useMemo(
   };
   // New button / New tab — the only path that marks New as deliberately clicked (useNewDocGate).
   const pressNew = () => { handleNew(); markNewClicked(); };
+  // The "New Return" tab always starts a whole new return, whatever the radio says (standard §9).
+  const pressNewTab = () => { resetToNewReturn(); markNewClicked(); };
   // After posting a return created in this sitting: a fresh return, same working date (Sale Bill's
   // readyForNextBill).
   const readyForNextReturn = () => {
     const workingDate = date;
-    handleNew();
+    resetToNewReturn();
     setDate(workingDate);
     requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
@@ -760,7 +764,6 @@ const nextSystemReturnNo = useMemo(
     if (!date) { setErrorMsg('Date is required.'); return null; }
     if (!storeId) { setErrorMsg('Store is required.'); return null; }
     if (!customerId) { setErrorMsg('Customer is required.'); return null; }
-    if (!billNo) { setErrorMsg('Return Bill No. is required.'); return null; }
     if (items.length === 0) { setErrorMsg('At least one product item is required.'); return null; }
 
     for (let i = 0; i < items.length; i++) {
@@ -817,8 +820,10 @@ const nextSystemReturnNo = useMemo(
 
     // Every other save — a brand-new return, or editing one that's still a draft — goes through
     // the draft table now (draftSaleReturns.service.js), not sale_returns directly.
-    const wasNew = mode !== 'edit';
-    const result = mode === 'edit' && returnId != null
+    // Keyed on returnId, not `mode === 'edit'` — Save on a NEW return now stays in 'new' mode
+    // (both halves open), and the next Save must update that same draft, never create a second.
+    const wasNew = returnId == null;
+    const result = !wasNew
       ? await api.draftSaleReturns.update(returnId, payload)
       : await api.draftSaleReturns.create(payload);
 
@@ -830,9 +835,10 @@ const nextSystemReturnNo = useMemo(
     setReturnId(result.data.draft_id);
     setCurrentSystemNo(result.data.system_no);
     setCurrentReturnIsPosted(false);
-    setSuccessMsg(mode === 'edit' ? 'Sale return updated successfully.' : 'New sale return saved successfully.');
+    setSuccessMsg(wasNew ? 'New sale return saved successfully.' : 'Sale return updated successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
-    setMode(finalize ? 'view' : 'edit');
+    // Done finishes (read-only, nothing unlocked); Save keeps whatever is open as it is.
+    if (finalize) { setMode('view'); setEditTarget(null); }
     setErrorMsg('');
     if (wasNew) { createdInThisRun.current = true; clearSaleReturnDraft(); }
     refreshDrafts();
@@ -868,12 +874,9 @@ const nextSystemReturnNo = useMemo(
       setCurrentReturnIsPosted(true);
       refreshDrafts();
       refreshPostedReturns();
-      if (createdInThisRun.current) {
-        setSuccessMsg(`Return ${postedBillNo} posted. Ready for the next one.`);
-        readyForNextReturn();
-      } else {
-        setSuccessMsg('Return posted successfully.');
-      }
+      // Post always clears for the next return, keeping the date (standard §8, 2026-10-06).
+      setSuccessMsg(`Return ${postedBillNo || `#${res.data.system_no}`} posted. Ready for the next one.`);
+      readyForNextReturn();
       setTimeout(() => setSuccessMsg(''), 3000);
     }
   };
@@ -893,7 +896,7 @@ const nextSystemReturnNo = useMemo(
         setTimeout(() => setSuccessMsg(''), 3000);
         refreshDrafts();
         refreshPostedReturns();
-        if (createdInThisRun.current) readyForNextReturn();
+        readyForNextReturn(); // Post always clears (standard §8, 2026-10-06)
       }
     }
   };
@@ -922,9 +925,10 @@ const nextSystemReturnNo = useMemo(
     setReturnId(res.data.draft_id);
     setCurrentSystemNo(res.data.system_no);
     setCurrentReturnIsPosted(false);
-    // Land on the editable screen straight away (toolbar standardisation, 2026-09-20) — adding a
-    // row to a just-unposted document is the whole reason for unposting it.
-    setMode('edit');
+    // Lands read-only (standard §6): New adds an article from view mode by itself, so Un Post no
+    // longer has to pre-unlock anything.
+    setMode('view');
+    setEditTarget(null);
     setSuccessMsg('Return unposted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshDrafts();
@@ -939,12 +943,28 @@ const nextSystemReturnNo = useMemo(
   // into edit mode too meant asking twice for one edit (reported by the user for both this
   // button and the report tabs).
   // Edit — lands focus on the first field of whichever scope is picked (per the user, 2026-08-31).
+  // The toolbar's Edit: Master unlocks the header only; Detail edits the selected article (same
+  // job as Edit Row and the row's ✏). Live while already editing — it is the only way to move the
+  // unlock to the other half (standard §6).
   const handleEditCurrentReturn = () => {
+    if (returnId == null || currentReturnIsPosted) return;
+    if (editScope === 'detail') {
+      if (selectedIndex == null) { setErrorMsg('Click the article you want to edit first, then press Edit.'); return; }
+      handleRowClick(selectedIndex);
+      return;
+    }
     setMode('edit');
-    requestAnimationFrame(() => {
-      if (editScope === 'detail') focusFirstField(entryProductCellRef.current);
-      else firstFieldRef.current?.focus();
-    });
+    setEditTarget('master');
+    requestAnimationFrame(() => firstFieldRef.current?.focus());
+  };
+
+  // Cancel — drops unsaved edits and reloads the saved draft, read-only (standard §6).
+  const handleCancelEdit = async () => {
+    if (returnId == null) { resetToNewReturn(); return; }
+    const res = await api.draftSaleReturns.get(returnId);
+    if (!res.ok) { setErrorMsg('Failed to reload return: ' + res.error.message); return; }
+    await loadDraftIntoForm(res.data, { mode: 'view' });
+    setEditTarget(null);
   };
 
   // Repairs the fields a restored draft can come back missing — same bug as SaleBillPage's own
@@ -963,6 +983,9 @@ const nextSystemReturnNo = useMemo(
   }, [hasSaleReturnDraft, storeId, stores, addaId, addas]);
 
   const pendingDeleteReturnId = useRef<number | null>(null);
+  // True when the whole-return delete was reached by deleting the LAST article — only changes the
+  // prompt's wording.
+  const [emptyingViaLastRow, setEmptyingViaLastRow] = useState(false);
 
   // Toolbar's Delete — the currently-open UNPOSTED return only (mirrors SaleBillPage's own
   // Delete); a posted return can't be deleted from here at all (disabled — see the button).
@@ -975,6 +998,7 @@ const nextSystemReturnNo = useMemo(
 
   const handlePasswordSuccess = async (password: string) => {
     setIsPasswordModalOpen(false);
+    setEmptyingViaLastRow(false);
     if (passwordActionType === 'delete_unposted_return') {
       const targetId = pendingDeleteReturnId.current;
       pendingDeleteReturnId.current = null;
@@ -985,7 +1009,7 @@ const nextSystemReturnNo = useMemo(
         } else {
           setSuccessMsg('Return deleted successfully.');
           setTimeout(() => setSuccessMsg(''), 3000);
-          if (returnId === targetId && !currentReturnIsPosted) handleNew();
+          if (returnId === targetId && !currentReturnIsPosted) resetToNewReturn();
           refreshDrafts();
           refreshDeletedNumbers();
         }
@@ -1068,6 +1092,7 @@ const nextSystemReturnNo = useMemo(
     setLastEnteredIndex(null);
     loadedItems.forEach(it => { if (it.articleId != null) fetchVariants(it.articleId); });
 
+    setEditTarget(null);
     setMode(opts.mode ?? 'edit');
     setErrorMsg('');
     return true;
@@ -1102,10 +1127,10 @@ const nextSystemReturnNo = useMemo(
     // there it only clears when the record on screen was itself one of the ones that posted.
     if (res.data.failed.length === 0) {
       const workingDate = date;
-      handleNew();
+      resetToNewReturn();
       setDate(workingDate);
     } else if (returnId != null && !currentReturnIsPosted && res.data.posted.some(p => p.draft_id === returnId)) {
-      handleNew();
+      resetToNewReturn();
     }
     // Both lists move: the drafts shrank AND the posted list grew. Only the drafts were being
     // refreshed here, leaving Posted stale until something else happened to reload it.
@@ -1154,12 +1179,15 @@ const nextSystemReturnNo = useMemo(
   useEffect(() => {
     if (hasSaleReturnDraft || didAutoOpenRef.current) return;
     // No mode/returnId check: a restored view of an older record must be replaced too (2026-09-18).
-    if (activeTab === 'return' && stores.length > 0 && addas.length > 0) {
+    // Waits for stores only. It also used to wait for a NON-EMPTY adda list — left over from when a
+    // blank return defaulted to the first adda — so a shop with no addas never auto-opened at all
+    // (found 2026-10-06). Adda is optional and blank by default now (2026-09-18).
+    if (activeTab === 'return' && stores.length > 0) {
       didAutoOpenRef.current = true;
       handleBrowseFilterChange('unposted', { auto: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, mode, returnId, stores, addas]);
+  }, [activeTab, mode, returnId, stores]);
 
   // Product field's SearchModal — same pattern as Customer's: type the article code, Enter opens
   // a big centered popup to pick from.
@@ -1312,16 +1340,22 @@ const nextSystemReturnNo = useMemo(
 
   // G-08: now the Edit Row toolbar button's handler, not the row's own onClick — a row click just
   // records `selectedIndex` (see the grid below), and this only runs once the user presses Edit Row.
+  // Unlocks the Detail half of a SAVED return (a new one has both halves open already).
+  const beginDetailEdit = () => {
+    if (mode === 'new' && returnId == null) return;
+    setMode('edit');
+    setEditTarget('detail');
+  };
+
+  // THE one "edit this existing article" path — Edit (Detail), Edit Row and the row's ✏ all land
+  // here, and it unlocks the Detail half itself (standard §6, superseding the 2026-08-31 rule that
+  // the grid was inert while Master was picked).
   const handleRowClick = (idx: number) => {
-    // Master/Detail edit-scope split (per the user, 2026-08-31): a row click is how the detail
-    // grid re-opens a committed line for editing — a no-op while scope is Master, so master-only
-    // edits can't sneak article changes in through the grid. Doesn't affect 'new'/view browsing.
-    if (mode === 'edit' && editScope !== 'detail') return;
     // A posted return is read-only — this used to offer a password prompt and then let the line
     // be edited in place, which is a second way in that the disabled Edit button already
     // refuses. Un Post is the only route (per the user, 2026-09-04).
     if (currentReturnIsPosted) return;
-    if (isViewMode) setMode('edit');
+    beginDetailEdit();
     loadRowIntoEntry(idx);
   };
 
@@ -1342,8 +1376,23 @@ const nextSystemReturnNo = useMemo(
       setEditingIndex(editingIndex - 1);
     }
     setSelectedIndex(null);
-    if (lastEnteredIndex === idx) setLastEnteredIndex(null);
+    // ▶ moves to the row that takes the deleted one's place (or the new last row).
+    const newLength = items.length - 1;
+    if (lastEnteredIndex === idx) setLastEnteredIndex(newLength === 0 ? null : Math.min(idx, newLength - 1));
     else if (lastEnteredIndex != null && idx < lastEnteredIndex) setLastEnteredIndex(lastEnteredIndex - 1);
+  };
+
+  // A grid row's own Delete. Deleting the LAST article of a SAVED return deletes the whole return
+  // (a return can't be empty) through the password prompt; otherwise the article goes on screen and
+  // the return enters Detail edit, so the next Save/Done removes it for good (standard §13).
+  const handleRowDelete = (idx: number) => {
+    if (items.length === 1 && returnId != null && !currentReturnIsPosted) {
+      setEmptyingViaLastRow(true);
+      handleDeleteCurrentReturn();
+      return;
+    }
+    beginDetailEdit();
+    handleRemoveItemRow(idx);
   };
 
   // Delete is dual-purpose, same as SaleBillPage's own toolbar Delete: a row loaded for editing
@@ -1383,8 +1432,8 @@ const nextSystemReturnNo = useMemo(
   // (isViewMode false, mode 'edit'), the radio narrows WHICH half actually unlocks — this does not
   // weaken the existing isPosted gate on the Edit button itself, it only adds a further split on
   // top of it. A brand-new return (mode 'new') is unaffected — everything stays editable there.
-  const masterFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
-  const detailFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
+  const masterFieldsLocked = awaitingNew || (mode === 'edit' && editTarget !== 'master');
+  const detailFieldsLocked = awaitingNew || (mode === 'edit' && editTarget !== 'detail');
 
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1656,7 +1705,7 @@ const nextSystemReturnNo = useMemo(
   const tabBar = (
     <div className="flex gap-1.5" data-no-print>
       <button
-        onClick={() => { setActiveTab('return'); pressNew(); }}
+        onClick={() => { setActiveTab('return'); pressNewTab(); }}
         className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'return' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
@@ -1739,37 +1788,41 @@ const nextSystemReturnNo = useMemo(
             newAction={{ onClick: pressNew, ref: newButtonRef }}
             remove={{
               onClick: handleDeleteAction,
-              disabled: deletedPlaceholder != null || returnId == null || currentReturnIsPosted,
+              disabled: returnId == null || currentReturnIsPosted,
               title: 'Delete this whole return — every article on it goes too (asks for your password)',
             }}
             editRow={{
               onClick: handleEditSelectedRow,
-              disabled: selectedIndex == null || editingIndex != null || isViewMode || currentReturnIsPosted || (mode === 'edit' && editScope !== 'detail'),
+              disabled: selectedIndex == null || currentReturnIsPosted,
               title: 'Edit selected article',
             }}
-            edit={{ onClick: handleEditCurrentReturn, disabled: deletedPlaceholder != null || mode !== 'view' || returnId == null || currentReturnIsPosted }}
-            save={{ onClick: () => handleSave(false), disabled: deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled, title: 'Save — keep editing this return' }}
-            done={{ onClick: () => handleSave(true), submit: true, disabled: deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled, title: 'Done — finish this return, then Post it' }}
-            cancel={{ onClick: () => setMode('view'), disabled: mode !== 'edit', title: 'Cancel Edit' }}
+            edit={{
+              onClick: handleEditCurrentReturn,
+              disabled: returnId == null || currentReturnIsPosted,
+              title: editScope === 'detail' ? 'Edit the selected article' : 'Edit the header fields',
+            }}
+            save={{ onClick: () => handleSave(false), disabled: mode === 'view' || !isNecessaryFieldsFilled, title: 'Save — keep editing this return' }}
+            done={{ onClick: () => handleSave(true), submit: true, disabled: mode === 'view' || !isNecessaryFieldsFilled, title: 'Done — finish this return, then Post it' }}
+            cancel={{ onClick: handleCancelEdit, disabled: mode !== 'edit', title: 'Cancel Edit' }}
             first={{ onClick: handleFirst, disabled: !canBrowse }}
             prev={{ onClick: handlePrev, disabled: !canNavPrevious }}
             next={{ onClick: handleNext, disabled: !canNavNext }}
             last={{ onClick: handleLast, disabled: !canBrowse }}
-            print={{ onClick: () => setIsPrintingSingle(true), disabled: deletedPlaceholder != null || mode !== 'view' || returnId == null }}
+            print={{ onClick: () => setIsPrintingSingle(true), disabled: mode !== 'view' || returnId == null }}
             find={{ onClick: () => setIsFindOpen(true) }}
-            unpost={{ onClick: handleUnpostCurrentReturn, disabled: deletedPlaceholder != null || mode !== 'view' || returnId == null || !currentReturnIsPosted, title: 'Un Post — move this posted return back to drafts' }}
-            post={{ onClick: async () => { await handlePostCurrentReturn(); focusNewButton(); }, disabled: deletedPlaceholder != null || mode !== 'view' || returnId == null || currentReturnIsPosted }}
-            exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
-            saveAndPost={{ onClick: async () => { await handleSaveAndPost(); focusNewButton(); }, disabled: deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || currentReturnIsPosted, title: 'Save & Post' }}
+            unpost={{ onClick: handleUnpostCurrentReturn, disabled: mode !== 'view' || returnId == null || !currentReturnIsPosted, title: 'Un Post — move this posted return back to drafts' }}
+            post={{ onClick: async () => { await handlePostCurrentReturn(); focusNewButton(); }, disabled: mode !== 'view' || returnId == null || currentReturnIsPosted }}
+            exit={{ onClick: async () => { if (!(await api.closeThisWindow())) dispatch({ type: 'NAVIGATE', page: 'home' }); } }}
+            saveAndPost={{ onClick: async () => { await handleSaveAndPost(); focusNewButton(); }, disabled: mode === 'view' || !isNecessaryFieldsFilled || currentReturnIsPosted, title: 'Save & Post' }}
             postAll={{ onClick: async () => { await handlePostAllDrafts(); focusNewButton(); }, disabled: postAllDraftsBusy || browseFilter === 'posted' || drafts.length === 0, title: `Post All (${drafts.length})` }}
-            pdf={{ onClick: () => setIsPrintingSingle(true), disabled: deletedPlaceholder != null || mode !== 'view' || returnId == null, title: 'Export PDF' }}
+            pdf={{ onClick: () => setIsPrintingSingle(true), disabled: mode !== 'view' || returnId == null, title: 'Export PDF' }}
             excel={{
               onClick: () => {
                 const headers = ['Article', 'Packing', 'Cartons', 'Pairs', 'Rate', 'D%', 'D. Value', 'Total Value'];
                 const rows = items.map(it => [it.label, it.packing, formatCartons(it.cartons), it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
                 exportRowsToExcel(`sale-return-${billNo || returnId}`, headers, rows);
               },
-              disabled: deletedPlaceholder != null || mode !== 'view' || returnId == null,
+              disabled: mode !== 'view' || returnId == null,
               title: 'Export Excel',
             }}
           />
@@ -1833,7 +1886,6 @@ const nextSystemReturnNo = useMemo(
           data-edit-scope="detail"
           style={{ border: '1px solid var(--border-color)', background: '#ffffff', height: invoiceCardHeight ?? undefined, position: 'relative' }}
         >
-          {deletedPlaceholder != null && <DeletedDocumentOverlay systemNo={deletedPlaceholder} label="return" />}
 
           {/* Print Title (Visible only when printing) */}
           <div className="hidden print:flex items-center justify-between mb-6 pb-4 border-b">
@@ -2037,10 +2089,10 @@ const nextSystemReturnNo = useMemo(
             </div>
 
             <div className="flex items-center gap-1.5" style={{ gridArea: 'billno' }}>
-              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--secondary-text)' }}>
-                Manual Invoice No. <span className="text-red-500 font-bold">*</span>
+              <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Manual Invoice No. <span className="text-slate-400 font-normal normal-case">— optional</span>
               </label>
-              <input type="text" required value={billNo} disabled={isViewMode || masterFieldsLocked} onChange={e => setBillNo(e.target.value)} className="soleria-input soleria-input-compact" />
+              <input type="text" value={billNo} disabled={isViewMode || masterFieldsLocked} onChange={e => setBillNo(e.target.value)} className="soleria-input soleria-input-compact" />
             </div>
             <div className="flex items-center gap-1.5" style={{ gridArea: 'gpno' }}>
               <label className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
@@ -2298,13 +2350,19 @@ const nextSystemReturnNo = useMemo(
                     key={item.uid}
                     ref={el => { rowRefs.current[idx] = el; }}
                     onClick={() => {
-                      // G-08: a click must produce no visible change — it only records which row
-                      // the Delete/Edit Row toolbar buttons act on next. Inert entirely while
-                      // another row is actually loaded for editing.
-                      if (editingIndex != null) return;
+                      // A click only SELECTS the row (what Edit/Edit Row act on next), in every
+                      // state — even while another row is in the strip (standard §5, superseding
+                      // G-08's "no visible change").
                       setSelectedIndex(prev => prev === idx ? null : idx);
                     }}
-                    className={`border-b cursor-pointer hover:bg-slate-50/50 ${idx === editingIndex ? 'bg-blue-50' : ''}`}
+                    aria-selected={idx === selectedIndex}
+                    // Three distinct states (standard §5): editing = blue, selected = gold, each
+                    // with a 4px left bar; the ▶ marker is never a background.
+                    className={`border-b cursor-pointer transition-colors border-l-4 ${
+                      idx === editingIndex ? 'bg-blue-100 border-l-blue-600'
+                        : idx === selectedIndex ? 'bg-[#B08D57]/15 border-l-[#B08D57]'
+                        : 'border-l-transparent hover:bg-slate-50/50'
+                    }`}
                     style={{ borderColor: 'var(--border-table)' }}
                   >
                     {/* G-05: a pure position indicator — never a background/highlight, so it can
@@ -2321,11 +2379,11 @@ const nextSystemReturnNo = useMemo(
                     <td className="p-1 text-center whitespace-nowrap">
                       <RowActions
                         onEdit={() => handleRowClick(idx)}
-                        onDelete={() => handleRemoveItemRow(idx)}
-                        disabled={deletedPlaceholder != null || currentReturnIsPosted || editingIndex != null || (mode === 'edit' && editScope !== 'detail')}
+                        onDelete={() => handleRowDelete(idx)}
+                        disabled={currentReturnIsPosted}
                         editTitle="Edit this article"
                         deleteTitle="Delete this article"
-                        disabledTitle="Unpost and edit the document (Detail scope) to change its articles"
+                        disabledTitle="Unpost the return to change its articles"
                       />
                     </td>
                   </tr>
@@ -2560,6 +2618,8 @@ const nextSystemReturnNo = useMemo(
         onClose={() => {
           setIsPasswordModalOpen(false);
           setPasswordActionType(null);
+          pendingDeleteReturnId.current = null;
+          setEmptyingViaLastRow(false);
         }}
         onSuccess={handlePasswordSuccess}
         title={
@@ -2570,7 +2630,9 @@ const nextSystemReturnNo = useMemo(
               : 'Authorization Required to Save Return Changes'
         }
         subtitle={passwordActionType === 'delete_unposted_return'
-          ? `This deletes the WHOLE return and every article on it — not a single row. It cannot be undone. Enter the password for user '${state.currentUsername || 'user'}' to confirm.`
+          ? emptyingViaLastRow
+            ? `That was the return's last article — a return can't be empty, so deleting it removes the WHOLE return. It cannot be undone. Enter the password for user '${state.currentUsername || 'user'}' to confirm.`
+            : `This deletes the WHOLE return and every article on it — not a single row. It cannot be undone. Enter the password for user '${state.currentUsername || 'user'}' to confirm.`
           : `Please enter password for user '${state.currentUsername || 'user'}' to confirm changes to Return #${billNo || currentSystemNo}.`}
       />
 

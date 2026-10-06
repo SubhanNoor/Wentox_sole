@@ -229,6 +229,13 @@ export default function ReportStockPage() {
   }, [colorReportRows, colorReportSearch]);
 
   const colorReportTotalPairs = useMemo(() => colorReportRows.reduce((sum, r) => sum + r.totalPairs, 0), [colorReportRows]);
+  // Plain count of cartons on hand (plus loose pairs) across all articles, as Ctn/Prs — the user
+  // asked for it even though carton sizes differ by article; Total Pairs stays the exact figure.
+  const colorReportTotalCtnPrs = useMemo(() => {
+    const ctn = colorReportRows.reduce((sum, r) => sum + r.totalCartons, 0);
+    const prs = colorReportRows.reduce((sum, r) => sum + r.totalLoosePairs, 0);
+    return `${ctn.toLocaleString()}/${prs.toLocaleString()}`;
+  }, [colorReportRows]);
   const totalPairs = useMemo(() => filteredStockRows.reduce((sum, r) => sum + r.total_pairs, 0), [filteredStockRows]);
   const totalCartons = useMemo(() => filteredStockRows.reduce((sum, r) => sum + r.cartons, 0), [filteredStockRows]);
   const totalExtraPairs = useMemo(() => filteredStockRows.reduce((sum, r) => sum + r.extra_pairs, 0), [filteredStockRows]);
@@ -438,10 +445,7 @@ export default function ReportStockPage() {
               ))}
               <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
                 <td colSpan={2 + allColorsAcrossArticles.length} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>TOTAL PAIRS ACROSS ALL ARTICLES & COLORS</td>
-                {/* No grand-total cartons here: cartons are only meaningful within one article's
-                    packing, so summing them across articles with different packing would be a
-                    meaningless number. The pairs grand total below stays. */}
-                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right' }}>—</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{colorReportTotalCtnPrs}</td>
                 <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{colorReportTotalPairs.toLocaleString()}</td>
               </tr>
             </tbody>
@@ -1416,8 +1420,7 @@ export default function ReportStockPage() {
               ))}
               <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2', fontSize: '12px' }}>
                 <td colSpan={3 + allColorsAcrossArticles.length} style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', textTransform: 'uppercase' }}>Report Total:</td>
-                {/* cartons aren't summable across articles of different packing — pairs only */}
-                <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right' }}>—</td>
+                <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right' }}>{colorReportTotalCtnPrs}</td>
                 <td style={{ border: '1px solid #000000', padding: '6px 8px', textAlign: 'right', borderBottom: '3px double #000000' }}>{colorReportTotalPairs.toLocaleString()}</td>
               </tr>
             </tbody>
@@ -1528,8 +1531,7 @@ export default function ReportStockPage() {
                 <tfoot>
                   <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
                     <td colSpan={2 + allColorsAcrossArticles.length} className="p-4 text-left font-lora">REPORT TOTAL</td>
-                    {/* cartons aren't summable across articles of different packing — pairs only */}
-                    <td className="p-4 text-right text-slate-400">—</td>
+                    <td className="p-4 text-right font-mono text-slate-800 whitespace-nowrap">{colorReportTotalCtnPrs}</td>
                     <td className="sticky right-0 z-10 bg-slate-50 p-4 text-right text-lg whitespace-nowrap border-l" style={{ color: 'var(--brand-gold)', borderColor: 'var(--border-color)' }}>
                       {colorReportTotalPairs.toLocaleString()} Pairs
                     </td>

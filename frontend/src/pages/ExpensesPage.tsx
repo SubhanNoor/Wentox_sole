@@ -23,8 +23,7 @@ import OverallExpensesTab from '@/components/OverallExpensesTab';
 import AccountBalanceTooltip from '@/components/AccountBalanceTooltip';
 import ConfirmModal from '@/components/ConfirmModal';
 import PageToasts from '@/components/PageToasts';
-import { toDateInputValue, formatDate, mergeWithDeleted } from '@/lib/utils';
-import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
+import { toDateInputValue, formatDate, asNavEntries } from '@/lib/utils';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
@@ -141,6 +140,13 @@ export default function ExpensesPage() {
   const [editScope, setEditScope] = usePersistentField<'master' | 'detail'>('expenses', 'editScope', 'master');
   // Keeps the radios pointing at whichever half is being worked in — see the hook.
   const autoEditScope = useAutoEditScope(setEditScope);
+  // Which half Edit (or New, for an entry) has actually UNLOCKED — separate from the radio, which
+  // only picks what New/Edit act on and can never unlock anything by itself (standard §6, ported
+  // from the Journal Voucher 2026-10-06). null = nothing unlocked.
+  const [editTarget, setEditTarget] = usePersistentField<'master' | 'detail' | null>('expenses', 'editTarget', null);
+  // The row a click SELECTED (draft_id) — what Edit/Edit Row act on next. Separate from the entry
+  // pulled into the strip for editing (standard §5).
+  const [selectedLineId, setSelectedLineId] = useState<number | null>(null);
   // First/Previous/Next/Last + Posted/Unposted dropdown, mirroring Receipts. `navFilter` is a REAL
   // data filter and the buttons page through whole VOUCHERS: 'posted' walks fully-posted ones,
   // 'unposted' walks those still awaiting posting (UNPOSTED or PARTIAL). Changed 2026-08-27 on the
@@ -170,6 +176,9 @@ export default function ExpensesPage() {
   // PN-01/RJ-06: delete an expense entry, password-gated.
   type PendingDelete = { kind: 'draft' | 'expense' | 'voucher'; id: number; amount: number };
   const [deleteTarget, setDeleteTarget] = useState<PendingDelete | null>(null);
+  // True when the whole-voucher delete was reached by deleting its LAST entry — a voucher can't be
+  // empty (standard §13). Only changes the prompt's wording.
+  const [emptyingViaLastRow, setEmptyingViaLastRow] = useState(false);
   // G-05 (changes-14-09-26.md, 2026-09-15): the line most recently ADDED or UPDATED via Done — a
   // pure position indicator (the ▶ gutter marker below), never a selection. Keyed by
   // `line.draft_id` (this grid's own row identity for an unposted line), not an array index —
@@ -195,11 +204,16 @@ export default function ExpensesPage() {
     // Only a whole-voucher delete touches voucher_no — a single line's deletion never does.
     if (deleteTarget.kind === 'voucher') refreshDeletedNumbers();
     setBalanceRefreshKey(k => k + 1);
-    if (deleteTarget.kind === 'voucher' && voucher?.voucher_id === deleteTarget.id) startNewVoucher();
+    if (deleteTarget.kind === 'voucher' && voucher?.voucher_id === deleteTarget.id) resetToNewVoucher();
     else if (voucher) await refreshVoucher(voucher.voucher_id);
-    // G-05: the deleted line may have been the pointer — startNewVoucher (above) already clears it
-    // via handleNew, this covers the single-line-delete path.
-    if (deleteTarget.kind !== 'voucher' && deleteTarget.id === lastEnteredLineId) setLastEnteredLineId(null);
+    // G-05: a deleted pointer row hands ▶ to the row that takes its place (or the new last row).
+    if (deleteTarget.kind !== 'voucher' && deleteTarget.id === lastEnteredLineId) {
+      const at = voucherLines.findIndex(l => l.draft_id === deleteTarget.id);
+      const rest = voucherLines.filter(l => l.draft_id !== deleteTarget.id);
+      setLastEnteredLineId(rest.length ? (rest[Math.min(at, rest.length - 1)].draft_id ?? null) : null);
+    }
+    setSelectedLineId(null);
+    setEmptyingViaLastRow(false);
   };
   // Bumped after anything that posts, so the balance panel re-reads instead of showing a stale figure.
   const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
@@ -246,16 +260,6 @@ export default function ExpensesPage() {
   const [openVoucherId, setOpenVoucherId] = usePersistentField<number | null>('expenses', 'openVoucherId', null);
   useEffect(() => { setOpenVoucherId(voucher?.voucher_id ?? null); }, [voucher, setOpenVoucherId]);
 
-  // Set when First/Prev/Next/Last lands on a deleted number — DeletedDocumentOverlay renders while
-  // this is non-null. Cleared as soon as a real voucher loads.
-  const [deletedPlaceholder, setDeletedPlaceholder] = useState<number | null>(null);
-  // navIndex normally tracks the loaded voucher's own position via voucher_id — a deleted marker
-  // has no voucher_id to match, so this overrides it while a placeholder is on screen.
-  const [navIndexOverride, setNavIndexOverride] = useState<number | null>(null);
-  useEffect(() => {
-    setDeletedPlaceholder(null);
-    setNavIndexOverride(null);
-  }, [voucher?.voucher_id]);
 
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
@@ -275,13 +279,13 @@ export default function ExpensesPage() {
   // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
   const awaitingNew = mode === 'new' && voucher == null && openVoucherId == null && !hasClickedNew;
   useEffect(() => { if (awaitingNew) focusNewButton(); }, [awaitingNew]);
-  const masterFieldsLocked = awaitingNew || (isViewMode || (mode === 'edit' && editScope !== 'master'));
-  const detailFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
+  const masterFieldsLocked = awaitingNew || (isViewMode || (mode === 'edit' && editTarget !== 'master'));
+  const detailFieldsLocked = awaitingNew || (mode === 'edit' && editTarget !== 'detail');
   // True only in the narrow window the Edit button (Master scope) opens — display of Date/Remarks
   // switches from the loaded voucher's own fields to the local editable ones only here, so typing
   // is actually visible while unlocked; committed via commitHeaderEdit() (expenseVouchers.update()),
   // the toolbar's Update button routes there instead of commitEntryLine() while this is true.
-  const isHeaderEditing = mode === 'edit' && editScope === 'master';
+  const isHeaderEditing = mode === 'edit' && editTarget === 'master';
   const voucherLines = voucher?.lines ?? [];
 
   // PN-01: ref target for the post-Done cursor return — the first field of the entry row. The form
@@ -535,6 +539,8 @@ export default function ExpensesPage() {
     setMode('new');
     setHasClickedNew(false);
     setEditScope('master'); // a blank voucher starts scoped to Master, same as any freshly loaded one
+    setEditTarget(null);
+    setSelectedLineId(null);
     setExpenseId(null);
     setEntryIsDraft(false);
     setDate(today());
@@ -596,6 +602,7 @@ export default function ExpensesPage() {
   // handleNew(), which abandons the whole voucher.
   const clearEntryRow = () => {
     setMode('new');
+    setEditTarget(null);
     setExpenseId(null);
     setEntryIsDraft(false);
     setBaId('');
@@ -721,7 +728,7 @@ export default function ExpensesPage() {
 
     if (res.data.failed.length === 0) {
       flash(`Voucher ${voucher.voucher_no} posted — ${res.data.posted?.length ?? 0} entr${(res.data.posted?.length ?? 0) === 1 ? 'y' : 'ies'}. Ready for the next voucher.`);
-      startNewVoucher();
+      resetToNewVoucher();
     }
   };
 
@@ -742,9 +749,10 @@ export default function ExpensesPage() {
     if (!res.ok) { fail('Failed to unpost voucher: ' + res.error.message); return; }
     setVoucherResult({ action: 'unpost', data: res.data });
     setVoucher(res.data.voucher);
-    // Land on the editable screen straight away (toolbar standardisation, 2026-09-20) — adding a
-    // row to a just-unposted document is the whole reason for unposting it.
-    setMode('edit');
+    // Lands read-only (standard §6): New adds an entry from view mode by itself, so Un Post no
+    // longer has to pre-unlock anything.
+    setMode('view');
+    setEditTarget(null);
     setBalanceRefreshKey(k => k + 1);
     refreshAllVouchers();
     refreshCheques(); // unposting releases any cheque allocation the lines held
@@ -771,10 +779,19 @@ export default function ExpensesPage() {
   // reset (used after committing a line), so this reuses it rather than abandoning the voucher.
   // Only Master scope (or no voucher open yet) gets the full reset below.
   const startNewVoucher = () => {
-    if (mode === 'edit' && editScope === 'detail' && voucher) {
+    // Detail + an unposted voucher on screen adds an entry — from view mode too, no Edit needed
+    // (standard §6). Master (or nothing open, or a posted voucher) starts a whole new voucher.
+    if (editScope === 'detail' && voucher && voucher.status !== 'POSTED') {
       clearEntryRow();
       return;
     }
+    resetToNewVoucher();
+  };
+
+  // A whole new, blank voucher. Everything that is not the New button itself (Post, Delete, an
+  // empty Unposted list…) resets through this, never through startNewVoucher(), which with Detail
+  // selected would add an entry to the voucher still on screen instead.
+  const resetToNewVoucher = () => {
     setVoucher(null);
     setVoucherRemarks('');
     setVoucherResult(null);
@@ -791,7 +808,8 @@ export default function ExpensesPage() {
       return;
     }
     setMode('edit');
-    setEditScope('master'); // opening a different line for correction must not carry over a stale edit scope
+    setEditTarget('detail'); // editing an entry unlocks the Detail half only (standard §6)
+    setSelectedLineId(null);
     // An unposted line lives in draft_expenses, so the id the entry row carries while editing is a
     // draft_id — handleDone routes on entryIsDraft to know which table to write back to.
     setEntryIsDraft(true);
@@ -831,27 +849,23 @@ export default function ExpensesPage() {
       .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no),
     [allVouchers]
   );
-  // Merged with deleted voucher_no's for browsing only — navPostedVouchers/navUnpostedVouchers
-  // above stay real-only (Post All, dropdown counts, Find all still use those unaffected).
-  // mergeWithDeleted re-sorts by its numeric key regardless of input order, so the date-based sort
-  // above doesn't need to change for this to come out in the right voucher_no order.
+  // The browse lists — real vouchers only, in the date order above. Deleted numbers are skipped,
+  // not browse stops (per the user, 2026-10-06, same as the Journal Voucher).
   const navPostedList = useMemo(
-    () => mergeWithDeleted(navPostedVouchers.map(v => ({ ...v, system_no: v.voucher_no })), deletedNumbers),
-    [navPostedVouchers, deletedNumbers],
+    () => asNavEntries(navPostedVouchers.map(v => ({ ...v, system_no: v.voucher_no }))),
+    [navPostedVouchers],
   );
   const navUnpostedList = useMemo(
-    () => mergeWithDeleted(navUnpostedVouchers.map(v => ({ ...v, system_no: v.voucher_no })), deletedNumbers),
-    [navUnpostedVouchers, deletedNumbers],
+    () => asNavEntries(navUnpostedVouchers.map(v => ({ ...v, system_no: v.voucher_no }))),
+    [navUnpostedVouchers],
   );
   const navList = navFilter === 'posted' ? navPostedList : navUnpostedList;
 
   // -1 when the voucher on screen isn't in the ACTIVE list — handlers treat that as "start over".
-  // navIndexOverride wins while a deleted-number placeholder is on screen — see SaleBillPage.tsx's
-  // navIndex for why.
   const derivedNavIndex = voucher == null
     ? -1
     : navList.findIndex(e => e.kind === 'doc' && e.row.voucher_id === voucher.voucher_id);
-  const navIndex = navIndexOverride ?? derivedNavIndex;
+  const navIndex = derivedNavIndex;
 
   const canNavPrevious = navList.length > 0 && navIndex !== 0;
   const canNavNext = navList.length > 0 && navIndex !== navList.length - 1;
@@ -859,16 +873,10 @@ export default function ExpensesPage() {
 
   // Opens whichever VOUCHER sits at `idx` of the active list, with all of its lines — the entries
   // grid below the form is what shows them, which is why the left-hand Pending Posting panel could
-  // be dropped entirely (per the user, 2026-08-27). A 'deleted' entry shows DeletedDocumentOverlay
-  // instead of loading anything.
+  // be dropped entirely (per the user, 2026-08-27).
   const goToNavIndex = (idx: number) => {
     if (idx < 0 || idx >= navList.length) return;
     const entry = navList[idx];
-    if (entry.kind === 'deleted') {
-      setNavIndexOverride(idx);
-      setDeletedPlaceholder(entry.system_no);
-      return;
-    }
     openVoucherInEntry(entry.row.voucher_id);
   };
 
@@ -928,7 +936,7 @@ export default function ExpensesPage() {
           .sort((a, b) => a.voucher_date.localeCompare(b.voucher_date) || a.voucher_no - b.voucher_no);
         const latest = unposted[unposted.length - 1];
         if (latest) await openVoucherInEntry(latest.voucher_id);
-        else startNewVoucher();
+        else resetToNewVoucher();
         requestAnimationFrame(() => newButtonRef.current?.focus());
       } else {
         const fresh = await refreshAllVouchers();
@@ -940,15 +948,14 @@ export default function ExpensesPage() {
     });
   };
 
-  // Preview of the System Voucher No. a brand-new voucher will get — voucher_no is ONE sequence
-  // across the whole expense_vouchers table regardless of status (MAX+1, allocated inside
-  // expenseVouchers.create() on the backend).
-  // The System No. shown before saving is only a PREVIEW (MAX(id)+1, never reserved server-side).
-  // Always shown, from the moment the page opens — an earlier round gated it behind pressing New,
-  // which the user reversed (2026-08-31): the number should just be there.
+  // Preview of the System Voucher No. a brand-new voucher will get: the highest number ever used,
+  // live OR deleted, + 1 — voucher_no comes from a NO CACHE sequence and a deleted number is never
+  // reused (per the user, 2026-10-06; it used to be MAX(voucher_no)+1, which re-issued a deleted
+  // newest number). Only a preview — the real number is allocated by expenseVouchers.create(). Shown only
+  // after New (useNewDocGate).
   const nextVoucherNo = useMemo(
-    () => Math.max(0, ...allVouchers.map(v => v.voucher_no)) + 1,
-    [allVouchers]
+    () => Math.max(0, ...allVouchers.map(v => v.voucher_no), ...deletedNumbers.map(d => d.system_no)) + 1,
+    [allVouchers, deletedNumbers]
   );
 
   // Opens a voucher straight into the read-only view on the Expense Entry tab (its own lines +
@@ -962,6 +969,7 @@ export default function ExpensesPage() {
     setVoucherResult(null);
     setDate(res.data.voucher_date);
     setMode('view');
+    setEditTarget(null);
   };
 
   // Declared after openVoucherInEntry, which it calls through handleNavFilterChange:
@@ -1032,7 +1040,7 @@ export default function ExpensesPage() {
       // keeping the date being worked on. Matches every other entry page's Post All (per the
       // user, 2026-09-04). A partial run keeps the voucher up: the failures still need looking at.
       const workingDate = date;
-      startNewVoucher();
+      resetToNewVoucher();
       setDate(workingDate);
     } else if (voucher && posted.some(p => p.voucher_id === voucher.voucher_id)) {
       await refreshVoucher(voucher.voucher_id);
@@ -1177,28 +1185,36 @@ export default function ExpensesPage() {
             newAction={{ onClick: () => { startNewVoucher(); markNewClicked(); }, title: 'New Voucher', ref: newButtonRef }}
             remove={{
               onClick: handleDeleteVoucherClick,
-              disabled: deletedPlaceholder != null || !voucher || voucher.status !== 'UNPOSTED',
+              disabled: !voucher || voucher.status !== 'UNPOSTED',
               title: 'Delete this whole voucher — every entry on it goes too (asks for your password)',
             }}
             editRow={{
               onClick: () => {
-                const line = voucherLines.find(l => l.draft_id === lastEnteredLineId) ?? voucherLines[voucherLines.length - 1];
+                const line = voucherLines.find(l => l.draft_id === selectedLineId);
                 if (line) handleEditLine(line);
               },
-              disabled: deletedPlaceholder != null || !voucher || voucher.status === 'POSTED' || voucherLines.length === 0,
-              title: 'Edit the last entry you touched',
+              disabled: !voucher || voucher.status === 'POSTED' || selectedLineId == null,
+              title: 'Edit the selected entry',
             }}
             edit={{
+              // Master unlocks the header only; Detail edits the selected entry, same job as Edit
+              // Row and the row's ✏. Live while editing — the only way to move the unlock (§6).
               onClick: () => {
-                setMode('edit');
-                if (editScope === 'master' && voucher) {
-                  setDate(voucher.voucher_date);
-                  setVoucherRemarks(voucher.remarks ?? '');
+                if (!voucher || voucher.status === 'POSTED') return;
+                if (editScope === 'detail') {
+                  const line = voucherLines.find(l => l.draft_id === selectedLineId);
+                  if (!line) { fail('Click the entry you want to edit first, then press Edit.'); return; }
+                  handleEditLine(line);
+                  return;
                 }
-                if (editScope === 'detail') focusFirstEntryField();
-                else requestAnimationFrame(() => firstFieldRef.current?.focus());
+                setMode('edit');
+                setEditTarget('master');
+                setDate(voucher.voucher_date);
+                setVoucherRemarks(voucher.remarks ?? '');
+                requestAnimationFrame(() => firstFieldRef.current?.focus());
               },
-              disabled: deletedPlaceholder != null || !voucher || voucher.status === 'POSTED',
+              disabled: !voucher || voucher.status === 'POSTED',
+              title: editScope === 'detail' ? 'Edit the selected entry' : 'Edit the header fields',
             }}
             save={{
               onClick: async () => {
@@ -1210,7 +1226,7 @@ export default function ExpensesPage() {
                   await handleDoneButton();
                 }
               },
-              disabled: isViewMode || deletedPlaceholder != null,
+              disabled: isViewMode,
               title: 'Save this entry into the voucher',
             }}
             done={{
@@ -1223,19 +1239,20 @@ export default function ExpensesPage() {
                   await handleDoneButton();
                 }
               },
-              disabled: isViewMode || deletedPlaceholder != null,
+              disabled: isViewMode,
               title: isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done — save this entry, ready to Post',
             }}
-            cancel={{ onClick: () => { clearEntryRow(); setMode('new'); }, disabled: mode !== 'edit', title: 'Cancel Edit' }}
-            first={{ onClick: handleNavFirst, disabled: !canNavPrevious }}
+            // Cancel drops the unsaved correction and reloads the saved voucher, read-only (§6).
+            cancel={{ onClick: async () => { if (voucher) await openVoucherInEntry(voucher.voucher_id); else clearEntryRow(); }, disabled: mode !== 'edit', title: 'Cancel Edit' }}
+            first={{ onClick: handleNavFirst, disabled: navList.length === 0 }}
             prev={{ onClick: handleNavPrevious, disabled: !canNavPrevious, title: 'Previous' }}
             next={{ onClick: handleNavNext, disabled: !canNavNext }}
-            last={{ onClick: handleNavLast, disabled: !canNavNext }}
+            last={{ onClick: handleNavLast, disabled: navList.length === 0 }}
             print={{ onClick: () => window.print(), disabled: !voucher }}
             find={{ onClick: () => setIsFindOpen(true) }}
-            unpost={{ onClick: handleUnpostVoucher, disabled: deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy, title: 'Unpost Voucher' }}
-            post={{ onClick: async () => { await handlePostVoucher(); focusNewButton(); }, disabled: deletedPlaceholder != null || !voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy, title: 'Post Voucher' }}
-            exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
+            unpost={{ onClick: handleUnpostVoucher, disabled: !voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy, title: 'Unpost Voucher' }}
+            post={{ onClick: async () => { await handlePostVoucher(); focusNewButton(); }, disabled: !voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy, title: 'Post Voucher' }}
+            exit={{ onClick: async () => { if (!(await api.closeThisWindow())) dispatch({ type: 'NAVIGATE', page: 'home' }); } }}
             saveAndPost={{ disabled: true, title: 'Not used here — each entry is saved as you add it; press Post when the voucher is complete' }}
             postAll={{ onClick: async () => { await handlePostAllVouchers(); focusNewButton(); }, disabled: navUnpostedVouchers.length === 0 || postAllVouchersBusy || navFilter === 'posted', title: `Post All (${navUnpostedVouchers.length})` }}
             pdf={{ onClick: () => window.print(), disabled: !voucher, title: 'Export PDF — choose "Save as PDF" in the print dialog' }}
@@ -1306,7 +1323,6 @@ export default function ExpensesPage() {
               data-edit-scope="detail"
               style={{ position: 'relative', height: entryCardHeight ?? undefined }}
             >
-              {deletedPlaceholder != null && <DeletedDocumentOverlay systemNo={deletedPlaceholder} label="voucher" />}
 
               <form id="expense-entry-form" onSubmit={handleEntrySubmit} className="flex flex-col gap-4 shrink-0">
                 {/* Hidden submit target for the app-wide G-01 rule (see fieldNav.ts#findSubmitButton)
@@ -1612,21 +1628,27 @@ export default function ExpensesPage() {
                           </td>
                         </tr>
                       ) : voucherLines.map(line => {
-                        // "Selected" is the line currently pulled into the entry strip — no second
-                        // piece of state to drift out of step with the form.
-                        const isSelected = mode === 'edit' && entryIsDraft
+                        // "Editing" is the line currently pulled into the entry strip — no second
+                        // piece of state to drift out of step with the form. "Selected" is the
+                        // row a click picked for Edit/Edit Row (standard §5).
+                        const isEditing = mode === 'edit' && entryIsDraft
                           && line.draft_id != null && expenseId === line.draft_id;
+                        const isSelected = line.draft_id != null && line.draft_id === selectedLineId;
                         return (
                         <tr
                           key={line.expense_id}
                           ref={el => { if (line.draft_id != null) rowRefs.current[line.draft_id] = el; }}
-                          // G-08 (changes-14-09-26.md, 2026-09-15): a click on a detail row must
-                          // produce no visible change at all — no edit load, no highlight.
-                          // Editing a line is already a deliberate, separate action here (the
-                          // per-row pencil icon below, with its own stopPropagation), so the row
-                          // itself no longer loads the line into the form on click.
+                          // A click only SELECTS the row (what Edit/Edit Row act on next), in every
+                          // state, and never loads it for editing (standard §5, superseding G-08's
+                          // "no highlight").
+                          onClick={() => { if (line.draft_id != null) setSelectedLineId(prev => prev === line.draft_id ? null : line.draft_id); }}
+                          aria-selected={isSelected}
                           title={line.status === 'CONFIRMED' ? 'Unpost this voucher before editing that entry' : undefined}
-                          className={`border-b transition-colors ${isSelected ? 'bg-blue-50' : 'hover:bg-slate-50/60'}`}
+                          className={`border-b cursor-pointer transition-colors border-l-4 ${
+                            isEditing ? 'bg-blue-100 border-l-blue-600'
+                              : isSelected ? 'bg-[#B08D57]/15 border-l-[#B08D57]'
+                              : 'border-l-transparent hover:bg-slate-50/60'
+                          }`}
                           style={{ borderColor: 'var(--border-table)' }}
                         >
                           {/* G-05: a pure position indicator — never a background/highlight, so
@@ -1661,10 +1683,18 @@ export default function ExpensesPage() {
                                 // mirror-image gate as the entry strip fields above.
                                 <RowActions
                                   onEdit={() => handleEditLine(line)}
-                                  onDelete={() => setDeleteTarget(line.draft_id != null
-                                    ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
-                                    : { kind: 'expense', id: line.expense_id as number, amount: Number(line.amount) })}
-                                  disabled={detailFieldsLocked}
+                                  onDelete={() => {
+                                    // The voucher's LAST entry: a voucher can't be empty, so this
+                                    // deletes the whole voucher (standard §13).
+                                    if (voucher && voucherLines.length === 1) {
+                                      setEmptyingViaLastRow(true);
+                                      setDeleteTarget({ kind: 'voucher', id: voucher.voucher_id, amount: Number(voucher.total_amount) });
+                                      return;
+                                    }
+                                    setDeleteTarget(line.draft_id != null
+                                      ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
+                                      : { kind: 'expense', id: line.expense_id as number, amount: Number(line.amount) });
+                                  }}
                                   editTitle="Pull this entry back into the form to correct it"
                                   deleteTitle="Delete this entry (asks for your password)"
                                   editDisabledTitle="Select Detail to edit voucher entries"
@@ -1776,11 +1806,13 @@ export default function ExpensesPage() {
 
       <PasswordPromptModal
         isOpen={deleteTarget != null}
-        onClose={() => setDeleteTarget(null)}
+        onClose={() => { setDeleteTarget(null); setEmptyingViaLastRow(false); }}
         onSuccess={handleDeleteConfirmed}
         title="Delete Expense"
         subtitle={deleteTarget ? (deleteTarget.kind === 'voucher'
-          ? `This deletes the WHOLE voucher and every entry on it (${formatCurrency(deleteTarget.amount)}) — not a single entry. It cannot be undone. Confirm your password.`
+          ? emptyingViaLastRow
+            ? `That was the voucher's last entry — a voucher can't be empty, so deleting it removes the WHOLE voucher (${formatCurrency(deleteTarget.amount)}). It cannot be undone. Confirm your password.`
+            : `This deletes the WHOLE voucher and every entry on it (${formatCurrency(deleteTarget.amount)}) — not a single entry. It cannot be undone. Confirm your password.`
           : `Confirm your password to permanently delete this ${formatCurrency(deleteTarget.amount)} expense entry. This cannot be undone.`) : undefined}
       />
 

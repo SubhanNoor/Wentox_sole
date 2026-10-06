@@ -3,6 +3,7 @@ const { ipcMain } = require('electron');
 const service = require('../services/settlements.service');
 const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
+const authService = require('../services/auth.service');
 
 module.exports = function register() {
   ipcMain.handle('settlements:list', wrap((payload) => {
@@ -26,8 +27,11 @@ module.exports = function register() {
     return service.update(payload.id, payload, session);
   }));
 
-  ipcMain.handle('settlements:remove', wrap((payload) => {
-    requireSession();
+  // Password required, matching 'draft-receipts:remove' — an endorsement is deleted from the same
+  // voucher grid as a receipt line, behind the same password prompt, so it gets the same check.
+  ipcMain.handle('settlements:remove', wrap(async (payload) => {
+    const session = requireSession();
+    await authService.verifyPassword(session.userId, payload.password);
     return service.remove(payload.id);
   }));
 

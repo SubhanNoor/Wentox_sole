@@ -276,7 +276,18 @@ async function hardDelete(transaction, baId) {
   await request.query('DELETE FROM dbo.business_accounts WHERE ba_id = @baId');
 }
 
+// Keeps dbo.customers.name and dbo.vendors.name in sync when a linked account is renamed from
+// the Accounts screen. Both UPDATEs are safe no-ops when there is no matching row.
+async function syncLinkedPartyName(baId, name) {
+  const baIdParam = { type: sql.Int, value: baId };
+  await query('UPDATE dbo.customers SET name = @name WHERE ba_id = @baId',
+    { baId: baIdParam, name: { type: sql.NVarChar(150), value: name } });
+  await query('UPDATE dbo.vendors   SET name = @name WHERE ba_id = @baId',
+    { baId: baIdParam, name: { type: sql.NVarChar(100), value: name } });
+}
+
 module.exports = {
   nextSerial, insert, updateName, findById, findByAcId, findByLinkCode, list, findByIdWithRestriction, update, updateOpening,
   setStatus, isPartyLinked, hasLedgerActivity, hasAnyReference, hardDelete, replaceOpeningEntries, allWithOpening,
+  syncLinkedPartyName,
 };

@@ -23,10 +23,12 @@ import stockVoucherSource from './StockVoucherPage.tsx?raw';
 // Each case pins the ACTUAL current flag name for that page (not a guessed generic one) and
 // asserts three things: the reset effect calls the list refresh, the callback is gated on
 // "list is empty AND the posted flag" (not `mode === 'view'` alone, the original bug), and it
-// actually calls handleNew() when both hold.
-// resetCall defaults to handleNew; JournalVoucherPage resets through resetToNewVoucher() instead,
-// since its New button was split from Edit (commit 9cca45f8, 2026-09-24).
-function assertGuardedReset(source: string, isPostedFlag: string, refreshCall: string, resetCall = 'handleNew') {
+// actually calls the page's reset when both hold.
+// resetCall is each page's own whole-new-document reset. Every page resets through a
+// resetToNew…() function rather than handleNew(), since New with Detail picked adds a line instead
+// of starting a new document — the Journal Voucher since 2026-09-24 (commit 9cca45f8), the other
+// pages since the standard's Master/Detail flow was ported to them (2026-10-06).
+function assertGuardedReset(source: string, isPostedFlag: string, refreshCall: string, resetCall: string) {
   const guardPattern = new RegExp(
     `${refreshCall}\\([^)]*\\)\\.then\\(data => \\{\\s*if \\(data && data\\.length === 0 && ${isPostedFlag}\\) ${resetCall}\\(\\);`,
   );
@@ -35,19 +37,19 @@ function assertGuardedReset(source: string, isPostedFlag: string, refreshCall: s
 
 describe('G-06: Posted/Unposted reset-on-reopen is gated on the persisted posted flag, not mode', () => {
   it('SaleBillPage uses currentBillIsPosted, not mode === \'view\' alone', () => {
-    assertGuardedReset(saleBillSource, 'currentBillIsPosted', 'refreshUnposted');
+    assertGuardedReset(saleBillSource, 'currentBillIsPosted', 'refreshUnposted', 'resetToNewBill');
   });
 
   it('SaleReturnPage uses currentReturnIsPosted, not mode === \'view\' alone', () => {
-    assertGuardedReset(saleReturnSource, 'currentReturnIsPosted', 'refreshDrafts');
+    assertGuardedReset(saleReturnSource, 'currentReturnIsPosted', 'refreshDrafts', 'resetToNewReturn');
   });
 
   it('PurchasePage uses currentIsPosted, not mode === \'view\' alone', () => {
-    assertGuardedReset(purchaseSource, 'currentIsPosted', 'refreshUnposted');
+    assertGuardedReset(purchaseSource, 'currentIsPosted', 'refreshUnposted', 'resetToNewPurchase');
   });
 
   it('PurchaseReturnPage uses currentIsPosted, not mode === \'view\' alone', () => {
-    assertGuardedReset(purchaseReturnSource, 'currentIsPosted', 'refreshUnposted');
+    assertGuardedReset(purchaseReturnSource, 'currentIsPosted', 'refreshUnposted', 'resetToNewReturn');
   });
 
   it('JournalVoucherPage uses isPosted, not mode === \'view\' alone', () => {
@@ -55,6 +57,6 @@ describe('G-06: Posted/Unposted reset-on-reopen is gated on the persisted posted
   });
 
   it('StockVoucherPage uses isPosted, not mode === \'view\' alone', () => {
-    assertGuardedReset(stockVoucherSource, 'isPosted', 'refreshUnposted');
+    assertGuardedReset(stockVoucherSource, 'isPosted', 'refreshUnposted', 'resetToNewVoucher');
   });
 });

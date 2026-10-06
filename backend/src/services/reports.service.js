@@ -994,8 +994,8 @@ async function overallTrail(filters = {}, session) {
 
   const rows = [];
   for (const a of accounts) {
+    // Zero-balance accounts are included; the screen's "Skip Zero Balances" option hides them.
     const net = baBalances.get(a.ba_id) || 0;
-    if (net === 0) continue; // no activity and no opening balance — nothing to show
     rows.push({
       code: a.code,
       description: a.name,
@@ -1011,7 +1011,6 @@ async function overallTrail(filters = {}, session) {
   }
   for (const ca of chartAccounts) {
     const net = acBalances.get(ca.ac_id) || 0;
-    if (net === 0) continue;
     rows.push({
       code: ca.code,
       description: ca.name,

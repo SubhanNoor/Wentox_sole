@@ -12,7 +12,7 @@ import { useLatestOnly } from '@/hooks/useLatestOnly';
 import * as api from '@/lib/api';
 import type {
   ProductRow, ProductVariantRow, StoreRow, StockVoucherRow, StockVoucherLineInput,
-  StockVoucherCreateInput, UnpostedStockVoucherRow, PostAllResult, StockRow, BusinessAccountRow,
+  StockVoucherCreateInput, UnpostedStockVoucherRow, PostAllResult, StockRow, BusinessAccountRow, DeletedNumberRow,
 } from '@/lib/api';
 import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, cartonsAndPairs } from '@/lib/utils';
 import { Search, Boxes, ChevronDown } from 'lucide-react';
@@ -195,10 +195,10 @@ export default function StockVoucherPage() {
     // leave `mode: 'edit'` while the loaded record is still posted, so `mode === 'view'` alone
     // under-triggers. `isPosted` (derived from the persisted `status`) is the direct, unambiguous
     // signal — true iff an actual posted record is loaded, in EITHER 'view' or 'edit' mode; only
-    // `handleNew()` ever resets `status` to 'DRAFT', so it can never be true while there's genuine
+    // `resetToNewVoucher()` ever resets `status` to 'DRAFT', so it can never be true while there's genuine
     // unsaved new-document work to protect.
     refreshUnposted().then(data => {
-      if (data && data.length === 0 && isPosted) handleNew();
+      if (data && data.length === 0 && isPosted) resetToNewVoucher();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshUnposted]);
@@ -219,7 +219,7 @@ export default function StockVoucherPage() {
     refreshUnpostedReservations(svId);
     refreshNav();
     const workingDate = date;
-    handleNew();
+    resetToNewVoucher();
     setDate(workingDate);
   };
 
@@ -238,8 +238,10 @@ export default function StockVoucherPage() {
   // it. hasPageDraftAtMount gates the auto-open further down (only genuine unsaved typing skips
   // it); hasClickedNew gates the No. preview and the awaitingNew lock; only New calls markNewClicked.
   const { hasRealDraftAtMount: hasPageDraftAtMount, hasClickedNew, setHasClickedNew, markNewClicked } =
-    useNewDocGate('stock-voucher', ['lines', 'remarks', 'accountBaId']);
+    useNewDocGate('stock-voucher', ['lines', 'remarks', 'accountBaId'], { emptiedEditCountsAsWork: true });
   const [svId, setSvId] = usePersistentField<number | null>('stock-voucher', 'svId', null);
+  // The visible System No. (voucher_no, migration 042) — svId stays the internal identity.
+  const [voucherNo, setVoucherNo] = usePersistentField<number | null>('stock-voucher', 'voucherNo', null);
   const [status, setStatus] = usePersistentField<'CONFIRMED' | 'DRAFT'>('stock-voucher', 'status', 'DRAFT');
   // Refetches whenever the open voucher changes (New/loading a different one) — this voucher's own
   // id is excluded, since its lines are accounted for separately, client-side, from `lines` itself.
@@ -256,6 +258,10 @@ export default function StockVoucherPage() {
   const [editScope, setEditScope] = usePersistentField<'master' | 'detail'>('stock-voucher', 'editScope', 'master');
   // Keeps the radios pointing at whichever half is being worked in — see the hook.
   const autoEditScope = useAutoEditScope(setEditScope);
+  // Which half Edit (or New, for a line) has actually UNLOCKED — separate from the radio, which
+  // only picks what New/Edit act on and can never unlock anything by itself (standard §6, ported
+  // from the Journal Voucher 2026-10-06). null = nothing unlocked.
+  const [editTarget, setEditTarget] = usePersistentField<'master' | 'detail' | null>('stock-voucher', 'editTarget', null);
   // A New Stock Voucher's own in-progress fields persist across switching pages AND an app
   // restart (usePersistentField — see src/hooks/usePersistentField.ts), so typing one up and
   // getting pulled away mid-entry never loses it. Deliberately NOT applied to mode/svId/status —
@@ -279,13 +285,13 @@ export default function StockVoucherPage() {
 
   const isViewMode = mode === 'view';
   const isPosted = status === 'CONFIRMED';
-  // Derived from editScope — applied to every master/detail field's `disabled` below (2026-08-31).
+  // Derived from editTarget (what Edit/New actually unlocked, not the radio) — applied to every master/detail field's `disabled` below (2026-08-31).
   // A blank voucher reached any way other than New (first open with nothing unposted, after Post,
   // Post All, a delete…) stays locked — no System No. may be allocated without New (2026-09-18).
   const awaitingNew = mode === 'new' && svId == null && !hasClickedNew;
   useEffect(() => { if (awaitingNew) focusNewButton(); }, [awaitingNew]);
-  const masterLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
-  const detailLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
+  const masterLocked = awaitingNew || (mode === 'edit' && editTarget !== 'master');
+  const detailLocked = awaitingNew || (mode === 'edit' && editTarget !== 'detail');
 
   const storeOptions = useMemo(
     () => stores.map(s => ({ value: String(s.store_id), label: s.name })),
@@ -297,7 +303,15 @@ export default function StockVoucherPage() {
   // gets the full reset below. Same reset shape used after committing a line, since the outcome is
   // identical: an empty, focused entry strip, voucher untouched.
   const handleNew = () => {
-    if (mode === 'edit' && editScope === 'detail' && svId != null) {
+    // Detail + an unposted voucher on screen (saved, or new with lines typed) adds a line — no Edit
+    // needed, header stays locked. Never wipes lines already typed (standard §6).
+    const voucherOnScreen = !awaitingNew && !isPosted && (svId != null || lines.length > 0);
+    if (editScope === 'detail' && voucherOnScreen) {
+      // Only a SAVED voucher needs unlocking; a new one already has both halves open.
+      if (svId != null) {
+        setMode('edit');
+        setEditTarget('detail');
+      }
       setEntry(emptyEntry());
       setEditingIndex(null);
       setSelectedIndex(null);
@@ -305,9 +319,16 @@ export default function StockVoucherPage() {
       requestAnimationFrame(() => entryArticleTriggerRef.current?.focus());
       return;
     }
+    resetToNewVoucher();
+  };
+
+  // A whole new, blank voucher. Everything that is not the New button itself (Post, Delete, the
+  // tab button, an empty Unposted list…) resets through this, never through handleNew(), which with
+  // Detail selected would add a line to the voucher still on screen instead.
+  const resetToNewVoucher = () => {
     // A blank document is an unposted one — back to the Unposted view (see useBrowseFilterFollowsDocument).
     setBrowseFilter('unposted');
-    setMode('new'); setHasClickedNew(false); setSvId(null); setStatus('DRAFT');
+    setMode('new'); setHasClickedNew(false); setSvId(null); setVoucherNo(null); setStatus('DRAFT');
     setDate(getTodayDate()); setStoreId(''); setRemarks('');
     // Fixed to STOCK TRANSFER, never blank — the auto-populate effect above also covers this once
     // businessAccounts finishes loading, but setting it here too means it's already right the
@@ -320,6 +341,7 @@ export default function StockVoucherPage() {
     setLastEnteredIndex(null);
     setErrorMsg('');
     setEditScope('master');
+    setEditTarget(null);
     clearStockVoucherDraft();
     // Explicit focus, not just a mode-change effect: clicking New while already on a blank/new
     // voucher (mode is already 'new') wouldn't otherwise re-trigger any such effect, so focus
@@ -698,12 +720,33 @@ export default function StockVoucherPage() {
 
   // G-08: now the Edit Row toolbar button's handler, not the row's own onClick — a row click just
   // records `selectedIndex` (see the grid below), and this only runs once the user presses Edit Row.
+  // Unlocks the Detail half of a SAVED voucher (a new one has both halves open already).
+  const beginDetailEdit = () => {
+    if (mode === 'new' && svId == null) return;
+    setMode('edit');
+    setEditTarget('detail');
+  };
+
+  // THE one "edit this existing line" path — Edit (Detail), Edit Row and the row's ✏ all land
+  // here (standard §6). A posted voucher never enters edit.
   const handleRowClick = (idx: number) => {
-    // Detail locked (scope is Master while already editing) — grid rows stay inert, per the
-    // Master/Detail edit-scope split (2026-08-31). New/view-mode behavior is untouched.
-    if (mode === 'edit' && editScope !== 'detail') return;
-    if (isViewMode) setMode('edit');
+    if (isPosted) return;
+    beginDetailEdit();
     loadLineIntoEntry(idx);
+  };
+
+  // The toolbar's Edit: Master unlocks the header only; Detail edits the selected line. Live while
+  // already editing — it is the only way to move the unlock to the other half.
+  const handleEdit = () => {
+    if (svId == null || isPosted) return;
+    if (editScope === 'detail') {
+      if (selectedIndex == null) { fail('Click the line you want to edit first, then press Edit.'); return; }
+      handleRowClick(selectedIndex);
+      return;
+    }
+    setMode('edit');
+    setEditTarget('master');
+    requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
 
   const handleEditSelectedRow = () => {
@@ -720,8 +763,23 @@ export default function StockVoucherPage() {
       setEditingIndex(editingIndex - 1);
     }
     setSelectedIndex(null);
-    if (lastEnteredIndex === idx) setLastEnteredIndex(null);
+    // ▶ moves to the row that takes the deleted one's place (or the new last row).
+    const newLength = lines.length - 1;
+    if (lastEnteredIndex === idx) setLastEnteredIndex(newLength === 0 ? null : Math.min(idx, newLength - 1));
     else if (lastEnteredIndex != null && idx < lastEnteredIndex) setLastEnteredIndex(lastEnteredIndex - 1);
+  };
+
+  // A grid row's own Delete. Deleting the LAST line of a SAVED voucher deletes the whole voucher
+  // (a voucher can't be empty) through the password prompt; otherwise the line goes on screen and
+  // the voucher enters Detail edit, so the next Save/Done removes it for good (standard §13).
+  const handleRowDelete = (idx: number) => {
+    if (lines.length === 1 && svId != null && !isPosted) {
+      setEmptyingViaLastRow(true);
+      handleDeleteAction();
+      return;
+    }
+    beginDetailEdit();
+    removeLine(idx);
   };
 
   // Toolbar's Delete is dual-purpose, same convention as SaleBillPage/JournalVoucherPage: a line
@@ -781,15 +839,18 @@ export default function StockVoucherPage() {
     if (awaitingNew) { setErrorMsg('Click New to start a voucher first.'); return null; }
     const payload = buildPayload();
     if (!payload) return null;
-    const result = mode === 'edit' && svId != null
+    // Keyed on svId alone, not `mode === 'edit'`: Save (not Done) on a NEW voucher keeps mode
+    // 'new' with svId now set, and a second Save/Done used to create() a duplicate (2026-10-06).
+    const result = svId != null
       ? await api.stockVouchers.update(svId, payload)
       : await api.stockVouchers.create(payload);
     if (!result.ok) { fail('Failed to save Stock Voucher: ' + result.error.message); return null; }
     setSvId(result.data.stock_voucher_id);
+    setVoucherNo(result.data.voucher_no);
     setStatus(result.data.status);
     setErrorMsg('');
     flash('Stock Voucher saved — Post it to update stock.');
-    if (finalize) setMode('view');
+    if (finalize) { setMode('view'); setEditTarget(null); }
     clearStockVoucherDraft();
     refresh();
     refreshUnposted();
@@ -805,7 +866,7 @@ export default function StockVoucherPage() {
 
   // Cancel Edit — drops back to the saved copy, same as Purchase's own Cancel (2026-09-20).
   const handleCancelEdit = async () => {
-    if (svId == null) { handleNew(); return; }
+    if (svId == null) { resetToNewVoucher(); return; }
     await loadSv(svId);
     setMode('view');
   };
@@ -834,7 +895,7 @@ export default function StockVoucherPage() {
     refreshUnpostedReservations(svId);
     refreshNav();
     const workingDate = date;
-    handleNew();
+    resetToNewVoucher();
     setDate(workingDate);
   };
 
@@ -851,9 +912,10 @@ export default function StockVoucherPage() {
     // It's a draft again now, so the window follows it back to the Unposted view (per the user,
     // 2026-08-30) rather than staying on Posted looking at a record that no longer belongs there.
     setBrowseFilter('unposted');
-    // Land on the editable screen straight away (toolbar standardisation, 2026-09-20) — adding a
-    // row to a just-unposted document is the whole reason for unposting it.
-    setMode('edit');
+    // Lands read-only (standard §6): New adds a line from view mode by itself, so Un Post no longer
+    // has to pre-unlock anything.
+    setMode('view');
+    setEditTarget(null);
   };
 
   // Listing rows only carry rolled-up totals, not the per-line detail — loading a voucher always
@@ -863,6 +925,7 @@ export default function StockVoucherPage() {
     if (!res.ok) { fail('Failed to load Stock Voucher: ' + res.error.message); return; }
     const sv = res.data;
     setSvId(sv.stock_voucher_id);
+    setVoucherNo(sv.voucher_no);
     setStatus(sv.status);
     setDate(toDateInputValue(sv.voucher_date));
     setStoreId(sv.store_id != null ? String(sv.store_id) : '');
@@ -890,6 +953,7 @@ export default function StockVoucherPage() {
     setLastEnteredIndex(null);
     setErrorMsg('');
     setEditScope('master');
+    setEditTarget(null);
     setMode('view');
   };
 
@@ -901,21 +965,26 @@ export default function StockVoucherPage() {
   // no reverse-never-erase trail, same guard level used everywhere else.
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const pendingDeleteSvId = useRef<number | null>(null);
+  // True when the whole-voucher delete was reached by deleting the LAST line — only changes the
+  // prompt's wording.
+  const [emptyingViaLastRow, setEmptyingViaLastRow] = useState(false);
 
 
   const handleDeletePasswordSuccess = async (password: string) => {
     setIsPasswordModalOpen(false);
+    setEmptyingViaLastRow(false);
     const targetId = pendingDeleteSvId.current;
     pendingDeleteSvId.current = null;
     if (targetId == null) return;
     const res = await api.stockVouchers.remove(targetId, password);
     if (!res.ok) { fail('Failed to delete: ' + res.error.message); return; }
     flash('Stock Voucher deleted successfully.');
-    if (svId === targetId) handleNew();
+    if (svId === targetId) resetToNewVoucher();
     refresh();
     refreshUnposted();
     refreshUnpostedReservations(svId);
     refreshNav();
+    refreshDeletedNumbers();
   };
 
   // Entry card fills whatever vertical space is left in the viewport below it — mirrors
@@ -1021,7 +1090,7 @@ export default function StockVoucherPage() {
         const freshUnposted = await refreshUnposted();
         const latest = (freshUnposted ?? unpostedSvs).slice(-1)[0];
         if (latest) await loadSv(latest.stock_voucher_id);
-        else handleNew();
+        else resetToNewVoucher();
         requestAnimationFrame(() => newButtonRef.current?.focus());
       } else {
         const fresh = await refreshNav();
@@ -1043,9 +1112,9 @@ export default function StockVoucherPage() {
   // own "New Voucher" tab, an equally deliberate click) is pressed — a restored in-progress draft
   // still counts (same as `hasPageDraftAtMount` already distinguishes elsewhere), but every other
   // path that resets to blank (G-06's auto-open, Post's "ready for the next one", the Unposted
-  // dropdown's own empty-list fallback, etc.) must leave it blank. `handleNew()` itself always
+  // dropdown's own empty-list fallback, etc.) must leave it blank. `resetToNewVoucher()` itself always
   // resets this to false; only the two deliberate click sites set it true, right after calling
-  // `handleNew()`.
+  // `handleNew()` or `resetToNewVoucher()`.
   // (hasClickedNew/hasPageDraftAtMount come from useNewDocGate, declared right after `mode`.)
   const didAutoOpenRef = useRef(false);
   useEffect(() => {
@@ -1055,11 +1124,20 @@ export default function StockVoucherPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Preview of the Number a brand-new voucher will get — stock_voucher_id is assigned the moment
-  // Save actually creates the row (draft or posted alike), so this is a client-side preview only.
+  // Retired numbers — a deleted voucher's number is never reused (migration 042), so the preview
+  // below skips past them, same as the sequence does.
+  const [deletedNumbers, setDeletedNumbers] = useState<DeletedNumberRow[]>([]);
+  const refreshDeletedNumbers = useCallback(async () => {
+    const res = await api.stockVouchers.listDeletedNumbers();
+    if (res.ok) setDeletedNumbers(res.data);
+  }, []);
+  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
+
+  // Preview of the Number a brand-new voucher will get: the highest number in use, live or
+  // deleted, + 1. Only a preview — the real one comes from dbo.seq_stock_voucher_no at first Save.
   const nextSvNoPreview = useMemo(
-    () => Math.max(0, ...navVouchers.map(v => v.stock_voucher_id), ...unpostedSvs.map(v => v.stock_voucher_id)) + 1,
-    [navVouchers, unpostedSvs]
+    () => Math.max(0, ...navVouchers.map(v => v.voucher_no), ...unpostedSvs.map(v => v.voucher_no), ...deletedNumbers.map(d => d.system_no)) + 1,
+    [navVouchers, unpostedSvs, deletedNumbers]
   );
 
   // Toolbar's Find — a quick jump to any voucher (posted or unposted) by number or remarks.
@@ -1071,13 +1149,13 @@ export default function StockVoucherPage() {
   const findResults = useMemo(() => {
     const q = findQuery.trim().toLowerCase();
     if (!q) return [];
-    const matches = (v: { remarks: string | null; stock_voucher_id: number }) =>
-      (v.remarks || '').toLowerCase().includes(q) || String(v.stock_voucher_id).includes(q);
+    const matches = (v: { remarks: string | null; voucher_no: number }) =>
+      (v.remarks || '').toLowerCase().includes(q) || String(v.voucher_no).includes(q);
     const posted = navVouchers.filter(v => v.status === 'CONFIRMED' && matches(v));
     const unposted = unpostedSvs.filter(matches);
     return [
-      ...posted.map(v => ({ id: v.stock_voucher_id, remarks: v.remarks, date: v.voucher_date, status: 'posted' as const })),
-      ...unposted.map(v => ({ id: v.stock_voucher_id, remarks: v.remarks, date: v.voucher_date, status: 'unposted' as const })),
+      ...posted.map(v => ({ id: v.stock_voucher_id, no: v.voucher_no, remarks: v.remarks, date: v.voucher_date, status: 'posted' as const })),
+      ...unposted.map(v => ({ id: v.stock_voucher_id, no: v.voucher_no, remarks: v.remarks, date: v.voucher_date, status: 'unposted' as const })),
     ].slice(0, 30);
   }, [findQuery, navVouchers, unpostedSvs]);
   const handleFindSelect = async (id: number) => {
@@ -1089,7 +1167,7 @@ export default function StockVoucherPage() {
   const tabBar = (
     <div className="flex gap-1.5" data-no-print>
       <button
-        onClick={() => { setActiveTab('entry'); handleNew(); markNewClicked(); }}
+        onClick={() => { setActiveTab('entry'); resetToNewVoucher(); markNewClicked(); }}
         className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'entry' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
@@ -1133,10 +1211,12 @@ export default function StockVoucherPage() {
             2026-09-03). */}
         <PasswordPromptModal
           isOpen={isPasswordModalOpen}
-          onClose={() => { setIsPasswordModalOpen(false); pendingDeleteSvId.current = null; }}
+          onClose={() => { setIsPasswordModalOpen(false); pendingDeleteSvId.current = null; setEmptyingViaLastRow(false); }}
           onSuccess={handleDeletePasswordSuccess}
           title="Delete Unposted Stock Voucher"
-          subtitle="This deletes the WHOLE voucher and every line on it — not a single row. It cannot be undone. Enter your password to confirm."
+          subtitle={emptyingViaLastRow
+            ? 'That was the voucher’s last line — a voucher can’t be empty, so deleting it removes the WHOLE voucher. It cannot be undone. Enter your password to confirm.'
+            : 'This deletes the WHOLE voucher and every line on it — not a single row. It cannot be undone. Enter your password to confirm.'}
         />
 
         {/* Find Stock Voucher Modal — jump to any posted or unposted voucher by number or remarks. */}
@@ -1159,7 +1239,7 @@ export default function StockVoucherPage() {
                     onClick={() => handleFindSelect(r.id)}
                     className="px-3 py-2 text-xs cursor-pointer hover:bg-amber-50/60 flex items-center justify-between gap-2"
                   >
-                    <span className="font-mono font-semibold text-slate-700">#{r.id}</span>
+                    <span className="font-mono font-semibold text-slate-700">#{r.no}</span>
                     <span className="text-slate-400 truncate flex-1">{r.remarks || '—'}</span>
                     <span className="text-slate-400">{formatDate(r.date)}</span>
                     <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${r.status === 'posted' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{r.status}</span>
@@ -1211,16 +1291,11 @@ export default function StockVoucherPage() {
               disabled: svId == null || isPosted,
               title: 'Delete this whole voucher — every line on it goes too (asks for your password)',
             }}
-            editRow={{ onClick: handleEditSelectedRow, disabled: selectedIndex == null || editingIndex != null || (isViewMode && isPosted) || (mode === 'edit' && editScope !== 'detail'), title: 'Edit selected line' }}
+            editRow={{ onClick: handleEditSelectedRow, disabled: selectedIndex == null || isPosted, title: 'Edit selected line' }}
             edit={{
-              onClick: () => {
-                setMode('edit');
-                requestAnimationFrame(() => {
-                  if (editScope === 'detail') entryArticleTriggerRef.current?.focus();
-                  else firstFieldRef.current?.focus();
-                });
-              },
-              disabled: !isViewMode || svId == null || isPosted,
+              onClick: handleEdit,
+              disabled: svId == null || isPosted,
+              title: editScope === 'detail' ? 'Edit the selected line' : 'Edit the header fields',
             }}
             save={{ onClick: async () => { await doSave(false); }, disabled: isViewMode || !isValid, title: 'Save — keep editing this voucher' }}
             done={{ submit: true, form: 'sv-entry-form', disabled: isViewMode || !isValid, title: 'Done — finish this voucher, then Post it' }}
@@ -1233,12 +1308,12 @@ export default function StockVoucherPage() {
             find={{ onClick: () => setIsFindOpen(true) }}
             unpost={{ onClick: handleUnpost, disabled: !isViewMode || svId == null || !isPosted, title: 'Un Post — move this posted voucher back to unposted' }}
             post={{ onClick: async () => { await handlePost(); focusNewButton(); }, disabled: !isViewMode || svId == null || isPosted }}
-            exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
+            exit={{ onClick: async () => { if (!(await api.closeThisWindow())) dispatch({ type: 'NAVIGATE', page: 'home' }); } }}
             saveAndPost={{ onClick: handleSaveAndPost, disabled: isViewMode || !isValid, title: 'Save & Post' }}
             postAll={{ onClick: async () => { await handlePostAll(); focusNewButton(); }, disabled: postAllBusy || browseFilter === 'posted' || unpostedSvs.length === 0, title: postAllBusy ? 'Posting…' : `Post All (${unpostedSvs.length})` }}
             pdf={{ onClick: () => window.print(), disabled: mode !== 'view' || svId == null, title: 'Export PDF — choose "Save as PDF" in the print dialog' }}
             excel={{
-              onClick: () => exportRowsToExcel(`stock-voucher-${svId}`, ['Article / Color', 'Category', 'Packing', 'Cartons', 'Pairs'], lines.map(l => [l.label, l.categoryName, l.packing, l.cartons, l.pairs])),
+              onClick: () => exportRowsToExcel(`stock-voucher-${voucherNo}`, ['Article / Color', 'Category', 'Packing', 'Cartons', 'Pairs'], lines.map(l => [l.label, l.categoryName, l.packing, l.cartons, l.pairs])),
               disabled: mode !== 'view' || svId == null,
               title: 'Export Excel',
             }}
@@ -1318,7 +1393,7 @@ export default function StockVoucherPage() {
             <CompactField label="No." gridArea="no">
               <input
                 type="text"
-                value={svId != null ? `#${svId}` : (navVouchersLoaded && unpostedSvsLoaded) ? (hasClickedNew ? `#${nextSvNoPreview}` : '') : '…'}
+                value={voucherNo != null ? `#${voucherNo}` : (navVouchersLoaded && unpostedSvsLoaded) ? (hasClickedNew ? `#${nextSvNoPreview}` : '') : '…'}
                 disabled
                 className="soleria-input soleria-input-compact bg-gray-50 text-gray-500 border-gray-200 font-mono text-center"
               />
@@ -1614,13 +1689,18 @@ export default function StockVoucherPage() {
                     key={line.uid}
                     ref={el => { rowRefs.current[idx] = el; }}
                     onClick={() => {
-                      // G-08: a click must produce no visible change — it only records which row
-                      // the Delete/Edit Row toolbar buttons act on next. Inert entirely while
-                      // another row is actually loaded for editing.
-                      if (editingIndex != null) return;
+                      // A click only SELECTS the row (what Edit/Edit Row act on next), in every
+                      // state — even while another row is in the strip (standard §5).
                       setSelectedIndex(prev => prev === idx ? null : idx);
                     }}
-                    className={`border-b cursor-pointer hover:bg-slate-50/55 transition-colors ${idx === editingIndex ? 'bg-blue-50' : ''}`}
+                    aria-selected={idx === selectedIndex}
+                    // Three distinct states (standard §5): editing = blue, selected = gold, each
+                    // with a 4px left bar; the ▶ marker is never a background.
+                    className={`border-b cursor-pointer transition-colors border-l-4 ${
+                      idx === editingIndex ? 'bg-blue-100 border-l-blue-600'
+                        : idx === selectedIndex ? 'bg-[#B08D57]/15 border-l-[#B08D57]'
+                        : 'border-l-transparent hover:bg-slate-50/55'
+                    }`}
                     style={{ borderColor: 'var(--border-table)' }}
                   >
                     {/* G-05: a pure position indicator — never a background/highlight, so it can
@@ -1635,11 +1715,11 @@ export default function StockVoucherPage() {
                     <td className="py-1 px-2 text-center whitespace-nowrap">
                       <RowActions
                         onEdit={() => handleRowClick(idx)}
-                        onDelete={() => removeLine(idx)}
-                        disabled={isPosted || editingIndex != null || (mode === 'edit' && editScope !== 'detail')}
+                        onDelete={() => handleRowDelete(idx)}
+                        disabled={isPosted}
                         editTitle="Edit this line"
                         deleteTitle="Delete this line"
-                        disabledTitle="Unpost and edit the document (Detail scope) to change its lines"
+                        disabledTitle="Unpost the voucher to change its lines"
                       />
                     </td>
                   </tr>
@@ -1726,7 +1806,7 @@ export default function StockVoucherPage() {
                   {vouchers.map(v => (
                     <tr key={v.stock_voucher_id} onClick={() => loadRow(v)} className="border-b hover:bg-slate-50/40 cursor-pointer" style={{ borderColor: 'var(--border-table)' }}>
                       <td className="p-3 pl-4 font-mono text-xs text-slate-600">{formatDate(v.voucher_date)}</td>
-                      <td className="p-3 text-xs font-mono text-slate-500">#{v.stock_voucher_id}</td>
+                      <td className="p-3 text-xs font-mono text-slate-500">#{v.voucher_no}</td>
                       <td className="p-3 text-xs text-slate-500">{v.store_name || '—'}</td>
                       <td className="p-3 text-xs text-slate-500">{v.remarks || '—'}</td>
                       <td className="p-3 text-center text-xs text-slate-500">{v.line_count}</td>

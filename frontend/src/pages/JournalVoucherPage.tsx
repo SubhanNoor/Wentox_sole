@@ -605,7 +605,10 @@ export default function JournalVoucherPage() {
     if (awaitingNew) { setErrorMsg('Click New to start a voucher first.'); return null; }
     const payload = buildPayload();
     if (!payload) return null;
-    const result = mode === 'edit' && jvId != null
+    // Keyed on jvId alone, not `mode === 'edit'`: Save (not Done) on a NEW voucher keeps
+    // mode 'new' with jvId now set, and a second Save/Done used to create() a duplicate voucher
+    // under a fresh number (2026-10-06).
+    const result = jvId != null
       ? await api.journalVouchers.update(jvId, payload)
       : await api.journalVouchers.create(payload);
     if (!result.ok) { fail('Failed to save Journal Voucher: ' + result.error.message); return null; }
@@ -1090,7 +1093,7 @@ const nextJvNoPreview = useMemo(
               disabled: !isViewMode || jvId == null || isPosted || !isPostable,
               title: !isPostable ? 'Needs at least two lines, with debit and credit matching, before posting' : 'Post',
             }}
-            exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
+            exit={{ onClick: async () => { if (!(await api.closeThisWindow())) dispatch({ type: 'NAVIGATE', page: 'home' }); } }}
             saveAndPost={{
               onClick: handleSaveAndPost,
               disabled: isViewMode || !isValid || !isPostable,

@@ -33,7 +33,14 @@ module.exports = function register() {
   ipcMain.handle('stock-vouchers:remove', wrap(async (payload) => {
     const session = requireSession();
     await authService.verifyPassword(session.userId, payload.password);
-    return service.remove(payload.id);
+    return service.remove(payload.id, session.userId);
+  }));
+
+  // Every Stock Voucher number retired by a delete — the page's No. preview skips them, same as
+  // the sequence (migration 042) does.
+  ipcMain.handle('stock-vouchers:listDeletedNumbers', wrap(() => {
+    requireSession();
+    return service.listDeletedNumbers();
   }));
 
   ipcMain.handle('stock-vouchers:post', wrap((payload) => {

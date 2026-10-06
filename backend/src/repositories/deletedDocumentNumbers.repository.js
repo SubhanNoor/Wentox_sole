@@ -32,21 +32,4 @@ async function listByType(docType) {
   return result.recordset;
 }
 
-// Receipt/Payment voucher numbers are NOT sequence-based like the other four doc types — voucher_no
-// is a plain MAX(voucher_no)+1 (per the user, 2026-09-07: keep that reuse behavior as-is, just log
-// deletions) — so a number logged as deleted can later be handed to a genuinely new voucher. Called
-// from receiptVouchers.service.js#create()/expenseVouchers.service.js#create() right after a fresh
-// voucher_no is resolved, so the stale "deleted" row never sits alongside the live voucher that just
-// reclaimed its number (which would otherwise make it show as BOTH a real document and a deleted
-// placeholder when browsing).
-async function unrecord(transaction, docType, systemNo) {
-  const request = requestWithParams(transaction, {
-    docType: { type: sql.VarChar(20), value: docType },
-    systemNo: { type: sql.Int, value: systemNo },
-  });
-  await request.query(`
-    DELETE FROM dbo.deleted_document_numbers WHERE doc_type = @docType AND system_no = @systemNo
-  `);
-}
-
-module.exports = { record, listByType, unrecord };
+module.exports = { record, listByType };

@@ -1,6 +1,6 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, nextSequenceValue } = require('../db/pool');
 
 function linesSubquery(alias = 'sv') {
   // No GROUP BY — SQL Server rejects a bare column selected alongside aggregates without one,
@@ -72,7 +72,7 @@ async function list(filters = {}) {
 // order they should post. Mirrors journalVouchers.repository.js#listUnposted.
 async function listUnposted() {
   const result = await query(
-    `SELECT sv.stock_voucher_id, sv.voucher_date, sv.remarks, totals.total_pairs
+    `SELECT sv.stock_voucher_id, sv.voucher_no, sv.voucher_date, sv.remarks, totals.total_pairs
      FROM dbo.stock_vouchers sv
      CROSS APPLY ${linesSubquery('sv')} totals
      WHERE sv.status = 'DRAFT'
@@ -128,8 +128,13 @@ async function findById(stockVoucherId) {
   return { ...sv, lines: await getLines(stockVoucherId) };
 }
 
+// voucher_no — the visible System No. — comes from dbo.seq_stock_voucher_no (migration 042): NO
+// CACHE, never reused, allocated in the creating transaction (standard §9). Never taken from the
+// client, never changed by updateHeader().
 async function insert(transaction, sv) {
+  const voucherNo = await nextSequenceValue(transaction, 'dbo.seq_stock_voucher_no');
   const request = requestWithParams(transaction, {
+    voucherNo: { type: sql.Int, value: voucherNo },
     voucherDate: { type: sql.Date, value: sv.voucher_date },
     storeId: { type: sql.Int, value: sv.store_id ?? null },
     remarks: { type: sql.NVarChar(500), value: sv.remarks ?? null },
@@ -144,11 +149,11 @@ async function insert(transaction, sv) {
   });
   const result = await request.query(`
     INSERT INTO dbo.stock_vouchers
-      (voucher_date, store_id, remarks, bill_no, bilty_no, igp_no, delivery_type, delivery_address,
+      (voucher_no, voucher_date, store_id, remarks, bill_no, bilty_no, igp_no, delivery_type, delivery_address,
        on_account_ba_id, main_ac_id, status, created_by)
     OUTPUT inserted.stock_voucher_id
     VALUES
-      (@voucherDate, @storeId, @remarks, @billNo, @biltyNo, @igpNo, @deliveryType, @deliveryAddress,
+      (@voucherNo, @voucherDate, @storeId, @remarks, @billNo, @biltyNo, @igpNo, @deliveryType, @deliveryAddress,
        @onAccountBaId, @mainAcId, 'DRAFT', @createdBy)
   `);
   return result.recordset[0].stock_voucher_id;
@@ -205,10 +210,9 @@ async function deleteLines(transaction, stockVoucherId) {
   await request.query('DELETE FROM dbo.stock_voucher_lines WHERE stock_voucher_id = @stockVoucherId');
 }
 
-async function remove(stockVoucherId) {
-  await query('DELETE FROM dbo.stock_vouchers WHERE stock_voucher_id = @stockVoucherId', {
-    stockVoucherId: { type: sql.Int, value: stockVoucherId },
-  });
+async function remove(transaction, stockVoucherId) {
+  const request = requestWithParams(transaction, { stockVoucherId: { type: sql.Int, value: stockVoucherId } });
+  await request.query('DELETE FROM dbo.stock_vouchers WHERE stock_voucher_id = @stockVoucherId');
 }
 
 async function setStatus(transaction, stockVoucherId, status, updatedBy) {

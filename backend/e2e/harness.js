@@ -204,7 +204,83 @@ async function browseFilterScenario(t, { menuLabel, setup }) {
   assert.equal(await dropdownMatchesScreen(page), true, 'after Unpost');
 }
 
+// The Master/Detail edit flow (document_page_standard.md §5–§6), run against one document page.
+// `setup` must create (through the backend services) ONE unposted document with exactly TWO lines,
+// newer than any other unposted one of its type, so it is what the page opens on. Checks:
+//   - it opens read-only; a row click only SELECTS (gold, aria-selected) and unlocks nothing;
+//   - Edit with Detail picked edits the selected row (blue); a click on another row while editing
+//     moves the selection only; Edit Row switches the edit to it; Cancel goes back to read-only;
+//   - a row's own Delete works from view mode and puts the document into edit (Save live);
+//     Cancel brings the line back;
+//   - New with Detail picked adds a line to the document on screen — never a new document — and
+//     leaves the header locked; Edit with Master picked unlocks the header;
+//   - Exit closes the window.
+async function masterDetailScenario(t, { menuLabel, setup }) {
+  const assert = require('node:assert/strict');
+  await setup(t);
+
+  const session = await launchApp();
+  t.after(() => session.close());
+  const { app, win } = session;
+  await login(win);
+  const page = await openInNewWindow(app, async () => (await menuItem(win, '2.DATA ENTRY', menuLabel)).click());
+
+  const rows = page.locator('tbody tr[aria-selected]');
+  const radio = (i) => page.locator('input[type="radio"][name$="edit-scope"]').nth(i);
+  const headerDate = page.locator('input[type="date"]').first();
+  const isBlue = (i) => async () => /bg-blue-100/.test((await rows.nth(i).getAttribute('class')) || '');
+  const isSelected = (i) => async () => (await rows.nth(i).getAttribute('aria-selected')) === 'true';
+
+  assert.equal(await eventually(() => rows.count(), 2, 15000), 2, 'the two-line document should open');
+  assert.equal(await eventually(isEnabled(page, 'Post'), true), true, 'it opens as a saved, unposted document');
+  assert.equal(await isEnabled(page, 'Save')(), false, 'it opens read-only');
+
+  await rows.nth(0).click();
+  assert.equal(await eventually(isSelected(0), true), true, 'a row click selects the row');
+  assert.equal(await isBlue(0)(), false, 'a row click never loads the row for editing');
+  assert.equal(await isEnabled(page, 'Save')(), false, 'a row click unlocks nothing');
+
+  await radio(1).check();
+  await click(page, 'Edit');
+  assert.equal(await eventually(isBlue(0), true), true, 'Edit with Detail edits the selected row');
+  assert.equal(await eventually(isEnabled(page, 'Save'), true), true, 'editing a line unlocks Save');
+  assert.equal(await headerDate.isDisabled(), true, 'editing a line keeps the header locked');
+
+  await rows.nth(1).click();
+  assert.equal(await eventually(isSelected(1), true), true, 'another row can be selected while editing');
+  assert.equal(await isBlue(0)(), true, 'selecting another row leaves the edited one as it is');
+  await click(page, 'Edit Row');
+  assert.equal(await eventually(isBlue(1), true), true, 'Edit Row switches the edit to the selected row');
+  assert.equal(await isBlue(0)(), false, 'only one row is being edited');
+
+  await click(page, 'Cancel');
+  assert.equal(await eventually(isEnabled(page, 'Save'), false), false, 'Cancel goes back to read-only');
+  assert.equal(await rows.count(), 2, 'Cancel keeps the saved lines');
+
+  await rows.nth(0).locator('button[title^="Delete this"]').click();
+  assert.equal(await eventually(() => rows.count(), 1), 1, "a row's Delete works from view mode");
+  assert.equal(await eventually(isEnabled(page, 'Save'), true), true, 'and puts the document into edit, so Save can keep it');
+  await click(page, 'Cancel');
+  assert.equal(await eventually(() => rows.count(), 2), 2, 'Cancel brings the deleted line back');
+
+  await radio(1).check();
+  await click(page, 'New');
+  assert.equal(await eventually(isEnabled(page, 'Save'), true), true, 'New with Detail opens the document for a new line');
+  assert.equal(await rows.count(), 2, 'New with Detail keeps the lines — it is not a new document');
+  assert.equal(await isEnabled(page, 'Post')(), false, 'still the same saved document, now being edited');
+  assert.equal(await headerDate.isDisabled(), true, 'New with Detail leaves the header locked');
+  await click(page, 'Cancel');
+
+  await radio(0).check();
+  await click(page, 'Edit');
+  assert.equal(await eventually(() => headerDate.isDisabled(), false), false, 'Edit with Master unlocks the header');
+  await click(page, 'Cancel');
+
+  await toolbar(page, 'Exit').click();
+  assert.equal(await eventually(async () => page.isClosed(), true), true, 'Exit closes the document window');
+}
+
 module.exports = {
   launchApp, login, menuItem, quickMenu, openInNewWindow, toolbar, browseFilter, chooseFilter, click,
-  eventually, filterValue, isEnabled, dropdownMatchesScreen, browseFilterScenario,
+  eventually, filterValue, isEnabled, dropdownMatchesScreen, browseFilterScenario, masterDetailScenario,
 };

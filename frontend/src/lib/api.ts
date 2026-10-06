@@ -778,6 +778,9 @@ export interface SettlementRow {
   status: 'CONFIRMED' | 'DRAFT';
   from_name?: string;
   to_name?: string;
+  /** The receipt voucher this endorsement is a line of (migration 041); null = standalone. */
+  voucher_id?: number | null;
+  voucher_no?: number | null;
 }
 
 export interface SettlementCreateInput {
@@ -789,6 +792,8 @@ export interface SettlementCreateInput {
   cheque_no?: string;
   cheque_date?: string;
   remarks?: string;
+  /** Makes it a line of this receipt voucher — takes the voucher's date, posts with it. */
+  voucher_id?: number;
 }
 
 export interface SettlementListFilters {
@@ -798,6 +803,10 @@ export interface SettlementListFilters {
   status?: 'CONFIRMED' | 'DRAFT';
   date_from?: string;
   date_to?: string;
+  /** Only endorsements that belong to no receipt voucher. */
+  standalone?: boolean;
+  /** Same window as receipts.list's range — explicit date_from/date_to win. */
+  range?: 'weekly' | 'monthly' | 'overall';
 }
 
 // Journal Voucher — a real multi-line double-entry journal (legacy "Journal Entry" screen): N
@@ -887,6 +896,8 @@ export interface StockVoucherLineRow extends StockVoucherLineInput {
 
 export interface StockVoucherRow {
   stock_voucher_id: number;
+  /** The visible System No., from dbo.seq_stock_voucher_no (migration 042) — never reused. */
+  voucher_no: number;
   voucher_date: string;
   store_id: number | null;
   store_name?: string;
@@ -927,6 +938,7 @@ export interface StockVoucherListFilters {
 /** A stock voucher still awaiting posting, for the Post All confirmation list. */
 export interface UnpostedStockVoucherRow {
   stock_voucher_id: number;
+  voucher_no: number;
   voucher_date: string;
   remarks: string | null;
   total_pairs: number;
@@ -1020,6 +1032,8 @@ export interface ReceiptVoucherRow {
   total_cash: number;
   total_cheque: number;
   total_online: number;
+  /** Endorsed lines — in total_amount, but in none of Cash/Cheque/Online. */
+  total_endorsed?: number;
   /** Present on get(), absent on list(). list() carries line_count/confirmed_lines instead. */
   lines?: ReceiptVoucherLineRow[];
   line_count?: number;
@@ -1033,6 +1047,12 @@ export interface ReceiptVoucherRow {
 export interface ReceiptVoucherLineRow extends Omit<ReceiptRow, 'receipt_id'> {
   receipt_id: number | null;
   draft_id: number | null;
+  /** Set on an endorsed line (a dbo.settlements row on this voucher); receipt_id/draft_id are then
+   *  both null, ba_id is the payer, and endorse_to_* is who the money went to instead of us. */
+  settlement_id?: number | null;
+  endorse_to_ba_id?: number | null;
+  endorse_to_name?: string | null;
+  endorse_to_code?: string | null;
 }
 
 /** PN-01: one line of an expense voucher — same two-table union as ReceiptVoucherLineRow. */
@@ -1958,6 +1978,7 @@ declare global {
       };
       windows: {
         open: (payload: { page: string; tab?: string; params?: Record<string, string> }) => Promise<ApiResult<{ ok: true }>>;
+        closeSelf: () => Promise<ApiResult<{ closed: boolean }>>;
       };
       systemReset: {
         run: (payload: { password: string }) => Promise<ApiResult<{ ok: true }>>;
@@ -2162,13 +2183,14 @@ declare global {
         listUnposted: () => Promise<ApiResult<UnpostedStockVoucherRow[]>>;
         postAll: (payload?: { ids?: number[] }) => Promise<ApiResult<PostAllResult<'stock_voucher_id'>>>;
         unpostedReservations: (payload?: { excludeStockVoucherId?: number }) => Promise<ApiResult<UnpostedReservationRow[]>>;
+        listDeletedNumbers: () => Promise<ApiResult<DeletedNumberRow[]>>;
       };
       settlements: {
         list: (payload?: SettlementListFilters) => Promise<ApiResult<SettlementRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<SettlementRow>>;
         create: (payload: SettlementCreateInput) => Promise<ApiResult<SettlementRow>>;
         update: (payload: { id: number } & SettlementCreateInput) => Promise<ApiResult<SettlementRow>>;
-        remove: (payload: { id: number }) => Promise<ApiResult<{ ok: true }>>;
+        remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
         post: (payload: { id: number }) => Promise<ApiResult<SettlementRow>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<SettlementRow>>;
       };
@@ -2517,6 +2539,14 @@ export async function currentSession(): Promise<ApiResult<{ username: string; ro
 export async function openWindow(page: string, tab?: string, params?: Record<string, string>): Promise<ApiResult<{ ok: true }>> {
   if (!window.api) return NO_BRIDGE;
   return window.api.windows.open({ page, tab, params });
+}
+
+// Exit from a document opened in its own window: closes that window and focuses the main one.
+// Resolves `closed: false` in the main window (or outside Electron) so the caller can navigate.
+export async function closeThisWindow(): Promise<boolean> {
+  if (!window.api) return false;
+  const res = await window.api.windows.closeSelf();
+  return res.ok && res.data.closed;
 }
 
 export async function updateCredentials(payload: { currentPassword: string; username?: string; newPassword?: string }): Promise<ApiResult<{ username: string }>> {
@@ -3082,6 +3112,8 @@ export const stockVouchers = {
     window.api ? window.api.stockVouchers.postAll(ids ? { ids } : undefined) : Promise.resolve(NO_BRIDGE),
   unpostedReservations: (excludeStockVoucherId?: number) =>
     window.api ? window.api.stockVouchers.unpostedReservations(excludeStockVoucherId != null ? { excludeStockVoucherId } : undefined) : Promise.resolve(NO_BRIDGE),
+  listDeletedNumbers: (): Promise<ApiResult<DeletedNumberRow[]>> =>
+    window.api ? window.api.stockVouchers.listDeletedNumbers() : Promise.resolve(NO_BRIDGE),
 };
 
 export const settlements = {
@@ -3093,7 +3125,7 @@ export const settlements = {
     window.api ? window.api.settlements.create(payload).then(r => mapResult(r, normalizeSettlementRow)) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: SettlementCreateInput) =>
     window.api ? window.api.settlements.update({ id, ...payload }).then(r => mapResult(r, normalizeSettlementRow)) : Promise.resolve(NO_BRIDGE),
-  remove: (id: number) => window.api ? window.api.settlements.remove({ id }) : Promise.resolve(NO_BRIDGE),
+  remove: (id: number, password: string) => window.api ? window.api.settlements.remove({ id, password }) : Promise.resolve(NO_BRIDGE),
   post: (id: number) =>
     window.api ? window.api.settlements.post({ id }).then(r => mapResult(r, normalizeSettlementRow)) : Promise.resolve(NO_BRIDGE),
   unpost: (id: number) =>

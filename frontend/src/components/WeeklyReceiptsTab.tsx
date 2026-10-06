@@ -38,7 +38,8 @@ export default function WeeklyReceiptsTab({ onVoucherUnposted, onSettlementUnpos
       api.receipts.list({ range: 'weekly' }),
       api.listBusinessAccounts(),
       api.receiptVouchers.list({}),
-      api.settlements.list({ status: 'CONFIRMED' })
+      // Same range as receipts above, so a voucher's endorsed lines and its receipts agree.
+      api.settlements.list({ status: 'CONFIRMED', range: 'weekly' })
     ]);
     if (r.ok) setRows(r.data);
     if (c.ok) setAccounts(c.data);
@@ -129,33 +130,46 @@ export default function WeeklyReceiptsTab({ onVoucherUnposted, onSettlementUnpos
   }, [settlements, selectedMonth, nameQuery]);
 
   const voucherCardsData = useMemo(() => {
-    const groups: { [voucherId: number]: { voucherId: number; receipts: ReceiptRow[]; totalAmount: number } } = {};
+    const groups: { [voucherId: number]: { voucherId: number; receipts: ReceiptRow[]; endorsements: SettlementRow[]; totalAmount: number } } = {};
+    const groupFor = (vid: number) => (groups[vid] ??= { voucherId: vid, receipts: [], endorsements: [], totalAmount: 0 });
 
     weeklyReceipts.forEach(r => {
       const vid = r.voucher_id;
       if (vid == null) return; // every receipt has one per migration 022's backfill — guard anyway
-      if (!groups[vid]) groups[vid] = { voucherId: vid, receipts: [], totalAmount: 0 };
-      const grp = groups[vid];
+      const grp = groupFor(vid);
       grp.receipts.push(r);
       grp.totalAmount += r.amount;
     });
+    // An endorsed entry made on a voucher (migration 041) is one of its lines — it belongs on that
+    // voucher's card and in its total, matching the entry screen. A voucher holding only endorsed
+    // lines still gets a card, so it can be opened and unposted from here.
+    weeklySettlements.forEach(s => {
+      if (s.voucher_id == null) return;
+      const grp = groupFor(s.voucher_id);
+      grp.endorsements.push(s);
+      grp.totalAmount += Number(s.amount);
+    });
 
     return Object.values(groups).sort((a, b) => b.totalAmount - a.totalAmount);
-  }, [weeklyReceipts]);
+  }, [weeklyReceipts, weeklySettlements]);
 
   // RP-01: the combined list the outer table actually renders — a voucher group and a settlement
   // are different shapes, so this is a thin discriminated wrapper around each rather than forcing
   // a settlement into the `{ voucherId, receipts, totalAmount }` shape it doesn't fit.
   type RecordGroup =
-    | { kind: 'voucher'; voucherId: number; receipts: ReceiptRow[]; totalAmount: number }
+    | { kind: 'voucher'; voucherId: number; receipts: ReceiptRow[]; endorsements: SettlementRow[]; totalAmount: number }
     | { kind: 'settlement'; settlement: SettlementRow; totalAmount: number };
   const recordGroups = useMemo((): RecordGroup[] => {
     const combined: RecordGroup[] = [
       ...voucherCardsData.map((g): RecordGroup => ({ kind: 'voucher', ...g })),
-      ...weeklySettlements.map((s): RecordGroup => ({ kind: 'settlement', settlement: s, totalAmount: s.amount })),
+      ...weeklySettlements.filter(s => s.voucher_id == null)
+        .map((s): RecordGroup => ({ kind: 'settlement', settlement: s, totalAmount: s.amount })),
     ];
     return combined.sort((a, b) => b.totalAmount - a.totalAmount);
   }, [voucherCardsData, weeklySettlements]);
+
+  // Endorsements made on a voucher are counted on its card, not as settlements of their own.
+  const standaloneCount = weeklySettlements.filter(s => s.voucher_id == null).length;
 
   const activeVoucherDetails = useMemo(() => {
     if (selectedVoucherId == null) return null;
@@ -354,6 +368,28 @@ export default function WeeklyReceiptsTab({ onVoucherUnposted, onSettlementUnpos
                   <td className="p-3.5 text-right font-mono font-bold text-emerald-800 pr-6">{formatCurrency(r.amount)}</td>
                 </tr>
               ))}
+              {activeVoucherDetails.endorsements.map(s => (
+                <tr key={`endorsement-${s.settlement_id}`} className="hover:bg-slate-50/50 transition-colors">
+                  <td className="p-3.5 pl-4 font-mono text-slate-600">{formatDate(s.settlement_date)}</td>
+                  <td className="p-3.5 text-center">
+                    <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider font-mono">
+                      E#{s.settlement_id}
+                    </span>
+                  </td>
+                  <td className="p-3.5 text-center">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-violet-50 text-violet-700 border border-violet-200">
+                      <ArrowLeftRight size={10} />
+                      Endorsed{s.payment_mode ? ` · ${s.payment_mode}` : ''}
+                    </span>
+                  </td>
+                  <td className="p-3.5 text-slate-600 font-medium">
+                    {s.from_name} <span className="font-semibold text-violet-700">→ {s.to_name}</span>
+                    {s.cheque_no && <span className="text-slate-400"> · Cheque #{s.cheque_no}</span>}
+                  </td>
+                  <td className="p-3.5 text-slate-500 text-xs">{s.remarks || '-'}</td>
+                  <td className="p-3.5 text-right font-mono font-bold text-emerald-800 pr-6">{formatCurrency(s.amount)}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -434,7 +470,7 @@ export default function WeeklyReceiptsTab({ onVoucherUnposted, onSettlementUnpos
 
         <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-2 rounded-xl border border-slate-200">
           {weeklyReceipts.length} Receipt Record{weeklyReceipts.length === 1 ? '' : 's'}
-          {weeklySettlements.length > 0 && `, ${weeklySettlements.length} Settlement${weeklySettlements.length === 1 ? '' : 's'}`}
+          {standaloneCount > 0 && `, ${standaloneCount} Settlement${standaloneCount === 1 ? '' : 's'}`}
         </div>
       </div>
 
@@ -501,13 +537,14 @@ export default function WeeklyReceiptsTab({ onVoucherUnposted, onSettlementUnpos
                       <div className="font-lora font-bold text-slate-900">#{header?.voucher_no ?? data.voucherId}</div>
                     </td>
                     <td className="p-3 font-mono text-slate-600">
-                      {header ? formatDate(header.voucher_date) : formatDate(data.receipts[0]?.receipt_date)}
+                      {header ? formatDate(header.voucher_date) : formatDate(data.receipts[0]?.receipt_date ?? data.endorsements[0]?.settlement_date)}
                     </td>
                     <td className="p-3 text-slate-500 text-xs">{header?.remarks || '-'}</td>
                     <td className="p-3 text-center">
                       <span className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-900 px-2.5 py-1 rounded-full text-xs font-semibold border border-amber-200/80">
                         <FileText size={13} className="text-amber-600" />
                         {data.receipts.length} {data.receipts.length === 1 ? 'Receipt' : 'Receipts'}
+                        {data.endorsements.length > 0 && ` + ${data.endorsements.length} Endorsed`}
                       </span>
                     </td>
                     <td className="p-3 text-right pr-6 font-mono font-bold text-emerald-700">{formatCurrency(data.totalAmount)}</td>

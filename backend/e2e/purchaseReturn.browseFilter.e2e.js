@@ -1,7 +1,7 @@
-// Purchase Return keeps every document on screen after Post (it never clears for the next one),
-// so it is where the "New greyed out after Post" regression (2026-09-30) hit hardest: posting moves
-// the dropdown to Posted, and New used to be disabled there. Also covers Unpost -> Unposted, which
-// this page never did on its own before useBrowseFilterFollowsDocument.
+// Purchase Return used to keep the document on screen after Post; since 2026-10-06 Post always
+// clears to a blank return under Unposted (standard §8), and New must stay usable either way (the
+// "New greyed out after Post" regression, 2026-09-30). Also covers Unpost -> Unposted, which this
+// page never did on its own before useBrowseFilterFollowsDocument.
 'use strict';
 
 const test = require('node:test');
@@ -52,7 +52,9 @@ test('Purchase Return: after Post, New stays usable and returns to Unposted; Unp
   assert.equal(await h.filterValue(page)(), 'unposted');
 
   await h.click(page, 'Post');
-  assert.equal(await h.eventually(h.filterValue(page), 'posted'), 'posted', 'a posted return is shown under Posted');
+  assert.equal(await h.eventually(h.isEnabled(page, 'Post'), false), false, 'Post should have gone through');
+  assert.equal(await h.isEnabled(page, 'Un Post')(), false, 'Post clears to a blank return, not the posted one');
+  assert.equal(await h.eventually(h.filterValue(page), 'unposted'), 'unposted', 'a blank return is shown under Unposted');
   assert.equal(await h.eventually(h.isEnabled(page, 'New'), true), true, 'New must not grey out after Post');
 
   // New → a blank return under Unposted.
@@ -60,8 +62,7 @@ test('Purchase Return: after Post, New stays usable and returns to Unposted; Unp
   assert.equal(await h.eventually(h.filterValue(page), 'unposted'), 'unposted', 'New must switch back to Unposted');
   assert.equal(await h.isEnabled(page, 'Un Post')(), false, 'New must leave a blank return, not the posted one');
 
-  // Back to the posted return via the dropdown, then Unpost: a draft again → Unposted. (Unpost
-  // lands in edit mode on purpose, so this is the last step — Post needs view mode.)
+  // Back to the posted return via the dropdown, then Unpost: a draft again → Unposted.
   await h.chooseFilter(page, 'posted');
   assert.equal(await h.eventually(h.isEnabled(page, 'Un Post'), true), true, 'Posted should open the posted return');
   await h.click(page, 'Un Post');

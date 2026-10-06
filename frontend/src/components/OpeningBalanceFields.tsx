@@ -20,12 +20,19 @@ interface OpeningBalanceFieldsProps {
   disabled?: boolean;
   /** True when editing an existing account — switches the note to the retroactive-change warning. */
   isExisting?: boolean;
+  /** Party screens (vendor/customer/employee) cannot load the stored pair, so on edit a blank
+   *  balance leaves the existing opening balance untouched rather than being a mismatch. */
+  blankKeepsExisting?: boolean;
 }
 
 export default function OpeningBalanceFields({
-  balance, date, onBalanceChange, onDateChange, disabled = false, isExisting = false,
+  balance, date, onBalanceChange, onDateChange, disabled = false, isExisting = false, blankKeepsExisting = false,
 }: OpeningBalanceFieldsProps) {
-  const partial = (balance.trim() !== '') !== (date.trim() !== '');
+  // On the party screens' edit, a blank balance means "unchanged" (the date is just the pre-filled
+  // default), so only a balance typed without a date is a mismatch there.
+  const partial = isExisting && blankKeepsExisting
+    ? balance.trim() !== '' && date.trim() === ''
+    : (balance.trim() !== '') !== (date.trim() !== '');
 
   return (
     <div className="rounded-xl border p-3" style={{ borderColor: 'var(--border-color)' }}>

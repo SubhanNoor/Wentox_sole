@@ -23,6 +23,98 @@ Log every completed task here (newest first within its milestone). Format:
 
 ---
 
+## Document page standard rolled out to every voucher page
+
+### 2026-10-06 — Sale Bill, Sale Return, Purchase, Purchase Return, Receipts, Payments, Stock Voucher
+- **What:** applied `System_architecture/document_page_standard.md` (the approved Journal Voucher
+  flow) to the other seven document pages. User rulings: port the JV's Master/Detail flow
+  (superseding G-08 and the 2026-08-31 rules); Post always clears (SB-05/P-02 dropped); deleted
+  numbers are no longer browse stops; Receipts/Payments/Stock Voucher numbers come from
+  never-reused sequences (reverses the 2026-09-07 reuse); Receipts/Payments keep per-entry saving
+  as a recorded exception. Full list in `System_architecture/document_page_gaps.md`.
+- **How:** each page got the JV's `editTarget` (what Edit/New actually unlocked, separate from the
+  radio), `beginDetailEdit`, the selected-vs-editing row states, row delete that enters edit (and
+  deletes the whole document on the last line), Cancel that reloads the saved copy, and a
+  `resetToNew…()` split from `handleNew()` so Post/Delete/the New tab never "add a line" by
+  accident. Exit closes the window everywhere. Bugs fixed on the way: Stock Voucher Save-twice
+  duplicate; Sale Bill/Sale Return/Stock Voucher row delete in view mode could not be saved;
+  Purchase/Purchase Return Cancel reloaded from the posted table with a draft id; Sale Return never
+  auto-opened without transport addas; Purchase Return never cleared after Post. Migration 042
+  adds `seq_receipt_voucher_no`, `seq_expense_voucher_no`, `seq_stock_voucher_no` and
+  `stock_vouchers.voucher_no` (backfilled with `stock_voucher_id`); Stock Voucher deletes are now
+  logged. Applied to `wentox_test` only.
+- **Tests:** new `e2e/masterDetail.e2e.js` (five pages); updated `saleBill`/`purchaseReturn` browse
+  tests and `postedFilterReset.wiring.test.ts`. 15/15 e2e, 25/25 backend, 17/17 frontend tests
+  pass; `npx tsc -b` clean; no new lint errors (six pages lost one).
+- **Files:** `frontend/src/pages/{SaleBill,SaleReturn,Purchase,PurchaseReturn,Receipts,Expenses,StockVoucher}Page.tsx`,
+  `frontend/src/lib/{api,utils}.ts`, `frontend/src/hooks/usePersistentField.ts`,
+  `frontend/src/components/DeletedDocumentOverlay.tsx` (deleted),
+  `frontend/src/pages/postedFilterReset.wiring.test.ts`,
+  `backend/src/db/migrations/042_voucher_number_sequences.sql`,
+  `backend/src/{repositories,services}/{receiptVouchers,expenseVouchers,stockVouchers}.*.js`,
+  `backend/src/repositories/deletedDocumentNumbers.repository.js`, `backend/src/ipc/stockVouchers.ipc.js`,
+  `backend/e2e/{harness,masterDetail,saleBill.browseFilter,purchaseReturn.browseFilter}*.js`,
+  `System_architecture/{document_page_standard,document_page_gaps,journal_voucher}.md`.
+
+## Journal Voucher: Save twice no longer duplicates the voucher
+
+### 2026-10-06 — Save (keep editing) on a new JV, then Save/Done again, made a second voucher
+- **What:** on a NEW Journal Voucher, Save kept the page in 'new' mode with the voucher's id now
+  set; the next Save or Done still called `create()`, so each further press made another voucher
+  under a fresh number (Save, Save, Done = 3 vouchers). Found while auditing the JV against
+  `System_architecture/document_page_standard.md`.
+- **How:** `doSave` now chooses `update` whenever the voucher already has an id (`jvId != null`),
+  not only in 'edit' mode. New real-screen test drives New → line → Save → Save → Done on
+  `wentox_test` and checks exactly one voucher exists; it fails on the old code (3 vouchers) and
+  passes on the new. Both JV e2e tests and the JV sign-rule unit test pass.
+- **Files:** `frontend/src/pages/JournalVoucherPage.tsx`, `backend/e2e/journalVoucher.saveTwice.e2e.js`
+  (new), `System_architecture/journal_voucher.md`, `System_architecture/document_page_gaps.md`.
+
+## Receipts: an endorsed entry is a line of its voucher
+
+### 2026-10-05 — endorsements join the receipt voucher they were entered on
+- **What:** client report — on Receipts (Jamma), an entry with Endorse ticked did not show in the
+  voucher's detail rows, and after Post only the endorsement was on screen, the ordinary entries
+  looking erased. Cause: an endorsement saved as a standalone `dbo.settlements` row with no link to
+  the voucher, and saving it switched the screen to that settlement, so Post posted only it (the
+  ordinary lines were still in their voucher, unposted). Now it is a line of the open voucher:
+  listed in the grid marked "Endorsed → <account>", posted/unposted/deleted with the voucher.
+  Decided with the user: it counts in the voucher's Total Amount (not in Cash/Cheque/Online — a new
+  Total Endorsed box shows it); endorsements saved before this stay standalone.
+- **How:** migration 041 adds nullable `settlements.voucher_id` (FK to `receipt_vouchers`).
+  `receiptVouchers.repository#listLines` unions settlements in (`settlement_id`, `endorse_to_*`);
+  `list()` counts them under a synthetic `'ENDORSED'` mode. `receiptVouchers.service` post/unpost
+  route a settlement line through `settlements.service` (same per-line isolation/reporting), remove
+  deletes them in its transaction, header date edits carry them. The ledger effect is unchanged
+  (Dr endorsed account / Cr payer, no cash/bank/cheque leg). `settlements.list({ standalone })`
+  keeps voucher lines out of the screen's standalone-endorsement browse list; the Weekly/Monthly/
+  Overall records tabs label them "Endorsed on Voucher #N" and block their individual Unpost.
+- **Tests:** `test/receiptVouchers.endorsedLines.test.js` (list/totals/post/unpost/delete) and
+  `e2e/receipts.endorsedLine.e2e.js` (real screen: marker, Total Endorsed, Post posts both lines),
+  on `wentox_test`. Full `npm test` 24/24; all 9 e2e pass.
+- **Debugger review fixes:** `ReceiptsPage`'s `docKind` is now persisted like `mode`/`receiptId` —
+  as plain state it reset on a remount mid-edit, so Done on an endorsed line CREATED a duplicate.
+  `settlements.repository#setStatus` is now conditional (returns rows changed; post/unpost throw
+  ALREADY_POSTED/NOT_POSTED inside the transaction), so overlapping posts can't write the ledger
+  pair twice; `removeByVoucher` deletes DRAFT lines only.
+- **Follow-up (same day, user asked to close the known gaps):** Weekly/Monthly/Overall Records now
+  put a voucher's endorsed lines on that voucher's card (listed in its detail view, counted in its
+  total; a voucher with only endorsed lines still gets a card) instead of separate "Settlement"
+  rows. `settlements:remove` now verifies the password like `draft-receipts:remove`. The ▶
+  last-entered marker / "Edit the last entry" follow endorsed lines (keyed `d<draft_id>` /
+  `s<settlement_id>`). The e2e test now also deletes an endorsed line through the password prompt
+  and checks Overall Records. Debugger review then caught Weekly/Monthly fetching settlements with
+  no date window while receipts use `range` — an old voucher's endorsements would have formed a
+  card without its receipts. `settlements.list` now applies `receipts.service#resolveDateRange`
+  (exported for this), and those tabs pass `range`. 25/25 unit, 9/9 e2e.
+- **Files:** `src/db/migrations/041_settlements_on_receipt_vouchers.sql`,
+  `src/repositories/{settlements,receiptVouchers}.repository.js`,
+  `src/services/{settlements,receiptVouchers}.service.js`, the two tests above;
+  `frontend/src/pages/ReceiptsPage.tsx`, `frontend/src/components/{Weekly,Monthly,Overall}ReceiptsTab.tsx`,
+  `frontend/src/lib/api.ts`.
+
+---
+
 ## Cheque deposits: allowed to split across more than one bank
 
 ### 2026-09-22 — a single cheque's balance can now be deposited into different banks

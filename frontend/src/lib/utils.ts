@@ -16,33 +16,13 @@ export function nextSystemNoPreview(...values: (number | null | undefined)[]): n
   return Math.max(0, ...finite) + 1;
 }
 
-// One entry in a First/Prev/Next/Last browse list: either a real document, or a permanently
-// deleted System No. shown as an actual stop rather than a silent skip (per the user, 2026-09-07:
-// System No.s are never reused/reassigned once deleted — see backend/src/db/pool.js's
-// nextSequenceValue comment — but the gap itself should still be visible while browsing).
-export type NavEntry<T> = { kind: 'doc'; row: T } | { kind: 'deleted'; system_no: number };
+// One entry of a page's First/Pre./Next/Last browse list. Deleted numbers are NOT browse stops —
+// they are skipped, same as the Journal Voucher (per the user, 2026-10-06; they used to show a
+// greyed-out placeholder). The number itself is still never reused.
+export type NavEntry<T> = { kind: 'doc'; row: T };
 
-/**
- * Merges a document list with the type's deleted-number log into one System-No.-ordered browse
- * list. `deletedNumbers` is the FULL log for the document type (not filtered to posted/unposted —
- * a deletion always happens to a draft-table row, so there's no reliable "was this posted when it
- * was deleted" split to filter on), so the same deleted marker can appear in both a Posted and an
- * Unposted browse list; that's expected, not a bug.
- */
-export function mergeWithDeleted<T extends { system_no: number }>(
-  docs: T[],
-  deletedNumbers: { system_no: number }[],
-): NavEntry<T>[] {
-  const items: NavEntry<T>[] = [
-    ...docs.map((row) => ({ kind: 'doc' as const, row })),
-    ...deletedNumbers.map((d) => ({ kind: 'deleted' as const, system_no: d.system_no })),
-  ];
-  items.sort((a, b) => {
-    const an = a.kind === 'doc' ? a.row.system_no : a.system_no;
-    const bn = b.kind === 'doc' ? b.row.system_no : b.system_no;
-    return an - bn;
-  });
-  return items;
+export function asNavEntries<T>(docs: T[]): NavEntry<T>[] {
+  return docs.map((row) => ({ kind: 'doc' as const, row }));
 }
 
 export function getTodayDate(): string {

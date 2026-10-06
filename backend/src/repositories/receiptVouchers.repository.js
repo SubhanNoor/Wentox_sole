@@ -4,18 +4,13 @@
 // RJ-03: the header side of a receipt voucher. The entry lines live in dbo.receipts and are read
 // through this file only for display (listLines) — anything that WRITES a line still goes through
 // receipts.repository, so there is one definition of how a receipt row is written.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, nextSequenceValue } = require('../db/pool');
 
-// RJ-03: "C.Book No" — MAX + 1, the same allocation business_accounts codes use. Takes the
-// caller's transaction so the read and the insert that consumes it cannot be split by another
-// write. (Single-session desktop app, so there is no concurrent allocator; the transaction is
-// belt-and-braces, and makes the intent explicit.)
-async function nextVoucherNo(transaction) {
-  const request = requestWithParams(transaction, {});
-  const result = await request.query(
-    'SELECT ISNULL(MAX(voucher_no), 0) + 1 AS nextNo FROM dbo.receipt_vouchers',
-  );
-  return result.recordset[0].nextNo;
+// The voucher's System No. — from dbo.seq_receipt_voucher_no (migration 042), NO CACHE and never reused, same as
+// every other document type (standard §9; it was MAX(voucher_no)+1 until 2026-10-06, which
+// re-issued a deleted newest voucher's number). Called inside the creating transaction.
+function nextVoucherNo(transaction) {
+  return nextSequenceValue(transaction, 'dbo.seq_receipt_voucher_no');
 }
 
 async function insert(transaction, voucher) {
@@ -68,7 +63,9 @@ async function listLines(voucherId) {
             c.customer_id, c.name AS customer_name,
             b.name AS bank_name,
             ch.cheque_no, ch.cheque_date, ch.cheque_received_date,
-            CAST(ch.cheque_status AS VARCHAR(20)) AS cheque_status
+            CAST(ch.cheque_status AS VARCHAR(20)) AS cheque_status,
+            CAST(NULL AS INT) AS settlement_id, CAST(NULL AS INT) AS endorse_to_ba_id,
+            CAST(NULL AS NVARCHAR(200)) AS endorse_to_name, CAST(NULL AS VARCHAR(50)) AS endorse_to_code
      FROM dbo.receipts r
      JOIN dbo.business_accounts ba ON ba.ba_id = r.ba_id
      LEFT JOIN dbo.customers c ON c.ba_id = r.ba_id
@@ -86,14 +83,38 @@ async function listLines(voucherId) {
             c.customer_id, c.name AS customer_name,
             b.name AS bank_name,
             dr.cheque_no, dr.cheque_date, dr.cheque_received_date,
-            CAST(NULL AS VARCHAR(20)) AS cheque_status
+            CAST(NULL AS VARCHAR(20)) AS cheque_status,
+            CAST(NULL AS INT) AS settlement_id, CAST(NULL AS INT) AS endorse_to_ba_id,
+            CAST(NULL AS NVARCHAR(200)) AS endorse_to_name, CAST(NULL AS VARCHAR(50)) AS endorse_to_code
      FROM dbo.draft_receipts dr
      JOIN dbo.business_accounts ba ON ba.ba_id = dr.ba_id
      LEFT JOIN dbo.customers c ON c.ba_id = dr.ba_id
      LEFT JOIN dbo.bank_accounts b ON b.bank_id = dr.bank_id
      WHERE dr.voucher_id = @voucherId
 
-     ORDER BY created_at ASC, receipt_id ASC, draft_id ASC`,
+     UNION ALL
+
+     -- Endorsed lines (migration 041): the payer (from_ba_id) is the line's account, as on any
+     -- receipt line; endorse_to_* names who the money went to instead of our cash/bank/drawer.
+     SELECT CAST(NULL AS INT) AS receipt_id, CAST(NULL AS INT) AS draft_id,
+            s.settlement_date AS receipt_date, s.from_ba_id AS ba_id, s.amount,
+            CAST(0 AS DECIMAL(14,2)) AS commission, s.payment_mode, CAST(NULL AS NVARCHAR(500)) AS details,
+            CAST(NULL AS INT) AS bank_id, s.remarks, s.voucher_id, s.created_at,
+            CAST(s.status AS VARCHAR(10)) AS status,
+            f.name AS account_name, f.code AS account_code,
+            c.customer_id, c.name AS customer_name,
+            CAST(NULL AS NVARCHAR(200)) AS bank_name,
+            s.cheque_no, s.cheque_date, CAST(NULL AS DATE) AS cheque_received_date,
+            CAST(NULL AS VARCHAR(20)) AS cheque_status,
+            s.settlement_id, s.to_ba_id AS endorse_to_ba_id,
+            t.name AS endorse_to_name, t.code AS endorse_to_code
+     FROM dbo.settlements s
+     JOIN dbo.business_accounts f ON f.ba_id = s.from_ba_id
+     JOIN dbo.business_accounts t ON t.ba_id = s.to_ba_id
+     LEFT JOIN dbo.customers c ON c.ba_id = s.from_ba_id
+     WHERE s.voucher_id = @voucherId
+
+     ORDER BY created_at ASC, receipt_id ASC, draft_id ASC, settlement_id ASC`,
     { voucherId: { type: sql.Int, value: voucherId } },
   );
   return result.recordset;
@@ -132,6 +153,13 @@ async function list(filters = {}) {
        UNION ALL
        SELECT dr.voucher_id, dr.amount, dr.payment_mode, 1 AS is_line, 0 AS is_confirmed
          FROM dbo.draft_receipts dr
+       UNION ALL
+       -- Endorsed lines count in the voucher's total but in none of the Cash/Cheque/Online
+       -- figures — that money never reached our cash, bank or drawer.
+       SELECT s.voucher_id, s.amount, 'ENDORSED' AS payment_mode, 1 AS is_line,
+              CASE WHEN s.status = 'CONFIRMED' THEN 1 ELSE 0 END AS is_confirmed
+         FROM dbo.settlements s
+        WHERE s.voucher_id IS NOT NULL
      )
      SELECT v.*,
             ISNULL(SUM(l.is_line), 0) AS line_count,
@@ -139,7 +167,8 @@ async function list(filters = {}) {
             ISNULL(SUM(l.amount), 0) AS total_amount,
             ISNULL(SUM(CASE WHEN l.payment_mode = 'CASH'   THEN l.amount ELSE 0 END), 0) AS total_cash,
             ISNULL(SUM(CASE WHEN l.payment_mode = 'CHEQUE' THEN l.amount ELSE 0 END), 0) AS total_cheque,
-            ISNULL(SUM(CASE WHEN l.payment_mode = 'ONLINE' THEN l.amount ELSE 0 END), 0) AS total_online
+            ISNULL(SUM(CASE WHEN l.payment_mode = 'ONLINE' THEN l.amount ELSE 0 END), 0) AS total_online,
+            ISNULL(SUM(CASE WHEN l.payment_mode = 'ENDORSED' THEN l.amount ELSE 0 END), 0) AS total_endorsed
      FROM dbo.receipt_vouchers v
      LEFT JOIN all_lines l ON l.voucher_id = v.voucher_id
      ${where}

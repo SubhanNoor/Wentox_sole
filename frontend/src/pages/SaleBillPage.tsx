@@ -9,7 +9,7 @@ import { Plus, AlertTriangle, ChevronDown } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { SaleBillPrintable, type SaleBillPrintModel } from '@/components/reports/SaleBillPrintable';
-import { getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, cartonsAndPairs, nextSystemNoPreview, mergeWithDeleted } from '@/lib/utils';
+import { getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, cartonsAndPairs, nextSystemNoPreview, asNavEntries } from '@/lib/utils';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal, { findDirectMatch } from '@/components/SearchModal';
@@ -30,7 +30,6 @@ import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import CartonsInput from '@/components/CartonsInput';
-import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
 import { getWindowParam } from '@/lib/windowParams';
 
 interface UiItem {
@@ -176,6 +175,10 @@ export default function SaleBillPage() {
   // Detail half (entry strip + grid) shut even when that's what had been unlocked and typed
   // into — reported by the user (2026-09-04) as "all the buttons are disable except New".
   const [editScope, setEditScope] = usePersistentField<'master' | 'detail'>('sale-bill', 'editScope', 'master');
+  // Which half Edit (or New, for a line) has actually UNLOCKED — separate from the radio, which
+  // only picks what New/Edit act on and can never unlock anything by itself (standard §6, ported
+  // from the Journal Voucher 2026-10-06). null = nothing unlocked.
+  const [editTarget, setEditTarget] = usePersistentField<'master' | 'detail' | null>('sale-bill', 'editTarget', null);
   // Keeps the radios pointing at whichever half is being worked in — see the hook.
   const autoEditScope = useAutoEditScope(setEditScope);
 
@@ -191,7 +194,7 @@ export default function SaleBillPage() {
   // auto-open below (only genuine unsaved typing skips it); hasClickedNew gates the No. preview and
   // the awaitingNew lock, and only the New button/tab sets it (pressNew).
   const { hasRealDraftAtMount: hasSaleBillDraft, hasClickedNew, setHasClickedNew, markNewClicked } =
-    useNewDocGate('sale-bill', ['customerId', 'billNo', 'items']);
+    useNewDocGate('sale-bill', ['customerId', 'billNo', 'items'], { emptiedEditCountsAsWork: true });
 
   // Form State
   //
@@ -319,12 +322,12 @@ export default function SaleBillPage() {
   // reopening kept showing that posted bill (dropdown defaulting to "Unposted" above it, per
   // `browseFilter`'s own always-fresh `useState`, made the mismatch obvious). `currentBillIsPosted`
   // is itself persisted and is the direct, unambiguous signal: it is true if and only if an actual
-  // posted record is loaded, in EITHER 'view' or 'edit' mode — `handleNew()` is the only thing that
+  // posted record is loaded, in EITHER 'view' or 'edit' mode — `resetToNewBill()` is the only thing that
   // ever sets it false, so it can never be true while there's genuine unsaved new-document work to
   // protect.
   useEffect(() => {
     refreshUnposted().then(data => {
-      if (data && data.length === 0 && currentBillIsPosted) handleNew();
+      if (data && data.length === 0 && currentBillIsPosted) resetToNewBill();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshUnposted]);
@@ -338,17 +341,6 @@ export default function SaleBillPage() {
   }, []);
   useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
 
-  // Set when First/Prev/Next/Last lands on a deleted number — DeletedDocumentOverlay renders while
-  // this is non-null. Cleared as soon as a real document loads (see the billId effect below).
-  const [deletedPlaceholder, setDeletedPlaceholder] = useState<number | null>(null);
-  // navIndex normally tracks the loaded bill's own position via billId (see navIndex below), but a
-  // deleted marker has no billId to match — this overrides it while a placeholder is on screen, so
-  // Prev/Next can still step from wherever the placeholder sits instead of restarting at 0.
-  const [navIndexOverride, setNavIndexOverride] = useState<number | null>(null);
-  useEffect(() => {
-    setDeletedPlaceholder(null);
-    setNavIndexOverride(null);
-  }, [billId]);
 
   // SB-06: post the whole run. Each draft confirms in its own transaction on the backend, so one
   // that can't confirm leaves the rest posted — which is why this reads `failed` instead of
@@ -381,10 +373,10 @@ export default function SaleBillPage() {
     // there it only clears when the record on screen was itself one of the ones that posted.
     if (res.data.failed.length === 0) {
       const workingDate = date;
-      handleNew();
+      resetToNewBill();
       setDate(workingDate);
     } else if (billId != null && !currentBillIsPosted && res.data.posted.some(p => p.draft_id === billId)) {
-      handleNew();
+      resetToNewBill();
     }
   };
 
@@ -625,6 +617,9 @@ const nextSystemBillNo = useMemo(
   }, [hasSaleBillDraft, storeId, stores]);
 
   const pendingDeleteBillId = useRef<number | null>(null);
+  // True when the whole-bill delete was reached by deleting the LAST article — only changes the
+  // prompt's wording.
+  const [emptyingViaLastRow, setEmptyingViaLastRow] = useState(false);
 
   // G-01: auto-focus the first field (Date) whenever the page becomes editable — this page's
   // entry area isn't wrapped in a <form>, so AppLayout's global auto-focus mechanism (which only
@@ -653,6 +648,7 @@ const nextSystemBillNo = useMemo(
     createdInThisRun.current = false;
     // Opening a different record must not carry over a stale scope from the last edit.
     setEditScope('master');
+    setEditTarget(null);
 
     setBillId(row.bill_id);
     setCurrentSystemNo(row.system_no);
@@ -727,6 +723,7 @@ const nextSystemBillNo = useMemo(
     createdInThisRun.current = false;
     // Opening a different record must not carry over a stale scope from the last edit.
     setEditScope('master');
+    setEditTarget(null);
     setBillId(draft.draft_id);
     setCurrentSystemNo(draft.system_no);
     setCurrentBillIsPosted(false);
@@ -806,12 +803,12 @@ const nextSystemBillNo = useMemo(
   // so First..Last could jump straight from system_no 11 to system_no 24 (reported by the user,
   // 2026-09-07). system_no order is what "First = earliest, Last = most recent" actually promises.
   const navPostedList = useMemo(
-    () => mergeWithDeleted([...postedBills].sort((a, b) => a.system_no - b.system_no), deletedNumbers),
-    [postedBills, deletedNumbers],
+    () => asNavEntries([...postedBills].sort((a, b) => a.system_no - b.system_no)),
+    [postedBills],
   );
   const navUnpostedList = useMemo(
-    () => mergeWithDeleted([...unpostedBills].sort((a, b) => a.system_no - b.system_no), deletedNumbers),
-    [unpostedBills, deletedNumbers],
+    () => asNavEntries([...unpostedBills].sort((a, b) => a.system_no - b.system_no)),
+    [unpostedBills],
   );
 
   // Whichever list the dropdown currently selects — this is what the nav buttons page through.
@@ -819,16 +816,14 @@ const nextSystemBillNo = useMemo(
 
   // Where the bill on screen sits in the ACTIVE list — -1 when it isn't in it at all (a brand-new
   // unsaved bill, or a draft while the dropdown is on Posted and vice versa), which the handlers
-  // below treat as "start from the beginning". navIndexOverride wins while a deleted-number
-  // placeholder is on screen — it has no billId to find, so the derived lookup would otherwise
-  // report -1 and Prev/Next would wrongly restart from the beginning instead of stepping on from it.
+  // below treat as "start from the beginning".
   const derivedNavIndex = useMemo(() => {
     if (billId == null) return -1;
     return browseFilter === 'posted'
       ? (currentBillIsPosted ? navPostedList.findIndex(e => e.kind === 'doc' && e.row.bill_id === billId) : -1)
       : (!currentBillIsPosted ? navUnpostedList.findIndex(e => e.kind === 'doc' && e.row.draft_id === billId) : -1);
   }, [billId, currentBillIsPosted, browseFilter, navPostedList, navUnpostedList]);
-  const navIndex = navIndexOverride ?? derivedNavIndex;
+  const navIndex = derivedNavIndex;
 
   const canBrowse = navList.length > 0;
   const canNavPrevious = canBrowse && navIndex !== 0;
@@ -837,16 +832,10 @@ const nextSystemBillNo = useMemo(
   // Loads whichever entry sits at `idx` of the ACTIVE list into the form, read-only — browsing is
   // look-then-decide, same as opening any other existing bill; Edit still needs its own explicit
   // click (and, for a posted bill, its own password gate on Save). Posted rows come from
-  // sale_bills, unposted ones from draft_sale_bills, so each needs its own loader. A 'deleted'
-  // entry shows DeletedDocumentOverlay instead of loading anything (see navIndexOverride above).
+  // sale_bills, unposted ones from draft_sale_bills, so each needs its own loader.
   const goToNavIndex = async (idx: number) => {
     if (idx < 0 || idx >= navList.length) return;
     const entry = navList[idx];
-    if (entry.kind === 'deleted') {
-      setNavIndexOverride(idx);
-      setDeletedPlaceholder(entry.system_no);
-      return;
-    }
     if (browseFilter === 'posted') {
       await loadBillRow(entry.row as SaleBillRow);
       setMode('view');
@@ -884,7 +873,7 @@ const nextSystemBillNo = useMemo(
         const list = [...(fresh ?? unpostedBills)].sort((a, b) => a.system_no - b.system_no);
         const latest = list[list.length - 1];
         const opened = latest ? await loadDraftIntoForm(latest, { mode: 'view' }) : false;
-        if (!opened) handleNew();
+        if (!opened) resetToNewBill();
         requestAnimationFrame(() => newButtonRef.current?.focus());
       } else {
         const fresh = await refreshPosted();
@@ -981,7 +970,15 @@ const nextSystemBillNo = useMemo(
   // full reset below. Same reset shape used after committing a line, since the outcome is
   // identical: an empty, focused entry row, bill untouched.
   const handleNew = () => {
-    if (mode === 'edit' && editScope === 'detail' && billId != null) {
+    // Detail + an unposted bill on screen (saved, or new with articles typed) adds an article — no
+    // Edit needed, header stays locked. Never wipes articles already typed (standard §6).
+    const billOnScreen = !awaitingNew && !currentBillIsPosted && (billId != null || items.length > 0);
+    if (editScope === 'detail' && billOnScreen) {
+      // Only a SAVED bill needs unlocking; a new one already has both halves open.
+      if (billId != null) {
+        setMode('edit');
+        setEditTarget('detail');
+      }
       setEntry(newUiItem());
       setEditingIndex(null);
       setSelectedIndex(null);
@@ -989,6 +986,13 @@ const nextSystemBillNo = useMemo(
       requestAnimationFrame(() => focusFirstField(entryProductCellRef.current));
       return;
     }
+    resetToNewBill();
+  };
+
+  // A whole new, blank bill. Everything that is not the New button itself (Post, Delete, the New
+  // tab, an empty Unposted list…) resets through this, never through handleNew(), which with
+  // Detail selected would add an article to the bill still on screen instead.
+  const resetToNewBill = () => {
     // A blank document is an unposted one — back to the Unposted view (see useBrowseFilterFollowsDocument).
     setBrowseFilter('unposted');
     clearSaleBillDraft();
@@ -997,6 +1001,7 @@ const nextSystemBillNo = useMemo(
     // SB-05: a blank form has nothing saved in it yet, so nothing to clear on post.
     createdInThisRun.current = false;
     setEditScope('master');
+    setEditTarget(null);
     setBillId(null);
     setCurrentSystemNo(null);
     setCurrentBillIsPosted(false);
@@ -1031,15 +1036,17 @@ const nextSystemBillNo = useMemo(
   };
   // New button / New tab — the only path that marks New as deliberately clicked (useNewDocGate).
   const pressNew = () => { handleNew(); markNewClicked(); };
+  // The "New Bill" tab always starts a whole new bill, whatever the radio says (standard §9).
+  const pressNewTab = () => { resetToNewBill(); markNewClicked(); };
 
   // SB-05: a finished bill clears straight back to a blank one so the next can be typed
-  // immediately. Reuses handleNew() rather than repeating its field list, so "a blank bill" stays
-  // defined in exactly one place — then puts the working date back, since handleNew() snaps to
+  // immediately. Reuses resetToNewBill() rather than repeating its field list, so "a blank bill" stays
+  // defined in exactly one place — then puts the working date back, since resetToNewBill() snaps to
   // today and a run of bills entered for an earlier date would otherwise reset on every one.
   // The cursor returns to the first field on its own via the app-wide G-01 auto-focus rule.
   const readyForNextBill = () => {
     const workingDate = date;
-    handleNew();
+    resetToNewBill();
     setDate(workingDate);
     // The G-01 auto-focus effect in AppLayout only re-scans when a <form> is newly INSERTED into
     // the DOM (on page mount, or a MutationObserver catching one appearing later) — it does not
@@ -1137,7 +1144,7 @@ const nextSystemBillNo = useMemo(
       setSavedPairsByVariant(pairsByVariant(items));
       setSuccessMsg('Sale bill updated successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
-      setMode(finalize ? 'view' : 'edit');
+      if (finalize) { setMode('view'); setEditTarget(null); }
       setErrorMsg('');
       refreshStock();
       return result.data;
@@ -1145,7 +1152,10 @@ const nextSystemBillNo = useMemo(
 
     // Every other save — a brand-new bill, or editing one that's still a draft — goes through the
     // draft table now (draftSaleBills.service.js), not sale_bills directly.
-    const result = mode === 'edit' && billId != null
+    // Keyed on billId, not `mode === 'edit'` — Save on a NEW bill now stays in 'new' mode (both
+    // halves open), and the next Save must update that same draft, never create a second one.
+    const wasNew = billId == null;
+    const result = !wasNew
       ? await api.draftSaleBills.update(billId, payload)
       : await api.draftSaleBills.create(payload);
 
@@ -1160,13 +1170,14 @@ const nextSystemBillNo = useMemo(
     setSavedPairsByVariant(pairsByVariant(items));
     // SB-05: only a freshly created bill counts as "part of this run" — an edit of an existing
     // bill must not clear the form out from under the user when it posts.
-    if (mode !== 'edit') {
+    if (wasNew) {
       createdInThisRun.current = true;
       clearSaleBillDraft();
     }
-    setSuccessMsg(mode === 'edit' ? 'Sale bill updated successfully.' : 'New sale bill saved successfully.');
+    setSuccessMsg(wasNew ? 'New sale bill saved successfully.' : 'Sale bill updated successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
-    setMode(finalize ? 'view' : 'edit');
+    // Done finishes (read-only, nothing unlocked); Save keeps whatever is open as it is.
+    if (finalize) { setMode('view'); setEditTarget(null); }
     setErrorMsg('');
     refreshStock();
     refreshUnposted(); // SB-06: a newly saved bill joins the pending-posting list immediately.
@@ -1231,7 +1242,9 @@ const nextSystemBillNo = useMemo(
         setTimeout(() => setSuccessMsg(''), 3000);
         refreshUnposted(); // SB-06: it just left the pending list.
         refreshPosted();
-        if (createdInThisRun.current) readyForNextBill();
+        // Post always clears for the next bill, keeping the date (standard §8; the user dropped
+        // SB-05's "stay on screen if opened from the list" on 2026-10-06).
+        readyForNextBill();
       }
     }
   };
@@ -1248,14 +1261,11 @@ const nextSystemBillNo = useMemo(
       setCurrentBillIsPosted(true);
       refreshUnposted(); // SB-06: it just left the pending list.
       refreshPosted();
-      // SB-05: clear for the next bill only if this one was entered in this run. A bill opened
-      // from the Find tab and posted there stays on screen — the user went to it deliberately.
-      if (createdInThisRun.current) {
-        setSuccessMsg(`Bill ${postedBillNo} posted. Ready for the next one.`);
-        readyForNextBill();
-      } else {
-        setSuccessMsg('Bill posted successfully.');
-      }
+      // Post always clears for the next bill, keeping the date (standard §8; the user dropped
+      // SB-05's "stay on screen if opened from the list" on 2026-10-06). The message names the
+      // bill, since the form emptying is otherwise the only sign it was posted.
+      setSuccessMsg(`Bill ${postedBillNo || `#${res.data.system_no}`} posted. Ready for the next one.`);
+      readyForNextBill();
       setTimeout(() => setSuccessMsg(''), 3000);
     }
   };
@@ -1274,9 +1284,10 @@ const nextSystemBillNo = useMemo(
     setBillId(res.data.draft_id);
     setCurrentSystemNo(res.data.system_no);
     setCurrentBillIsPosted(false);
-    // pages_design.md §3: land on the editable screen immediately after unposting, not a
-    // read-only one — the whole point of unposting is to go fix something.
-    setMode('edit');
+    // Lands read-only (standard §6, superseding pages_design.md §3's land-in-edit): New adds an
+    // article from view mode by itself, so Un Post no longer has to pre-unlock anything.
+    setMode('view');
+    setEditTarget(null);
     setSuccessMsg('Bill unposted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshUnposted();
@@ -1294,11 +1305,29 @@ const nextSystemBillNo = useMemo(
     await loadBillRow(bill);
     setActiveTab('bill');
     setMode('edit');
+    setEditTarget('master');
   };
 
   // Loads the target bill, then opens the preview modal on it — same trigger the toolbar's own
   // Print/PDF buttons use (isPrintingSingle just names "which bill is on the print-preview modal
   // right now", not "print immediately" — see renderBillPrintable above for why that changed).
+  // Cancel — drops unsaved edits and reloads the saved copy, read-only (standard §6). A posted bill
+  // (the bilty/adda edit, UC-07) reloads from sale_bills, a draft from draft_sale_bills.
+  const handleCancelEdit = async () => {
+    if (billId == null) { resetToNewBill(); return; }
+    if (currentBillIsPosted) {
+      const res = await api.saleBills.get(billId);
+      if (!res.ok) { setErrorMsg('Failed to reload bill: ' + res.error.message); return; }
+      await loadBillRow(res.data);
+    } else {
+      const res = await api.draftSaleBills.get(billId);
+      if (!res.ok) { setErrorMsg('Failed to reload bill: ' + res.error.message); return; }
+      await loadDraftIntoForm(res.data, { mode: 'view' });
+    }
+    setMode('view');
+    setEditTarget(null);
+  };
+
   const handlePrintSpecificBill = async (bill: SaleBillRow) => {
     await loadBillRow(bill);
     setIsPrintingSingle(true);
@@ -1309,16 +1338,24 @@ const nextSystemBillNo = useMemo(
   // into edit mode too meant asking twice for one edit (reported by the user for both this
   // button and handleEditSpecificBill above).
   // Edit — lands focus on the first field of whichever scope is picked (per the user, 2026-08-31).
+  // The toolbar's Edit: Master unlocks the header only; Detail edits the selected article (same
+  // job as Edit Row and the row's ✏). Live while already editing — it is the only way to move the
+  // unlock to the other half (standard §6).
   const handleEditCurrentBill = () => {
+    if (billId == null || currentBillIsPosted) return;
+    if (editScope === 'detail') {
+      if (selectedIndex == null) { setErrorMsg('Click the article you want to edit first, then press Edit.'); return; }
+      handleRowClick(selectedIndex);
+      return;
+    }
     setMode('edit');
-    requestAnimationFrame(() => {
-      if (editScope === 'detail') focusFirstField(entryProductCellRef.current);
-      else firstFieldRef.current?.focus();
-    });
+    setEditTarget('master');
+    requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
 
   const handlePasswordSuccess = async (password: string) => {
     setIsPasswordModalOpen(false);
+    setEmptyingViaLastRow(false);
     if (passwordActionType === 'save_bill') {
       await executeSave(password);
     } else if (passwordActionType === 'delete_unposted_bill') {
@@ -1333,7 +1370,7 @@ const nextSystemBillNo = useMemo(
           setTimeout(() => setSuccessMsg(''), 3000);
           // The bill on screen (if any) may have just been the one deleted — drop back to a
           // fresh form rather than leave it pointing at a bill that no longer exists.
-          if (billId === targetId && !currentBillIsPosted) handleNew();
+          if (billId === targetId && !currentBillIsPosted) resetToNewBill();
           await Promise.all([refreshUnposted(), refreshStock(), refreshDeletedNumbers()]);
         }
       }
@@ -1576,16 +1613,22 @@ const nextSystemBillNo = useMemo(
 
   // G-08: now the Edit toolbar button's handler, not the row's own onClick — a row click just
   // records `selectedIndex` (see the grid below), and this only runs once the user presses Edit.
+  // Unlocks the Detail half of a SAVED bill (a new one has both halves open already).
+  const beginDetailEdit = () => {
+    if (mode === 'new' && billId == null) return;
+    setMode('edit');
+    setEditTarget('detail');
+  };
+
+  // THE one "edit this existing article" path — Edit (Detail), Edit Row and the row's ✏ all land
+  // here, and it unlocks the Detail half itself (standard §6, superseding the 2026-08-31 rule that
+  // the grid was inert while Master was picked).
   const handleRowClick = (idx: number) => {
-    // Master/Detail edit-scope split (per the user, 2026-08-31): a row click is how the detail
-    // grid re-opens a committed line for editing — a no-op while scope is Master, so master-only
-    // edits can't sneak article changes in through the grid. Doesn't affect 'new'/view browsing.
-    if (mode === 'edit' && editScope !== 'detail') return;
     // A posted bill is read-only — this used to offer a password prompt and then let the line
     // be edited in place, which is a second way in that the disabled Edit button already
     // refuses. Un Post is the only route (per the user, 2026-09-04).
     if (currentBillIsPosted) return;
-    if (isViewMode) setMode('edit');
+    beginDetailEdit();
     loadRowIntoEntry(idx);
   };
 
@@ -1603,8 +1646,23 @@ const nextSystemBillNo = useMemo(
       setEditingIndex(editingIndex - 1);
     }
     setSelectedIndex(null);
-    if (lastEnteredIndex === idx) setLastEnteredIndex(null);
+    // ▶ moves to the row that takes the deleted one's place (or the new last row).
+    const newLength = items.length - 1;
+    if (lastEnteredIndex === idx) setLastEnteredIndex(newLength === 0 ? null : Math.min(idx, newLength - 1));
     else if (lastEnteredIndex != null && idx < lastEnteredIndex) setLastEnteredIndex(lastEnteredIndex - 1);
+  };
+
+  // A grid row's own Delete. Deleting the LAST article of a SAVED bill deletes the whole bill (a
+  // bill can't be empty) through the password prompt; otherwise the article goes on screen and the
+  // bill enters Detail edit, so the next Save/Done removes it for good (standard §13).
+  const handleRowDelete = (idx: number) => {
+    if (items.length === 1 && billId != null && !currentBillIsPosted) {
+      setEmptyingViaLastRow(true);
+      handleDeleteCurrentBill();
+      return;
+    }
+    beginDetailEdit();
+    handleRemoveItemRow(idx);
   };
 
   // Invoice card fills whatever vertical space is left in the viewport below it, so the item
@@ -1634,12 +1692,11 @@ const nextSystemBillNo = useMemo(
   }, [mode, hasStockExceeded]);
 
   const isViewMode = mode === 'view';
-  // Master/Detail edit-scope split (per the user, 2026-08-31): once Edit is already reachable
-  // (isViewMode false, mode 'edit'), the radio narrows WHICH half actually unlocks — this does not
-  // weaken the existing isPosted gate on the Edit button itself, it only adds a further split on
-  // top of it. A brand-new bill (mode 'new') is unaffected — everything stays editable there.
-  const masterFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
-  const detailFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
+  // Master/Detail: in 'edit' mode only the half that Edit (or New, for an article) actually
+  // unlocked is open — editTarget, never the radio (standard §6). A brand-new bill (mode 'new') is
+  // unaffected — everything stays editable there.
+  const masterFieldsLocked = awaitingNew || (mode === 'edit' && editTarget !== 'master');
+  const detailFieldsLocked = awaitingNew || (mode === 'edit' && editTarget !== 'detail');
 
   // Backend has no real-time stock IPC channel wired up yet (stock.service.js#currentStock
   // exists server-side but isn't exposed over ipc) — Stock column just shows a placeholder.
@@ -1762,7 +1819,7 @@ const nextSystemBillNo = useMemo(
   const tabBar = (
     <div className="flex gap-1.5" data-no-print>
       <button
-        onClick={() => { setActiveTab('bill'); pressNew(); }}
+        onClick={() => { setActiveTab('bill'); pressNewTab(); }}
         className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all ${
           activeTab === 'bill' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border text-slate-600 hover:bg-slate-50'
         }`}
@@ -1854,37 +1911,41 @@ const nextSystemBillNo = useMemo(
             newAction={{ onClick: pressNew, ref: newButtonRef }}
             remove={{
               onClick: handleDeleteAction,
-              disabled: deletedPlaceholder != null || billId == null || currentBillIsPosted,
+              disabled: billId == null || currentBillIsPosted,
               title: 'Delete this whole bill — every article on it goes too (asks for your password)',
             }}
             editRow={{
               onClick: handleEditSelectedRow,
-              disabled: selectedIndex == null || editingIndex != null || isViewMode || currentBillIsPosted || (mode === 'edit' && editScope !== 'detail'),
+              disabled: selectedIndex == null || currentBillIsPosted,
               title: 'Edit selected article',
             }}
-            edit={{ onClick: handleEditCurrentBill, disabled: deletedPlaceholder != null || mode !== 'view' || billId == null || currentBillIsPosted }}
-            save={{ onClick: () => handleSave(false), disabled: deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded, title: 'Save — keep editing this bill' }}
-            done={{ onClick: () => handleSave(true), submit: true, disabled: deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded, title: 'Done — finish this bill, then Post it' }}
-            cancel={{ onClick: () => setMode('view'), disabled: mode !== 'edit', title: 'Cancel Edit' }}
+            edit={{
+              onClick: handleEditCurrentBill,
+              disabled: billId == null || currentBillIsPosted,
+              title: editScope === 'detail' ? 'Edit the selected article' : 'Edit the header fields',
+            }}
+            save={{ onClick: () => handleSave(false), disabled: mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded, title: 'Save — keep editing this bill' }}
+            done={{ onClick: () => handleSave(true), submit: true, disabled: mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded, title: 'Done — finish this bill, then Post it' }}
+            cancel={{ onClick: handleCancelEdit, disabled: mode !== 'edit', title: 'Cancel Edit' }}
             first={{ onClick: handleFirst, disabled: !canBrowse }}
             prev={{ onClick: handlePrev, disabled: !canNavPrevious }}
             next={{ onClick: handleNext, disabled: !canNavNext }}
             last={{ onClick: handleLast, disabled: !canBrowse }}
-            print={{ onClick: () => setIsPrintingSingle(true), disabled: deletedPlaceholder != null || mode !== 'view' || billId == null }}
+            print={{ onClick: () => setIsPrintingSingle(true), disabled: mode !== 'view' || billId == null }}
             find={{ onClick: () => setIsFindOpen(true) }}
-            unpost={{ onClick: handleUnpostCurrentBill, disabled: deletedPlaceholder != null || mode !== 'view' || billId == null || !currentBillIsPosted, title: 'Un Post — move this posted bill back to drafts' }}
-            post={{ onClick: async () => { await handlePostCurrentBill(); focusNewButton(); }, disabled: deletedPlaceholder != null || mode !== 'view' || billId == null || currentBillIsPosted }}
-            exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
-            saveAndPost={{ onClick: async () => { await handleSaveAndPost(); focusNewButton(); }, disabled: deletedPlaceholder != null || mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded || currentBillIsPosted, title: 'Save & Post' }}
+            unpost={{ onClick: handleUnpostCurrentBill, disabled: mode !== 'view' || billId == null || !currentBillIsPosted, title: 'Un Post — move this posted bill back to drafts' }}
+            post={{ onClick: async () => { await handlePostCurrentBill(); focusNewButton(); }, disabled: mode !== 'view' || billId == null || currentBillIsPosted }}
+            exit={{ onClick: async () => { if (!(await api.closeThisWindow())) dispatch({ type: 'NAVIGATE', page: 'home' }); } }}
+            saveAndPost={{ onClick: async () => { await handleSaveAndPost(); focusNewButton(); }, disabled: mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded || currentBillIsPosted, title: 'Save & Post' }}
             postAll={{ onClick: async () => { await handlePostAll(); focusNewButton(); }, disabled: postAllBusy || browseFilter === 'posted' || unpostedBills.length === 0, title: `Post All (${unpostedBills.length})` }}
-            pdf={{ onClick: () => setIsPrintingSingle(true), disabled: deletedPlaceholder != null || mode !== 'view' || billId == null, title: 'Export PDF' }}
+            pdf={{ onClick: () => setIsPrintingSingle(true), disabled: mode !== 'view' || billId == null, title: 'Export PDF' }}
             excel={{
               onClick: () => {
                 const headers = ['Article', 'Packing', 'Cartons', 'Pairs', 'Rate', 'D%', 'D. Value', 'Total Value'];
                 const rows = items.map(it => [it.label, it.packing, formatCartons(it.cartons), it.pairs, it.rate, it.discountPercent, it.discountValue, it.value]);
                 exportRowsToExcel(`sale-bill-${billNo || billId}`, headers, rows);
               },
-              disabled: deletedPlaceholder != null || mode !== 'view' || billId == null,
+              disabled: mode !== 'view' || billId == null,
               title: 'Export Excel',
             }}
           />
@@ -1951,7 +2012,6 @@ const nextSystemBillNo = useMemo(
           data-edit-scope="detail"
           style={{ border: '1px solid var(--border-color)', background: '#ffffff', overflow: 'visible', height: invoiceCardHeight ?? undefined, position: 'relative' }}
         >
-          {deletedPlaceholder != null && <DeletedDocumentOverlay systemNo={deletedPlaceholder} label="bill" />}
 
           {/* Print Title (Visible only when printing) */}
           <div className="hidden print:flex items-center justify-between mb-6 pb-4 border-b">
@@ -2499,14 +2559,19 @@ const nextSystemBillNo = useMemo(
                     key={item.uid}
                     ref={el => { rowRefs.current[idx] = el; }}
                     onClick={() => {
-                      // G-08: a click must produce no visible change — it only records which row
-                      // the Delete/Edit Row toolbar buttons act on next. Inert entirely while
-                      // another row is actually loaded for editing (see the file-level comment on
-                      // `selectedIndex`).
-                      if (editingIndex != null) return;
+                      // A click only SELECTS the row (what Edit/Edit Row act on next), in every
+                      // state — even while another row is in the strip (standard §5, superseding
+                      // G-08's "no visible change").
                       setSelectedIndex(prev => prev === idx ? null : idx);
                     }}
-                    className={`border-b cursor-pointer hover:bg-slate-50/50 ${idx === editingIndex ? 'bg-blue-50' : ''}`}
+                    aria-selected={idx === selectedIndex}
+                    // Three distinct states (standard §5): editing = blue, selected = gold, each
+                    // with a 4px left bar; the ▶ marker is never a background.
+                    className={`border-b cursor-pointer transition-colors border-l-4 ${
+                      idx === editingIndex ? 'bg-blue-100 border-l-blue-600'
+                        : idx === selectedIndex ? 'bg-[#B08D57]/15 border-l-[#B08D57]'
+                        : 'border-l-transparent hover:bg-slate-50/50'
+                    }`}
                     style={{ borderColor: 'var(--border-table)' }}
                   >
                     {/* G-05: a pure position indicator — never a background/highlight, so it can
@@ -2523,11 +2588,11 @@ const nextSystemBillNo = useMemo(
                     <td className="p-1 text-center whitespace-nowrap">
                       <RowActions
                         onEdit={() => handleRowClick(idx)}
-                        onDelete={() => handleRemoveItemRow(idx)}
-                        disabled={deletedPlaceholder != null || currentBillIsPosted || editingIndex != null || (mode === 'edit' && editScope !== 'detail')}
+                        onDelete={() => handleRowDelete(idx)}
+                        disabled={currentBillIsPosted}
                         editTitle="Edit this article"
                         deleteTitle="Delete this article"
-                        disabledTitle="Unpost and edit the document (Detail scope) to change its articles"
+                        disabledTitle="Unpost the bill to change its articles"
                       />
                     </td>
                   </tr>
@@ -2778,6 +2843,7 @@ const nextSystemBillNo = useMemo(
           setIsPasswordModalOpen(false);
           setPasswordActionType(null);
           pendingDeleteBillId.current = null;
+          setEmptyingViaLastRow(false);
         }}
         onSuccess={handlePasswordSuccess}
         title={
@@ -2787,7 +2853,9 @@ const nextSystemBillNo = useMemo(
         }
         subtitle={
           passwordActionType === 'delete_unposted_bill'
-            ? `This deletes the WHOLE bill and every article on it — not a single row. It cannot be undone. Enter the password for user '${state.currentUsername || 'user'}' to confirm.`
+            ? emptyingViaLastRow
+              ? `That was the bill's last article — a bill can't be empty, so deleting it removes the WHOLE bill. It cannot be undone. Enter the password for user '${state.currentUsername || 'user'}' to confirm.`
+              : `This deletes the WHOLE bill and every article on it — not a single row. It cannot be undone. Enter the password for user '${state.currentUsername || 'user'}' to confirm.`
             : `Please enter password for user '${state.currentUsername || 'user'}' to save changes to Bill #${billNo || currentSystemNo || ''}.`
         }
       />

@@ -10,8 +10,7 @@ import type {
   VendorRow, RegionRow, CityRow, PurchaseRow, PurchaseCreateInput, PurchaseItemInput,
   DraftPurchaseRow, ConfirmAllResult, DeletedNumberRow
 } from '@/lib/api';
-import { formatDate, getTodayDate, getThreeMonthsAgoDate, toDateInputValue, nextSystemNoPreview, mergeWithDeleted } from '@/lib/utils';
-import DeletedDocumentOverlay from '@/components/DeletedDocumentOverlay';
+import { formatDate, getTodayDate, getThreeMonthsAgoDate, toDateInputValue, nextSystemNoPreview, asNavEntries } from '@/lib/utils';
 import { focusNextField } from '@/lib/fieldNav';
 import { Plus, ShoppingBag, CheckCircle2, ChevronDown } from 'lucide-react';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
@@ -120,10 +119,10 @@ export default function PurchasePage() {
     // (2026-09-16, found on SaleBillPage's own equivalent bug): an edit-on-a-posted-record flow can
     // leave `mode: 'edit'` while the loaded record is still posted, so `mode === 'view'` alone
     // under-triggers. `currentIsPosted` (persisted) is the direct, unambiguous signal — true iff an
-    // actual posted record is loaded, in EITHER 'view' or 'edit' mode; only `handleNew()` ever sets
+    // actual posted record is loaded, in EITHER 'view' or 'edit' mode; only `resetToNewPurchase()` ever sets
     // it false, so it can never be true while there's genuine unsaved new-document work to protect.
     refreshUnposted().then(data => {
-      if (data && data.length === 0 && currentIsPosted) handleNew();
+      if (data && data.length === 0 && currentIsPosted) resetToNewPurchase();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshPurchases, refreshUnposted]);
@@ -135,7 +134,7 @@ export default function PurchasePage() {
   // it. hasPageDraftAtMount gates the auto-open further down (only genuine unsaved typing skips
   // it); hasClickedNew gates the No. preview and the awaitingNew lock; only New calls markNewClicked.
   const { hasRealDraftAtMount: hasPageDraftAtMount, hasClickedNew, setHasClickedNew, markNewClicked } =
-    useNewDocGate('purchase', ['vendorId', 'billNo', 'items', 'remarks']);
+    useNewDocGate('purchase', ['vendorId', 'billNo', 'items', 'remarks'], { emptiedEditCountsAsWork: true });
   // Master/Detail edit-scope radio (left-side widget, below) — which half of the form Edit
   // actually unlocks. Per the user, 2026-08-31: Edit used to unlock the whole document at once;
   // now Master unlocks only the header fields, Detail only the entry strip + grid. Reset to
@@ -146,6 +145,10 @@ export default function PurchasePage() {
   // Detail half (entry strip + grid) shut even when that's what had been unlocked and typed
   // into — reported by the user (2026-09-04) as "all the buttons are disable except New".
   const [editScope, setEditScope] = usePersistentField<'master' | 'detail'>('purchase', 'editScope', 'master');
+  // Which half Edit (or New, for a line) has actually UNLOCKED — separate from the radio, which
+  // only picks what New/Edit act on and can never unlock anything by itself (standard §6, ported
+  // from the Journal Voucher 2026-10-06). null = nothing unlocked.
+  const [editTarget, setEditTarget] = usePersistentField<'master' | 'detail' | null>('purchase', 'editTarget', null);
   // Keeps the radios pointing at whichever half is being worked in — see the hook.
   const autoEditScope = useAutoEditScope(setEditScope);
 
@@ -169,16 +172,6 @@ export default function PurchasePage() {
   }, []);
   useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
 
-  // Set when First/Prev/Next/Last lands on a deleted number — DeletedDocumentOverlay renders while
-  // this is non-null. Cleared as soon as a real document loads (see the purchaseId effect below).
-  const [deletedPlaceholder, setDeletedPlaceholder] = useState<number | null>(null);
-  // navIndex normally tracks the loaded purchase's own position via purchaseId — a deleted marker
-  // has no purchaseId to match, so this overrides it while a placeholder is on screen.
-  const [navIndexOverride, setNavIndexOverride] = useState<number | null>(null);
-  useEffect(() => {
-    setDeletedPlaceholder(null);
-    setNavIndexOverride(null);
-  }, [purchaseId]);
   // A New Purchase's own in-progress fields persist across switching pages AND an app restart
   // (usePersistentField — see src/hooks/usePersistentField.ts), so typing one up and getting
   // pulled away mid-entry never loses it. Deliberately NOT applied to mode/purchaseId/
@@ -424,10 +417,10 @@ const nextSystemBillNo = useMemo(
   // Loads the row back into the entry fields for editing — the row stays in the grid (not pulled
   // out) until the edit is committed, so it never looks "missing".
   const handleEditRow = (item: UiItem) => {
-    if (isViewMode) return;
-    // Detail scope only — clicking a row to re-edit it is a detail-section interaction, so it
-    // must stay inert while Master is the selected edit scope (per the user, 2026-08-31).
-    if (detailFieldsLocked) return;
+    // A posted document never enters edit; otherwise this unlocks the Detail half itself
+    // (standard §6, superseding the 2026-08-31 rule that the grid was inert under Master).
+    if (currentIsPosted) return;
+    beginDetailEdit();
     setCurrentRow({ materialName: item.materialName, unit: item.unit, quantity: item.quantity, pricePerUnit: item.pricePerUnit });
     setEditingUid(item.uid);
     setSelectedUid(null);
@@ -438,6 +431,28 @@ const nextSystemBillNo = useMemo(
   const handleEditSelectedRow = () => {
     const item = items.find(it => it.uid === selectedUid);
     if (item) handleEditRow(item);
+  };
+
+  // Unlocks the Detail half of a SAVED purchase (a new one has both halves open already).
+  const beginDetailEdit = () => {
+    if (mode === 'new' && purchaseId == null) return;
+    setMode('edit');
+    setEditTarget('detail');
+  };
+
+  // The toolbar's Edit: Master unlocks the header only; Detail edits the selected article (same
+  // job as Edit Row and the row's ✏). Live while already editing — it is the only way to move the
+  // unlock to the other half (standard §6).
+  const handleEdit = () => {
+    if (purchaseId == null || currentIsPosted) return;
+    if (editScope === 'detail') {
+      if (selectedUid == null) { setErrorMsg('Click the article you want to edit first, then press Edit.'); return; }
+      handleEditSelectedRow();
+      return;
+    }
+    setMode('edit');
+    setEditTarget('master');
+    requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
 
   const cancelEditRow = () => {
@@ -451,7 +466,25 @@ const nextSystemBillNo = useMemo(
     setItems(prev => prev.filter(it => it.uid !== uid));
     if (editingUid === uid) cancelEditRow(); // was mid-edit on the row just deleted
     setSelectedUid(null);
-    if (lastEnteredUid === uid) setLastEnteredUid(null);
+    // ▶ moves to the row that takes the deleted one's place (or the new last row).
+    if (lastEnteredUid === uid) {
+      const at = items.findIndex(it => it.uid === uid);
+      const rest = items.filter(it => it.uid !== uid);
+      setLastEnteredUid(rest.length ? rest[Math.min(at, rest.length - 1)].uid : null);
+    }
+  };
+
+  // A grid row's own Delete. Deleting the LAST article of a SAVED purchase deletes the whole purchase
+  // (it can't be empty) through the password prompt; otherwise the article goes on screen and the
+  // purchase enters Detail edit, so the next Save/Done removes it for good (standard §13).
+  const handleRowDelete = (uid: string) => {
+    if (items.length === 1 && purchaseId != null && !currentIsPosted) {
+      setEmptyingViaLastRow(true);
+      handleDeleteCurrentPurchase();
+      return;
+    }
+    beginDetailEdit();
+    removeItemRow(uid);
   };
 
   const grandTotal = useMemo(() => items.reduce((s, it) => s + it.totalPrice, 0), [items]);
@@ -512,8 +545,8 @@ const nextSystemBillNo = useMemo(
   // Edit-scope split (per the user, 2026-08-31): while actually editing, Master unlocks only the
   // header fields and Detail only the entry strip + grid — each stays locked whenever the OTHER
   // scope is selected. Both are false outside edit mode (view/new behave exactly as before).
-  const masterFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'master');
-  const detailFieldsLocked = awaitingNew || (mode === 'edit' && editScope !== 'detail');
+  const masterFieldsLocked = awaitingNew || (mode === 'edit' && editTarget !== 'master');
+  const detailFieldsLocked = awaitingNew || (mode === 'edit' && editTarget !== 'detail');
 
   // P-02: "was the purchase now on screen created in this run?" — the difference between finishing
   // one you were entering (clear and move to the next) and posting one you deliberately opened
@@ -526,7 +559,15 @@ const nextSystemBillNo = useMemo(
   // yet) gets the full reset below. Same reset shape used after committing a line, since the
   // outcome is identical: an empty, focused entry row, purchase untouched.
   const handleNew = () => {
-    if (mode === 'edit' && editScope === 'detail' && purchaseId != null) {
+    // Detail + an unposted purchase on screen (saved, or new with articles typed) adds an article —
+    // no Edit needed, header stays locked. Never wipes articles already typed (standard §6).
+    const docOnScreen = !awaitingNew && !currentIsPosted && (purchaseId != null || items.length > 0);
+    if (editScope === 'detail' && docOnScreen) {
+      // Only a SAVED purchase needs unlocking; a new one already has both halves open.
+      if (purchaseId != null) {
+        setMode('edit');
+        setEditTarget('detail');
+      }
       setCurrentRow(emptyCurrentRow());
       setEditingUid(null);
       setSelectedUid(null);
@@ -534,6 +575,13 @@ const nextSystemBillNo = useMemo(
       requestAnimationFrame(() => materialNameRef.current?.focus());
       return;
     }
+    startNewPurchase();
+  };
+
+  // A whole new, blank purchase. Everything that is not the New button itself (Post, Delete, the
+  // entry tab, an empty Unposted list…) resets through this, never through handleNew(), which
+  // with Detail selected would add an article to the purchase still on screen instead.
+  const resetToNewPurchase = () => {
     // A blank document is an unposted one — back to the Unposted view (see useBrowseFilterFollowsDocument).
     setNavFilter('unposted');
     setMode('new');
@@ -555,12 +603,13 @@ const nextSystemBillNo = useMemo(
     setIsCustomUnit(false);
     setErrorMsg('');
     setEditScope('master'); // a blank form starts scoped to Master, same as any freshly loaded record
+    setEditTarget(null);
     clearPurchaseDraft();
   };
 
   // P-02: a finished purchase clears straight back to a blank one so the next can be typed
-  // immediately. Reuses handleNew() so "a blank purchase" stays defined once, then restores the
-  // working date — handleNew() snaps to today, and a run of purchases entered for an earlier date
+  // immediately. Reuses resetToNewPurchase() so "a blank purchase" stays defined once, then restores the
+  // working date — resetToNewPurchase() snaps to today, and a run of purchases entered for an earlier date
   // would otherwise reset on every one. Cursor returns to the first field via the G-01 rule.
   // Explicit ref + focus, not AppLayout's own G-01 auto-focus effect: that effect only re-scans
   // when a <form> is newly INSERTED into the DOM (page mount, or a MutationObserver catching one
@@ -595,7 +644,7 @@ const nextSystemBillNo = useMemo(
 
   const readyForNextPurchase = () => {
     const workingDate = date;
-    handleNew();
+    resetToNewPurchase();
     setDate(workingDate);
     requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
@@ -604,7 +653,7 @@ const nextSystemBillNo = useMemo(
   // is a deliberate reset of the whole form (including the date), so focus goes to Date itself
   // rather than restoring a working date and jumping past it.
   const startNewPurchase = () => {
-    handleNew();
+    resetToNewPurchase();
     requestAnimationFrame(() => firstFieldRef.current?.focus());
   };
 
@@ -651,17 +700,20 @@ const nextSystemBillNo = useMemo(
   // make the NEXT Save create a second, duplicate draft instead of updating this one.
   const doSave = async (finalize: boolean) => {
     // Backstop for the awaitingNew lock.
-    if (awaitingNew) { setErrorMsg('Click New to start a purchase first.'); return; }
+    if (awaitingNew) { setErrorMsg('Click New to start a purchase first.'); return null; }
     const payload = buildPayload();
-    if (!payload) return;
+    if (!payload) return null;
 
-    const result = mode === 'edit' && purchaseId != null
+    // Keyed on the id, not `mode === 'edit'` — Save on a NEW purchase now stays in 'new' mode (both
+    // halves open), and the next Save must update that same draft, never create a second one.
+    const wasNew = purchaseId == null;
+    const result = !wasNew
       ? await api.draftPurchases.update(purchaseId, payload)
       : await api.draftPurchases.create(payload);
 
     if (!result.ok) {
       setErrorMsg('Failed to save purchase: ' + result.error.message);
-      return;
+      return null;
     }
 
     setPurchaseId(result.data.draft_id);
@@ -669,15 +721,27 @@ const nextSystemBillNo = useMemo(
     setCurrentIsPosted(false);
     // P-02: only a freshly created purchase counts as "part of this run" — an edit of an existing
     // one must not clear the form out from under the user when it posts.
-    if (mode !== 'edit') {
+    if (wasNew) {
       createdInThisRun.current = true;
       clearPurchaseDraft();
     }
     setErrorMsg('');
-    setSuccessMsg(mode === 'edit' ? 'Purchase updated successfully.' : 'Purchase recorded successfully.');
+    setSuccessMsg(wasNew ? 'Purchase recorded successfully.' : 'Purchase updated successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
-    setMode(finalize ? 'view' : 'edit');
+    // Done finishes (read-only, nothing unlocked); Save keeps whatever is open as it is.
+    if (finalize) { setMode('view'); setEditTarget(null); }
     refreshUnposted(); // P-03: a newly saved purchase joins the pending-posting list immediately.
+    return result.data.draft_id;
+  };
+
+  // Cancel — drops unsaved edits and reloads the saved draft, read-only (standard §6). It used to
+  // re-fetch through api.purchases.get — the POSTED table — with the draft's id, which loaded the
+  // wrong purchase or failed (2026-10-06).
+  const handleCancelEdit = async () => {
+    if (purchaseId == null) { startNewPurchase(); return; }
+    const res = await api.draftPurchases.get(purchaseId);
+    if (!res.ok) { setErrorMsg('Failed to reload purchase: ' + res.error.message); return; }
+    await loadDraftIntoForm(res.data, { mode: 'view' });
   };
 
   // The <form>'s own onSubmit — reached by the Done button (type="submit") and by the Enter-key
@@ -685,6 +749,13 @@ const nextSystemBillNo = useMemo(
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     await doSave(true);
+  };
+
+  // Save+Post in one click, same as Sale Bill's/Journal Voucher's (standard §8, 2026-10-06).
+  const handleSaveAndPost = async () => {
+    const savedId = await doSave(true);
+    if (savedId == null) return;
+    await handlePost(savedId);
   };
 
   const loadPurchaseRow = async (rowIn: PurchaseRow) => {
@@ -725,16 +796,20 @@ const nextSystemBillNo = useMemo(
     setIsCustomUnit(false);
     setErrorMsg('');
     setEditScope('master'); // opening a different record must not carry over a stale edit scope
+    setEditTarget(null);
     setMode('view');
   };
 
   // Post = confirm the draft: moves it from draft_purchases into the real purchases table,
   // writing ledger + vendor stock, deleting the draft. Only reachable while !currentIsPosted, so
   // purchaseId is always a draft_id here.
-  const handlePost = async () => {
-    if (purchaseId == null) return;
+  // `idOverride` lets Save+Post post the draft it has just saved, before the id state has
+  // re-rendered (same as Sale Bill/Journal Voucher, 2026-10-06).
+  const handlePost = async (idOverride?: number) => {
+    const postId = idOverride ?? purchaseId;
+    if (postId == null) return;
     const postedBillNo = billNo.trim();
-    const res = await api.draftPurchases.confirm(purchaseId);
+    const res = await api.draftPurchases.confirm(postId);
     if (!res.ok) {
       setErrorMsg('Failed to post purchase: ' + res.error.message);
       return;
@@ -742,15 +817,11 @@ const nextSystemBillNo = useMemo(
     setPurchaseId(res.data.purchase_id);
     setCurrentSystemNo(res.data.system_no);
     setCurrentIsPosted(true);
-    // P-02: clear for the next purchase only if this one was entered in this run — one opened
-    // from the list and posted there stays on screen. The message names the document, because
-    // once the form empties the clearing is otherwise the only sign anything was saved.
-    if (createdInThisRun.current) {
-      setSuccessMsg(`Purchase ${postedBillNo || `#${res.data.system_no}`} posted. Ready for the next one.`);
-      readyForNextPurchase();
-    } else {
-      setSuccessMsg('Purchase posted successfully.');
-    }
+    // Post always clears for the next purchase, keeping the date (standard §8; the user dropped
+    // P-02's "stay on screen if opened from the list" on 2026-10-06). The message names the
+    // document, since the form emptying is otherwise the only sign anything was posted.
+    setSuccessMsg(`Purchase ${postedBillNo || `#${res.data.system_no}`} posted. Ready for the next one.`);
+    readyForNextPurchase();
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshPurchases();
     refreshUnposted(); // P-03: it just left the pending list.
@@ -783,10 +854,10 @@ const nextSystemBillNo = useMemo(
     // there it only clears when the record on screen was itself one of the ones that posted.
     if (res.data.failed.length === 0) {
       const workingDate = date;
-      handleNew();
+      resetToNewPurchase();
       setDate(workingDate);
     } else if (purchaseId != null && !currentIsPosted && res.data.posted.some(p => p.draft_id === purchaseId)) {
-      handleNew();
+      resetToNewPurchase();
     }
   };
 
@@ -802,7 +873,10 @@ const nextSystemBillNo = useMemo(
     setPurchaseId(res.data.draft_id);
     setCurrentSystemNo(res.data.system_no);
     setCurrentIsPosted(false);
-    setMode('edit'); // land on the editable screen straight away, not the read-only view
+    // Lands read-only (standard §6): New adds an article from view mode by itself, so Un Post no
+    // longer has to pre-unlock anything.
+    setMode('view');
+    setEditTarget(null);
     setSuccessMsg('Purchase unposted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshPurchases();
@@ -857,6 +931,7 @@ const nextSystemBillNo = useMemo(
     setIsCustomUnit(false);
     setErrorMsg('');
     setEditScope('master'); // opening a different draft must not carry over a stale edit scope
+    setEditTarget(null);
     setMode(opts.mode ?? 'edit');
     return true;
   };
@@ -867,10 +942,14 @@ const nextSystemBillNo = useMemo(
   // with no reverse-never-erase trail, same guard level used on Sale Bill/Sale Return.
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const pendingDeleteDraftId = useRef<number | null>(null);
+  // True when the whole-purchase delete was reached by deleting the LAST article — only changes the
+  // prompt's wording.
+  const [emptyingViaLastRow, setEmptyingViaLastRow] = useState(false);
 
 
   const handleDeletePasswordSuccess = async (password: string) => {
     setIsPasswordModalOpen(false);
+    setEmptyingViaLastRow(false);
     const targetId = pendingDeleteDraftId.current;
     pendingDeleteDraftId.current = null;
     if (targetId == null) return;
@@ -881,7 +960,7 @@ const nextSystemBillNo = useMemo(
     }
     setSuccessMsg('Purchase deleted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
-    if (purchaseId === targetId && !currentIsPosted) handleNew();
+    if (purchaseId === targetId && !currentIsPosted) resetToNewPurchase();
     refreshUnposted();
     refreshDeletedNumbers();
   };
@@ -917,12 +996,12 @@ const nextSystemBillNo = useMemo(
   // purchase next to whatever else shares its date when browsing, so First..Last could jump between
   // unrelated system_no's (reported by the user on Sale Bill, 2026-09-07; same architecture here).
   const navPostedList = useMemo(
-    () => mergeWithDeleted(purchases.filter(p => p.is_posted).sort((a, b) => a.system_no - b.system_no), deletedNumbers),
-    [purchases, deletedNumbers],
+    () => asNavEntries(purchases.filter(p => p.is_posted).sort((a, b) => a.system_no - b.system_no)),
+    [purchases],
   );
   const navUnpostedList = useMemo(
-    () => mergeWithDeleted([...unpostedPurchases].sort((a, b) => a.system_no - b.system_no), deletedNumbers),
-    [unpostedPurchases, deletedNumbers],
+    () => asNavEntries([...unpostedPurchases].sort((a, b) => a.system_no - b.system_no)),
+    [unpostedPurchases],
   );
 
   // Whichever list the dropdown selects — this is what the nav buttons page through.
@@ -930,15 +1009,13 @@ const nextSystemBillNo = useMemo(
 
   // -1 when the purchase on screen isn't in the ACTIVE list (unsaved, or a draft while the
   // dropdown is on Posted and vice versa); the handlers treat that as "start from the beginning".
-  // navIndexOverride wins while a deleted-number placeholder is on screen — see SaleBillPage.tsx's
-  // navIndex for why.
   const derivedNavIndex = useMemo(() => {
     if (purchaseId == null) return -1;
     return navFilter === 'posted'
       ? (currentIsPosted ? navPostedList.findIndex(e => e.kind === 'doc' && e.row.purchase_id === purchaseId) : -1)
       : (!currentIsPosted ? navUnpostedList.findIndex(e => e.kind === 'doc' && e.row.draft_id === purchaseId) : -1);
   }, [currentIsPosted, purchaseId, navFilter, navPostedList, navUnpostedList]);
-  const navIndex = navIndexOverride ?? derivedNavIndex;
+  const navIndex = derivedNavIndex;
 
   const canNavPrevious = navList.length > 0 && navIndex !== 0;
   const canNavNext = navList.length > 0 && navIndex !== navList.length - 1;
@@ -948,16 +1025,10 @@ const nextSystemBillNo = useMemo(
   const canBrowse = navList.length > 0;
 
   // Posted rows come from purchases, unposted ones from draft_purchases — each needs its own
-  // loader. Both open read-only; Edit stays a separate deliberate click. A 'deleted' entry shows
-  // DeletedDocumentOverlay instead of loading anything.
+  // loader. Both open read-only; Edit stays a separate deliberate click.
   const goToNavIndex = async (idx: number) => {
     if (idx < 0 || idx >= navList.length) return;
     const entry = navList[idx];
-    if (entry.kind === 'deleted') {
-      setNavIndexOverride(idx);
-      setDeletedPlaceholder(entry.system_no);
-      return;
-    }
     if (navFilter === 'posted') {
       await loadPurchaseRow(entry.row as PurchaseRow);
     } else {
@@ -1242,52 +1313,40 @@ const nextSystemBillNo = useMemo(
             /* New works from either view (it used to be disabled on Posted, which greyed it out right
                after posting a document that stays on screen — 2026-09-30). A blank document returns the
                dropdown to Unposted inside handleNew, same as Receipts/Expenses. */
-            newAction={{ onClick: () => { startNewPurchase(); markNewClicked(); }, ref: newButtonRef, title: 'New' }}
+            newAction={{ onClick: () => { handleNew(); markNewClicked(); }, ref: newButtonRef, title: 'New' }}
             remove={{
               onClick: deleteSelectedArticle,
-              disabled: deletedPlaceholder != null || purchaseId == null || currentIsPosted,
+              disabled: purchaseId == null || currentIsPosted,
               title: 'Delete this whole purchase — every article on it goes too (asks for your password)',
             }}
-            editRow={{ onClick: handleEditSelectedRow, disabled: selectedUid == null || editingUid != null || isViewMode || detailFieldsLocked, title: 'Edit selected article' }}
+            editRow={{ onClick: handleEditSelectedRow, disabled: selectedUid == null || currentIsPosted, title: 'Edit selected article' }}
             edit={{
-              onClick: () => {
-                setMode('edit');
-                requestAnimationFrame(() => {
-                  if (editScope === 'detail') materialNameRef.current?.focus();
-                  else firstFieldRef.current?.focus();
-                });
-              },
-              disabled: deletedPlaceholder != null || !isViewMode || currentIsPosted,
+              onClick: handleEdit,
+              disabled: purchaseId == null || currentIsPosted,
+              title: editScope === 'detail' ? 'Edit the selected article' : 'Edit the header fields',
             }}
-            save={{ onClick: () => doSave(false), disabled: deletedPlaceholder != null || isViewMode || !isValid, title: 'Save — keep editing this purchase' }}
-            done={{ submit: true, form: 'purchase-entry-form', disabled: deletedPlaceholder != null || isViewMode || !isValid, title: 'Done — finish this purchase, then Post it' }}
-            cancel={{
-              onClick: async () => {
-                if (purchaseId == null) return;
-                const res = await api.purchases.get(purchaseId);
-                if (res.ok) await loadPurchaseRow(res.data);
-              },
-              disabled: mode !== 'edit',
-              title: 'Cancel Edit',
-            }}
+            save={{ onClick: async () => { await doSave(false); }, disabled: isViewMode || !isValid, title: 'Save — keep editing this purchase' }}
+            done={{ submit: true, form: 'purchase-entry-form', disabled: isViewMode || !isValid, title: 'Done — finish this purchase, then Post it' }}
+            cancel={{ onClick: handleCancelEdit, disabled: mode !== 'edit', title: 'Cancel Edit' }}
             first={{ onClick: handleNavFirst, disabled: !canBrowse }}
             prev={{ onClick: handleNavPrevious, disabled: !canNavPrevious, title: 'Previous' }}
             next={{ onClick: handleNavNext, disabled: !canNavNext }}
             last={{ onClick: handleNavLast, disabled: !canBrowse }}
-            print={{ onClick: () => setIsPrintingSingle(true), disabled: deletedPlaceholder != null || !isViewMode || purchaseId == null }}
+            print={{ onClick: () => setIsPrintingSingle(true), disabled: !isViewMode || purchaseId == null }}
             find={{ onClick: () => setIsFindOpen(true) }}
-            unpost={{ onClick: handleUnpost, disabled: deletedPlaceholder != null || !isViewMode || purchaseId == null || !currentIsPosted, title: 'Unpost — move this posted purchase back to drafts' }}
-            post={{ onClick: async () => { await handlePost(); focusNewButton(); }, disabled: deletedPlaceholder != null || !isViewMode || purchaseId == null || currentIsPosted }}
-            exit={{ onClick: () => dispatch({ type: 'NAVIGATE', page: 'home' }) }}
+            unpost={{ onClick: handleUnpost, disabled: !isViewMode || purchaseId == null || !currentIsPosted, title: 'Unpost — move this posted purchase back to drafts' }}
+            post={{ onClick: async () => { await handlePost(); focusNewButton(); }, disabled: !isViewMode || purchaseId == null || currentIsPosted }}
+            exit={{ onClick: async () => { if (!(await api.closeThisWindow())) dispatch({ type: 'NAVIGATE', page: 'home' }); } }}
+            saveAndPost={{ onClick: async () => { await handleSaveAndPost(); focusNewButton(); }, disabled: isViewMode || !isValid || currentIsPosted, title: 'Save & Post' }}
             postAll={{ onClick: async () => { await handlePostAll(); focusNewButton(); }, disabled: postAllBusy || navFilter === 'posted' || unpostedPurchases.length === 0, title: postAllBusy ? 'Posting…' : `Post All (${unpostedPurchases.length})` }}
-            pdf={{ onClick: () => setIsPrintingSingle(true), disabled: deletedPlaceholder != null || !isViewMode || purchaseId == null, title: 'Export PDF' }}
+            pdf={{ onClick: () => setIsPrintingSingle(true), disabled: !isViewMode || purchaseId == null, title: 'Export PDF' }}
             excel={{
               onClick: () => {
                 const headers = ['Material', 'Unit', 'Quantity', 'Rate', 'Total Price'];
                 const rows = items.map(it => [it.materialName, it.unit, it.quantity, it.pricePerUnit, it.totalPrice]);
                 exportRowsToExcel(`purchase-${billNo || purchaseId}`, headers, rows);
               },
-              disabled: deletedPlaceholder != null || !isViewMode || purchaseId == null,
+              disabled: !isViewMode || purchaseId == null,
               title: 'Export Excel',
             }}
           />
@@ -1350,7 +1409,6 @@ const nextSystemBillNo = useMemo(
           style={{ height: invoiceCardHeight ?? undefined, position: 'relative' }}
           data-no-print
         >
-          {deletedPlaceholder != null && <DeletedDocumentOverlay systemNo={deletedPlaceholder} label="purchase" />}
           <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-5">
             <ShoppingBag size={18} className="text-[#B08D57]" />
             <h3 className="font-lora font-bold text-lg text-slate-900">Raw Material Purchase</h3>
@@ -1652,17 +1710,19 @@ const nextSystemBillNo = useMemo(
                     key={item.uid}
                     ref={el => { rowRefs.current[item.uid] = el; }}
                     onClick={() => {
-                      // G-08: a click must produce no visible change — it only records which row
-                      // the Delete/Edit Row toolbar buttons act on next. Inert entirely while
-                      // another row is actually loaded for editing.
-                      if (editingUid != null) return;
-                      if (isViewMode || detailFieldsLocked) return;
+                      // A click only SELECTS the row (what Edit/Edit Row act on next), in every
+                      // state — even while another row is in the strip (standard §5, superseding
+                      // G-08's "no visible change").
                       setSelectedUid(prev => prev === item.uid ? null : item.uid);
                     }}
-                    title={!isViewMode && !detailFieldsLocked ? 'Click to select this article — Delete (toolbar) removes it' : undefined}
-                    className={`border-b transition-colors ${
-                      item.uid === editingUid ? 'bg-blue-50' : 'hover:bg-slate-50/55'
-                    } ${!isViewMode && !detailFieldsLocked ? 'cursor-pointer' : ''}`}
+                    aria-selected={item.uid === selectedUid}
+                    // Three distinct states (standard §5): editing = blue, selected = gold, each
+                    // with a 4px left bar; the ▶ marker is never a background.
+                    className={`border-b cursor-pointer transition-colors border-l-4 ${
+                      item.uid === editingUid ? 'bg-blue-100 border-l-blue-600'
+                        : item.uid === selectedUid ? 'bg-[#B08D57]/15 border-l-[#B08D57]'
+                        : 'border-l-transparent hover:bg-slate-50/55'
+                    }`}
                     style={{ borderColor: 'var(--border-table)' }}
                   >
                     {/* G-05: a pure position indicator — never a background/highlight, so it can
@@ -1678,11 +1738,11 @@ const nextSystemBillNo = useMemo(
                     <td className="p-3 text-center whitespace-nowrap">
                       <RowActions
                         onEdit={() => handleEditRow(item)}
-                        onDelete={() => removeItemRow(item.uid)}
-                        disabled={deletedPlaceholder != null || isViewMode || detailFieldsLocked || editingUid != null}
+                        onDelete={() => handleRowDelete(item.uid)}
+                        disabled={currentIsPosted}
                         editTitle="Edit this article"
                         deleteTitle="Delete this article"
-                        disabledTitle="Unpost and edit the document (Detail scope) to change its articles"
+                        disabledTitle="Unpost the purchase to change its articles"
                       />
                     </td>
                   </tr>
@@ -1867,10 +1927,12 @@ const nextSystemBillNo = useMemo(
 
         <PasswordPromptModal
           isOpen={isPasswordModalOpen}
-          onClose={() => { setIsPasswordModalOpen(false); pendingDeleteDraftId.current = null; }}
+          onClose={() => { setIsPasswordModalOpen(false); pendingDeleteDraftId.current = null; setEmptyingViaLastRow(false); }}
           onSuccess={handleDeletePasswordSuccess}
           title="Delete Unposted Purchase"
-          subtitle="This deletes the WHOLE purchase and every article on it — not a single row. It cannot be undone. Enter your password to confirm."
+          subtitle={emptyingViaLastRow
+            ? 'That was the purchase’s last article — a purchase can’t be empty, so deleting it removes the WHOLE purchase. It cannot be undone. Enter your password to confirm.'
+            : 'This deletes the WHOLE purchase and every article on it — not a single row. It cannot be undone. Enter your password to confirm.'}
         />
 
         {/* Find Purchase Modal — jump to any posted or unposted purchase by System No., manual

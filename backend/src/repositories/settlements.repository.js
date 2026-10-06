@@ -32,13 +32,19 @@ async function list(filters = {}) {
     conditions.push('s.settlement_date <= @dateTo');
     params.dateTo = { type: sql.Date, value: filters.date_to };
   }
+  // Endorsements entered as a receipt voucher's line are reached through that voucher; the
+  // Receipts screen's standalone list asks for only the ones that belong to no voucher.
+  if (filters.standalone) {
+    conditions.push('s.voucher_id IS NULL');
+  }
 
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT s.*, f.name AS from_name, t.name AS to_name
+    `SELECT s.*, f.name AS from_name, t.name AS to_name, rv.voucher_no
      FROM dbo.settlements s
      JOIN dbo.business_accounts f ON f.ba_id = s.from_ba_id
      JOIN dbo.business_accounts t ON t.ba_id = s.to_ba_id
+     LEFT JOIN dbo.receipt_vouchers rv ON rv.voucher_id = s.voucher_id
      ${where}
      ORDER BY s.settlement_date DESC, s.settlement_id DESC`,
     params,
@@ -48,10 +54,11 @@ async function list(filters = {}) {
 
 async function findById(settlementId) {
   const result = await query(
-    `SELECT s.*, f.name AS from_name, t.name AS to_name
+    `SELECT s.*, f.name AS from_name, t.name AS to_name, rv.voucher_no
      FROM dbo.settlements s
      JOIN dbo.business_accounts f ON f.ba_id = s.from_ba_id
      JOIN dbo.business_accounts t ON t.ba_id = s.to_ba_id
+     LEFT JOIN dbo.receipt_vouchers rv ON rv.voucher_id = s.voucher_id
      WHERE s.settlement_id = @settlementId`,
     { settlementId: { type: sql.Int, value: settlementId } },
   );
@@ -72,13 +79,14 @@ async function insert(transaction, settlement) {
     chequeDate: { type: sql.Date, value: settlement.cheque_date ?? null },
     remarks: { type: sql.NVarChar(500), value: settlement.remarks ?? null },
     createdBy: { type: sql.Int, value: settlement.created_by ?? null },
+    voucherId: { type: sql.Int, value: settlement.voucher_id ?? null },
   });
   const result = await request.query(`
     INSERT INTO dbo.settlements (settlement_date, from_ba_id, to_ba_id, amount,
-                                 payment_mode, cheque_no, cheque_date, remarks, status, created_by)
+                                 payment_mode, cheque_no, cheque_date, remarks, status, created_by, voucher_id)
     OUTPUT inserted.settlement_id
     VALUES (@settlementDate, @fromBaId, @toBaId, @amount,
-            @paymentMode, @chequeNo, @chequeDate, @remarks, 'DRAFT', @createdBy)
+            @paymentMode, @chequeNo, @chequeDate, @remarks, 'DRAFT', @createdBy, @voucherId)
   `);
   return result.recordset[0].settlement_id;
 }
@@ -111,15 +119,39 @@ async function remove(settlementId) {
   );
 }
 
+// Whole-voucher delete: its endorsement lines go in the same transaction as its receipt lines.
+async function removeByVoucher(transaction, voucherId) {
+  const request = requestWithParams(transaction, { voucherId: { type: sql.Int, value: voucherId } });
+  // DRAFT only: a line posted meanwhile stays, and the voucher FK then fails the delete instead of
+  // leaving that line's ledger rows orphaned.
+  await request.query("DELETE FROM dbo.settlements WHERE voucher_id = @voucherId AND status = 'DRAFT'");
+}
+
+// The voucher's header date moving carries its endorsement lines with it, same as its receipts.
+async function syncVoucherDates(transaction, voucherId, voucherDate) {
+  const request = requestWithParams(transaction, {
+    voucherId: { type: sql.Int, value: voucherId },
+    voucherDate: { type: sql.Date, value: voucherDate },
+  });
+  await request.query(`
+    UPDATE dbo.settlements SET settlement_date = @voucherDate, updated_at = SYSUTCDATETIME()
+     WHERE voucher_id = @voucherId
+  `);
+}
+
+// Conditional on the status it is leaving, so two overlapping posts (screen Post and Post All, now
+// that endorsements post with their voucher) cannot both succeed. Returns rows changed: 0 = lost.
 async function setStatus(transaction, settlementId, status, updatedBy) {
   const request = requestWithParams(transaction, {
     settlementId: { type: sql.Int, value: settlementId },
     status: { type: sql.VarChar(10), value: status },
     updatedBy: { type: sql.Int, value: updatedBy ?? null },
   });
-  await request.query(
-    'UPDATE dbo.settlements SET status = @status, updated_by = @updatedBy WHERE settlement_id = @settlementId',
+  const result = await request.query(
+    `UPDATE dbo.settlements SET status = @status, updated_by = @updatedBy
+      WHERE settlement_id = @settlementId AND status <> @status`,
   );
+  return result.rowsAffected[0];
 }
 
 // One ledger pair: Dr the creditor we owed / Cr the debtor who paid them on our behalf.
@@ -165,5 +197,6 @@ async function deleteLedgerEntries(transaction, settlementId) {
 }
 
 module.exports = {
-  list, findById, insert, update, remove, setStatus, insertLedgerEntries, deleteLedgerEntries,
+  list, findById, insert, update, remove, removeByVoucher, syncVoucherDates, setStatus,
+  insertLedgerEntries, deleteLedgerEntries,
 };

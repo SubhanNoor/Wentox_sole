@@ -134,6 +134,9 @@ export default function VendorSetupPage() {
     };
 
     if (selectedVendorId) {
+      // The date field is pre-filled with today, so a blank balance on edit means "leave the
+      // opening balance alone" — send neither key, and a name/region/city edit is not refused.
+      if (!openingBalance.trim()) { delete payload.opening_balance; delete payload.opening_date; }
       const res = await api.vendors.update(selectedVendorId, payload);
       if (!res.ok) return setErrorMsg(res.error.message);
       flash('Vendor details updated successfully.');
@@ -449,6 +452,7 @@ export default function VendorSetupPage() {
                   onBalanceChange={setOpeningBalance}
                   onDateChange={setOpeningDate}
                   isExisting={selectedVendorId != null}
+                  blankKeepsExisting
                 />
 
                 <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">

@@ -1,7 +1,8 @@
 // IPC layer: opens additional app windows — no business logic, no SQL, no service/repository
 // (there's nothing to query; this only calls into Electron's own BrowserWindow via windowManager).
 const { ipcMain } = require('electron');
-const { createAppWindow } = require('../../electron/windowManager');
+const { BrowserWindow } = require('electron');
+const { createAppWindow, closeChildAndFocusMain } = require('../../electron/windowManager');
 const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
 
@@ -15,5 +16,12 @@ module.exports = function register() {
     if (!page) throw new Error('page is required');
     createAppWindow(page, payload?.tab, { child: true, params: payload?.params });
     return { ok: true };
+  }));
+
+  // Closes the CALLING window (only ever a child — the main window is left alone) and focuses the
+  // main window. `closed: false` tells the renderer it was the main window, so it navigates instead.
+  ipcMain.handle('windows:closeSelf', wrap((_payload, event) => {
+    const closed = closeChildAndFocusMain(BrowserWindow.fromWebContents(event.sender));
+    return { closed };
   }));
 };

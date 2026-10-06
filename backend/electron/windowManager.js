@@ -109,4 +109,16 @@ function createAppWindow(page, tab, { child = false, params = {} } = {}) {
   return win;
 }
 
-module.exports = { createAppWindow };
+// Exit on a document opened in its own window: close that window and bring the main ("mother")
+// window forward, rather than letting the OS hand focus to whichever window happens to be next.
+function closeChildAndFocusMain(win) {
+  if (!win || win.isDestroyed() || !childWindows.has(win)) return false;
+  win.close();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+  return true;
+}
+
+module.exports = { createAppWindow, closeChildAndFocusMain };

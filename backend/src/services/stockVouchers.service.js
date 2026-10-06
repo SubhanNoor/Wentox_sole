@@ -17,6 +17,7 @@
 // edited once applied) but are always written as their defaults (0/null/'SAME') and never read
 // back out — see resolveLines()/buildHeaderFields() below.
 const repository = require('../repositories/stockVouchers.repository');
+const deletedNumbersRepository = require('../repositories/deletedDocumentNumbers.repository');
 const productColorsService = require('./productColors.service');
 const storesService = require('./stores.service');
 const businessAccountsService = require('./businessAccounts.service');
@@ -145,13 +146,23 @@ async function update(stockVoucherId, payload) {
 }
 
 // DRAFT-only hard delete — stock_vouchers is a transaction table, never soft-deleted.
-async function remove(stockVoucherId) {
+// The voucher's number is retired for good and logged, so the screen's number preview skips it
+// (standard §9, 2026-10-06).
+async function remove(stockVoucherId, userId) {
   const existing = await getById(stockVoucherId);
   if (existing.status === 'CONFIRMED') {
     throw ApiError.conflict('Unpost the Stock Voucher before deleting', 'POSTED_LOCK');
   }
-  await repository.remove(stockVoucherId);
+  await withTransaction(async (transaction) => {
+    await repository.remove(transaction, stockVoucherId);
+    await deletedNumbersRepository.record(transaction, 'STOCK_VOUCHER', existing.voucher_no, userId);
+  });
   return { ok: true };
+}
+
+// Every retired voucher_no — the page's number preview skips past them.
+function listDeletedNumbers() {
+  return deletedNumbersRepository.listByType('STOCK_VOUCHER');
 }
 
 // No ledger effect (per the user, 2026-08-30) — post() only writes stock_movements.
@@ -234,5 +245,5 @@ async function postAll(ids, userId) {
 }
 
 module.exports = {
-  list, getById, create, update, remove, post, unpost, listUnposted, postAll, unpostedReservations,
+  list, getById, create, update, remove, post, unpost, listUnposted, postAll, unpostedReservations, listDeletedNumbers,
 };

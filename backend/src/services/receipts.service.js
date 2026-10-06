@@ -359,5 +359,5 @@ async function unconfirm(receiptId, session) {
 
 module.exports = {
   list, getById, create, update, remove, post, unpost, unconfirm, resolveDebitSide,
-  insertReceipt, postWithinTransaction,
+  insertReceipt, postWithinTransaction, resolveDateRange,
 };

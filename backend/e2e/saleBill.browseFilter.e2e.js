@@ -77,15 +77,20 @@ test('Sale Bill: dropdown follows the bill on screen through Posted, New, Post a
   await h.click(page, 'New');
   assert.equal(await h.eventually(h.filterValue(page), 'unposted'), 'unposted', 'New must switch back to Unposted');
 
-  // Unposted → the latest draft opens; posting it keeps it on screen (it was opened, not typed
-  // in this run), so the dropdown moves to Posted — and New must still be clickable.
+  // Unposted → the latest draft opens; Post always clears to a blank bill under Unposted (standard
+  // §8, 2026-10-06 — it used to keep a bill opened from the list on screen) — and New must still
+  // be clickable.
   await h.chooseFilter(page, 'unposted');
   assert.equal(await h.eventually(h.isEnabled(page, 'Post'), true), true, 'a draft should be on screen');
   await h.click(page, 'Post');
-  assert.equal(await h.eventually(h.filterValue(page), 'posted'), 'posted', 'a bill posted in place is a posted bill');
+  assert.equal(await h.eventually(h.isEnabled(page, 'Post'), false), false, 'Post should have gone through');
+  assert.equal(await h.isEnabled(page, 'Un Post')(), false, 'Post clears to a blank bill');
+  assert.equal(await h.eventually(h.filterValue(page), 'unposted'), 'unposted', 'a blank bill is an unposted one');
   assert.equal(await h.eventually(h.isEnabled(page, 'New'), true), true, 'New must not grey out after Post');
 
-  // Unpost → it's a draft again → Unposted.
+  // Posted → the bill just posted; Unpost → it's a draft again → Unposted.
+  await h.chooseFilter(page, 'posted');
+  assert.equal(await h.eventually(h.isEnabled(page, 'Un Post'), true), true, 'Posted should open the posted bill');
   await h.click(page, 'Un Post');
   assert.equal(await h.eventually(h.filterValue(page), 'unposted'), 'unposted', 'Unpost must switch back to Unposted');
 });

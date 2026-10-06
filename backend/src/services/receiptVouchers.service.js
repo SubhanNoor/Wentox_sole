@@ -13,6 +13,11 @@ const receiptsService = require('./receipts.service');
 const draftReceiptsService = require('./draftReceipts.service');
 const draftReceiptsRepository = require('../repositories/draftReceipts.repository');
 const deletedNumbersRepository = require('../repositories/deletedDocumentNumbers.repository');
+// Endorsed lines (migration 041) are dbo.settlements rows carrying this voucher's id — a line with
+// `settlement_id` set. They post/unpost through the settlements service, which owns their ledger
+// pair (Dr the endorsed account / Cr the payer, no cash/bank/cheque leg).
+const settlementsService = require('./settlements.service');
+const settlementsRepository = require('../repositories/settlements.repository');
 const { withTransaction } = require('../db/pool');
 const ApiError = require('../errors/ApiError');
 const { today } = require('../utils/dates');
@@ -34,14 +39,21 @@ function deriveStatus({ line_count, confirmed_lines }) {
 // Totals per payment mode, for the Total Cash / Cheque / Online footer on the client's screen.
 // Computed from the lines rather than read from the header — nothing is denormalised onto the
 // voucher, so there is no figure that can drift out of step with its lines.
+//
+// Endorsed lines count in total_amount (per the user, 2026-10-05) but in none of Cash/Cheque/Online:
+// their payment_mode only says how the payer paid our creditor — that money never reached us.
 function summariseLines(lines) {
-  const sum = (mode) => lines
+  const received = lines.filter((l) => l.settlement_id == null);
+  const sum = (mode) => received
     .filter((l) => l.payment_mode === mode)
     .reduce((acc, l) => acc + Number(l.amount), 0);
   return {
     total_cash: sum('CASH'),
     total_cheque: sum('CHEQUE'),
     total_online: sum('ONLINE'),
+    total_endorsed: lines
+      .filter((l) => l.settlement_id != null)
+      .reduce((acc, l) => acc + Number(l.amount), 0),
     total_amount: lines.reduce((acc, l) => acc + Number(l.amount), 0),
   };
 }
@@ -77,10 +89,6 @@ async function create(payload, userId) {
   validateHeader(payload);
   const voucherId = await withTransaction(async (transaction) => {
     const voucherNo = await repository.nextVoucherNo(transaction);
-    // voucher_no is MAX+1, not a sequence — it CAN reuse a number a deleted voucher left behind
-    // (per the user, 2026-09-07, unlike Sale Bill/Purchase). Clear any stale "deleted" log row for
-    // it so a live voucher never also shows as a deleted placeholder when browsing.
-    await deletedNumbersRepository.unrecord(transaction, 'RECEIPT_VOUCHER', voucherNo);
     return repository.insert(transaction, {
       voucher_no: voucherNo,
       voucher_date: payload.voucher_date || today(),
@@ -117,6 +125,7 @@ async function update(voucherId, payload, userId) {
     // the header too — update() is only reachable while the voucher is entirely UNPOSTED, so in
     // practice this is the call that does the work and syncLineDates above is the no-op.
     await draftReceiptsRepository.syncVoucherLineDates(transaction, voucherId, payload.voucher_date);
+    await settlementsRepository.syncVoucherDates(transaction, voucherId, payload.voucher_date);
   });
 
   return getById(voucherId);
@@ -145,6 +154,24 @@ async function post(voucherId, userId, session) {
   for (const line of voucher.lines) {
     // Already a real, posted row — meets the caller's intent, same as the old ALREADY_POSTED skip.
     if (line.status === 'CONFIRMED') continue;
+    if (line.settlement_id != null) {
+      try {
+        await settlementsService.post(line.settlement_id, userId, session);
+        posted.push({ receipt_id: null, settlement_id: line.settlement_id, amount: Number(line.amount) });
+      } catch (err) {
+        if (err.code === 'ALREADY_POSTED') continue;
+        if (!err.status) console.error(`receiptVouchers.post: unexpected failure on endorsement ${line.settlement_id}:`, err);
+        failed.push({
+          receipt_id: null,
+          settlement_id: line.settlement_id,
+          account_name: line.account_name,
+          amount: Number(line.amount),
+          message: err.status ? err.message : 'Unexpected error while posting this endorsement.',
+          code: err.code || 'INTERNAL',
+        });
+      }
+      continue;
+    }
     // A DRAFT-status line with no draft_id to confirm() should never happen — every unposted line
     // is supposed to live in dbo.draft_receipts — but it did (found 2026-09-16, same bug as
     // expenseVouchers.service.js#post(): old data inserted straight into dbo.receipts with
@@ -194,6 +221,23 @@ async function unpost(voucherId, session) {
 
   for (const line of voucher.lines) {
     if (line.status !== 'CONFIRMED') continue;
+    if (line.settlement_id != null) {
+      try {
+        await settlementsService.unpost(line.settlement_id, session && session.userId, session);
+        unposted.push({ receipt_id: null, settlement_id: line.settlement_id, amount: Number(line.amount) });
+      } catch (err) {
+        if (!err.status) console.error(`receiptVouchers.unpost: unexpected failure on endorsement ${line.settlement_id}:`, err);
+        failed.push({
+          receipt_id: null,
+          settlement_id: line.settlement_id,
+          account_name: line.account_name,
+          amount: Number(line.amount),
+          message: err.status ? err.message : 'Unexpected error while unposting this endorsement.',
+          code: err.code || 'INTERNAL',
+        });
+      }
+      continue;
+    }
     try {
       await receiptsService.unconfirm(line.receipt_id, session);
       unposted.push({ receipt_id: line.receipt_id, amount: Number(line.amount) });
@@ -217,12 +261,10 @@ async function unpost(voucherId, session) {
 // receipts.repository so there is one definition of how a receipt row is deleted; the FK on
 // receipts.voucher_id is deliberately NOT ON DELETE CASCADE, because a cascade would silently
 // delete posted lines too.
-// Records the deleted voucher_no (migration 032's table, extended per the user 2026-09-07) so
-// browsing can show "#N — Deleted" instead of silently skipping the gap — matching Sale Bill/
-// Purchase, but WITHOUT their "never reused" guarantee: voucher_no can still come back on a later
-// voucher (see create()'s unrecord() call), same reuse behavior as today, just now visible while
-// it lasts. Only whole-voucher deletion touches voucher_no — deleting one line out of a multi-line
-// voucher (draftReceipts.service.js#remove()/receipts.service.js#remove()) never reaches here.
+// Records the deleted voucher_no (migration 032's table) — retired for good: voucher_no comes from
+// dbo.seq_receipt_voucher_no (migration 042), so it is never reused (2026-10-06). Only
+// whole-voucher deletion touches voucher_no — deleting one line out of a multi-line voucher
+// (draftReceipts.service.js#remove()/receipts.service.js#remove()) never reaches here.
 async function remove(voucherId, userId) {
   const voucher = await getById(voucherId);
   if (voucher.status !== 'UNPOSTED') {
@@ -230,7 +272,10 @@ async function remove(voucherId, userId) {
   }
 
   await withTransaction(async (transaction) => {
+    // Endorsed lines are DRAFT settlements here (the voucher is UNPOSTED), so no ledger rows.
+    await settlementsRepository.removeByVoucher(transaction, voucherId);
     for (const line of voucher.lines) {
+      if (line.settlement_id != null) continue;
       // An UNPOSTED voucher's lines are all drafts by the invariant; the real-row branch is kept
       // so this stays correct for any row that predates the draft/real split.
       if (line.draft_id != null) {
@@ -244,9 +289,7 @@ async function remove(voucherId, userId) {
   });
 }
 
-// For the browse UI: every voucher_no currently sitting as a gap because its voucher was deleted
-// and hasn't since been reused (see unrecord() in create()) — so First/Prev/Next/Last can show
-// "#N — Deleted" instead of silently skipping it.
+// Every retired voucher_no — the screen's number preview skips past them.
 function listDeletedNumbers() {
   return deletedNumbersRepository.listByType('RECEIPT_VOUCHER');
 }

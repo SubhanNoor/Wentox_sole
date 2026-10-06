@@ -181,6 +181,9 @@ export default function EmployeeSetupPage() {
     };
 
     if (selectedId) {
+      // The date field is pre-filled with today, so a blank balance on edit means "leave the
+      // opening balance alone" — send neither key, and a name/region/city edit is not refused.
+      if (!openingBalance.trim()) { delete payload.opening_balance; delete payload.opening_date; }
       const res = await api.employees.update(selectedId, payload);
       if (!res.ok) return setErrorMsg(res.error.message);
       flash('Employee details updated successfully.');
@@ -516,6 +519,7 @@ export default function EmployeeSetupPage() {
                   onBalanceChange={setOpeningBalance}
                   onDateChange={setOpeningDate}
                   isExisting={selectedId != null}
+                  blankKeepsExisting
                 />
 
                 {/* Worker Trades vs Salaried Monthly Salary */}
