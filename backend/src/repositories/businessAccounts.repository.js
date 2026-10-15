@@ -49,6 +49,21 @@ async function updateName(baId, name) {
   );
 }
 
+// Region/city copied from the party row (customer/vendor/employee) onto its linked account, so the
+// ledgers — which read business_accounts.city_id — show the same city as the party's own screen.
+// withRegion = false for employees, which have no region of their own.
+async function updateLocation(baId, { region_id, city_id }, withRegion = true) {
+  await query(
+    `UPDATE dbo.business_accounts SET city_id = @cityId${withRegion ? ', region_id = @regionId' : ''}
+     WHERE ba_id = @baId`,
+    {
+      baId: { type: sql.Int, value: baId },
+      regionId: { type: sql.Int, value: region_id ?? null },
+      cityId: { type: sql.Int, value: city_id ?? null },
+    },
+  );
+}
+
 async function findById(baId) {
   const result = await query(
     'SELECT * FROM dbo.business_accounts WHERE ba_id = @baId',
@@ -276,18 +291,37 @@ async function hardDelete(transaction, baId) {
   await request.query('DELETE FROM dbo.business_accounts WHERE ba_id = @baId');
 }
 
-// Keeps dbo.customers.name and dbo.vendors.name in sync when a linked account is renamed from
-// the Accounts screen. Both UPDATEs are safe no-ops when there is no matching row.
+// Keeps the linked party's name in sync when an account is renamed from the Accounts screen.
+// Employees and banks were missed until 2026-10-08 (same drift as the customer/vendor names that
+// migration 040 repaired). Each UPDATE is a safe no-op when there is no matching row.
 async function syncLinkedPartyName(baId, name) {
   const baIdParam = { type: sql.Int, value: baId };
   await query('UPDATE dbo.customers SET name = @name WHERE ba_id = @baId',
     { baId: baIdParam, name: { type: sql.NVarChar(150), value: name } });
   await query('UPDATE dbo.vendors   SET name = @name WHERE ba_id = @baId',
     { baId: baIdParam, name: { type: sql.NVarChar(100), value: name } });
+  await query('UPDATE dbo.employees SET name = @name WHERE ba_id = @baId',
+    { baId: baIdParam, name: { type: sql.NVarChar(100), value: name } });
+  await query('UPDATE dbo.bank_accounts SET name = @name WHERE ba_id = @baId',
+    { baId: baIdParam, name: { type: sql.NVarChar(100), value: name } });
+}
+
+// The reverse of updateLocation: an account edited from the Accounts screen pushes its region/city
+// to the linked party row. customers.region_id is NOT NULL, so a blank region keeps the party's
+// own. Each UPDATE is a no-op when there is no linked row.
+async function syncLinkedPartyLocation(baId, { region_id, city_id }) {
+  const params = {
+    baId: { type: sql.Int, value: baId },
+    regionId: { type: sql.Int, value: region_id ?? null },
+    cityId: { type: sql.Int, value: city_id ?? null },
+  };
+  await query('UPDATE dbo.customers SET region_id = COALESCE(@regionId, region_id), city_id = @cityId WHERE ba_id = @baId', params);
+  await query('UPDATE dbo.vendors   SET region_id = @regionId, city_id = @cityId WHERE ba_id = @baId', params);
+  await query('UPDATE dbo.employees SET city_id = @cityId WHERE ba_id = @baId', params);
 }
 
 module.exports = {
   nextSerial, insert, updateName, findById, findByAcId, findByLinkCode, list, findByIdWithRestriction, update, updateOpening,
   setStatus, isPartyLinked, hasLedgerActivity, hasAnyReference, hardDelete, replaceOpeningEntries, allWithOpening,
-  syncLinkedPartyName,
+  syncLinkedPartyName, updateLocation, syncLinkedPartyLocation,
 };

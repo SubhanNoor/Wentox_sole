@@ -49,6 +49,12 @@ function renameLinked(baId, name) {
   return repository.updateName(baId, name);
 }
 
+// Editing the party's region/city keeps the linked account's in sync (reported by the user,
+// 2026-10-08: a customer moved to HAFIZ ABAD still showed MINGORA on the ledger).
+function relocateLinked(baId, { region_id, city_id }, withRegion = true) {
+  return repository.updateLocation(baId, { region_id, city_id }, withRegion);
+}
+
 // The one business account seeded for cash (db/seeds/run.js#ensureCashBusinessAccount) — lets
 // transfers.service.js/reports.service.js resolve "the Cash ba_id" by its reserved chart code
 // instead of a hardcoded id, same as every other reserved-account lookup in this codebase.
@@ -304,6 +310,7 @@ async function update(baId, payload, session) {
   if (existing && name !== existing.name) {
     await repository.syncLinkedPartyName(baId, name);
   }
+  await repository.syncLinkedPartyLocation(baId, { region_id: payload.region_id, city_id: payload.city_id });
   await syncOpeningEntries(baId);
   return repository.findById(baId);
 }
@@ -387,7 +394,7 @@ async function permanentDelete(baId, session) {
 }
 
 module.exports = {
-  createUnderChartCode, renameLinked, getById, getCashAccount, getByAcId, getChequesInHandAccount, setOpening, validateOpeningPair,
+  createUnderChartCode, renameLinked, relocateLinked, getById, getCashAccount, getByAcId, getChequesInHandAccount, setOpening, validateOpeningPair,
   createBatch,
   syncOpeningEntries,
   list, getForSetup, assertAccessible, create, update, remove, reactivate, permanentDelete,

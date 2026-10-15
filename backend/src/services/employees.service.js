@@ -134,6 +134,9 @@ async function update(employeeId, payload) {
   if (existing.ba_id && name !== existing.name) {
     await businessAccountsService.renameLinked(existing.ba_id, name);
   }
+  if (existing.ba_id) {
+    await businessAccountsService.relocateLinked(existing.ba_id, { city_id: payload.city_id }, false);
+  }
   // The opening balance lives on the linked business account, not on this row.
   if (existing.ba_id) await businessAccountsService.setOpening(existing.ba_id, payload);
 
